@@ -90,6 +90,32 @@ For Databricks Unity Catalog authentication, use environment variables:
 .. _`azure options`: https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants
 .. _`gcs options`: https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants
 
+Verify Table Existence
+~~~~~~~~~~~~~~~~~~~~~~
+
+You can check whether or not a Delta table exists at a particular path by using
+the :meth:`DeltaTable.is_deltatable()` method.
+
+.. code-block:: python
+    from deltalake import DeltaTable
+
+    table_path = "<path/to/valid/table>"
+    DeltaTable.is_deltatable(table_path)
+    # True
+
+    invalid_table_path = "<path/to/nonexistent/table>"
+    DeltaTable.is_deltatable(invalid_table_path)
+    # False
+
+    bucket_table_path = "<path/to/valid/table/in/bucket>"
+    storage_options = {
+        "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+        ...
+    }
+    DeltaTable.is_deltatable(bucket_table_path)
+    # True
+
 Custom Storage Backends
 ~~~~~~~~~~~~~~~~~~~~~~~
 

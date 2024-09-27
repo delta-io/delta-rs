@@ -4,14 +4,14 @@
 //! 1) Read the latest state snapshot of the table.
 //! 2) Read table state for version or datetime to restore
 //! 3) Compute files available in state for restoring (files were removed by some commit)
-//! but missed in the latest. Add these files into commit as AddFile action.
+//!    but missed in the latest. Add these files into commit as AddFile action.
 //! 4) Compute files available in the latest state snapshot (files were added after version to restore)
-//! but missed in the state to restore. Add these files into commit as RemoveFile action.
+//!    but missed in the state to restore. Add these files into commit as RemoveFile action.
 //! 5) If ignore_missing_files option is false (default value) check availability of AddFile
-//! in file system.
+//!    in file system.
 //! 6) Commit Protocol, all RemoveFile and AddFile actions
-//! into delta log using `LogStore::write_commit_entry` (commit will be failed in case of parallel transaction)
-//! TODO: comment is outdated
+//!    into delta log using `LogStore::write_commit_entry` (commit will be failed in case of parallel transaction)
+//!    TODO: comment is outdated
 //! 7) If table was modified in parallel then ignore restore and raise exception.
 //!
 //! # Example
@@ -272,14 +272,19 @@ async fn execute(
         .await?;
 
     let commit_version = snapshot.version() + 1;
-    let commit = prepared_commit.path();
-    match log_store.write_commit_entry(commit_version, commit).await {
+    let commit_bytes = prepared_commit.commit_or_bytes();
+    match log_store
+        .write_commit_entry(commit_version, commit_bytes.clone())
+        .await
+    {
         Ok(_) => {}
         Err(err @ TransactionError::VersionAlreadyExists(_)) => {
             return Err(err.into());
         }
         Err(err) => {
-            log_store.abort_commit_entry(commit_version, commit).await?;
+            log_store
+                .abort_commit_entry(commit_version, commit_bytes.clone())
+                .await?;
             return Err(err.into());
         }
     }

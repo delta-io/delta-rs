@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::compute::take;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use arrow_select::take::take;
 
 use crate::kernel::{DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType};
 use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
-use crate::{DeltaConfigKey, DeltaTable, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -270,13 +270,13 @@ pub fn get_delta_schema_with_nested_struct() -> StructType {
 }
 
 pub async fn setup_table_with_configuration(
-    key: DeltaConfigKey,
+    key: TableProperty,
     value: Option<impl Into<String>>,
 ) -> DeltaTable {
     let table_schema = get_delta_schema();
     DeltaOps::new_in_memory()
         .create()
-        .with_columns(table_schema.fields().clone())
+        .with_columns(table_schema.fields().cloned())
         .with_configuration_property(key, value)
         .await
         .expect("Failed to create table")
@@ -299,7 +299,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .with_location(table_path.to_str().unwrap())
         .with_table_name("test-table")
         .with_comment("A table for running tests")
-        .with_columns(table_schema.fields().clone())
+        .with_columns(table_schema.fields().cloned())
         .with_partition_columns(partition_cols)
         .await
         .unwrap()

@@ -1,6 +1,6 @@
-use arrow_array::cast::AsArray;
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
 use arrow_array::types::UInt16Type;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaBuilder;
@@ -10,13 +10,13 @@ use async_trait::async_trait;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::{col, Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::ExecutionPlan;
 use lazy_static::lazy_static;
 
 use crate::delta_datafusion::find_files::logical::FindFilesNode;
@@ -27,8 +27,6 @@ use crate::delta_datafusion::{
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTableError;
-
-use super::create_physical_expr_fix;
 
 pub mod logical;
 pub mod physical;
@@ -43,8 +41,10 @@ lazy_static! {
         ONLY_FILES_SCHEMA.clone().to_dfschema_ref().unwrap();
 }
 
+#[derive(Default)]
 struct FindFilesPlannerExtension {}
 
+#[derive(Default)]
 struct FindFilesPlanner {}
 
 #[async_trait]
@@ -139,11 +139,11 @@ async fn scan_table_by_files(
         .with_file_column(true)
         .build(&snapshot)?;
 
-    let logical_schema = df_logical_schema(&snapshot, &scan_config)?;
+    let logical_schema = df_logical_schema(&snapshot, &scan_config.file_column_name, None)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression
-        .to_columns()?
+        .column_refs()
         .into_iter()
         .map(|column| logical_schema.index_of(&column.name))
         .collect::<std::result::Result<Vec<usize>, ArrowError>>()?;
@@ -161,11 +161,8 @@ async fn scan_table_by_files(
     let input_schema = scan.logical_schema.as_ref().to_owned();
     let input_dfschema = input_schema.clone().try_into()?;
 
-    let predicate_expr = create_physical_expr_fix(
-        Expr::IsTrue(Box::new(expression.clone())),
-        &input_dfschema,
-        state.execution_props(),
-    )?;
+    let predicate_expr =
+        state.create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
 
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
@@ -193,6 +190,7 @@ async fn scan_table_by_files(
 pub mod tests {
     use std::sync::Arc;
 
+    use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::prelude::{DataFrame, SessionContext};
     use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_expr::{col, lit, Expr, Extension, LogicalPlan};
@@ -207,9 +205,9 @@ pub mod tests {
         expr: Expr,
     ) -> Result<Vec<arrow_array::RecordBatch>, DeltaTableError> {
         let ctx = SessionContext::new();
-        let state = ctx
-            .state()
-            .with_query_planner(Arc::new(FindFilesPlanner {}));
+        let state = SessionStateBuilder::new_from_existing(ctx.state())
+            .with_query_planner(Arc::new(FindFilesPlanner::default()))
+            .build();
         let find_files_node = LogicalPlan::Extension(Extension {
             node: Arc::new(FindFilesNode::new(
                 "my_cool_plan".into(),

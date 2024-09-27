@@ -51,6 +51,9 @@ impl std::future::IntoFuture for LoadBuilder {
 
         Box::pin(async move {
             PROTOCOL.can_read_from(&this.snapshot.snapshot)?;
+            if !this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles("reading".into()));
+            }
 
             let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             let schema = table.snapshot()?.arrow_schema()?;

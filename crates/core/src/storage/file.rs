@@ -1,17 +1,17 @@
 //! Local file storage backend. This backend read and write objects from local filesystem.
 //!
 //! The local file storage backend is multi-writer safe.
+use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::{
     local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions,
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
-use std::ops::Range;
-use std::sync::Arc;
-use tokio::io::AsyncWrite;
+use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
 
 const STORE_NAME: &str = "DeltaLocalObjectStore";
@@ -106,14 +106,14 @@ impl From<LocalFileSystemError> for ObjectStoreError {
 /// Multi-writer support for different platforms:
 ///
 /// * Modern Linux kernels are well supported. However because Linux implementation leverages
-/// `RENAME_NOREPLACE`, older versions of the kernel might not work depending on what filesystem is
-/// being used:
+///   `RENAME_NOREPLACE`, older versions of the kernel might not work depending on what filesystem is
+///   being used:
 ///   *  ext4 requires >= Linux 3.15
 ///   *  btrfs, shmem, and cif requires >= Linux 3.17
 ///   *  xfs requires >= Linux 4.0
 ///   *  ext2, minix, reiserfs, jfs, vfat, and bpf requires >= Linux 4.9
 /// * Darwin is supported but not fully tested.
-/// Patches welcome.
+///   Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
 #[derive(Debug)]
 pub struct FileStorageBackend {
@@ -166,14 +166,18 @@ impl std::fmt::Display for FileStorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for FileStorageBackend {
-    async fn put(&self, location: &ObjectStorePath, bytes: Bytes) -> ObjectStoreResult<PutResult> {
+    async fn put(
+        &self,
+        location: &ObjectStorePath,
+        bytes: PutPayload,
+    ) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
     }
 
     async fn put_opts(
         &self,
         location: &ObjectStorePath,
-        bytes: Bytes,
+        bytes: PutPayload,
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
@@ -254,16 +258,16 @@ impl ObjectStore for FileStorageBackend {
     async fn put_multipart(
         &self,
         location: &ObjectStorePath,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &ObjectStorePath,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        options: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 }
 
@@ -275,10 +279,7 @@ async fn rename_noreplace(from: &str, to: &str) -> Result<(), LocalFileSystemErr
 }
 
 // Generic implementation (Requires 2 system calls)
-#[cfg(not(any(
-    all(target_os = "linux", target_env = "gnu", glibc_renameat2),
-    target_os = "macos"
-)))]
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
 mod imp {
     use super::*;
 
@@ -319,10 +320,7 @@ mod imp {
 }
 
 // Optimized implementations (Only 1 system call)
-#[cfg(any(
-    all(target_os = "linux", target_env = "gnu", glibc_renameat2),
-    target_os = "macos"
-))]
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
 mod imp {
     use super::*;
     use std::ffi::CString;

@@ -81,6 +81,11 @@ nav:
       - api/catalog.md
       - api/exceptions.md
   - Integrations:
+      - Object Storage:
+          - integrations/object-storage/adls.md
+          - integrations/object-storage/hdfs.md
+          - integrations/object-storage/s3.md
+          - integrations/object-storage/s3-like.md
       - Arrow: integrations/delta-lake-arrow.md
       - Daft: integrations/delta-lake-daft.md
       - Dagster: integrations/delta-lake-dagster.md

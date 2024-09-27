@@ -240,8 +240,11 @@ impl std::future::IntoFuture for VacuumBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
         Box::pin(async move {
+            if !&this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles("VACUUM".into()));
+            }
+
             let plan = this.create_vacuum_plan().await?;
             if this.dry_run {
                 return Ok((

@@ -7,13 +7,14 @@ use deltalake::arrow::datatypes::{
 use deltalake::arrow::error::ArrowError;
 use deltalake::arrow::pyarrow::PyArrowType;
 use deltalake::kernel::{
-    ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, PrimitiveType as DeltaPrimitve,
-    StructField, StructType as DeltaStructType,
+    ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, MetadataValue,
+    PrimitiveType as DeltaPrimitve, StructField, StructType as DeltaStructType, StructTypeExt,
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::IntoPyDict;
 use std::collections::HashMap;
+
+use crate::utils::warn;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
 // objects within Rust code, which we need here. So for now, we implement
@@ -22,40 +23,40 @@ use std::collections::HashMap;
 
 // Decimal is separate special case, since it has parameters
 
-fn schema_type_to_python(schema_type: DataType, py: Python) -> PyResult<PyObject> {
+fn schema_type_to_python(schema_type: DataType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     match schema_type {
-        DataType::Primitive(data_type) => {
-            Ok((PrimitiveType::new(data_type.to_string())?).into_py(py))
-        }
+        DataType::Primitive(data_type) => Ok((PrimitiveType::new(data_type.to_string())?)
+            .into_py(py)
+            .into_bound(py)),
         DataType::Array(array_type) => {
             let array_type: ArrayType = (*array_type).into();
-            Ok(array_type.into_py(py))
+            Ok(array_type.into_py(py).into_bound(py))
         }
         DataType::Map(map_type) => {
             let map_type: MapType = (*map_type).into();
-            Ok(map_type.into_py(py))
+            Ok(map_type.into_py(py).into_bound(py))
         }
         DataType::Struct(struct_type) => {
             let struct_type: StructType = (*struct_type).into();
-            Ok(struct_type.into_py(py))
+            Ok(struct_type.into_py(py).into_bound(py))
         }
     }
 }
 
-fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<DataType> {
-    if let Ok(data_type) = ob.extract::<PrimitiveType>(py) {
+fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
+    if let Ok(data_type) = ob.extract::<PrimitiveType>() {
         return Ok(DataType::Primitive(data_type.inner_type));
     }
-    if let Ok(array_type) = ob.extract::<ArrayType>(py) {
+    if let Ok(array_type) = ob.extract::<ArrayType>() {
         return Ok(array_type.into());
     }
-    if let Ok(map_type) = ob.extract::<MapType>(py) {
+    if let Ok(map_type) = ob.extract::<MapType>() {
         return Ok(map_type.into());
     }
-    if let Ok(struct_type) = ob.extract::<StructType>(py) {
+    if let Ok(struct_type) = ob.extract::<StructType>() {
         return Ok(struct_type.into());
     }
-    if let Ok(raw_primitive) = ob.extract::<String>(py) {
+    if let Ok(raw_primitive) = ob.extract::<String>() {
         // Pass through PrimitiveType::new() to do validation
         return PrimitiveType::new(raw_primitive)
             .map(|data_type| DataType::Primitive(data_type.inner_type));
@@ -98,30 +99,6 @@ impl PrimitiveType {
         Ok(Self {
             inner_type: data_type,
         })
-
-        // if data_type.starts_with("decimal") {
-        //     if try_parse_decimal_type(&data_type).is_none() {
-        //         Err(PyValueError::new_err(format!(
-        //             "invalid decimal type: {data_type}"
-        //         )))
-        //     } else {
-        //         Ok(Self {
-        //             inner_type: data_type,
-        //         })
-        //     }
-        // } else if !VALID_PRIMITIVE_TYPES
-        //     .iter()
-        //     .any(|&valid| data_type == valid)
-        // {
-        //     Err(PyValueError::new_err(format!(
-        //         "data_type must be one of decimal(<precision>, <scale>), {}.",
-        //         VALID_PRIMITIVE_TYPES.join(", ")
-        //     )))
-        // } else {
-        //     Ok(Self {
-        //         inner_type: data_type,
-        //     })
-        // }
     }
 
     #[getter]
@@ -145,7 +122,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
-        let inner_type = DataType::Primitive(self.inner_type);
+        let inner_type = DataType::Primitive(self.inner_type.clone());
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
@@ -160,7 +137,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<PyArrowType<ArrowDataType>> {
-        let inner_type = DataType::Primitive(self.inner_type);
+        let inner_type = DataType::Primitive(self.inner_type.clone());
         Ok(PyArrowType((&inner_type).try_into().map_err(
             |err: ArrowError| PyException::new_err(err.to_string()),
         )?))
@@ -211,16 +188,15 @@ impl TryFrom<DataType> for ArrayType {
 impl ArrayType {
     #[new]
     #[pyo3(signature = (element_type, contains_null = true))]
-    fn new(element_type: PyObject, contains_null: bool, py: Python) -> PyResult<Self> {
-        let inner_type =
-            DeltaArrayType::new(python_type_to_schema(element_type, py)?, contains_null);
+    fn new(element_type: &Bound<'_, PyAny>, contains_null: bool) -> PyResult<Self> {
+        let inner_type = DeltaArrayType::new(python_type_to_schema(element_type)?, contains_null);
         Ok(Self { inner_type })
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
         let type_repr: String = schema_type_to_python(self.inner_type.element_type().clone(), py)?
-            .call_method0(py, "__repr__")?
-            .extract(py)?;
+            .call_method0("__repr__")?
+            .extract()?;
         Ok(format!(
             "ArrayType({}, contains_null={})",
             type_repr,
@@ -248,13 +224,13 @@ impl ArrayType {
     }
 
     #[getter]
-    fn element_type(&self, py: Python) -> PyResult<PyObject> {
+    fn element_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         schema_type_to_python(self.inner_type.element_type().to_owned(), py)
     }
 
     #[getter]
-    fn contains_null(&self, py: Python) -> PyResult<PyObject> {
-        Ok(self.inner_type.contains_null().into_py(py))
+    fn contains_null<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(self.inner_type.contains_null().into_py(py).into_bound(py))
     }
 
     #[pyo3(text_signature = "($self)")]
@@ -325,15 +301,14 @@ impl TryFrom<DataType> for MapType {
 impl MapType {
     #[new]
     #[pyo3(signature = (key_type, value_type, value_contains_null = true))]
-    fn new(
-        key_type: PyObject,
-        value_type: PyObject,
+    fn new<'py>(
+        key_type: &Bound<'py, PyAny>,
+        value_type: &Bound<'py, PyAny>,
         value_contains_null: bool,
-        py: Python,
     ) -> PyResult<Self> {
         let inner_type = DeltaMapType::new(
-            python_type_to_schema(key_type, py)?,
-            python_type_to_schema(value_type, py)?,
+            python_type_to_schema(key_type)?,
+            python_type_to_schema(value_type)?,
             value_contains_null,
         );
         Ok(Self { inner_type })
@@ -341,11 +316,11 @@ impl MapType {
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
         let key_repr: String = schema_type_to_python(self.inner_type.key_type().clone(), py)?
-            .call_method0(py, "__repr__")?
-            .extract(py)?;
+            .call_method0("__repr__")?
+            .extract()?;
         let value_repr: String = schema_type_to_python(self.inner_type.value_type().clone(), py)?
-            .call_method0(py, "__repr__")?
-            .extract(py)?;
+            .call_method0("__repr__")?
+            .extract()?;
         Ok(format!(
             "MapType({}, {}, value_contains_null={})",
             key_repr,
@@ -374,18 +349,22 @@ impl MapType {
     }
 
     #[getter]
-    fn key_type(&self, py: Python) -> PyResult<PyObject> {
+    fn key_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         schema_type_to_python(self.inner_type.key_type().to_owned(), py)
     }
 
     #[getter]
-    fn value_type(&self, py: Python) -> PyResult<PyObject> {
+    fn value_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         schema_type_to_python(self.inner_type.value_type().to_owned(), py)
     }
 
     #[getter]
-    fn value_contains_null(&self, py: Python) -> PyResult<PyObject> {
-        Ok(self.inner_type.value_contains_null().into_py(py))
+    fn value_contains_null<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(self
+            .inner_type
+            .value_contains_null()
+            .into_py(py)
+            .into_bound(py))
     }
 
     #[pyo3(text_signature = "($self)")]
@@ -425,25 +404,25 @@ impl MapType {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct Field {
-    inner: StructField,
+    pub inner: StructField,
 }
 
 #[pymethods]
 impl Field {
     #[new]
     #[pyo3(signature = (name, r#type, nullable = true, metadata = None))]
-    fn new(
+    fn new<'py>(
         name: String,
-        r#type: PyObject,
+        r#type: &Bound<'py, PyAny>,
         nullable: bool,
-        metadata: Option<PyObject>,
-        py: Python,
+        metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
-        let ty = python_type_to_schema(r#type, py)?;
+        let py = r#type.py();
+        let ty = python_type_to_schema(r#type)?;
 
         // Serialize and de-serialize JSON (it needs to be valid JSON anyways)
-        let metadata: HashMap<String, serde_json::Value> = if let Some(ref json) = metadata {
-            let json_dumps = PyModule::import(py, "json")?.getattr("dumps")?;
+        let metadata: HashMap<String, serde_json::Value> = if let Some(json) = metadata {
+            let json_dumps = PyModule::import_bound(py, "json")?.getattr("dumps")?;
             let metadata_json: String = json_dumps.call1((json,))?.extract()?;
             let metadata_json = Some(metadata_json)
                 .filter(|x| x != "null")
@@ -455,7 +434,24 @@ impl Field {
         };
 
         let mut inner = StructField::new(name, ty, nullable);
-        inner = inner.with_metadata(metadata);
+        inner = inner.with_metadata(metadata.iter().map(|(k, v)| {
+            (
+                k,
+                if let serde_json::Value::Number(n) = v {
+                    n.as_i64().map_or_else(
+                        || MetadataValue::String(v.to_string()),
+                        |i| {
+                            i32::try_from(i)
+                                .ok()
+                                .map(MetadataValue::Number)
+                                .unwrap_or_else(|| MetadataValue::String(v.to_string()))
+                        },
+                    )
+                } else {
+                    MetadataValue::String(v.to_string())
+                },
+            )
+        }));
 
         Ok(Self { inner })
     }
@@ -466,7 +462,7 @@ impl Field {
     }
 
     #[getter]
-    fn get_type(&self, py: Python) -> PyResult<PyObject> {
+    fn get_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         schema_type_to_python(self.inner.data_type().clone(), py)
     }
 
@@ -476,26 +472,27 @@ impl Field {
     }
 
     #[getter]
-    fn metadata(&self, py: Python) -> PyResult<PyObject> {
-        let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
+    fn metadata<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let json_loads = PyModule::import_bound(py, "json")?.getattr("loads")?;
         let metadata_json: String = serde_json::to_string(self.inner.metadata())
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        Ok(json_loads.call1((metadata_json,))?.to_object(py))
+        Ok(json_loads
+            .call1((metadata_json,))?
+            .to_object(py)
+            .bind(py)
+            .to_owned())
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
         let type_repr: String = schema_type_to_python(self.inner.data_type().clone(), py)?
-            .call_method0(py, "__repr__")?
-            .extract(py)?;
+            .call_method0("__repr__")?
+            .extract()?;
 
         let metadata = self.inner.metadata();
         let maybe_metadata = if metadata.is_empty() {
             "".to_string()
         } else {
-            let metadata_repr: String = self
-                .metadata(py)?
-                .call_method0(py, "__repr__")?
-                .extract(py)?;
+            let metadata_repr: String = self.metadata(py)?.call_method0("__repr__")?.extract()?;
             format!(", metadata={metadata_repr}")
         };
         Ok(format!(
@@ -597,7 +594,6 @@ impl StructType {
         let inner_data: Vec<String> = self
             .inner_type
             .fields()
-            .iter()
             .map(|field| {
                 let field = Field {
                     inner: field.clone(),
@@ -628,7 +624,6 @@ impl StructType {
     fn fields(&self) -> Vec<Field> {
         self.inner_type
             .fields()
-            .iter()
             .map(|field| Field {
                 inner: field.clone(),
             })
@@ -669,20 +664,14 @@ impl StructType {
     }
 }
 
-pub fn schema_to_pyobject(schema: &DeltaStructType, py: Python) -> PyResult<PyObject> {
-    let fields: Vec<Field> = schema
-        .fields()
-        .iter()
-        .map(|field| Field {
-            inner: field.clone(),
-        })
-        .collect();
+pub fn schema_to_pyobject(schema: DeltaStructType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    let fields = schema.fields().map(|field| Field {
+        inner: field.clone(),
+    });
 
-    let py_schema = PyModule::import(py, "deltalake.schema")?.getattr("Schema")?;
+    let py_schema = PyModule::import_bound(py, "deltalake.schema")?.getattr("Schema")?;
 
-    py_schema
-        .call1((fields,))
-        .map(|schema| schema.to_object(py))
+    py_schema.call1((fields.collect::<Vec<_>>(),))
 }
 
 /// A Delta Lake schema
@@ -718,7 +707,6 @@ impl PySchema {
         let inner_data: Vec<String> = super_
             .inner_type
             .fields()
-            .iter()
             .map(|field| {
                 let field = Field {
                     inner: field.clone(),
@@ -729,26 +717,18 @@ impl PySchema {
         Ok(format!("Schema([{}])", inner_data.join(", ")))
     }
 
-    fn json(self_: PyRef<'_, Self>, py: Python) -> PyResult<PyObject> {
-        let warnings_warn = PyModule::import(py, "warnings")?.getattr("warn")?;
-        let deprecation_warning = PyModule::import(py, "builtins")?
-            .getattr("DeprecationWarning")?
-            .to_object(py);
-        let kwargs: [(&str, PyObject); 2] = [
-            ("category", deprecation_warning),
-            ("stacklevel", 2.to_object(py)),
-        ];
-        warnings_warn.call(
-            ("Schema.json() is deprecated. Use json.loads(Schema.to_json()) instead.",),
-            Some(kwargs.into_py_dict(py)),
+    fn json<'py>(self_: PyRef<'_, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        warn(
+            py,
+            "DeprecationWarning",
+            "Schema.json() is deprecated. Use json.loads(Schema.to_json()) instead.",
+            Some(2),
         )?;
 
         let super_ = self_.as_ref();
         let json = super_.to_json()?;
-        let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
-        json_loads
-            .call1((json.into_py(py),))
-            .map(|obj| obj.to_object(py))
+        let json_loads = PyModule::import_bound(py, "json")?.getattr("loads")?;
+        json_loads.call1((json.into_py(py),))
     }
 
     #[pyo3(signature = (as_large_types = false))]
@@ -826,12 +806,15 @@ impl PySchema {
 
     #[staticmethod]
     #[pyo3(text_signature = "(data_type)")]
-    fn from_pyarrow(data_type: PyArrowType<ArrowSchema>, py: Python) -> PyResult<PyObject> {
+    fn from_pyarrow(
+        data_type: PyArrowType<ArrowSchema>,
+        py: Python<'_>,
+    ) -> PyResult<Bound<'_, PyAny>> {
         let inner_type: DeltaStructType = (&data_type.0)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
-        schema_to_pyobject(&inner_type, py)
+        schema_to_pyobject(inner_type, py)
     }
 
     #[pyo3(text_signature = "($self)")]

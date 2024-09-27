@@ -6,6 +6,7 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -24,7 +25,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Add, PartitionsExt, Scalar, StructType};
+use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt, StructType};
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
@@ -362,7 +363,9 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
-            self.storage.put_with_retries(&path, obj_bytes, 15).await?;
+            self.storage
+                .put_with_retries(&path, obj_bytes.into(), 15)
+                .await?;
 
             actions.push(create_add(
                 &writer.partition_values,
@@ -616,7 +619,7 @@ mod tests {
                 .with_location(&path)
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(schema.fields().clone())
+                .with_columns(schema.fields().cloned())
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");

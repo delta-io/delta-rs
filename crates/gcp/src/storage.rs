@@ -4,11 +4,11 @@ use bytes::Bytes;
 use deltalake_core::storage::ObjectStoreRef;
 use deltalake_core::Path;
 use futures::stream::BoxStream;
+use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use std::ops::Range;
-use tokio::io::AsyncWrite;
 
 use deltalake_core::storage::object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
 
@@ -36,14 +36,14 @@ impl std::fmt::Display for GcsStorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for GcsStorageBackend {
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<PutResult> {
+    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.inner.put(location, bytes).await
     }
 
     async fn put_opts(
         &self,
         location: &Path,
-        bytes: Bytes,
+        bytes: PutPayload,
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
@@ -120,18 +120,15 @@ impl ObjectStore for GcsStorageBackend {
         }
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &Path,
-        multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        options: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 }

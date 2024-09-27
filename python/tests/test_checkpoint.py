@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import PostCommitHookProperties
 
 
 def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -94,6 +95,68 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     assert not first_log_path.exists()
     assert not first_failed_log_path.exists()
+    assert second_log_path.exists()
+    assert third_log_path.exists()
+    assert second_failed_log_path.exists()
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_cleanup_metadata_log_cleanup_hook(
+    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+):
+    delta_table = setup_cleanup_metadata(tmp_path, sample_data)
+    delta_table.create_checkpoint()
+
+    sample_data = sample_data.drop(["binary"])
+    write_deltalake(delta_table, sample_data, mode="append", engine=engine)
+
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
+    first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
+    third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
+
+    assert not first_log_path.exists()
+    assert not first_failed_log_path.exists()
+    assert second_log_path.exists()
+    assert third_log_path.exists()
+    assert second_failed_log_path.exists()
+
+
+@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
+def test_cleanup_metadata_log_cleanup_hook_disabled(
+    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+):
+    delta_table = setup_cleanup_metadata(tmp_path, sample_data)
+    delta_table.create_checkpoint()
+
+    sample_data = sample_data.drop(["binary"])
+    write_deltalake(
+        delta_table,
+        sample_data,
+        mode="append",
+        engine=engine,
+        post_commithook_properties=PostCommitHookProperties(cleanup_expired_logs=False),
+    )
+
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    first_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.json.tmp"
+    )
+    first_log_path = tmp_table_path / "_delta_log" / "00000000000000000000.json"
+    second_log_path = tmp_table_path / "_delta_log" / "00000000000000000001.json"
+    second_failed_log_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000002.json.tmp"
+    )
+    third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
+
+    assert first_log_path.exists()
+    assert first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
     assert second_failed_log_path.exists()
@@ -249,6 +312,29 @@ def test_checkpoint_partition_timestamp_2380(
     assert checkpoint_path.exists()
 
 
+def test_checkpoint_with_binary_column(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "intColumn": pa.array([1]),
+            "binaryColumn": pa.array([b"a"]),
+        }
+    )
+
+    write_deltalake(
+        str(tmp_path),
+        data,
+        partition_by=["intColumn"],
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+
+    dt = DeltaTable(tmp_path)
+
+    assert dt.to_pyarrow_table().equals(data)
+
+
 def test_checkpoint_post_commit_config(tmp_path: pathlib.Path, sample_data: pa.Table):
     """Checks whether checkpoints are properly written based on commit_interval"""
     tmp_table_path = tmp_path / "path" / "to" / "table"
@@ -355,3 +441,30 @@ def test_checkpoint_post_commit_config_multiple_operations(
 
     delta_table = DeltaTable(str(tmp_table_path))
     assert delta_table.version() == 9
+
+
+def test_checkpoint_with_nullable_false(tmp_path: pathlib.Path):
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
+
+    pylist = [{"year": 2023, "n_party": 0}, {"year": 2024, "n_party": 1}]
+    my_schema = pa.schema(
+        [
+            pa.field("year", pa.int64(), nullable=False),
+            pa.field("n_party", pa.int64(), nullable=False),
+        ]
+    )
+
+    data = pa.Table.from_pylist(pylist, schema=my_schema)
+
+    write_deltalake(
+        str(tmp_table_path),
+        data,
+        configuration={"delta.dataSkippingNumIndexedCols": "1"},
+    )
+
+    DeltaTable(str(tmp_table_path)).create_checkpoint()
+
+    assert checkpoint_path.exists()
+
+    assert DeltaTable(str(tmp_table_path)).to_pyarrow_table() == data

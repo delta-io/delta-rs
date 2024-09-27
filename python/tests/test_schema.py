@@ -6,6 +6,7 @@ import pytest
 from deltalake import DeltaTable, Field
 from deltalake.schema import (
     ArrayType,
+    ArrowSchemaConversionMode,
     MapType,
     PrimitiveType,
     Schema,
@@ -222,13 +223,94 @@ def test_delta_schema():
     assert schema_without_metadata == Schema.from_pyarrow(pa_schema)
 
 
-@pytest.mark.parametrize(
-    "schema,expected_schema,large_dtypes",
-    [
+def _generate_test_type():
+    class UuidType(pa.ExtensionType):
+        def __init__(self):
+            pa.ExtensionType.__init__(self, pa.binary(16), "my_package.uuid")
+
+        def __arrow_ext_serialize__(self):
+            # since we don't have a parameterized type, we don't need extra
+            # metadata to be deserialized
+            return b""
+
+        @classmethod
+        def __arrow_ext_deserialize__(self, storage_type, serialized):
+            # return an instance of this subclass given the serialized
+            # metadata.
+            return UuidType()
+
+    pa.register_extension_type(UuidType())
+    return UuidType()
+
+
+def _generate_test_tuples():
+    test_tuples = [
+        (
+            pa.schema([("some_int", pa.uint32()), ("some_string", pa.string_view())]),
+            pa.schema([("some_int", pa.int32()), ("some_string", pa.string_view())]),
+            ArrowSchemaConversionMode.PASSTHROUGH,
+        ),
+        (
+            pa.schema(
+                [
+                    ("some_int", pa.uint32()),
+                    ("some_string", pa.list_view(pa.large_string())),
+                ]
+            ),
+            pa.schema(
+                [
+                    ("some_int", pa.int32()),
+                    ("some_string", pa.list_view(pa.large_string())),
+                ]
+            ),
+            ArrowSchemaConversionMode.PASSTHROUGH,
+        ),
         (
             pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
             pa.schema([("some_int", pa.int32()), ("some_string", pa.string())]),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
+        ),
+        (
+            pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
+            pa.schema([("some_int", pa.int32()), ("some_string", pa.string())]),
+            ArrowSchemaConversionMode.PASSTHROUGH,
+        ),
+        (
+            pa.schema([("some_int", pa.uint32()), ("some_string", pa.large_string())]),
+            pa.schema([("some_int", pa.int32()), ("some_string", pa.large_string())]),
+            ArrowSchemaConversionMode.PASSTHROUGH,
+        ),
+        (
+            pa.schema([("some_int", pa.uint32()), ("some_binary", pa.large_binary())]),
+            pa.schema([("some_int", pa.int32()), ("some_binary", pa.large_binary())]),
+            ArrowSchemaConversionMode.PASSTHROUGH,
+        ),
+        (
+            pa.schema(
+                [
+                    ("some_int", pa.uint32()),
+                    ("some_string", pa.large_list(pa.large_string())),
+                ]
+            ),
+            pa.schema(
+                [
+                    ("some_int", pa.int32()),
+                    ("some_string", pa.large_list(pa.large_string())),
+                ]
+            ),
+            ArrowSchemaConversionMode.PASSTHROUGH,
+        ),
+        (
+            pa.schema(
+                [
+                    ("some_int", pa.uint32()),
+                    ("some_string", pa.list_(pa.large_string())),
+                ]
+            ),
+            pa.schema(
+                [("some_int", pa.int32()), ("some_string", pa.list_(pa.large_string()))]
+            ),
+            ArrowSchemaConversionMode.PASSTHROUGH,
         ),
         (
             pa.schema(
@@ -247,7 +329,7 @@ def test_delta_schema():
                     pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
                 ]
             ),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
         ),
         (
             pa.schema(
@@ -262,17 +344,17 @@ def test_delta_schema():
                     pa.field("some_string", pa.large_string(), nullable=False),
                 ]
             ),
-            True,
+            ArrowSchemaConversionMode.LARGE,
         ),
         (
             pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
             pa.schema([("some_int", pa.int32()), ("some_string", pa.large_string())]),
-            True,
+            ArrowSchemaConversionMode.LARGE,
         ),
         (
             pa.schema([("some_int", pa.uint32()), ("some_string", pa.large_string())]),
             pa.schema([("some_int", pa.int32()), ("some_string", pa.string())]),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
         ),
         (
             pa.schema(
@@ -291,7 +373,7 @@ def test_delta_schema():
                     ("some_int3", pa.int64()),
                 ]
             ),
-            True,
+            ArrowSchemaConversionMode.LARGE,
         ),
         (
             pa.schema(
@@ -310,7 +392,7 @@ def test_delta_schema():
                     ("some_string", pa.large_string()),
                 ]
             ),
-            True,
+            ArrowSchemaConversionMode.LARGE,
         ),
         (
             pa.schema(
@@ -327,7 +409,7 @@ def test_delta_schema():
                     ("some_binary", pa.binary()),
                 ]
             ),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
         ),
         (
             pa.schema(
@@ -355,7 +437,7 @@ def test_delta_schema():
                     ("some_binary", pa.large_binary()),
                 ]
             ),
-            True,
+            ArrowSchemaConversionMode.LARGE,
         ),
         (
             pa.schema(
@@ -383,7 +465,7 @@ def test_delta_schema():
                     ("some_binary", pa.binary()),
                 ]
             ),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
         ),
         (
             pa.schema(
@@ -410,7 +492,7 @@ def test_delta_schema():
                     ("timestamp7", pa.timestamp("us", tz="UTC")),
                 ]
             ),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
         ),
         (
             pa.schema(
@@ -451,11 +533,23 @@ def test_delta_schema():
                     )
                 ]
             ),
-            False,
+            ArrowSchemaConversionMode.NORMAL,
         ),
-    ],
+        (
+            pa.schema([("uuid", _generate_test_type())]),
+            pa.schema([("uuid", pa.binary(16))]),
+            ArrowSchemaConversionMode.NORMAL,
+        ),
+    ]
+
+    return test_tuples
+
+
+@pytest.mark.parametrize(
+    "schema,expected_schema,conversion_mode",
+    _generate_test_tuples(),
 )
-def test_schema_conversions(schema, expected_schema, large_dtypes):
-    result_schema = _convert_pa_schema_to_delta(schema, large_dtypes)
+def test_schema_conversions(schema, expected_schema, conversion_mode):
+    result_schema = _convert_pa_schema_to_delta(schema, conversion_mode)
 
     assert result_schema == expected_schema

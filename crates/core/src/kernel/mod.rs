@@ -1,15 +1,15 @@
 //! Delta Kernel module
 //!
 //! The Kernel module contains all the logic for reading and processing the Delta Lake transaction log.
+use delta_kernel::engine::arrow_expression::ArrowExpressionHandler;
 
 pub mod arrow;
 pub mod error;
-pub mod expressions;
 pub mod models;
+pub mod scalars;
 mod snapshot;
 
 pub use error::*;
-pub use expressions::*;
 pub use models::*;
 pub use snapshot::*;
 
@@ -19,4 +19,8 @@ pub trait DataCheck {
     fn get_name(&self) -> &str;
     /// The SQL expression to use for the check
     fn get_expression(&self) -> &str;
+}
+
+lazy_static::lazy_static! {
+    static ref ARROW_HANDLER: ArrowExpressionHandler = ArrowExpressionHandler {};
 }

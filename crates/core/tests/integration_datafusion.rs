@@ -1,14 +1,10 @@
 #![cfg(feature = "datafusion")]
-
-use arrow::array::Int64Array;
-use deltalake_test::datafusion::*;
-use deltalake_test::utils::*;
-use serial_test::serial;
-
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use arrow::array::Int64Array;
 use arrow::array::*;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{
@@ -28,8 +24,6 @@ use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
 };
-use url::Url;
-
 use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::logstore_for;
@@ -41,7 +35,10 @@ use deltalake_core::{
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
-use std::error::Error;
+use deltalake_test::datafusion::*;
+use deltalake_test::utils::*;
+use serial_test::serial;
+use url::Url;
 
 mod local {
     use datafusion::common::stats::Precision;
@@ -68,6 +65,8 @@ mod local {
     #[derive(Debug, Default)]
     pub struct ExecutionMetricsCollector {
         scanned_files: HashSet<Label>,
+        pub skip_count: usize,
+        pub keep_count: usize,
     }
 
     impl ExecutionMetricsCollector {
@@ -86,6 +85,15 @@ mod local {
             if let Some(exec) = plan.as_any().downcast_ref::<ParquetExec>() {
                 let files = get_scanned_files(exec);
                 self.scanned_files.extend(files);
+            } else if let Some(exec) = plan.as_any().downcast_ref::<DeltaScan>() {
+                self.keep_count = exec
+                    .metrics()
+                    .and_then(|m| m.sum_by_name("files_scanned").map(|v| v.as_usize()))
+                    .unwrap_or_default();
+                self.skip_count = exec
+                    .metrics()
+                    .and_then(|m| m.sum_by_name("files_pruned").map(|v| v.as_usize()))
+                    .unwrap_or_default();
             }
             Ok(true)
         }
@@ -106,7 +114,7 @@ mod local {
             .unwrap()
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions)
             .await
             .unwrap();
@@ -198,10 +206,8 @@ mod local {
             &ctx,
             &DeltaPhysicalCodec {},
         )?;
-        let fields = StructType::try_from(source_scan.schema())
-            .unwrap()
-            .fields()
-            .clone();
+        let schema = StructType::try_from(source_scan.schema()).unwrap();
+        let fields = schema.fields().cloned();
 
         // Create target Delta Table
         let target_table = CreateBuilder::new()
@@ -232,7 +238,7 @@ mod local {
                 .clone(),
         )
         .unwrap();
-        let source_store = logstore_for(source_uri, HashMap::new()).unwrap();
+        let source_store = logstore_for(source_uri, HashMap::new(), None).unwrap();
         let object_store_url = source_store.object_store_url();
         let source_store_url: &Url = object_store_url.as_ref();
         state
@@ -322,7 +328,7 @@ mod local {
 
         let expected = vec![
             "+-----------------------+-----------------------+",
-            "| MAX(test_table.value) | MIN(test_table.value) |",
+            "| max(test_table.value) | min(test_table.value) |",
             "+-----------------------+-----------------------+",
             "| 4                     | 0                     |",
             "+-----------------------+-----------------------+",
@@ -353,7 +359,7 @@ mod local {
 
         let expected = vec![
             "+------------------------+------------------------+",
-            "| MAX(test_table2.value) | MIN(test_table2.value) |",
+            "| max(test_table2.value) | min(test_table2.value) |",
             "+------------------------+------------------------+",
             "| 3                      | 1                      |",
             "+------------------------+------------------------+",
@@ -445,6 +451,10 @@ mod local {
             let task_ctx = Arc::new(TaskContext::from(state));
             let _result = collect(plan.execute(0, task_ctx)?).await?;
             visit_execution_plan(&plan, &mut metrics).unwrap();
+        } else {
+            // if scan produces no output from ParquetExec, we still want to visit DeltaScan
+            // to check its metrics
+            visit_execution_plan(scan.as_ref(), &mut metrics).unwrap();
         }
 
         Ok(metrics)
@@ -621,6 +631,8 @@ mod local {
 
         let metrics = get_scan_metrics(&table, &state, &[]).await?;
         assert_eq!(metrics.num_scanned_files(), 3);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 0);
 
         // (Column name, value from file 1, value from file 2, value from file 3, non existent value)
         let tests = [
@@ -667,11 +679,15 @@ mod local {
             let e = col(column).eq(file1_value.clone());
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 1);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 2);
 
             // Value does not exist
             let e = col(column).eq(non_existent_value.clone());
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 0);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 3);
 
             // Conjunction
             let e = col(column)
@@ -679,6 +695,8 @@ mod local {
                 .and(col(column).lt(file2_value.clone()));
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 2);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 1);
 
             // Disjunction
             let e = col(column)
@@ -686,6 +704,8 @@ mod local {
                 .or(col(column).gt(file3_value.clone()));
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 2);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 1);
         }
 
         // Validate Boolean type
@@ -697,10 +717,14 @@ mod local {
         let e = col("boolean").eq(lit(true));
         let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 1);
 
         let e = col("boolean").eq(lit(false));
         let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 1);
 
         let tests = [
             TestCase::new_wrapped("utf8", |value| lit(value.to_string())),
@@ -767,11 +791,15 @@ mod local {
             let e = col(column).eq(file1_value.clone());
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 1);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 8);
 
             // Value does not exist
             let e = col(column).eq(non_existent_value);
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 0);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 9);
 
             // Conjunction
             let e = col(column)
@@ -779,11 +807,15 @@ mod local {
                 .and(col(column).lt(file2_value));
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 2);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 7);
 
             // Disjunction
             let e = col(column).lt(file1_value).or(col(column).gt(file3_value));
             let metrics = get_scan_metrics(&table, &state, &[e]).await?;
             assert_eq!(metrics.num_scanned_files(), 2);
+            assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+            assert_eq!(metrics.skip_count, 7);
 
             // TODO how to get an expression with the right datatypes eludes me ..
             // Validate null pruning
@@ -813,10 +845,14 @@ mod local {
         let e = col("boolean").eq(lit(true));
         let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 1);
 
         let e = col("boolean").eq(lit(false));
         let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 1);
 
         // Ensure that tables without stats and partition columns can be pruned for just partitions
         // let table = open_table("./tests/data/delta-0.8.0-null-partition").await?;
@@ -905,13 +941,14 @@ mod local {
 
         let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
 
+        // Without defining a schema of the select the default for a timestamp is ms UTC
         let expected = vec![
-            "+-------------------------------+---------------------+------------+",
-            "| BIG_DATE                      | NORMAL_DATE         | SOME_VALUE |",
-            "+-------------------------------+---------------------+------------+",
-            "| 1816-03-28T05:56:08.066277376 | 2022-02-01T00:00:00 | 2          |",
-            "| 1816-03-29T05:56:08.066277376 | 2022-01-01T00:00:00 | 1          |",
-            "+-------------------------------+---------------------+------------+",
+            "+-----------------------------+----------------------+------------+",
+            "| BIG_DATE                    | NORMAL_DATE          | SOME_VALUE |",
+            "+-----------------------------+----------------------+------------+",
+            "| 1816-03-28T05:56:08.066278Z | 2022-02-01T00:00:00Z | 2          |",
+            "| 1816-03-29T05:56:08.066278Z | 2022-01-01T00:00:00Z | 1          |",
+            "+-----------------------------+----------------------+------------+",
         ];
 
         assert_batches_sorted_eq!(&expected, &batches);
@@ -1035,7 +1072,7 @@ mod local {
             deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
         let _ = DeltaOps::from(table)
             .create()
-            .with_columns(schema.fields().to_owned())
+            .with_columns(schema.fields().cloned())
             .await?;
 
         let mut table = open_table("./tests/data/issue-1619").await?;
@@ -1118,7 +1155,7 @@ mod local {
             .unwrap();
         let batch = batches.pop().unwrap();
 
-        let expected_schema = Schema::new(vec![Field::new("id", ArrowDataType::Int32, true)]);
+        let expected_schema = Schema::new(vec![Field::new("id", ArrowDataType::Int64, false)]);
         assert_eq!(batch.schema().as_ref(), &expected_schema);
         Ok(())
     }

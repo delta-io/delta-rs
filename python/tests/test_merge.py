@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import CommitProperties
 
 
 def test_merge_when_matched_delete_wo_predicate(
@@ -20,12 +21,13 @@ def test_merge_when_matched_delete_wo_predicate(
         }
     )
 
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=commit_properties,
     ).when_matched_delete().execute()
 
     nrows = 4
@@ -940,3 +942,99 @@ def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     expected = pa.table({"x": [1], "y--1": [4]})
 
     assert dt.to_pyarrow_table() == expected
+
+
+@pytest.mark.pandas
+def test_struct_casting(tmp_path: pathlib.Path):
+    import pandas as pd
+
+    cols = ["id", "name", "address", "scores"]
+    data = [
+        (
+            2,
+            "Marry Doe",
+            {"street": "123 Main St", "city": "Anytown", "state": "CA"},
+            [0, 0, 0],
+        )
+    ]
+    df = pd.DataFrame(data, columns=cols)
+    df_merge = pd.DataFrame(
+        [
+            (
+                2,
+                "Merged",
+                {"street": "1 Front", "city": "San Francisco", "state": "CA"},
+                [7, 0, 7],
+            )
+        ],
+        columns=cols,
+    )
+    assert not df.empty
+
+    schema = pa.Table.from_pandas(df=df).schema
+    dt = DeltaTable.create(tmp_path, schema, name="test")
+    metadata = dt.metadata()
+    assert metadata.name == "test"
+
+    result = (
+        dt.merge(
+            source=df_merge,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+    assert result is not None
+
+
+def test_merge_isin_partition_pruning(
+    tmp_path: pathlib.Path,
+):
+    nrows = 5
+    data = pa.table(
+        {
+            "id": pa.array([str(x) for x in range(nrows)]),
+            "partition": pa.array(list(range(nrows)), pa.int64()),
+            "sold": pa.array(list(range(nrows)), pa.int32()),
+        }
+    )
+
+    write_deltalake(tmp_path, data, mode="append", partition_by="partition")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["3", "4"]),
+            "partition": pa.array([3, 4], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+        }
+    )
+
+    metrics = (
+        dt.merge(
+            source=source_table,
+            predicate="t.id = s.id and t.partition in (3,4)",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    expected = pa.table(
+        {
+            "id": pa.array(["0", "1", "2", "3", "4"]),
+            "partition": pa.array([0, 1, 2, 3, 4], pa.int64()),
+            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
+    assert metrics["num_target_files_scanned"] == 2
+    assert metrics["num_target_files_skipped_during_scan"] == 3

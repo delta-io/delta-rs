@@ -24,15 +24,13 @@ use object_store::ObjectStore;
 use serde::Serialize;
 use url::{ParseError, Url};
 
+use super::transaction::{CommitBuilder, CommitProperties};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
-
-use super::transaction::CommitBuilder;
-use super::transaction::CommitProperties;
 
 /// Audit the Delta Table's active files with the underlying file system.
 /// See this module's documentation for more information
@@ -102,7 +100,7 @@ impl FileSystemCheckBuilder {
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> =
-            HashMap::with_capacity(self.snapshot.file_actions()?.len());
+            HashMap::with_capacity(self.snapshot.files_count());
         let log_store = self.log_store.clone();
 
         for active in self.snapshot.file_actions_iter()? {

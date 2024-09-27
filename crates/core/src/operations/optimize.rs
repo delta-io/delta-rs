@@ -25,8 +25,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef as ArrowSchemaRef;
+use delta_kernel::expressions::Scalar;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -38,12 +39,13 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
-use tracing::debug;
+use tracing::*;
+use url::Url;
 
 use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Action, PartitionsExt, Remove, Scalar};
+use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
 use crate::protocol::DeltaOperation;
@@ -136,6 +138,7 @@ impl fmt::Display for MetricDetails {
     }
 }
 
+#[derive(Debug)]
 /// Metrics for a single partition
 pub struct PartialMetrics {
     /// Number of optimized files added
@@ -202,9 +205,9 @@ pub struct OptimizeBuilder<'a> {
     commit_properties: CommitProperties,
     /// Whether to preserve insertion order within files (default false)
     preserve_insertion_order: bool,
-    /// Max number of concurrent tasks (default is number of cpus)
+    /// Maximum number of concurrent tasks (default is number of cpus)
     max_concurrent_tasks: usize,
-    /// Maximum number of bytes that are allowed to spill to disk
+    /// Maximum number of bytes allowed in memory before spilling to disk
     max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
@@ -225,7 +228,7 @@ impl<'a> OptimizeBuilder<'a> {
             commit_properties: CommitProperties::default(),
             preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
-            max_spill_size: 20 * 1024 * 1024 * 2014, // 20 GB.
+            max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
         }
@@ -295,6 +298,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
         Box::pin(async move {
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            if !&this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
+            }
 
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 WriterProperties::builder()
@@ -341,6 +347,7 @@ impl From<OptimizeInput> for DeltaOperation {
     }
 }
 
+/// Generate an appropriate remove action for the optimization task
 fn create_remove(
     path: &str,
     partitions: &IndexMap<String, Scalar>,
@@ -602,12 +609,26 @@ impl MergePlan {
         use datafusion_expr::expr::ScalarFunction;
         use datafusion_expr::{Expr, ScalarUDF};
 
-        let locations = files
+        // This code is ... not ideal. Essentially `read_parquet` expects Strings that it will then
+        // parse as URLs and then pass back to the object store (x_x). This can cause problems when
+        // paths in object storage have special characters like spaces, etc.
+        //
+        // This [str::replace] i kind of a hack to address
+        // <https://github.com/delta-io/delta-rs/issues/2834 >
+        let locations: Vec<String> = files
             .iter()
-            .map(|file| format!("delta-rs:///{}", file.location))
-            .collect_vec();
+            .map(|om| {
+                format!(
+                    "delta-rs:///{}",
+                    str::replace(om.location.as_ref(), "%", "%25")
+                )
+            })
+            .collect();
+        debug!("Reading z-order with locations are: {locations:?}");
+
         let df = context
             .ctx
+            // TODO: should read options have the partition columns
             .read_parquet(locations, ParquetReadOptions::default())
             .await?;
 
@@ -708,6 +729,7 @@ impl MergePlan {
                     bins.len() <= num_cpus::get(),
                 ));
 
+                debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
                 #[cfg(feature = "datafusion")]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
@@ -715,6 +737,7 @@ impl MergePlan {
                     max_spill_size,
                 )?);
                 let task_parameters = self.task_parameters.clone();
+
                 let log_store = log_store.clone();
                 futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
@@ -887,9 +910,7 @@ impl MergeBin {
         self.size_bytes += meta.size as i64;
         self.files.push(meta);
     }
-}
 
-impl MergeBin {
     fn iter(&self) -> impl Iterator<Item = &ObjectMeta> {
         self.files.iter()
     }
@@ -1001,7 +1022,6 @@ fn build_zorder_plan(
     let field_names = snapshot
         .schema()
         .fields()
-        .iter()
         .map(|field| field.name().to_string())
         .collect_vec();
     let unknown_columns = zorder_columns
@@ -1033,6 +1053,7 @@ fn build_zorder_plan(
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
             .add(object_meta);
+        error!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
     let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files);
@@ -1226,7 +1247,6 @@ pub(super) mod zorder {
                 let runtime = Arc::new(RuntimeEnv::new(config)?);
                 runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
 
-                use url::Url;
                 let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
                 ctx.register_udf(ScalarUDF::from(datafusion::ZOrderUDF));
                 Ok(Self { columns, ctx })
@@ -1266,6 +1286,7 @@ pub(super) mod zorder {
         fn zorder_key_datafusion(
             columns: &[ColumnarValue],
         ) -> Result<ColumnarValue, DataFusionError> {
+            debug!("zorder_key_datafusion: {columns:#?}");
             let length = columns
                 .iter()
                 .map(|col| match col {
@@ -1419,6 +1440,94 @@ pub(super) mod zorder {
                     .with_type(OptimizeType::ZOrder(vec!["moDified".into()]))
                     .await;
                 assert!(res.is_ok());
+            }
+
+            /// Issue <https://github.com/delta-io/delta-rs/issues/2834>
+            #[tokio::test]
+            async fn test_zorder_space_in_partition_value() {
+                use arrow_schema::Schema as ArrowSchema;
+                let _ = pretty_env_logger::try_init();
+                let schema = Arc::new(ArrowSchema::new(vec![
+                    Field::new("modified", DataType::Utf8, true),
+                    Field::new("country", DataType::Utf8, true),
+                    Field::new("value", DataType::Int32, true),
+                ]));
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "2021-02-01",
+                            "2021-02-01",
+                            "2021-02-02",
+                            "2021-02-02",
+                        ])),
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "Germany",
+                            "China",
+                            "Canada",
+                            "Dominican Republic",
+                        ])),
+                        Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+                        //Arc::new(arrow::array::StringArray::from(vec!["Dominican Republic"])),
+                        //Arc::new(arrow::array::Int32Array::from(vec![100])),
+                    ],
+                )
+                .unwrap();
+                // write some data
+                let table = crate::DeltaOps::new_in_memory()
+                    .write(vec![batch.clone()])
+                    .with_partition_columns(vec!["country"])
+                    .with_save_mode(crate::protocol::SaveMode::Overwrite)
+                    .await
+                    .unwrap();
+
+                let res = crate::DeltaOps(table)
+                    .optimize()
+                    .with_type(OptimizeType::ZOrder(vec!["modified".into()]))
+                    .await;
+                assert!(res.is_ok(), "Failed to optimize: {res:#?}");
+            }
+
+            #[tokio::test]
+            async fn test_zorder_space_in_partition_value_garbage() {
+                use arrow_schema::Schema as ArrowSchema;
+                let _ = pretty_env_logger::try_init();
+                let schema = Arc::new(ArrowSchema::new(vec![
+                    Field::new("modified", DataType::Utf8, true),
+                    Field::new("country", DataType::Utf8, true),
+                    Field::new("value", DataType::Int32, true),
+                ]));
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "2021-02-01",
+                            "2021-02-01",
+                            "2021-02-02",
+                            "2021-02-02",
+                        ])),
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "Germany", "China", "Canada", "USA$$!",
+                        ])),
+                        Arc::new(arrow::array::Int32Array::from(vec![1, 10, 20, 100])),
+                    ],
+                )
+                .unwrap();
+                // write some data
+                let table = crate::DeltaOps::new_in_memory()
+                    .write(vec![batch.clone()])
+                    .with_partition_columns(vec!["country"])
+                    .with_save_mode(crate::protocol::SaveMode::Overwrite)
+                    .await
+                    .unwrap();
+
+                let res = crate::DeltaOps(table)
+                    .optimize()
+                    .with_type(OptimizeType::ZOrder(vec!["modified".into()]))
+                    .await;
+                assert!(res.is_ok(), "Failed to optimize: {res:#?}");
             }
         }
     }
@@ -1574,6 +1683,31 @@ pub(super) mod zorder {
             let data: &BinaryArray = as_generic_binary_array(result.as_ref());
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
+        }
+
+        #[tokio::test]
+        async fn works_on_spark_table() {
+            use crate::DeltaOps;
+            use tempfile::TempDir;
+            // Create a temporary directory
+            let tmp_dir = TempDir::new().expect("Failed to make temp dir");
+            let table_name = "delta-1.2.1-only-struct-stats";
+
+            // Copy recursively from the test data directory to the temporary directory
+            let source_path = format!("../test/tests/data/{table_name}");
+            fs_extra::dir::copy(source_path, tmp_dir.path(), &Default::default()).unwrap();
+
+            // Run optimize
+            let (_, metrics) =
+                DeltaOps::try_from_uri(tmp_dir.path().join(table_name).to_str().unwrap())
+                    .await
+                    .unwrap()
+                    .optimize()
+                    .await
+                    .unwrap();
+
+            // Verify it worked
+            assert_eq!(metrics.num_files_added, 1);
         }
     }
 }

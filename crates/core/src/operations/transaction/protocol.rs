@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
+use tracing::log::*;
 
 use super::{TableReference, TransactionError};
 use crate::kernel::{
@@ -80,20 +81,19 @@ impl ProtocolChecker {
     }
 
     /// checks if table contains timestamp_ntz in any field including nested fields.
-    pub fn contains_timestampntz(&self, fields: &[StructField]) -> bool {
-        fn check_vec_fields(fields: &[StructField]) -> bool {
-            fields.iter().any(|f| _check_type(f.data_type()))
-        }
-
+    pub fn contains_timestampntz<'a>(
+        &self,
+        mut fields: impl Iterator<Item = &'a StructField>,
+    ) -> bool {
         fn _check_type(dtype: &DataType) -> bool {
             match dtype {
-                &DataType::TIMESTAMPNTZ => true,
+                &DataType::TIMESTAMP_NTZ => true,
                 DataType::Array(inner) => _check_type(inner.element_type()),
-                DataType::Struct(inner) => check_vec_fields(inner.fields()),
+                DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
                 _ => false,
             }
         }
-        check_vec_fields(fields)
+        fields.any(|f| _check_type(f.data_type()))
     }
 
     /// Check can write_timestamp_ntz
@@ -148,17 +148,33 @@ impl ProtocolChecker {
     pub fn can_write_to(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from(snapshot)?;
+        let min_writer_version = snapshot.protocol().min_writer_version;
 
-        let required_features: Option<&HashSet<WriterFeatures>> =
-            match snapshot.protocol().min_writer_version {
-                0 | 1 => None,
-                2 => Some(&WRITER_V2),
-                3 => Some(&WRITER_V3),
-                4 => Some(&WRITER_V4),
-                5 => Some(&WRITER_V5),
-                6 => Some(&WRITER_V6),
-                _ => snapshot.protocol().writer_features.as_ref(),
-            };
+        let required_features: Option<&HashSet<WriterFeatures>> = match min_writer_version {
+            0 | 1 => None,
+            2 => Some(&WRITER_V2),
+            3 => Some(&WRITER_V3),
+            4 => Some(&WRITER_V4),
+            5 => Some(&WRITER_V5),
+            6 => Some(&WRITER_V6),
+            _ => snapshot.protocol().writer_features.as_ref(),
+        };
+
+        if (4..7).contains(&min_writer_version) {
+            debug!("min_writer_version is less 4-6, checking for unsupported table features");
+            if let Ok(schema) = snapshot.metadata().schema() {
+                for field in schema.fields() {
+                    if field.metadata.contains_key(
+                        crate::kernel::ColumnMetadataKey::GenerationExpression.as_ref(),
+                    ) {
+                        error!("The table contains `delta.generationExpression` settings on columns which mean this table cannot be currently written to by delta-rs");
+                        return Err(TransactionError::UnsupportedWriterFeatures(vec![
+                            WriterFeatures::GeneratedColumns,
+                        ]));
+                    }
+                }
+            }
+        }
 
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.writer_features).peekable();
@@ -228,6 +244,11 @@ pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeatures::AppendOnly);
     writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
+    #[cfg(feature = "cdf")]
+    {
+        writer_features.insert(WriterFeatures::ChangeDataFeed);
+        writer_features.insert(WriterFeatures::GeneratedColumns);
+    }
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(WriterFeatures::Invariants);
@@ -243,13 +264,19 @@ pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_utils::create_metadata_action;
+    use std::collections::HashMap;
+
     use super::*;
-    use crate::kernel::{Action, Add, Protocol, Remove};
+    use crate::kernel::DataType as DeltaDataType;
+    use crate::kernel::{Action, Add, Metadata, PrimitiveType, Protocol, Remove};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
-    use crate::DeltaConfigKey;
-    use std::collections::HashMap;
+    use crate::test_utils::{ActionFactory, TestSchemas};
+    use crate::TableProperty;
+
+    fn metadata_action(configuration: Option<HashMap<String, Option<String>>>) -> Metadata {
+        ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, configuration)
+    }
 
     #[test]
     fn test_can_commit_append_only() {
@@ -300,13 +327,11 @@ mod tests {
                     writer_features: Some(feat.into_iter().collect()),
                     ..Default::default()
                 }),
-                create_metadata_action(
-                    None,
-                    Some(HashMap::from([(
-                        DeltaConfigKey::AppendOnly.as_ref().to_string(),
-                        Some(append.to_string()),
-                    )])),
-                ),
+                metadata_action(Some(HashMap::from([(
+                    TableProperty::AppendOnly.as_ref().to_string(),
+                    Some(append.to_string()),
+                )])))
+                .into(),
             ]
         };
 
@@ -400,7 +425,7 @@ mod tests {
                 min_writer_version: 1,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_1 = DeltaTableState::from_actions(actions).unwrap();
         let eager_1 = snapshot_1.snapshot();
@@ -414,7 +439,7 @@ mod tests {
                 min_writer_version: 1,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_2 = DeltaTableState::from_actions(actions).unwrap();
         let eager_2 = snapshot_2.snapshot();
@@ -431,7 +456,7 @@ mod tests {
                 min_writer_version: 2,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_3 = DeltaTableState::from_actions(actions).unwrap();
         let eager_3 = snapshot_3.snapshot();
@@ -451,7 +476,7 @@ mod tests {
                 min_writer_version: 3,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_4 = DeltaTableState::from_actions(actions).unwrap();
         let eager_4 = snapshot_4.snapshot();
@@ -474,7 +499,7 @@ mod tests {
                 min_writer_version: 4,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
         let eager_5 = snapshot_5.snapshot();
@@ -500,7 +525,7 @@ mod tests {
                 min_writer_version: 5,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_6 = DeltaTableState::from_actions(actions).unwrap();
         let eager_6 = snapshot_6.snapshot();
@@ -529,7 +554,7 @@ mod tests {
                 min_writer_version: 6,
                 ..Default::default()
             }),
-            create_metadata_action(None, Some(HashMap::new())),
+            metadata_action(None).into(),
         ];
         let snapshot_7 = DeltaTableState::from_actions(actions).unwrap();
         let eager_7 = snapshot_7.snapshot();
@@ -553,5 +578,64 @@ mod tests {
         assert!(checker_7.can_read_from(eager_6).is_ok());
         assert!(checker_7.can_read_from(eager_7).is_ok());
         assert!(checker_7.can_write_to(eager_7).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_minwriter_v4_with_cdf() {
+        let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
+        let actions = vec![
+            Action::Protocol(
+                Protocol::new(2, 4)
+                    .with_writer_features(vec![crate::kernel::WriterFeatures::ChangeDataFeed]),
+            ),
+            metadata_action(None).into(),
+        ];
+        let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
+        let eager_5 = snapshot_5.snapshot();
+        assert!(checker_5.can_write_to(eager_5).is_ok());
+    }
+
+    /// Technically we do not yet support generated columns, but it is okay to "accept" writing to
+    /// a column with minWriterVersion=4 and the generated columns feature as long as the
+    /// `delta.generationExpression` isn't actually defined the write is still allowed
+    #[tokio::test]
+    async fn test_minwriter_v4_with_generated_columns() {
+        let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
+        let actions = vec![
+            Action::Protocol(
+                Protocol::new(2, 4)
+                    .with_writer_features(vec![crate::kernel::WriterFeatures::GeneratedColumns]),
+            ),
+            metadata_action(None).into(),
+        ];
+        let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
+        let eager_5 = snapshot_5.snapshot();
+        assert!(checker_5.can_write_to(eager_5).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_minwriter_v4_with_generated_columns_and_expressions() {
+        let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
+        let actions = vec![Action::Protocol(Protocol::new(2, 4))];
+
+        let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                Some(HashMap::from([(
+                    "delta.generationExpression".into(),
+                    "x IS TRUE".into(),
+                )])),
+            )
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .expect("failed to make a version 4 table with EnableChangeDataFeed");
+        let eager_5 = table
+            .snapshot()
+            .expect("Failed to get snapshot from test table");
+        assert!(checker_5.can_write_to(eager_5).is_err());
     }
 }

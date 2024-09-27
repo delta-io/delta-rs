@@ -18,12 +18,12 @@ use std::{
 
 use arrow_array::{builder::UInt64Builder, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-};
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_physical_expr::{Distribution, PhysicalExpr};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
 use futures::{Stream, StreamExt};
 
 use crate::{
@@ -67,6 +67,10 @@ impl MergeBarrierExec {
 }
 
 impl ExecutionPlan for MergeBarrierExec {
+    fn name(&self) -> &str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -83,14 +87,14 @@ impl ExecutionPlan for MergeBarrierExec {
         vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
     }
 
-    fn children(&self) -> Vec<std::sync::Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn with_new_children(
-        self: std::sync::Arc<Self>,
-        children: Vec<std::sync::Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<std::sync::Arc<dyn ExecutionPlan>> {
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Plan(
                 "MergeBarrierExec wrong number of children".to_string(),
@@ -106,7 +110,7 @@ impl ExecutionPlan for MergeBarrierExec {
     fn execute(
         &self,
         partition: usize,
-        context: std::sync::Arc<datafusion::execution::TaskContext>,
+        context: Arc<datafusion::execution::TaskContext>,
     ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         Ok(Box::pin(MergeBarrierStream::new(
@@ -422,22 +426,33 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
         exprs: &[datafusion_expr::Expr],
         inputs: &[datafusion_expr::LogicalPlan],
     ) -> Self {
-        MergeBarrier {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<datafusion_expr::Expr>,
+        inputs: Vec<datafusion_expr::LogicalPlan>,
+    ) -> DataFusionResult<Self> {
+        Ok(MergeBarrier {
             input: inputs[0].clone(),
             file_column: self.file_column.clone(),
             expr: exprs[0].clone(),
-        }
+        })
     }
 }
 
-pub(crate) fn find_barrier_node(parent: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-    //! Used to locate the physical Barrier Node after the planner converts the logical node
-    if parent.as_any().downcast_ref::<MergeBarrierExec>().is_some() {
+pub(crate) fn find_node<T: 'static>(
+    parent: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    //! Used to locate a Node::<T> after the planner converts the logical node
+    if parent.as_any().downcast_ref::<T>().is_some() {
         return Some(parent.to_owned());
     }
 
     for child in &parent.children() {
-        let res = find_barrier_node(child);
+        let res = find_node::<T>(child);
         if res.is_some() {
             return res;
         }

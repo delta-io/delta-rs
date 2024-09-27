@@ -1,12 +1,25 @@
 //! Default implementation of [`LogStore`] for storage backends with atomic put-if-absent operation
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
-use object_store::{path::Path, ObjectStore};
+use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 
-use super::{LogStore, LogStoreConfig};
-use crate::{operations::transaction::TransactionError, storage::ObjectStoreRef, DeltaResult};
+use super::{CommitOrBytes, LogStore, LogStoreConfig};
+use crate::{
+    operations::transaction::TransactionError,
+    storage::{commit_uri_from_version, ObjectStoreRef},
+    DeltaResult,
+};
+
+fn put_options() -> &'static PutOptions {
+    static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
+    PUT_OPTS.get_or_init(|| PutOptions {
+        mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
+        tags: TagSet::default(),
+        attributes: Attributes::default(),
+    })
+}
 
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
@@ -45,17 +58,39 @@ impl LogStore for DefaultLogStore {
     async fn write_commit_entry(
         &self,
         version: i64,
-        tmp_commit: &Path,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
-        super::write_commit_entry(self.storage.as_ref(), version, tmp_commit).await
+        match commit_or_bytes {
+            CommitOrBytes::LogBytes(log_bytes) => self
+                .object_store()
+                .put_opts(
+                    &commit_uri_from_version(version),
+                    log_bytes.into(),
+                    put_options().clone(),
+                )
+                .await
+                .map_err(|err| -> TransactionError {
+                    match err {
+                        ObjectStoreError::AlreadyExists { .. } => {
+                            TransactionError::VersionAlreadyExists(version)
+                        }
+                        _ => TransactionError::from(err),
+                    }
+                })?,
+            _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
+        };
+        Ok(())
     }
 
     async fn abort_commit_entry(
         &self,
-        version: i64,
-        tmp_commit: &Path,
+        _version: i64,
+        commit_or_bytes: CommitOrBytes,
     ) -> Result<(), TransactionError> {
-        super::abort_commit_entry(self.storage.as_ref(), version, tmp_commit).await
+        match &commit_or_bytes {
+            CommitOrBytes::LogBytes(_) => Ok(()),
+            _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
+        }
     }
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {

@@ -1,8 +1,9 @@
 //! Schema definitions for action types
+use std::sync::Arc;
 
+use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
 use lazy_static::lazy_static;
 
-use super::schema::{ArrayType, DataType, MapType, StructField, StructType};
 use super::ActionType;
 
 impl ActionType {
@@ -270,4 +271,11 @@ fn deletion_vector_field() -> StructField {
 #[cfg(test)]
 pub(crate) fn log_schema() -> &'static StructType {
     &LOG_SCHEMA
+}
+
+pub(crate) fn log_schema_ref() -> &'static Arc<StructType> {
+    lazy_static! {
+        static ref LOG_SCHEMA_REF: Arc<StructType> = Arc::new(LOG_SCHEMA.clone());
+    }
+    &LOG_SCHEMA_REF
 }

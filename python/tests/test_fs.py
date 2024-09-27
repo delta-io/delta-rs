@@ -207,18 +207,8 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
-@pytest.mark.skip("since object store 0.9.1 sas tokens aren't working with azurite.")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
-    import os
-
-    for key in [
-        "AZURE_USE_EMULATOR",
-        "AZURE_STORAGE_ALLOW_HTTP",
-        "AZURE_STORAGE_CONNECTION_STRING",
-    ]:
-        if key in os.environ:
-            del os.environ[key]
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
@@ -229,7 +219,6 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
-@pytest.mark.skip("since object store 0.9.1 sas tokens aren't working with azurite.")
 def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip4"
     azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(
@@ -241,6 +230,20 @@ def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table = dt.to_pyarrow_table()
     assert table == sample_data
     assert dt.version() == 0
+
+
+@pytest.mark.parametrize("storage_size", [1, 4 * 1024 * 1024, 5 * 1024 * 1024 - 1])
+def test_warning_for_small_max_buffer_size(tmp_path, storage_size):
+    storage_opts = {"max_buffer_size": str(storage_size)}
+    store = DeltaStorageHandler(str(tmp_path.absolute()), options=storage_opts)
+    with pytest.warns(UserWarning) as warnings:
+        store.open_output_stream("test")
+
+    assert len(warnings) == 1
+    assert (
+        f"You specified a `max_buffer_size` of {storage_size} bits less than {5*1024*1024} bits"
+        in str(warnings[0].message)
+    )
 
 
 def test_pickle_roundtrip(tmp_path):

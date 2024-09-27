@@ -7,13 +7,13 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::array::{new_null_array, Array, UInt32Array};
-use arrow::compute::{partition, take};
-use arrow::record_batch::RecordBatch;
-use arrow_array::ArrayRef;
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
+use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_select::take::take;
 use bytes::Bytes;
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
@@ -28,8 +28,8 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, Add, PartitionsExt, Scalar, StructType};
-use crate::operations::cast::merge_schema;
+use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, StructType};
+use crate::operations::cast::merge_schema::merge_arrow_schema;
 use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
@@ -224,7 +224,9 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
-            self.storage.put_with_retries(&path, obj_bytes, 15).await?;
+            self.storage
+                .put_with_retries(&path, obj_bytes.into(), 15)
+                .await?;
 
             actions.push(create_add(
                 &writer.partition_values,
@@ -319,8 +321,11 @@ impl PartitionWriter {
                 WriteMode::MergeSchema => {
                     debug!("The writer and record batch schemas do not match, merging");
 
-                    let merged =
-                        merge_schema(self.arrow_schema.clone(), record_batch.schema().clone())?;
+                    let merged = merge_arrow_schema(
+                        self.arrow_schema.clone(),
+                        record_batch.schema().clone(),
+                        true,
+                    )?;
                     self.arrow_schema = merged;
 
                     let mut cols = vec![];
@@ -539,7 +544,7 @@ mod tests {
         let table = DeltaOps(table)
             .create()
             .with_partition_columns(partition_cols.to_vec())
-            .with_columns(delta_schema.fields().clone())
+            .with_columns(delta_schema.fields().cloned())
             .await
             .unwrap();
 
@@ -659,7 +664,7 @@ mod tests {
             .with_location(table_path.to_str().unwrap())
             .with_table_name("test-table")
             .with_comment("A table for running tests")
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partition_cols)
             .await
             .unwrap();
@@ -735,7 +740,7 @@ mod tests {
                 .with_location(table_path.to_str().unwrap())
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(table_schema.fields().clone())
+                .with_columns(table_schema.fields().cloned())
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");
@@ -779,8 +784,7 @@ mod tests {
 
             let new_schema = table.metadata().unwrap().schema().unwrap();
             let expected_columns = vec!["id", "value", "modified", "vid", "name"];
-            let found_columns: Vec<&String> =
-                new_schema.fields().iter().map(|f| f.name()).collect();
+            let found_columns: Vec<&String> = new_schema.fields().map(|f| f.name()).collect();
             assert_eq!(
                 expected_columns, found_columns,
                 "The new table schema does not contain all evolved columns as expected"
@@ -797,7 +801,7 @@ mod tests {
                 .with_location(table_path.to_str().unwrap())
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(table_schema.fields().clone())
+                .with_columns(table_schema.fields().cloned())
                 .with_partition_columns(["id"])
                 .await
                 .unwrap();
@@ -928,7 +932,7 @@ mod tests {
                 .with_location(table_path.to_str().unwrap())
                 .with_table_name("test-table")
                 .with_comment("A table for running tests")
-                .with_columns(table_schema.fields().clone())
+                .with_columns(table_schema.fields().cloned())
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");

@@ -19,44 +19,61 @@
 //! ````
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use arrow::datatypes::Schema as ArrowSchema;
-use arrow_schema::Field;
+use async_trait::async_trait;
+use datafusion::error::Result as DataFusionResult;
 use datafusion::{
+    dataframe::DataFrame,
+    datasource::provider_as_source,
     execution::context::SessionState,
-    physical_plan::{metrics::MetricBuilder, projection::ProjectionExec, ExecutionPlan},
+    execution::session_state::SessionStateBuilder,
+    physical_plan::{metrics::MetricBuilder, ExecutionPlan},
+    physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::SessionContext,
 };
-use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::{case, col, lit, when, Expr};
-use datafusion_physical_expr::{
-    expressions::{self},
-    PhysicalExpr,
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::{
+    case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
+use tracing::log::*;
 
-use super::write::write_execution_plan;
+use super::write::{write_execution_plan, write_execution_plan_cdc};
 use super::{
     datafusion_utils::Expression,
     transaction::{CommitBuilder, CommitProperties},
 };
 use super::{transaction::PROTOCOL, write::WriterStatsConfig};
-use crate::delta_datafusion::{
-    create_physical_expr_fix, expr::fmt_expr_to_sql, physical::MetricObserverExec,
-    DataFusionMixins, DeltaColumn, DeltaSessionContext,
-};
-use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
+use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
+use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::{
+    delta_datafusion::{
+        expr::fmt_expr_to_sql,
+        logical::MetricObserver,
+        physical::{find_metric_node, get_metric, MetricObserverExec},
+        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext,
+        DeltaTableProvider,
+    },
+    DeltaTableError,
+};
 use crate::{DeltaResult, DeltaTable};
+
+/// Custom column name used for marking internal [RecordBatch] rows as updated
+pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";
+
+const UPDATE_COUNT_ID: &str = "update_source_count";
+const UPDATE_ROW_COUNT: &str = "num_updated_rows";
+const COPIED_ROW_COUNT: &str = "num_copied_rows";
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -163,6 +180,44 @@ impl UpdateBuilder {
     }
 }
 
+#[derive(Clone)]
+struct UpdateMetricExtensionPlanner {}
+
+#[async_trait]
+impl ExtensionPlanner for UpdateMetricExtensionPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
+            if metric_observer.id.eq(UPDATE_COUNT_ID) {
+                return Ok(Some(MetricObserverExec::try_new(
+                    UPDATE_COUNT_ID.into(),
+                    physical_inputs,
+                    |batch, metrics| {
+                        let array = batch.column_by_name(UPDATE_PREDICATE_COLNAME).unwrap();
+                        let copied_rows = array.null_count();
+                        let num_updated = array.len() - copied_rows;
+
+                        MetricBuilder::new(metrics)
+                            .global_counter(UPDATE_ROW_COUNT)
+                            .add(num_updated);
+
+                        MetricBuilder::new(metrics)
+                            .global_counter(COPIED_ROW_COUNT)
+                            .add(copied_rows);
+                    },
+                )?));
+            }
+        }
+        Ok(None)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     predicate: Option<Expression>,
@@ -172,7 +227,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-    safe_cast: bool,
+    _safe_cast: bool,
 ) -> DeltaResult<(DeltaTableState, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -183,6 +238,17 @@ async fn execute(
     // For files that were identified, scan for records that match the predicate,
     // perform update operations, and then commit add and remove actions to
     // the log.
+    if !&snapshot.load_config().require_files {
+        return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
+    }
+
+    let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
+        extension_planner: UpdateMetricExtensionPlanner {},
+    };
+
+    let state = SessionStateBuilder::new_from_existing(state)
+        .with_query_planner(Arc::new(update_planner))
+        .build();
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
@@ -199,15 +265,15 @@ async fn execute(
         None => None,
     };
 
-    let updates: HashMap<Column, Expr> = updates
+    let updates = updates
         .into_iter()
         .map(|(key, expr)| match expr {
-            Expression::DataFusion(e) => Ok((key, e)),
+            Expression::DataFusion(e) => Ok((key.name, e)),
             Expression::String(s) => snapshot
                 .parse_predicate_expression(s, &state)
-                .map(|e| (key, e)),
+                .map(|e| (key.name, e)),
         })
-        .collect::<Result<HashMap<Column, Expr>, _>>()?;
+        .collect::<Result<HashMap<String, Expr>, _>>()?;
 
     let current_metadata = snapshot.metadata();
     let table_partition_cols = current_metadata.partition_columns.clone();
@@ -222,132 +288,63 @@ async fn execute(
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
-    let execution_props = state.execution_props();
+    let scan_config = DeltaScanConfigBuilder::default()
+        .with_file_column(false)
+        .with_schema(snapshot.input_schema()?)
+        .build(&snapshot)?;
+
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    let scan = DeltaScanBuilder::new(&snapshot, log_store.clone(), &state)
-        .with_files(&candidates.candidates)
-        .build()
-        .await?;
-    let scan = Arc::new(scan);
+    let target_provider = Arc::new(
+        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_files(candidates.candidates.clone()),
+    );
 
-    // Create a projection for a new column with the predicate evaluated
-    let input_schema = snapshot.input_schema()?;
+    let target_provider = provider_as_source(target_provider);
+    let plan = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
 
-    let mut fields = Vec::new();
-    for field in input_schema.fields.iter() {
-        fields.push(field.to_owned());
-    }
-    fields.push(Arc::new(Field::new(
-        "__delta_rs_update_predicate",
-        arrow_schema::DataType::Boolean,
-        true,
-    )));
-    // Recreate the schemas with the new column included
-    let input_schema = Arc::new(ArrowSchema::new(fields));
-    let input_dfschema: DFSchema = input_schema.as_ref().clone().try_into()?;
-
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = scan.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        expressions.push((
-            Arc::new(expressions::Column::new(field.name(), i)),
-            field.name().to_owned(),
-        ));
-    }
+    let df = DataFrame::new(state.clone(), plan);
 
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT statisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
-
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
-    let predicate_expr =
-        create_physical_expr_fix(predicate_null, &input_dfschema, execution_props)?;
-    expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
 
-    let projection_predicate: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, scan)?);
+    let df_with_update_col = df
+        .clone()
+        .with_column(UPDATE_PREDICATE_COLNAME, predicate_null)?;
 
-    let count_plan = Arc::new(MetricObserverExec::new(
-        "update_count".into(),
-        projection_predicate.clone(),
-        |batch, metrics| {
-            let array = batch.column_by_name("__delta_rs_update_predicate").unwrap();
-            let copied_rows = array.null_count();
-            let num_updated = array.len() - copied_rows;
+    let plan_with_metrics = LogicalPlan::Extension(Extension {
+        node: Arc::new(MetricObserver {
+            id: UPDATE_COUNT_ID.into(),
+            input: df_with_update_col.into_unoptimized_plan(),
+            enable_pushdown: false,
+        }),
+    });
 
-            MetricBuilder::new(metrics)
-                .global_counter("num_updated_rows")
-                .add(num_updated);
+    let df_with_predicate_and_metrics = DataFrame::new(state.clone(), plan_with_metrics);
 
-            MetricBuilder::new(metrics)
-                .global_counter("num_copied_rows")
-                .add(copied_rows);
-        },
-    ));
+    let expressions: Vec<Expr> = df_with_predicate_and_metrics
+        .schema()
+        .fields()
+        .into_iter()
+        .map(|field| {
+            let field_name = field.name();
+            let expr = match updates.get(field_name) {
+                Some(expr) => case(col(UPDATE_PREDICATE_COLNAME))
+                    .when(lit(true), expr.to_owned())
+                    .otherwise(col(Column::from_name(field_name)))?
+                    .alias(field_name),
+                None => col(Column::from_name(field_name)),
+            };
+            Ok(expr)
+        })
+        .collect::<DeltaResult<Vec<Expr>>>()?;
 
-    // Perform another projection but instead calculate updated values based on
-    // the predicate value.  If the predicate is true then evalute the user
-    // provided expression otherwise return the original column value
-    //
-    // For each update column a new column with a name of __delta_rs_ + `original name` is created
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = count_plan.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        expressions.push((
-            Arc::new(expressions::Column::new(field.name(), i)),
-            field.name().to_owned(),
-        ));
-    }
-
-    // Maintain a map from the original column name to its temporary column index
-    let mut map = HashMap::<String, usize>::new();
-    let mut control_columns = HashSet::<String>::new();
-    control_columns.insert("__delta_rs_update_predicate".to_owned());
-
-    for (column, expr) in updates {
-        let expr = case(col("__delta_rs_update_predicate"))
-            .when(lit(true), expr.to_owned())
-            .otherwise(col(column.to_owned()))?;
-        let predicate_expr = create_physical_expr_fix(expr, &input_dfschema, execution_props)?;
-        map.insert(column.name.clone(), expressions.len());
-        let c = "__delta_rs_".to_string() + &column.name;
-        expressions.push((predicate_expr, c.clone()));
-        control_columns.insert(c);
-    }
-
-    let projection_update: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, count_plan.clone())?);
-
-    // Project again to remove __delta_rs columns and rename update columns to their original name
-    let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = projection_update.schema();
-    for (i, field) in scan_schema.fields().into_iter().enumerate() {
-        if !control_columns.contains(field.name()) {
-            match map.get(field.name()) {
-                Some(value) => {
-                    expressions.push((
-                        Arc::new(expressions::Column::new(field.name(), *value)),
-                        field.name().to_owned(),
-                    ));
-                }
-                None => {
-                    expressions.push((
-                        Arc::new(expressions::Column::new(field.name(), i)),
-                        field.name().to_owned(),
-                    ));
-                }
-            }
-        }
-    }
-
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-        expressions,
-        projection_update.clone(),
-    )?);
-
+    let updated_df = df_with_predicate_and_metrics.select(expressions.clone())?;
+    let physical_plan = updated_df.clone().create_physical_plan().await?;
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
         snapshot
@@ -356,32 +353,28 @@ async fn execute(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
+    let tracker = CDCTracker::new(df, updated_df.drop_columns(&[UPDATE_PREDICATE_COLNAME])?);
+
     let add_actions = write_execution_plan(
         Some(&snapshot),
         state.clone(),
-        projection.clone(),
+        physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store().clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
-        writer_properties,
-        safe_cast,
+        writer_properties.clone(),
+        writer_stats_config.clone(),
         None,
-        writer_stats_config,
     )
     .await?;
 
-    let count_metrics = count_plan.metrics().unwrap();
+    let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
+    let update_count = find_metric_node(UPDATE_COUNT_ID, &physical_plan).ok_or_else(err)?;
+    let update_count_metrics = update_count.metrics().unwrap();
 
-    metrics.num_updated_rows = count_metrics
-        .sum_by_name("num_updated_rows")
-        .map(|m| m.as_usize())
-        .unwrap_or(0);
-
-    metrics.num_copied_rows = count_metrics
-        .sum_by_name("num_copied_rows")
-        .map(|m| m.as_usize())
-        .unwrap_or(0);
+    metrics.num_updated_rows = get_metric(&update_count_metrics, UPDATE_ROW_COUNT);
+    metrics.num_copied_rows = get_metric(&update_count_metrics, COPIED_ROW_COUNT);
 
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -421,6 +414,30 @@ async fn execute(
         "operationMetrics".to_owned(),
         serde_json::to_value(&metrics)?,
     );
+
+    if let Ok(true) = should_write_cdc(&snapshot) {
+        match tracker.collect() {
+            Ok(df) => {
+                let cdc_actions = write_execution_plan_cdc(
+                    Some(&snapshot),
+                    state,
+                    df.create_physical_plan().await?,
+                    table_partition_cols,
+                    log_store.object_store(),
+                    Some(snapshot.table_config().target_file_size() as usize),
+                    None,
+                    writer_properties,
+                    writer_stats_config,
+                    None,
+                )
+                .await?;
+                actions.extend(cdc_actions);
+            }
+            Err(err) => {
+                error!("Failed to collect CDC batches: {err:#?}");
+            }
+        };
+    }
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
@@ -472,24 +489,25 @@ impl std::future::IntoFuture for UpdateBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use crate::kernel::DataType as DeltaDataType;
-    use crate::kernel::PrimitiveType;
-    use crate::kernel::StructField;
-    use crate::kernel::StructType;
+    use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
+    use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
-    use crate::DeltaConfigKey;
-    use crate::DeltaTable;
+    use crate::{DeltaTable, TableProperty};
+    use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::Int32Array;
     use arrow_schema::DataType;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
     use serde_json::json;
     use std::sync::Arc;
@@ -499,7 +517,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(table_schema.fields().clone())
+            .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
@@ -531,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_when_delta_table_is_append_only() {
-        let table = setup_table_with_configuration(DeltaConfigKey::AppendOnly, Some("true")).await;
+        let table = setup_table_with_configuration(TableProperty::AppendOnly, Some("true")).await;
         let batch = get_record_batch(None, false);
         // Append
         let table = write_batch(table, batch).await;
@@ -789,7 +807,7 @@ mod tests {
 
         let table = DeltaOps::new_in_memory()
             .create()
-            .with_columns(schema.fields().clone())
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         let table = write_batch(table, batch).await;
@@ -968,5 +986,235 @@ mod tests {
             .with_update("value", lit("a string"))
             .await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_no_cdc_on_older_tables() {
+        let table = prepare_values_table().await;
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 1);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+        )
+        .unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").eq(lit(2)))
+            .with_update("value", lit(12))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        // NOTE: This currently doesn't really assert anything because cdc_files() is not reading
+        // actions correct
+        if let Some(state) = table.state.clone() {
+            let cdc_files = state.cdc_files();
+            assert!(cdc_files.is_ok());
+            if let Ok(cdc_files) = cdc_files {
+                let cdc_files: Vec<_> = cdc_files.collect();
+                assert_eq!(cdc_files.len(), 0);
+            }
+        } else {
+            panic!("I shouldn't exist!");
+        }
+
+        // Too close for missiles, switching to guns. Just checking that the data wasn't actually
+        // written instead!
+        if let Ok(files) = crate::storage::utils::flatten_list_stream(
+            &table.object_store(),
+            Some(&object_store::path::Path::from("_change_data")),
+        )
+        .await
+        {
+            assert_eq!(
+                0,
+                files.len(),
+                "This test should not find any written CDC files! {files:#?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_cdc_enabled() {
+        // Currently you cannot pass EnableChangeDataFeed through `with_configuration_property`
+        // so the only way to create a truly CDC enabled table is by shoving the Protocol
+        // directly into the actions list
+        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+        )
+        .unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").eq(lit(2)))
+            .with_update("value", lit(12))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+------------------+-----------------+",
+        "| value | _change_type     | _commit_version |",
+        "+-------+------------------+-----------------+",
+        "| 1     | insert           | 1               |",
+        "| 2     | insert           | 1               |",
+        "| 2     | update_preimage  | 2               |",
+        "| 12    | update_postimage | 2               |",
+        "| 3     | insert           | 1               |",
+        "+-------+------------------+-----------------+",
+            ], &batches }
+    }
+
+    #[tokio::test]
+    async fn test_update_cdc_enabled_partitions() {
+        // Currently you cannot pass EnableChangeDataFeed through `with_configuration_property`
+        // so the only way to create a truly CDC enabled table is by shoving the Protocol
+        // directly into the actions list
+        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "year",
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+                None,
+            )
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_partition_columns(vec!["year"])
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("year", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("2020"),
+                    Some("2020"),
+                    Some("2024"),
+                ])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+            ],
+        )
+        .unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").eq(lit(2)))
+            .with_update("year", "2024")
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        let _ = arrow::util::pretty::print_batches(&batches);
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+-------+------------------+-----------------+------+",
+        "| value | _change_type     | _commit_version | year |",
+        "+-------+------------------+-----------------+------+",
+        "| 1     | insert           | 1               | 2020 |",
+        "| 2     | insert           | 1               | 2020 |",
+        "| 2     | update_preimage  | 2               | 2020 |",
+        "| 2     | update_postimage | 2               | 2024 |",
+        "| 3     | insert           | 1               | 2024 |",
+        "+-------+------------------+-----------------+------+",
+            ], &batches }
     }
 }

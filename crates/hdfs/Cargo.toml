@@ -1,0 +1,29 @@
+[package]
+name = "deltalake-hdfs"
+version = "0.4.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deltalake-core = { version = "0.20.0", path = "../core" }
+hdfs-native-object-store = "0.11"
+
+# workspace dependecies
+object_store = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+serial_test = "3"
+deltalake-test = { path = "../test" }
+which = "6"
+
+[features]
+integration_test = ["hdfs-native-object-store/integration-test"]

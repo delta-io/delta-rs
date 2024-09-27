@@ -5,7 +5,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.75"
+rust-version = "1.80"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
 edition = "2021"
@@ -26,30 +26,34 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
+delta_kernel = { version = "=0.3.0" }
+# delta_kernel = { path = "../delta-kernel-rs/kernel", version = "0.3.0" }
+
 # arrow
-arrow = { version = "51" }
-arrow-arith = { version = "51" }
-arrow-array = { version = "51", features = ["chrono-tz"] }
-arrow-buffer = { version = "51" }
-arrow-cast = { version = "51" }
-arrow-ipc = { version = "51" }
-arrow-json = { version = "51" }
-arrow-ord = { version = "51" }
-arrow-row = { version = "51" }
-arrow-schema = { version = "51" }
-arrow-select = { version = "51" }
-object_store = { version = "0.9" }
-parquet = { version = "51" }
+arrow = { version = "52" }
+arrow-arith = { version = "52" }
+arrow-array = { version = "52", features = ["chrono-tz"] }
+arrow-buffer = { version = "52" }
+arrow-cast = { version = "52" }
+arrow-ipc = { version = "52" }
+arrow-json = { version = "52" }
+arrow-ord = { version = "52" }
+arrow-row = { version = "52" }
+arrow-schema = { version = "52" }
+arrow-select = { version = "52" }
+object_store = { version = "0.10.1" }
+parquet = { version = "52" }
 
 # datafusion
-datafusion = { version = "37.1" }
-datafusion-expr = { version = "37.1" }
-datafusion-common = { version = "37.1" }
-datafusion-proto = { version = "37.1" }
-datafusion-sql = { version = "37.1" }
-datafusion-physical-expr = { version = "37.1" }
-datafusion-functions = { version = "37.1" }
-datafusion-functions-array = { version = "37.1" }
+datafusion = { version = "41" }
+datafusion-expr = { version = "41" }
+datafusion-common = { version = "41" }
+datafusion-proto = { version = "41" }
+datafusion-sql = { version = "41" }
+datafusion-physical-expr = { version = "41" }
+datafusion-physical-plan = { version = "41" }
+datafusion-functions = { version = "41" }
+datafusion-functions-aggregate = { version = "41" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -62,6 +66,7 @@ tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "1" }
 url = { version = "2" }
+urlencoding = "2.1.3"
 uuid = { version = "1" }
 
 # runtime / async

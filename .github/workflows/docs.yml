@@ -1,6 +1,7 @@
 name: Build (and maybe release) the documentation
 
 on:
+  merge_group:
   pull_request:
     paths:
       - python/**
@@ -31,9 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: psf/black@stable
-        with:
-          src: docs/src/python
+      - run: |
+          cd docs
+          make check
 
   build-deploy:
     needs:
@@ -47,25 +48,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v3
-        with:
-          python-version: '3.10'
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
 
       - name: Build and install deltalake
         run: |
           cd python
-          pip install virtualenv
-          virtualenv venv
+          python -m venv venv
           source venv/bin/activate
           make ${{ env.BUILD_ARGS }}
 

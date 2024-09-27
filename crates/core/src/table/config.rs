@@ -2,19 +2,19 @@
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
+use delta_kernel::features::ColumnMappingMode;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-use crate::errors::DeltaTableError;
-
 use super::Constraint;
+use crate::errors::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
 #[derive(PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum DeltaConfigKey {
+pub enum TableProperty {
     /// true for this Delta table to be append-only. If append-only,
     /// existing records cannot be deleted, and existing values cannot be updated.
     AppendOnly,
@@ -116,7 +116,7 @@ pub enum DeltaConfigKey {
     CheckpointPolicy,
 }
 
-impl AsRef<str> for DeltaConfigKey {
+impl AsRef<str> for TableProperty {
     fn as_ref(&self) -> &str {
         match self {
             Self::AppendOnly => "delta.appendOnly",
@@ -146,7 +146,7 @@ impl AsRef<str> for DeltaConfigKey {
     }
 }
 
-impl FromStr for DeltaConfigKey {
+impl FromStr for TableProperty {
     type Err = DeltaTableError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -210,33 +210,35 @@ pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
 
 /// Default num index cols
 pub const DEFAULT_NUM_INDEX_COLS: i32 = 32;
+/// Default target file size
+pub const DEFAULT_TARGET_FILE_SIZE: i64 = 104857600;
 
 impl<'a> TableConfig<'a> {
     table_config!(
         (
             "true for this Delta table to be append-only",
-            DeltaConfigKey::AppendOnly,
+            TableProperty::AppendOnly,
             append_only,
             bool,
             false
         ),
         (
             "true for Delta Lake to write file statistics in checkpoints in JSON format for the stats column.",
-            DeltaConfigKey::CheckpointWriteStatsAsJson,
+            TableProperty::CheckpointWriteStatsAsJson,
             write_stats_as_json,
             bool,
             true
         ),
         (
             "true for Delta Lake to write file statistics to checkpoints in struct format",
-            DeltaConfigKey::CheckpointWriteStatsAsStruct,
+            TableProperty::CheckpointWriteStatsAsStruct,
             write_stats_as_struct,
             bool,
             false
         ),
         (
             "The target file size in bytes or higher units for file tuning",
-            DeltaConfigKey::TargetFileSize,
+            TableProperty::TargetFileSize,
             target_file_size,
             i64,
             // Databricks / spark defaults to 104857600 (bytes) or 100mb
@@ -244,14 +246,14 @@ impl<'a> TableConfig<'a> {
         ),
         (
             "true to enable change data feed.",
-            DeltaConfigKey::EnableChangeDataFeed,
+            TableProperty::EnableChangeDataFeed,
             enable_change_data_feed,
             bool,
             false
         ),
         (
             "true to enable deletion vectors and predictive I/O for updates.",
-            DeltaConfigKey::EnableDeletionVectors,
+            TableProperty::EnableDeletionVectors,
             enable_deletion_vectors,
             bool,
             // in databricks the default is dependent on the workspace settings and runtime version
@@ -260,21 +262,21 @@ impl<'a> TableConfig<'a> {
         ),
         (
             "The number of columns for Delta Lake to collect statistics about for data skipping.",
-            DeltaConfigKey::DataSkippingNumIndexedCols,
+            TableProperty::DataSkippingNumIndexedCols,
             num_indexed_cols,
             i32,
             32
         ),
         (
             "whether to cleanup expired logs",
-            DeltaConfigKey::EnableExpiredLogCleanup,
+            TableProperty::EnableExpiredLogCleanup,
             enable_expired_log_cleanup,
             bool,
             true
         ),
         (
             "Interval (number of commits) after which a new checkpoint should be created",
-            DeltaConfigKey::CheckpointInterval,
+            TableProperty::CheckpointInterval,
             checkpoint_interval,
             i32,
             100
@@ -295,7 +297,7 @@ impl<'a> TableConfig<'a> {
             static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 weeks").unwrap();
         }
         self.0
-            .get(DeltaConfigKey::DeletedFileRetentionDuration.as_ref())
+            .get(TableProperty::DeletedFileRetentionDuration.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
             .unwrap_or_else(|| DEFAULT_DURATION.to_owned())
     }
@@ -311,7 +313,7 @@ impl<'a> TableConfig<'a> {
             static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 days").unwrap();
         }
         self.0
-            .get(DeltaConfigKey::LogRetentionDuration.as_ref())
+            .get(TableProperty::LogRetentionDuration.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
             .unwrap_or_else(|| DEFAULT_DURATION.to_owned())
     }
@@ -321,7 +323,7 @@ impl<'a> TableConfig<'a> {
     /// Valid values are `Serializable` and `WriteSerializable`.
     pub fn isolation_level(&self) -> IsolationLevel {
         self.0
-            .get(DeltaConfigKey::IsolationLevel.as_ref())
+            .get(TableProperty::IsolationLevel.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
     }
@@ -329,7 +331,7 @@ impl<'a> TableConfig<'a> {
     /// Policy applied during chepoint creation
     pub fn checkpoint_policy(&self) -> CheckpointPolicy {
         self.0
-            .get(DeltaConfigKey::CheckpointPolicy.as_ref())
+            .get(TableProperty::CheckpointPolicy.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
     }
@@ -337,7 +339,7 @@ impl<'a> TableConfig<'a> {
     /// Return the column mapping mode according to delta.columnMapping.mode
     pub fn column_mapping_mode(&self) -> ColumnMappingMode {
         self.0
-            .get(DeltaConfigKey::ColumnMappingMode.as_ref())
+            .get(TableProperty::ColumnMappingMode.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
             .unwrap_or_default()
     }
@@ -360,7 +362,7 @@ impl<'a> TableConfig<'a> {
     /// This property takes precedence over [num_indexed_cols](Self::num_indexed_cols).
     pub fn stats_columns(&self) -> Option<Vec<&str>> {
         self.0
-            .get(DeltaConfigKey::DataSkippingStatsColumns.as_ref())
+            .get(TableProperty::DataSkippingStatsColumns.as_ref())
             .and_then(|o| o.as_ref().map(|v| v.split(',').collect()))
     }
 }
@@ -463,49 +465,6 @@ impl FromStr for CheckpointPolicy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
-/// The Column Mapping modes used for reading and writing data
-#[serde(rename_all = "camelCase")]
-pub enum ColumnMappingMode {
-    /// No column mapping is applied
-    None,
-    /// Columns are mapped by their field_id in parquet
-    Id,
-    /// Columns are mapped to a physical name
-    Name,
-}
-
-impl Default for ColumnMappingMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-impl AsRef<str> for ColumnMappingMode {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::None => "none",
-            Self::Id => "id",
-            Self::Name => "name",
-        }
-    }
-}
-
-impl FromStr for ColumnMappingMode {
-    type Err = DeltaTableError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "none" => Ok(Self::None),
-            "id" => Ok(Self::Id),
-            "name" => Ok(Self::Name),
-            _ => Err(DeltaTableError::Generic(
-                "Invalid string for ColumnMappingMode".into(),
-            )),
-        }
-    }
-}
-
 const SECONDS_PER_MINUTE: u64 = 60;
 const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
 const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
@@ -577,7 +536,7 @@ mod tests {
         // change to 2 day
         let mut md = dummy_metadata();
         md.configuration.insert(
-            DeltaConfigKey::DeletedFileRetentionDuration
+            TableProperty::DeletedFileRetentionDuration
                 .as_ref()
                 .to_string(),
             Some("interval 2 day".to_string()),
@@ -608,7 +567,7 @@ mod tests {
         // change to false
         let mut md = dummy_metadata();
         md.configuration.insert(
-            DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into(),
+            TableProperty::EnableExpiredLogCleanup.as_ref().into(),
             Some("false".to_string()),
         );
         let config = TableConfig(&md.configuration);

@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::ToDFSchema;
+use datafusion_physical_plan::ExecutionPlan;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 
@@ -89,6 +89,12 @@ impl std::future::IntoFuture for ConstraintBuilder {
         let this = self;
 
         Box::pin(async move {
+            if !this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles(
+                    "ADD CONSTRAINTS".into(),
+                ));
+            }
+
             let name = match this.name {
                 Some(v) => v,
                 None => return Err(DeltaTableError::Generic("No name provided".to_string())),

@@ -1,10 +1,11 @@
+use std::fmt;
+
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use chrono::{DateTime, TimeZone, Utc};
 use object_store::ObjectMeta;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::{ser::SerializeSeq, Deserialize, Serialize};
-use std::fmt;
 
 use super::log_segment::LogSegment;
 use super::EagerSnapshot;
