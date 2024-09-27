@@ -1,8 +1,8 @@
 # CloudFlare R2 & Minio
 
-`delta-rs` offers native support for using Cloudflare R2 and Minio's as storage backend. R2 and Minio support conditional puts, however we have to pass this flag into the storage options. See the example blow
+`delta-rs` offers native support for using Cloudflare R2 and Minio's as storage backend. R2 and Minio support conditional puts, however we have to pass this flag into the storage options. See the example below
 
-You don’t need to install any extra dependencies to red/write Delta tables to S3 with engines that use `delta-rs`. You do need to configure your AWS access credentials correctly.
+You don’t need to install any extra dependencies to read/write Delta tables to S3 with engines that use `delta-rs`. You do need to configure your AWS access credentials correctly.
 
 ## Passing S3 Credentials
 
