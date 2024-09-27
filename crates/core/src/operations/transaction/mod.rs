@@ -83,7 +83,7 @@ use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
 use serde_json::Value;
 
-use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
+use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
@@ -97,6 +97,7 @@ use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
 
+pub use self::conflict_checker::CommitConflictError;
 pub use self::protocol::INSTANCE as PROTOCOL;
 
 #[cfg(test)]
