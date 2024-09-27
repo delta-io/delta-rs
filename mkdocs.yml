@@ -82,6 +82,8 @@ nav:
       - api/exceptions.md
   - Integrations:
       - Object Storage:
+          - integrations/object-storage/adls.md
+          - integrations/object-storage/gcs.md
           - integrations/object-storage/hdfs.md
           - integrations/object-storage/s3.md
           - integrations/object-storage/s3-like.md
