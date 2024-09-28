@@ -718,6 +718,8 @@ impl MergePlan {
                 })
                 .boxed(),
             OptimizeOperations::ZOrder(zorder_columns, bins) => {
+                debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
+
                 #[cfg(not(feature = "datafusion"))]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
@@ -729,7 +731,6 @@ impl MergePlan {
                     bins.len() <= num_cpus::get(),
                 ));
 
-                debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
                 #[cfg(feature = "datafusion")]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,

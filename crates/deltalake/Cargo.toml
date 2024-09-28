@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.20.0"
+version = "0.20.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
