@@ -1,3 +1,5 @@
+import datetime
+import os
 import pathlib
 
 import pyarrow as pa
@@ -1038,3 +1040,40 @@ def test_merge_isin_partition_pruning(
     assert result == expected
     assert metrics["num_target_files_scanned"] == 2
     assert metrics["num_target_files_skipped_during_scan"] == 3
+
+
+def test_cdc_merge_planning_union_2908(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/2908"""
+    cdc_path = f"{tmp_path}/_change_data"
+
+    data = {
+        "id": pa.array([1, 2], pa.int64()),
+        "date": pa.array(
+            [datetime.date(1970, 1, 1), datetime.date(1970, 1, 2)], pa.date32()
+        ),
+    }
+
+    table = pa.Table.from_pydict(data)
+
+    dt = DeltaTable.create(
+        table_uri=tmp_path,
+        schema=table.schema,
+        mode="overwrite",
+        partition_by=["id"],
+        configuration={
+            "delta.enableChangeDataFeed": "true",
+        },
+    )
+
+    dt.merge(
+        source=table,
+        predicate="s.id = t.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert_all().execute()
+
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert dt.version() == 1
+    assert os.path.exists(cdc_path), "_change_data doesn't exist"
