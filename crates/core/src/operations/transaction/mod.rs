@@ -108,7 +108,7 @@ mod protocol;
 mod state;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-pub(crate) const DEFAULT_RETRIES: usize = 15;
+pub(crate) const DEFAULT_RETRIES: usize = 100;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -333,6 +333,7 @@ impl Default for CommitProperties {
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
+            create_checkpoint: false,
         }
     }
 }

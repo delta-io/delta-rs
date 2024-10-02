@@ -41,7 +41,7 @@ arrow-ord = { version = "52" }
 arrow-row = { version = "52" }
 arrow-schema = { version = "52" }
 arrow-select = { version = "52" }
-object_store = { version = "0.10.1" }
+object_store = { git = "https://github.com/ameer50/arrow-rs.git", rev = "bf74c3fde354c4f41d181fe27e010b9bdd9c1a29" }
 parquet = { version = "52" }
 
 # datafusion
@@ -74,3 +74,7 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+
+[replace]
+"object_store:0.9.1" = { git = "https://github.com/ameer50/arrow-rs.git", rev = "bf74c3fde354c4f41d181fe27e010b9bdd9c1a29" }
+"object_store:0.10.1" = { git = "https://github.com/ameer50/arrow-rs.git", rev = "bf74c3fde354c4f41d181fe27e010b9bdd9c1a29" }

@@ -17,12 +17,21 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use deltalake::arrow::pyarrow::ToPyArrow;
+use deltalake::arrow::record_batch::RecordBatchReader;
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
+use deltalake::datafusion::datasource::memory::MemTable;
+use deltalake::datafusion::datasource::provider::TableProvider;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use deltalake::datafusion::physical_plan::ExecutionPlan;
-use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::datafusion::prelude::{DataFrame, SessionContext};
+use deltalake::delta_datafusion::{
+    DataFusionMixins, DeltaDataChecker, DeltaScanConfigBuilder, DeltaSessionConfig,
+    DeltaTableProvider,
+};
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
@@ -1231,6 +1240,65 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (predicate = None, columns = None))]
+    pub fn datafusion_read(
+        &self,
+        py: Python,
+        predicate: Option<String>,
+        columns: Option<Vec<&str>>,
+    ) -> PyResult<PyObject> {
+        let batches = py.allow_threads(|| -> PyResult<_> {
+            let snapshot = self._table.snapshot().map_err(PythonError::from)?;
+            let log_store = self._table.log_store();
+
+            let scan_config = DeltaScanConfigBuilder::default()
+                .with_parquet_pushdown(false)
+                .build(&snapshot)
+                .map_err(PythonError::from)?;
+
+            let provider = Arc::new(
+                DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)
+                    .map_err(PythonError::from)?,
+            );
+            let source = provider_as_source(provider);
+
+            let state = {
+                let config = DeltaSessionConfig::default().into();
+                let session = SessionContext::new_with_config(config);
+                session.state()
+            };
+
+            let maybe_filter = predicate
+                .map(|predicate| snapshot.parse_predicate_expression(predicate, &state))
+                .transpose()
+                .map_err(PythonError::from)?;
+
+            let filters = match &maybe_filter {
+                Some(filter) => vec![filter.clone()],
+                None => vec![],
+            };
+
+            let plan = LogicalPlanBuilder::scan_with_filters(UNNAMED_TABLE, source, None, filters)
+                .unwrap()
+                .build()
+                .unwrap();
+
+            let mut df = DataFrame::new(state, plan);
+
+            if let Some(filter) = maybe_filter {
+                df = df.filter(filter).unwrap();
+            }
+
+            if let Some(columns) = columns {
+                df = df.select_columns(&columns).unwrap();
+            }
+
+            Ok(rt().block_on(async { df.collect().await }).unwrap())
+        })?;
+
+        batches.to_pyarrow(py)
     }
 }
 

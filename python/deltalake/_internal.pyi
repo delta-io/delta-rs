@@ -221,6 +221,11 @@ class RawDeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
     ) -> pyarrow.RecordBatchReader: ...
+    def datafusion_read(
+        self,
+        predicate: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+    ) -> None: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -388,11 +393,11 @@ class ArrayType:
     """
 
     element_type: DataType
-    """ The type of the element, of type: 
+    """ The type of the element, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -470,21 +475,21 @@ class MapType:
     ) -> None: ...
     type: Literal["map"]
     key_type: DataType
-    """ The type of the keys, of type: 
+    """ The type of the keys, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
 
     value_type: DataType
-    """The type of the values, of type: 
+    """The type of the values, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -572,11 +577,11 @@ class Field:
     """
 
     type: DataType
-    """ The type of the field, of type: 
+    """ The type of the field, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """

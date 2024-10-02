@@ -49,6 +49,8 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
         Expr::ScalarFunction(func) => {
             if func.args.len() == 1 {
                 references_table(&func.args[0], table)
+            } else if func.name() == "arrow_cast" && func.args.len() == 2 {
+                references_table(&func.args[0], table)
             } else {
                 ReferenceTableCheck::Unknown
             }

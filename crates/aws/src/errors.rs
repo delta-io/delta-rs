@@ -77,7 +77,7 @@ pub enum LockClientError {
     #[error("Lock table not found")]
     LockTableNotFound,
 
-    #[error("error in DynamoDb")]
+    #[error("error in DynamoDb: '{source:?}'")]
     GenericDynamoDb {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
