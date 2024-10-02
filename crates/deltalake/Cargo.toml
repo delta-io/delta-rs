@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.20.0"
+version = "0.21.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -16,12 +16,12 @@ rust-version.workspace = true
 features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
 
 [dependencies]
-deltalake-core = { version = "0.20.0", path = "../core" }
-deltalake-aws = { version = "0.3.0", path = "../aws", default-features = false, optional = true }
-deltalake-azure = { version = "0.3.0", path = "../azure", optional = true }
-deltalake-gcp = { version = "0.4.0", path = "../gcp", optional = true }
-deltalake-hdfs = { version = "0.4.0", path = "../hdfs", optional = true }
-deltalake-catalog-glue = { version = "0.4.0", path = "../catalog-glue", optional = true }
+deltalake-core = { version = "0.21.0", path = "../core" }
+deltalake-aws = { version = "0.4.0", path = "../aws", default-features = false, optional = true }
+deltalake-azure = { version = "0.4.0", path = "../azure", optional = true }
+deltalake-gcp = { version = "0.5.0", path = "../gcp", optional = true }
+deltalake-hdfs = { version = "0.5.0", path = "../hdfs", optional = true }
+deltalake-catalog-glue = { version = "0.5.0", path = "../catalog-glue", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that

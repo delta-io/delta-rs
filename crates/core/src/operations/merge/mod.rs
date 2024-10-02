@@ -1154,6 +1154,14 @@ async fn execute(
                 .select(write_projection.clone())?
                 .with_column(CDC_COLUMN_NAME, lit("insert"))?,
         );
+
+        let after = cdc_projection
+            .clone()
+            .filter(col(TARGET_COLUMN).is_true())?
+            .select(write_projection.clone())?;
+
+        // Extra select_columns is required so that before and after have same schema order
+        // DataFusion doesn't have UnionByName yet, see https://github.com/apache/datafusion/issues/12650
         let before = cdc_projection
             .clone()
             .filter(col(crate::delta_datafusion::PATH_COLUMN).is_not_null())?
@@ -1164,12 +1172,15 @@ async fn execute(
                     .filter(|c| c.name != crate::delta_datafusion::PATH_COLUMN)
                     .map(|c| Expr::Column(c.clone()))
                     .collect_vec(),
+            )?
+            .select_columns(
+                &after
+                    .schema()
+                    .columns()
+                    .iter()
+                    .map(|v| v.name())
+                    .collect::<Vec<_>>(),
             )?;
-
-        let after = cdc_projection
-            .clone()
-            .filter(col(TARGET_COLUMN).is_true())?
-            .select(write_projection.clone())?;
 
         let tracker = CDCTracker::new(before, after);
         change_data.push(tracker.collect()?);
