@@ -229,13 +229,16 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
     Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
-pub(crate) fn simplify_predicate(predicate: Expr, schema: &ArrowSchema) -> datafusion_common::Result<Expr> {
+pub(crate) fn simplify_predicate(
+    predicate: Expr,
+    schema: &ArrowSchema,
+) -> datafusion_common::Result<Expr> {
     let execution_props = ExecutionProps::new();
     let schema = schema.clone().to_dfschema_ref()?;
     let context = SimplifyContext::new(&execution_props).with_schema(schema.clone());
     let simplifier = ExprSimplifier::new(context);
     let predicate = simplifier.simplify(predicate)?;
-    simplifier.coerce(predicate, schema)
+    simplifier.coerce(predicate, &schema)
 }
 
 pub(crate) fn files_matching_predicate<'a>(
@@ -245,7 +248,8 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let predicate = simplify_predicate(predicate.clone(), snapshot.arrow_schema()?.as_ref()).unwrap_or(predicate);
+        let predicate = simplify_predicate(predicate.clone(), snapshot.arrow_schema()?.as_ref())
+            .unwrap_or(predicate);
         let expr = SessionContext::new()
             .create_physical_expr(predicate, &snapshot.arrow_schema()?.to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
@@ -830,9 +834,12 @@ impl TableProvider for DeltaTableProvider {
 
     fn supports_filters_pushdown(
         &self,
-        _filter: &[&Expr],
+        filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact])
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {

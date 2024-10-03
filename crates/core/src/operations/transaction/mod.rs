@@ -331,9 +331,9 @@ impl Default for CommitProperties {
             app_metadata: Default::default(),
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
-            create_checkpoint: true,
-            cleanup_expired_logs: None,
+            // TODO: remove and add through python post commit hook properties
             create_checkpoint: false,
+            cleanup_expired_logs: None,
         }
     }
 }

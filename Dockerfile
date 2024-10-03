@@ -1,5 +1,8 @@
 FROM --platform=linux/amd64 ghcr.io/pyo3/maturin
 
+ARG CARGO_VERSION=1.81.0
+ENV CARGO_VERSION=$CARGO_VERSION
+
 VOLUME /io
 
 WORKDIR /
@@ -12,7 +15,7 @@ RUN rustup target add x86_64-unknown-linux-gnu
 RUN pip install ziglang
 
 # Solves https://github.com/time-rs/time/issues/693
-RUN rustup install 1.77.1 && rustup default 1.77.1
+RUN rustup install $CARGO_VERSION && rustup default $CARGO_VERSION
 
 # To build, run in delta-rs root:
 # docker build --tag delta-maturin --build-arg TARGETARCH=amd64 --platform linux/amd64 .

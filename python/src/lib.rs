@@ -8,6 +8,7 @@ mod utils;
 use std::collections::{HashMap, HashSet};
 use std::future::IntoFuture;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,12 +19,9 @@ use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use deltalake::arrow::pyarrow::ToPyArrow;
-use deltalake::arrow::record_batch::RecordBatchReader;
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
-use deltalake::datafusion::datasource::memory::MemTable;
-use deltalake::datafusion::datasource::provider::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
 use deltalake::datafusion::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use deltalake::datafusion::physical_plan::ExecutionPlan;
@@ -1247,7 +1245,7 @@ impl RawDeltaTable {
         &self,
         py: Python,
         predicate: Option<String>,
-        columns: Option<Vec<&str>>,
+        columns: Option<Vec<String>>,
     ) -> PyResult<PyObject> {
         let batches = py.allow_threads(|| -> PyResult<_> {
             let snapshot = self._table.snapshot().map_err(PythonError::from)?;
@@ -1255,7 +1253,7 @@ impl RawDeltaTable {
 
             let scan_config = DeltaScanConfigBuilder::default()
                 .with_parquet_pushdown(false)
-                .build(&snapshot)
+                .build(snapshot)
                 .map_err(PythonError::from)?;
 
             let provider = Arc::new(
@@ -1292,7 +1290,9 @@ impl RawDeltaTable {
             }
 
             if let Some(columns) = columns {
-                df = df.select_columns(&columns).unwrap();
+                df = df
+                    .select_columns(&columns.iter().map(String::as_str).collect::<Vec<_>>())
+                    .unwrap();
             }
 
             Ok(rt().block_on(async { df.collect().await }).unwrap())
