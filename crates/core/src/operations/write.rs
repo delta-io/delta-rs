@@ -1075,7 +1075,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         actions.push(protocol.into())
                     }
 
-                    if schema != table_schema {
+                    if try_cast_batch(schema.fields(), table_schema.fields()).is_err() {
                         let mut metadata = snapshot.metadata().clone();
                         let delta_schema: StructType = schema.as_ref().try_into()?;
                         metadata.schema_string = serde_json::to_string(&delta_schema)?;
