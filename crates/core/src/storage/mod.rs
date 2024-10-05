@@ -395,10 +395,10 @@ pub fn factories() -> FactoryRegistry {
 }
 
 /// Simpler access pattern for the [FactoryRegistry] to get a single store
-pub fn store_for(url: &Url) -> DeltaResult<ObjectStoreRef> {
+pub fn store_for(url: &Url, storage_options: &StorageOptions) -> DeltaResult<ObjectStoreRef> {
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     if let Some(factory) = factories().get(&scheme) {
-        let (store, _prefix) = factory.parse_url_opts(url, &StorageOptions::default())?;
+        let (store, _prefix) = factory.parse_url_opts(url, storage_options)?;
         Ok(store)
     } else {
         Err(DeltaTableError::InvalidTableLocation(url.clone().into()))

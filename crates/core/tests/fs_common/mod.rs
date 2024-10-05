@@ -5,7 +5,7 @@ use deltalake_core::kernel::{
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::{GetResult, ObjectStoreResult};
+use deltalake_core::storage::{GetResult, ObjectStoreResult, StorageOptions};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
@@ -152,7 +152,7 @@ impl SlowStore {
         _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
         Ok(Self {
-            inner: deltalake_core::storage::store_for(&location)?,
+            inner: deltalake_core::storage::store_for(&location, &StorageOptions::default())?,
         })
     }
 }
