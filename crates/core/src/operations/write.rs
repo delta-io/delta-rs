@@ -950,7 +950,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = schema.clone().try_into()?;
                     let current_protocol = snapshot.protocol();
-                    let mut metadata = snapshot.metadata().clone();
+                    let configuration = snapshot.metadata().configuration.clone();
                     let maybe_new_protocol = if PROTOCOL
                         .contains_timestampntz(schema_struct.fields())
                         && !current_protocol
@@ -965,18 +965,19 @@ impl std::future::IntoFuture for WriteBuilder {
                         if !(current_protocol.min_reader_version == 3
                             && current_protocol.min_writer_version == 7)
                         {
-                            Some(new_protocol.move_table_properties_into_features(
-                                &metadata.configuration.clone(),
-                            ))
+                            Some(new_protocol.move_table_properties_into_features(&configuration))
                         } else {
                             Some(new_protocol)
                         }
                     } else {
                         None
                     };
-                    metadata.schema_string = serde_json::to_string(&schema_struct)?;
-                    metadata.partition_columns = partition_columns.clone();
-                    actions.push(metadata.into());
+                    let schema_action = Action::Metadata(Metadata::try_new(
+                        schema_struct,
+                        partition_columns.clone(),
+                        configuration,
+                    )?);
+                    actions.push(schema_action);
                     if let Some(new_protocol) = maybe_new_protocol {
                         actions.push(new_protocol.into())
                     }
