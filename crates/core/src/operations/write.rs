@@ -1588,6 +1588,15 @@ mod tests {
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
 
+        // <https://github.com/delta-io/delta-rs/issues/2925>
+        let metadata = table
+            .metadata()
+            .expect("Failed to retrieve updated metadata");
+        assert_ne!(
+            None, metadata.created_time,
+            "Created time should be the milliseconds since epoch of when the action was created"
+        );
+
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
     }

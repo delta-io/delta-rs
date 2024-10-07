@@ -86,7 +86,7 @@ impl Metadata {
             configuration,
             name: None,
             description: None,
-            created_time: None,
+            created_time: Some(chrono::Utc::now().timestamp_millis()),
         })
     }
 
