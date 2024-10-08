@@ -294,7 +294,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../integrations/object-storage/hdfs/" class="md-tabs__link">
+        <a href="../../integrations/object-storage/adls/" class="md-tabs__link">
           
   
     
@@ -1421,6 +1421,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1452,6 +1456,46 @@
             Object Storage
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/adls/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Azure ADLS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/gcs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GCS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1862,7 +1906,13 @@ to.</p>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">dry_run</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="c1"># Don&#39;t run this unless you are sure!</span>
 </span></code></pre></div>
 <h2 id="optimizing-tables">Optimizing tables</h2>
-<p>Optimizing tables is not currently supported.</p>
+<p>Optimizing a table compacts small files into larger files to avoid the small file problem. This is especially important for tables that get small amounts of data appended to with high frequency. In addition to compacting small files, you can colocate similar data in the same files with Z Ordering, which allows for better file skipping and faster queries.</p>
+<p>A table <code>dt = DeltaTable(...)</code> has two methods for optimizing it:</p>
+<ul>
+<li><code>dt.optimize.compact()</code> for compacting small files,</li>
+<li><code>dt.optimize.z_order()</code> to compact and apply Z Ordering.</li>
+</ul>
+<p>See the section <a href="../optimize/small-file-compaction-with-optimize/">Small file compaction</a> for more information and a detailed example on <code>compact</code>, and the section <a href="../optimize/delta-lake-z-order/">Z Order</a> for more information on <code>z_order</code>.</p>
 
 
 

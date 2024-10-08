@@ -296,7 +296,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../hdfs/" class="md-tabs__link">
+        <a href="../adls/" class="md-tabs__link">
           
   
     
@@ -1371,6 +1371,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1400,6 +1404,46 @@
             Object Storage
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adls/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Azure ADLS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gcs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GCS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1887,8 +1931,8 @@
 
 
 <h1 id="aws-s3-storage-backend">AWS S3 Storage Backend</h1>
-<p><code>delta-rs</code> offers native support for using AWS S3 as an objet storage backend.</p>
-<p>You don’t need to install any extra dependencies to red/write Delta tables to S3 with engines that use <code>delta-rs</code>. You do need to configure your AWS access credentials correctly.</p>
+<p><code>delta-rs</code> offers native support for using AWS S3 as an object storage backend.</p>
+<p>You don’t need to install any extra dependencies to read/write Delta tables to S3 with engines that use <code>delta-rs</code>. You do need to configure your AWS access credentials correctly.</p>
 <h2 id="note-for-boto3-users">Note for boto3 users</h2>
 <p>Many Python engines use <a href="https://boto3.amazonaws.com/v1/documentation/api/latest/index.html">boto3</a> to connect to AWS. This library supports reading credentials automatically from your local <code>.aws/config</code> or <code>.aws/creds</code> file.</p>
 <p>For example, if you’re running locally with the proper credentials in your local <code>.aws/config</code> or <code>.aws/creds</code> file then you can write a Parquet file to S3 like this with pandas:</p>

@@ -296,7 +296,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../hdfs/" class="md-tabs__link">
+        <a href="../adls/" class="md-tabs__link">
           
   
     
@@ -1371,6 +1371,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1400,6 +1404,46 @@
             Object Storage
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adls/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Azure ADLS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gcs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GCS Storage Backend
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1507,15 +1551,8 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-safe-concurrent-writes" class="md-nav__link">
-    Delta Lake on S3: Safe Concurrent Writes
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-required-permissions" class="md-nav__link">
-    Delta Lake on S3: Required permissions
+  <a href="#minio-and-docker" class="md-nav__link">
+    Minio and Docker
   </a>
   
 </li>
@@ -1841,15 +1878,8 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-safe-concurrent-writes" class="md-nav__link">
-    Delta Lake on S3: Safe Concurrent Writes
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#delta-lake-on-s3-required-permissions" class="md-nav__link">
-    Delta Lake on S3: Required permissions
+  <a href="#minio-and-docker" class="md-nav__link">
+    Minio and Docker
   </a>
   
 </li>
@@ -1873,8 +1903,8 @@
 
 
 <h1 id="cloudflare-r2-minio">CloudFlare R2 &amp; Minio</h1>
-<p><code>delta-rs</code> offers native support for using Cloudflare R2 and Minio's as storage backend. R2 and Minio support conditional puts, however we have to pass this flag into the storage options. See the example blow</p>
-<p>You don’t need to install any extra dependencies to red/write Delta tables to S3 with engines that use <code>delta-rs</code>. You do need to configure your AWS access credentials correctly.</p>
+<p><code>delta-rs</code> offers native support for using Cloudflare R2 or Minio as an S3-compatible storage backend. R2 and Minio support conditional puts, which removes the need for DynamoDB for safe concurrent writes.  However, we have to pass the <code>aws_conditional_put</code> flag into <code>storage_options</code>. See the example below.</p>
+<p>You don’t need to install any extra dependencies to read/write Delta tables to S3 with engines that use <code>delta-rs</code>. You do need to configure your AWS access credentials correctly.</p>
 <h2 id="passing-s3-credentials">Passing S3 Credentials</h2>
 <p>You can pass your AWS credentials explicitly by using:</p>
 <ul>
@@ -1897,7 +1927,7 @@
 </ol>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">access_key</span><span class="o">&gt;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="s1">&#39;conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span><span class="p">,</span> <span class="c1"># Here we say to use conditional put, this provides safe concurrency.</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span><span class="p">,</span> <span class="c1"># Here we say to use conditional put, this provides safe concurrency.</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
 </span></code></pre></div>
 <ol>
@@ -1908,34 +1938,30 @@
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="delta-lake-on-s3-safe-concurrent-writes">Delta Lake on S3: Safe Concurrent Writes</h2>
-<p>You need a locking provider to ensure safe concurrent writes when writing Delta tables to S3. This is because S3 does not guarantee mutual exclusion.</p>
-<p>A locking provider guarantees that only one writer is able to create the same file. This prevents corrupted or conflicting data.</p>
-<p><code>delta-rs</code> uses DynamoDB to guarantee safe concurrent writes.</p>
-<p>Run the code below in your terminal to create a DynamoDB table that will act as your locking provider.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>    aws dynamodb create-table \
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    --table-name delta_log \
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    --attribute-definitions AttributeName=tablePath,AttributeType=S AttributeName=fileName,AttributeType=S \
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    --key-schema AttributeName=tablePath,KeyType=HASH AttributeName=fileName,KeyType=RANGE \
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+<h2 id="minio-and-docker">Minio and Docker</h2>
+<p>Minio is straightforward to host locally with Docker and docker-compose, via the following <code>docker-compose.yml</code> file - just run <code>docker-compose up</code>:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;3.8&#39;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">services</span><span class="p">:</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">minio</span><span class="p">:</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">minio/minio</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9000:9000&quot;</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9001:9001&quot;</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="nt">MINIO_ROOT_USER</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">      </span><span class="nt">MINIO_ROOT_PASSWORD</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">server /data --console-address &quot;:9001&quot;</span>
 </span></code></pre></div>
-<p>If for some reason you don't want to use DynamoDB as your locking mechanism you can choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true</code> in order to enable S3 unsafe writes.</p>
-<p>Read more in the <a href="../../../usage/writing/writing-to-s3-with-locking-provider/">Usage</a> section.</p>
-<h2 id="delta-lake-on-s3-required-permissions">Delta Lake on S3: Required permissions</h2>
-<p>You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the Delta Lake, because there are temporary files into the log folder that are deleted after usage.</p>
-<p>In AWS S3, you will need the following permissions:</p>
-<ul>
-<li>s3:GetObject</li>
-<li>s3:PutObject</li>
-<li>s3:DeleteObject</li>
-</ul>
-<p>In DynamoDB, you will need the following permissions:</p>
-<ul>
-<li>dynamodb:GetItem</li>
-<li>dynamodb:Query</li>
-<li>dynamodb:PutItem</li>
-<li>dynamodb:UpdateItem</li>
-</ul>
+<p>With this configuration, Minio will host its S3-compatible API over HTTP, not HTTPS, on port 9000.  This requires an additional flag in <code>storage_options</code>, <code>AWS_ALLOW_HTTP</code>, to be set to <code>true</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="o">...</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="o">...</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;http://localhost:9000&#39;</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="s1">&#39;AWS_ALLOW_HTTP&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">}</span>
+</span></code></pre></div>
 
 
 
