@@ -946,3 +946,67 @@ def test_is_deltatable_with_storage_opts():
         "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
     }
     assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
+
+
+def test_datafusion_read_table():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["1", "2", "3", "4", "5", "6", "7"],
+        "year": ["2020", "2020", "2020", "2021", "2021", "2021", "2021"],
+        "month": ["1", "2", "2", "4", "12", "12", "12"],
+        "day": ["1", "3", "5", "5", "4", "20", "20"],
+    }
+    actual = pa.Table.from_batches(dt.datafusion_read()).sort_by("value").to_pydict()
+    assert expected == actual
+
+
+def test_datafusion_read_table_with_columns():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["1", "2", "3", "4", "5", "6", "7"],
+        "day": ["1", "3", "5", "5", "4", "20", "20"],
+    }
+    actual = (
+        pa.Table.from_batches(dt.datafusion_read(columns=["value", "day"]))
+        .sort_by("value")
+        .to_pydict()
+    )
+    assert expected == actual
+
+
+def test_datafusion_read_with_filter_on_partitioned_column():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["1", "2", "3"],
+        "year": ["2020", "2020", "2020"],
+        "month": ["1", "2", "2"],
+        "day": ["1", "3", "5"],
+    }
+    actual = (
+        pa.Table.from_batches(dt.datafusion_read(predicate="year = '2020'"))
+        .sort_by("value")
+        .to_pydict()
+    )
+    assert expected == actual
+
+
+def test_datafusion_read_with_filter_on_multiple_columns():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["4", "5"],
+        "year": ["2021", "2021"],
+        "month": ["4", "12"],
+        "day": ["5", "4"],
+    }
+    actual = (
+        pa.Table.from_batches(
+            dt.datafusion_read(predicate="year = '2021' and value < '6'")
+        )
+        .sort_by("value")
+        .to_pydict()
+    )
+    assert expected == actual

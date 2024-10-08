@@ -1417,6 +1417,13 @@ class DeltaTable:
         )
         return json.loads(metrics)
 
+    def datafusion_read(
+        self,
+        predicate: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+    ) -> List[pyarrow.RecordBatch]:
+        return self._table.datafusion_read(predicate, columns)
+
 
 class TableMerger:
     """API for various table `MERGE` commands."""
