@@ -1,6 +1,8 @@
 //! Custom AWS credential providers used by delta-rs
 //!
 
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
@@ -83,13 +85,25 @@ impl OptionsCredentialsProvider {
     /// [Credentials] instance for AWS SDK credential resolution
     fn credentials(&self) -> aws_credential_types::provider::Result {
         debug!("Attempting to pull credentials from `StorageOptions`");
-        let access_key = self.options.0.get(constants::AWS_ACCESS_KEY_ID).ok_or(
+
+        // StorageOptions can have a variety of flavors because
+        // [object_store::aws::AmazonS3ConfigKey] supports a couple different variants for key
+        // names.
+        let config_keys: HashMap<AmazonS3ConfigKey, String> =
+            HashMap::from_iter(self.options.0.iter().filter_map(|(k, v)| {
+                match AmazonS3ConfigKey::from_str(&k.to_lowercase()) {
+                    Ok(k) => Some((k, v.into())),
+                    Err(_) => None,
+                }
+            }));
+
+        let access_key = config_keys.get(&AmazonS3ConfigKey::AccessKeyId).ok_or(
             CredentialsError::not_loaded("access key not in StorageOptions"),
         )?;
-        let secret_key = self.options.0.get(constants::AWS_SECRET_ACCESS_KEY).ok_or(
+        let secret_key = config_keys.get(&AmazonS3ConfigKey::SecretAccessKey).ok_or(
             CredentialsError::not_loaded("secret key not in StorageOptions"),
         )?;
-        let session_token = self.options.0.get(constants::AWS_SESSION_TOKEN).cloned();
+        let session_token = config_keys.get(&AmazonS3ConfigKey::Token).cloned();
 
         Ok(Credentials::new(
             access_key,
@@ -107,6 +121,53 @@ impl ProvideCredentials for OptionsCredentialsProvider {
         Self: 'a,
     {
         future::ProvideCredentials::ready(self.credentials())
+    }
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+    use maplit::hashmap;
+
+    #[test]
+    fn test_empty_options_error() {
+        let options = StorageOptions::default();
+        let provider = OptionsCredentialsProvider { options };
+        let result = provider.credentials();
+        assert!(
+            result.is_err(),
+            "The default StorageOptions don't have credentials!"
+        );
+    }
+
+    #[test]
+    fn test_uppercase_options_resolve() {
+        let mash = hashmap! {
+            "AWS_ACCESS_KEY_ID".into() => "key".into(),
+            "AWS_SECRET_ACCESS_KEY".into() => "secret".into(),
+        };
+        let options = StorageOptions(mash);
+        let provider = OptionsCredentialsProvider { options };
+        let result = provider.credentials();
+        assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
+        let result = result.unwrap();
+        assert_eq!(result.access_key_id(), "key");
+        assert_eq!(result.secret_access_key(), "secret");
+    }
+
+    #[test]
+    fn test_lowercase_options_resolve() {
+        let mash = hashmap! {
+            "aws_access_key_id".into() => "key".into(),
+            "aws_secret_access_key".into() => "secret".into(),
+        };
+        let options = StorageOptions(mash);
+        let provider = OptionsCredentialsProvider { options };
+        let result = provider.credentials();
+        assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
+        let result = result.unwrap();
+        assert_eq!(result.access_key_id(), "key");
+        assert_eq!(result.secret_access_key(), "secret");
     }
 }
 
