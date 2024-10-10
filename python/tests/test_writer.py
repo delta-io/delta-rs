@@ -4,7 +4,7 @@ import os
 import pathlib
 import random
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from math import inf
 from typing import Any, Dict, Iterable, List, Literal
@@ -1888,3 +1888,108 @@ def test_predicate_out_of_bounds(tmp_path: pathlib.Path):
         schema_mode="merge",
         predicate=predicate,
     )
+
+
+@pytest.mark.pandas
+def test_write_timestampntz(tmp_path: pathlib.Path):
+    import pandas as pd
+
+    data = [
+        ("AAPL", "20240731", 100, 11.1),
+        ("GOOG", "20240731", 200, 11.1),
+    ]
+    columns = ["ins", "date", "f1", "f2"]
+    df = pd.DataFrame(data, columns=columns)
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        partition_by="date",
+        mode="overwrite",
+    )
+
+    dt = DeltaTable(tmp_path)
+    protocol = dt.protocol()
+    # A fresh table with no special features should have the lowest possible
+    # minwriter feature
+    assert protocol.min_writer_version == 2
+
+    data = [
+        (datetime(2024, 7, 31, 9, 30, 0), "AAPL", "20240731", 666, 666),
+        (datetime(2024, 7, 31, 9, 30, 0), "GOOG", "20240731", 777, 777),
+    ]
+    columns = ["ts", "ins", "date", "fb", "fc"]
+    df = pd.DataFrame(data, columns=columns)
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        partition_by="date",
+        mode="append",
+        schema_mode="merge",
+    )
+
+    dt = DeltaTable(tmp_path)
+    protocol = dt.protocol()
+    # Now that a datetime has been passed through the writer version needs to
+    # be upgraded to 7 to support timestampNtz
+    assert protocol.min_writer_version == 7
+
+
+@pytest.mark.pandas
+def test_write_timestamp(tmp_path: pathlib.Path):
+    import pandas as pd
+
+    data = [
+        ("AAPL", "20240731", 100, 11.1),
+        ("GOOG", "20240731", 200, 11.1),
+    ]
+    columns = ["ins", "date", "f1", "f2"]
+    df = pd.DataFrame(data, columns=columns)
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        partition_by="date",
+        mode="overwrite",
+    )
+
+    dt = DeltaTable(tmp_path)
+    protocol = dt.protocol()
+    # A fresh table with no special features should have the lowest possible
+    # minwriter feature
+    assert protocol.min_writer_version == 2
+
+    # Performing schema evolution with a timestamp that *has* a timezone should
+    # not result in a writer version upgrade!
+    data = [
+        (
+            datetime(2024, 7, 31, 9, 30, 0, tzinfo=timezone.utc),
+            "AAPL",
+            "20240731",
+            666,
+            666,
+        ),
+        (
+            datetime(2024, 7, 31, 9, 30, 0, tzinfo=timezone.utc),
+            "GOOG",
+            "20240731",
+            777,
+            777,
+        ),
+    ]
+    columns = ["ts", "ins", "date", "fb", "fc"]
+    df = pd.DataFrame(data, columns=columns)
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=df,
+        partition_by="date",
+        mode="append",
+        schema_mode="merge",
+    )
+
+    # Reload the table to make sure we have the latest protocol
+    dt = DeltaTable(tmp_path)
+    protocol = dt.protocol()
+    # Now that a datetime has been passed through the writer version needs to
+    # be upgraded to 7 to support timestampNtz
+    assert protocol.min_writer_version == 2
