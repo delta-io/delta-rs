@@ -86,7 +86,7 @@ Create another pandas DataFrame and append it to the Delta table to see how this
 
 ```python
 df = pd.DataFrame({"num": [8, 9], "letter": ["dd", "ee"]})
-write_deltalake("tmp/some-table", df, mode="ovewrite")
+write_deltalake("tmp/some-table", df, mode="append")
 ```
 
 Here are the files in storage:
