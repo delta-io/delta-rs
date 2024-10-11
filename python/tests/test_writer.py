@@ -273,7 +273,7 @@ def test_write_type_castable_types(existing_table: DeltaTable):
         engine="rust",
     )
     with pytest.raises(
-        Exception, match="Cast error: Cannot cast string 'hello' to value of Int8 type"
+        Exception, match="Cast error: Failed to cast int8 from Int8 to Utf8: Cannot cast string 'hello' to value of Int8 type"
     ):
         write_deltalake(
             existing_table,
