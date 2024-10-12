@@ -221,6 +221,11 @@ class RawDeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
     ) -> pyarrow.RecordBatchReader: ...
+    def datafusion_read(
+        self,
+        predicate: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+    ) -> None: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
