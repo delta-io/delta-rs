@@ -12,7 +12,7 @@ Start by creating a pandas DataFrame and writing it out to a Delta table.
 
 ```python
 import pandas as pd
-from deltalake import DeltaTable, write_deltalake
+from deltalake import write_deltalake
 
 df = pd.DataFrame({"num": [1, 2, 3], "letter": ["a", "b", "c"]})
 write_deltalake("tmp/some-table", df)
@@ -86,7 +86,7 @@ Create another pandas DataFrame and append it to the Delta table to see how this
 
 ```python
 df = pd.DataFrame({"num": [8, 9], "letter": ["dd", "ee"]})
-write_deltalake(f"{cwd}/tmp/delta-table", df, mode="append")
+write_deltalake("tmp/some-table", df, mode="append")
 ```
 
 Here are the files in storage:
@@ -132,7 +132,7 @@ Now create a third pandas DataFrame and overwrite the Delta table with the new d
 
 ```python
 df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
-write_deltalake(f"{cwd}/tmp/delta-table", df, mode="append")
+write_deltalake("tmp/some-table", df, mode="overwrite")
 ```
 
 Here are the files in storage:
@@ -202,7 +202,7 @@ Data lakes consist of data files persisted in storage. They don't have a transac
 
 Data lakes perform transactions differently than Delta tables.
 
-When you perform an overwrite tranasction with a Delta table, you logically delete the exiting data without physically removing it.
+When you perform an overwrite transaction with a Delta table, you logically delete the exiting data without physically removing it.
 
 Data lakes don't support logical deletes, so you have to physically delete the data from storage.
 
