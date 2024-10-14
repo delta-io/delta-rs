@@ -25,7 +25,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
+    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
 };
 use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::add_feature::AddTableFeatureBuilder;
@@ -1232,6 +1232,19 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
+
+    pub fn transaction_versions(&self) -> HashMap<String, String> {
+        self._table
+            .get_app_transaction_version()
+            .iter()
+            .map(|(app_id, transaction)| {
+                (
+                    app_id.to_owned(),
+                    serde_json::to_string(transaction).unwrap(),
+                )
+            })
+            .collect()
+    }
 }
 
 fn set_post_commithook_properties(
@@ -1378,6 +1391,11 @@ fn maybe_create_commit_properties(
         if let Some(max_retries) = commit_props.max_commit_retries {
             commit_properties = commit_properties.with_max_retries(max_retries);
         };
+
+        if let Some(app_transactions) = commit_props.app_transactions {
+            let app_transactions = app_transactions.iter().map(Transaction::from).collect();
+            commit_properties = commit_properties.with_application_transactions(app_transactions);
+        }
     }
 
     if let Some(post_commit_hook_props) = post_commithook_properties {
@@ -1657,9 +1675,27 @@ pub struct PyPostCommitHookProperties {
 }
 
 #[derive(FromPyObject)]
+pub struct PyTransaction {
+    app_id: String,
+    version: i64,
+    last_updated: Option<i64>,
+}
+
+impl From<&PyTransaction> for Transaction {
+    fn from(value: &PyTransaction) -> Self {
+        Transaction {
+            app_id: value.app_id.clone(),
+            version: value.version,
+            last_updated: value.last_updated,
+        }
+    }
+}
+
+#[derive(FromPyObject)]
 pub struct PyCommitProperties {
     custom_metadata: Option<HashMap<String, String>>,
     max_commit_retries: Option<usize>,
+    app_transactions: Option<Vec<PyTransaction>>,
 }
 
 #[pyfunction]

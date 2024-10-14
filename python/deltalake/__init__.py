@@ -15,6 +15,7 @@ from .table import CommitProperties as CommitProperties
 from .table import DeltaTable as DeltaTable
 from .table import Metadata as Metadata
 from .table import PostCommitHookProperties as PostCommitHookProperties
+from .table import Transaction as Transaction
 from .table import (
     WriterProperties as WriterProperties,
 )

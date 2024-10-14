@@ -23,7 +23,7 @@ from deltalake.exceptions import (
     DeltaProtocolError,
     SchemaMismatchError,
 )
-from deltalake.table import ProtocolVersions
+from deltalake.table import CommitProperties, ProtocolVersions, Transaction
 from deltalake.writer import try_get_table_and_table_uri
 
 try:
@@ -1993,3 +1993,32 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     # Now that a datetime has been passed through the writer version needs to
     # be upgraded to 7 to support timestampNtz
     assert protocol.min_writer_version == 2
+
+
+def test_write_transactions(tmp_path: pathlib.Path, sample_data: pa.Table):
+    transactions = [
+        Transaction(app_id="app_1", version=1),
+        Transaction(app_id="app_2", version=2, last_updated=123456),
+    ]
+    commit_properties = CommitProperties(app_transactions=transactions)
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=sample_data,
+        mode="overwrite",
+        schema_mode="overwrite",
+        commit_properties=commit_properties,
+    )
+
+    delta_table = DeltaTable(tmp_path)
+    transactions = delta_table.transaction_versions()
+
+    assert len(transactions) == 2
+    assert transactions["app_1"] == {
+        "appId": "app_1",
+        "version": 1,
+    }
+    assert transactions["app_2"] == {
+        "appId": "app_2",
+        "version": 2,
+        "lastUpdated": 123456,
+    }

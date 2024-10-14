@@ -150,6 +150,13 @@ class PostCommitHookProperties:
         self.cleanup_expired_logs = cleanup_expired_logs
 
 
+@dataclass
+class Transaction:
+    app_id: str
+    version: int
+    last_updated: Optional[int] = None
+
+
 @dataclass(init=True)
 class CommitProperties:
     """The commit properties. Controls the behaviour of the commit."""
@@ -158,6 +165,7 @@ class CommitProperties:
         self,
         custom_metadata: Optional[Dict[str, str]] = None,
         max_commit_retries: Optional[int] = None,
+        app_transactions: Optional[List[Transaction]] = None,
     ):
         """Custom metadata to be stored in the commit. Controls the number of retries for the commit.
 
@@ -167,6 +175,7 @@ class CommitProperties:
         """
         self.custom_metadata = custom_metadata
         self.max_commit_retries = max_commit_retries
+        self.app_transactions = app_transactions
 
 
 def _commit_properties_from_custom_metadata(
@@ -1416,6 +1425,12 @@ class DeltaTable:
             post_commithook_properties,
         )
         return json.loads(metrics)
+
+    def transaction_versions(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            app_id: json.loads(transaction)
+            for app_id, transaction in self._table.transaction_versions().items()
+        }
 
 
 class TableMerger:
