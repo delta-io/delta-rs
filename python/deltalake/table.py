@@ -43,6 +43,7 @@ from deltalake._internal import (
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
+    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -148,13 +149,6 @@ class PostCommitHookProperties:
         """
         self.create_checkpoint = create_checkpoint
         self.cleanup_expired_logs = cleanup_expired_logs
-
-
-@dataclass
-class Transaction:
-    app_id: str
-    version: int
-    last_updated: Optional[int] = None
 
 
 @dataclass(init=True)
@@ -1426,11 +1420,8 @@ class DeltaTable:
         )
         return json.loads(metrics)
 
-    def transaction_versions(self) -> Dict[str, Dict[str, Any]]:
-        return {
-            app_id: json.loads(transaction)
-            for app_id, transaction in self._table.transaction_versions().items()
-        }
+    def transaction_versions(self) -> Dict[str, Transaction]:
+        return self._table.transaction_versions()
 
 
 class TableMerger:

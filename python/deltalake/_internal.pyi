@@ -221,7 +221,7 @@ class RawDeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
     ) -> pyarrow.RecordBatchReader: ...
-    def transaction_versions(self) -> Dict[str, str]: ...
+    def transaction_versions(self) -> Dict[str, Transaction]: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -907,3 +907,12 @@ FilterConjunctionType = List[FilterLiteralType]
 FilterDNFType = List[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = List[Tuple[str, str, Union[str, List[str]]]]
+
+class Transaction:
+    app_id: str
+    version: int
+    last_updated: Optional[int]
+
+    def __init__(
+        self, app_id: str, version: int, last_updated: Optional[int] = None
+    ) -> None: ...
