@@ -1233,16 +1233,11 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    pub fn transaction_versions(&self) -> HashMap<String, String> {
+    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
         self._table
             .get_app_transaction_version()
-            .iter()
-            .map(|(app_id, transaction)| {
-                (
-                    app_id.to_owned(),
-                    serde_json::to_string(transaction).unwrap(),
-                )
-            })
+            .into_iter()
+            .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
             .collect()
     }
 }
@@ -1674,11 +1669,48 @@ pub struct PyPostCommitHookProperties {
     cleanup_expired_logs: Option<bool>,
 }
 
-#[derive(FromPyObject)]
+#[derive(Clone)]
+#[pyclass(name = "Transaction", module = "deltalake._internal")]
 pub struct PyTransaction {
-    app_id: String,
-    version: i64,
-    last_updated: Option<i64>,
+    #[pyo3(get)]
+    pub app_id: String,
+    #[pyo3(get)]
+    pub version: i64,
+    #[pyo3(get)]
+    pub last_updated: Option<i64>,
+}
+
+#[pymethods]
+impl PyTransaction {
+    #[new]
+    #[pyo3(signature = (app_id, version, last_updated = None))]
+    fn new(app_id: String, version: i64, last_updated: Option<i64>) -> Self {
+        Self {
+            app_id,
+            version,
+            last_updated,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Transaction(app_id={}, version={}, last_updated={})",
+            self.app_id,
+            self.version,
+            self.last_updated
+                .map_or("None".to_owned(), |n| n.to_string())
+        )
+    }
+}
+
+impl From<Transaction> for PyTransaction {
+    fn from(value: Transaction) -> Self {
+        PyTransaction {
+            app_id: value.app_id,
+            version: value.version,
+            last_updated: value.last_updated,
+        }
+    }
 }
 
 impl From<&PyTransaction> for Transaction {
@@ -2039,6 +2071,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
+    m.add_class::<PyTransaction>()?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;
