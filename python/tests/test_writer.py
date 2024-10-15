@@ -1996,11 +1996,11 @@ def test_write_timestamp(tmp_path: pathlib.Path):
 
 
 def test_write_transactions(tmp_path: pathlib.Path, sample_data: pa.Table):
-    transactions = [
+    expected_transactions = [
         Transaction(app_id="app_1", version=1),
         Transaction(app_id="app_2", version=2, last_updated=123456),
     ]
-    commit_properties = CommitProperties(app_transactions=transactions)
+    commit_properties = CommitProperties(app_transactions=expected_transactions)
     write_deltalake(
         table_or_uri=tmp_path,
         data=sample_data,
@@ -2013,12 +2013,13 @@ def test_write_transactions(tmp_path: pathlib.Path, sample_data: pa.Table):
     transactions = delta_table.transaction_versions()
 
     assert len(transactions) == 2
-    assert transactions["app_1"] == {
-        "appId": "app_1",
-        "version": 1,
-    }
-    assert transactions["app_2"] == {
-        "appId": "app_2",
-        "version": 2,
-        "lastUpdated": 123456,
-    }
+
+    transaction_1 = transactions["app_1"]
+    assert transaction_1.app_id == "app_1"
+    assert transaction_1.version == 1
+    assert transaction_1.last_updated is None
+
+    transaction_2 = transactions["app_2"]
+    assert transaction_2.app_id == "app_2"
+    assert transaction_2.version == 2
+    assert transaction_2.last_updated == 123456
