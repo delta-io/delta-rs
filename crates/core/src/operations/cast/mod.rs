@@ -144,7 +144,19 @@ fn cast_field(
             add_missing,
         )?) as ArrayRef),
         _ if is_cast_required(col_type, field_type) => {
-            cast_with_options(col, field_type, cast_options)
+            cast_with_options(col, field_type, cast_options).map_err(|err| {
+                if let ArrowError::CastError(err) = err {
+                    ArrowError::CastError(format!(
+                        "Failed to cast {} from {} to {}: {}",
+                        field.name(),
+                        field_type,
+                        col_type,
+                        err
+                    ))
+                } else {
+                    err
+                }
+            })
         }
         _ => Ok(col.clone()),
     }
