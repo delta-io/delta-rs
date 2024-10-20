@@ -173,6 +173,7 @@ async fn test_merge_different_range() {
     let (_table_ref1, _metrics) = merge(table_ref1, df1, expr.clone()).await.unwrap();
     let result = merge(table_ref2, df2, expr).await;
 
+    println!("{result:#?}");
     assert!(result.is_ok());
 }
 
