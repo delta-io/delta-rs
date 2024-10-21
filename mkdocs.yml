@@ -60,6 +60,7 @@ nav:
       - Reading Change Data: usage/read-cdf.md
       - Examining a table: usage/examining-table.md
       - Querying a table: usage/querying-delta-tables.md
+      - Merging a table: usage/merging-tables.md
       - Managing a table: usage/managing-tables.md
       - Writing a table:
           - usage/writing/index.md
