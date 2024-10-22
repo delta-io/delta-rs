@@ -349,9 +349,15 @@ fn parquet_bytes_from_state(
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
-    let jsons = jsons.collect::<Result<Vec<serde_json::Value>, _>>()?;
-    decoder.serialize(&jsons)?;
 
+    // Count of actions
+    let mut total_actions = 0;
+
+    for j in jsons {
+        let buf = serde_json::to_string(&j?).unwrap();
+        let _ = decoder.decode(buf.as_bytes())?;
+        total_actions += 1;
+    }
     while let Some(batch) = decoder.flush()? {
         writer.write(&batch)?;
     }
@@ -359,7 +365,7 @@ fn parquet_bytes_from_state(
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
-    let checkpoint = CheckPointBuilder::new(state.version(), jsons.len() as i64)
+    let checkpoint = CheckPointBuilder::new(state.version(), total_actions)
         .with_size_in_bytes(bytes.len() as i64)
         .build();
     Ok((checkpoint, bytes::Bytes::from(bytes)))
