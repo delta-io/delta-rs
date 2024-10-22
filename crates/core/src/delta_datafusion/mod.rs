@@ -91,7 +91,6 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 
-mod find_files;
 mod schema_adapter;
 
 impl From<DeltaTableError> for DataFusionError {
@@ -1772,7 +1771,6 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use crate::operations::create::CreateBuilder;
     use crate::operations::write::SchemaMode;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
@@ -1785,7 +1783,6 @@ mod tests {
     use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
-    use delta_kernel::schema::StructField;
     use object_store::path::Path;
     use serde_json::json;
     use std::ops::Deref;

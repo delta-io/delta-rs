@@ -24,12 +24,12 @@ impl Debug for DeltaStatement {
 }
 
 impl DeltaStatement {
-    /// Return a `format`able structure with the a human readable
+    /// Return a `format`ed structure with a human-readable
     /// description of this LogicalPlan node per node, not including
     /// children.
     pub fn display(&self) -> impl fmt::Display + '_ {
         struct Wrapper<'a>(&'a DeltaStatement);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     DeltaStatement::Vacuum(Vacuum {

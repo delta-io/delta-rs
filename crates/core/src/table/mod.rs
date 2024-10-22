@@ -418,7 +418,7 @@ impl DeltaTable {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'_>>> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
         self.state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
