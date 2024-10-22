@@ -57,7 +57,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
         if options.0.keys().any(|key| {
             let key = key.to_ascii_lowercase();
-            vec![
+            [
                 AmazonS3ConfigKey::ConditionalPut.as_ref(),
                 "conditional_put",
             ]
@@ -69,7 +69,7 @@ impl LogStoreFactory for S3LogStoreFactory {
 
         if options.0.keys().any(|key| {
             let key = key.to_ascii_lowercase();
-            vec![
+            [
                 AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
                 "copy_if_not_exists",
             ]
@@ -306,9 +306,11 @@ impl DynamoDbLockClient {
                         .send()
                         .await
                 },
-                |err| match err.as_service_error() {
-                    Some(GetItemError::ProvisionedThroughputExceededException(_)) => true,
-                    _ => false,
+                |err| {
+                    matches!(
+                        err.as_service_error(),
+                        Some(GetItemError::ProvisionedThroughputExceededException(_))
+                    )
                 },
             )
             .await
@@ -340,9 +342,11 @@ impl DynamoDbLockClient {
                     .await?;
                 Ok(())
             },
-            |err: &SdkError<_, _>| match err.as_service_error() {
-                Some(PutItemError::ProvisionedThroughputExceededException(_)) => true,
-                _ => false,
+            |err: &SdkError<_, _>| {
+                matches!(
+                    err.as_service_error(),
+                    Some(PutItemError::ProvisionedThroughputExceededException(_))
+                )
             },
         )
         .await
@@ -395,9 +399,11 @@ impl DynamoDbLockClient {
                         .send()
                         .await
                 },
-                |err: &SdkError<_, _>| match err.as_service_error() {
-                    Some(QueryError::ProvisionedThroughputExceededException(_)) => true,
-                    _ => false,
+                |err: &SdkError<_, _>| {
+                    matches!(
+                        err.as_service_error(),
+                        Some(QueryError::ProvisionedThroughputExceededException(_))
+                    )
                 },
             )
             .await
@@ -446,9 +452,11 @@ impl DynamoDbLockClient {
                         .await?;
                     Ok(())
                 },
-                |err: &SdkError<_, _>| match err.as_service_error() {
-                    Some(UpdateItemError::ProvisionedThroughputExceededException(_)) => true,
-                    _ => false,
+                |err: &SdkError<_, _>| {
+                    matches!(
+                        err.as_service_error(),
+                        Some(UpdateItemError::ProvisionedThroughputExceededException(_))
+                    )
                 },
             )
             .await;
@@ -488,9 +496,11 @@ impl DynamoDbLockClient {
                     .await?;
                 Ok(())
             },
-            |err: &SdkError<_, _>| match err.as_service_error() {
-                Some(DeleteItemError::ProvisionedThroughputExceededException(_)) => true,
-                _ => false,
+            |err: &SdkError<_, _>| {
+                matches!(
+                    err.as_service_error(),
+                    Some(DeleteItemError::ProvisionedThroughputExceededException(_))
+                )
             },
         )
         .await
