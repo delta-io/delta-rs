@@ -8,7 +8,7 @@
 //!   bare minimum - [`Protocol`] and [`Metadata`] - is cached in memory.
 //! - [`EagerSnapshot`] is a snapshot where much more log data is eagerly loaded into memory.
 //!
-//! The sub modules provide structures and methods that aid in generating
+//! The submodules provide structures and methods that aid in generating
 //! and consuming snapshots.
 //!
 //! ## Reading the log
