@@ -21,7 +21,7 @@ use deltalake_core::storage::StorageOptions;
 use deltalake_core::DeltaResult;
 use tracing::log::*;
 
-use crate::constants::{self, AWS_ENDPOINT_URL};
+use crate::constants;
 
 /// An [object_store::CredentialProvider] which handles converting a populated [SdkConfig]
 /// into a necessary [AwsCredential] type for configuring [object_store::aws::AmazonS3]
@@ -183,19 +183,26 @@ fn assume_role_arn(options: &StorageOptions) -> Option<String> {
     options
         .0
         .get(constants::AWS_IAM_ROLE_ARN)
-        .or(options.0.get(constants::AWS_S3_ASSUME_ROLE_ARN))
+        .or(
+            #[allow(deprecated)]
+            options.0.get(constants::AWS_S3_ASSUME_ROLE_ARN),
+        )
         .or(std::env::var_os(constants::AWS_IAM_ROLE_ARN)
             .map(|o| {
                 o.into_string()
                     .expect("Failed to unwrap AWS_IAM_ROLE_ARN which may have invalid data")
             })
             .as_ref())
-        .or(std::env::var_os(constants::AWS_S3_ASSUME_ROLE_ARN)
-            .map(|o| {
-                o.into_string()
-                    .expect("Failed to unwrap AWS_S3_ASSUME_ROLE_ARN which may have invalid data")
-            })
-            .as_ref())
+        .or(
+            #[allow(deprecated)]
+            std::env::var_os(constants::AWS_S3_ASSUME_ROLE_ARN)
+                .map(|o| {
+                    o.into_string().expect(
+                        "Failed to unwrap AWS_S3_ASSUME_ROLE_ARN which may have invalid data",
+                    )
+                })
+                .as_ref(),
+        )
         .cloned()
 }
 
@@ -204,13 +211,13 @@ fn assume_session_name(options: &StorageOptions) -> String {
     let assume_session = options
         .0
         .get(constants::AWS_IAM_ROLE_SESSION_NAME)
-        .or(options.0.get(constants::AWS_S3_ROLE_SESSION_NAME))
+        .or(
+            #[allow(deprecated)]
+            options.0.get(constants::AWS_S3_ROLE_SESSION_NAME),
+        )
         .cloned();
 
-    match assume_session {
-        Some(s) => s,
-        None => assume_role_sessio_name(),
-    }
+    assume_session.unwrap_or_else(assume_role_sessio_name)
 }
 
 /// Take a set of [StorageOptions] and produce an appropriate AWS SDK [SdkConfig]

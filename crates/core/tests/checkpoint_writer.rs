@@ -84,9 +84,11 @@ mod simple_checkpoint {
 
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
+    use std::fs::{FileTimes, OpenOptions};
+    use std::ops::Sub;
+    use std::time::{Duration, SystemTime};
 
     use ::object_store::path::Path as ObjectStorePath;
-    use chrono::Utc;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
     use maplit::hashmap;
@@ -103,10 +105,14 @@ mod delete_expired_delta_log_in_checkpoint {
         .await;
 
         let table_path = table.table_uri();
-        let set_file_last_modified = |version: usize, last_modified_millis: i64| {
-            let last_modified_secs = last_modified_millis / 1000;
-            let path = format!("{}/_delta_log/{:020}.json", &table_path, version);
-            utime::set_file_times(path, last_modified_secs, last_modified_secs).unwrap();
+        let set_file_last_modified = |version: usize, last_modified_millis: u64| {
+            let path = format!("{}_delta_log/{:020}.json", &table_path, version);
+            let file = OpenOptions::new().write(true).open(path).unwrap();
+            let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
+            let times = FileTimes::new()
+                .set_modified(last_modified)
+                .set_accessed(last_modified);
+            file.set_times(times).unwrap();
         };
 
         // create 2 commits
@@ -116,10 +122,9 @@ mod delete_expired_delta_log_in_checkpoint {
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
 
         // set last_modified
-        let now = Utc::now().timestamp_millis();
-        set_file_last_modified(0, now - 25 * 60 * 1000); // 25 mins ago, should be deleted
-        set_file_last_modified(1, now - 15 * 60 * 1000); // 25 mins ago, should be deleted
-        set_file_last_modified(2, now - 5 * 60 * 1000); // 25 mins ago, should be kept
+        set_file_last_modified(0, 25 * 60 * 1000); // 25 mins ago, should be deleted
+        set_file_last_modified(1, 15 * 60 * 1000); // 25 mins ago, should be deleted
+        set_file_last_modified(2, 5 * 60 * 1000); // 25 mins ago, should be kept
 
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");

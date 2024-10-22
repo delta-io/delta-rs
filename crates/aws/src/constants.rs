@@ -8,6 +8,7 @@ use std::time::Duration;
 /// Custom S3 endpoint.
 pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
 /// Custom DynamoDB endpoint.
+///
 /// If DynamoDB endpoint is not supplied, will use S3 endpoint (AWS_ENDPOINT_URL)
 /// If it is supplied, this endpoint takes precedence over the global endpoint set in AWS_ENDPOINT_URL for DynamoDB
 pub const AWS_ENDPOINT_URL_DYNAMODB: &str = "AWS_ENDPOINT_URL_DYNAMODB";
@@ -41,7 +42,9 @@ pub const AWS_IAM_ROLE_SESSION_NAME: &str = "AWS_IAM_ROLE_SESSION_NAME";
     note = "Please use AWS_IAM_ROLE_SESSION_NAME instead"
 )]
 pub const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
-/// The `pool_idle_timeout` option of aws http client. Has to be lower than 20 seconds, which is
+/// The `pool_idle_timeout` option of aws http client.
+///
+/// Has to be lower than 20 seconds, which is
 /// default S3 server timeout <https://aws.amazon.com/premiumsupport/knowledge-center/s3-socket-connection-timeout-error/>.
 /// However, since rusoto uses hyper as a client, its default timeout is 90 seconds
 /// <https://docs.rs/hyper/0.13.2/hyper/client/struct.Builder.html#method.keep_alive_timeout>.
@@ -55,16 +58,19 @@ pub const AWS_STS_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_STS_POOL_IDLE_TIMEOUT_S
 pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
     "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES";
 /// The web identity token file to use when using a web identity provider.
+///
 /// NOTE: web identity related options are set in the environment when
 /// creating an instance of [crate::storage::s3::S3StorageOptions].
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 /// The role name to use for web identity.
+///
 /// NOTE: web identity related options are set in the environment when
 /// creating an instance of [crate::storage::s3::S3StorageOptions].
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_ROLE_ARN: &str = "AWS_ROLE_ARN";
 /// The role session name to use for web identity.
+///
 /// NOTE: web identity related options are set in the environment when
 /// creating an instance of [crate::storage::s3::S3StorageOptions].
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
@@ -99,8 +105,8 @@ pub const S3_OPTS: &[&str] = &[
     AWS_SECRET_ACCESS_KEY,
     AWS_SESSION_TOKEN,
     AWS_S3_LOCKING_PROVIDER,
-    AWS_S3_ASSUME_ROLE_ARN,
-    AWS_S3_ROLE_SESSION_NAME,
+    AWS_IAM_ROLE_ARN,
+    AWS_IAM_ROLE_SESSION_NAME,
     AWS_WEB_IDENTITY_TOKEN_FILE,
     AWS_ROLE_ARN,
     AWS_ROLE_SESSION_NAME,

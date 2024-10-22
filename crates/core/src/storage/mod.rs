@@ -50,6 +50,7 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
                     RuntimeBuilder::new_current_thread()
                 };
                 let builder = builder.worker_threads(config.worker_threads);
+                #[allow(unused_mut)]
                 let mut builder = if config.enable_io && config.enable_time {
                     builder.enable_all()
                 } else if !config.enable_io && config.enable_time {
@@ -480,6 +481,7 @@ pub fn limit_store_handler<T: ObjectStore>(store: T, options: &StorageOptions) -
 }
 
 /// Storage option keys to use when creating [ObjectStore].
+///
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
 /// Must be implemented for a given storage provider
 pub mod storage_constants {

@@ -10,6 +10,7 @@ use super::Constraint;
 use crate::errors::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
+///
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
 #[derive(PartialEq, Eq, Hash)]
@@ -213,7 +214,7 @@ pub const DEFAULT_NUM_INDEX_COLS: i32 = 32;
 /// Default target file size
 pub const DEFAULT_TARGET_FILE_SIZE: i64 = 104857600;
 
-impl<'a> TableConfig<'a> {
+impl TableConfig<'_> {
     table_config!(
         (
             "true for this Delta table to be append-only",
