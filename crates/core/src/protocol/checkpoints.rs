@@ -284,7 +284,7 @@ fn parquet_bytes_from_state(
             remove.extended_file_metadata = Some(false);
         }
     }
-    let files = state.file_actions().unwrap();
+    let files = state.file_actions_iter().unwrap();
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
         min_reader_version: state.protocol().min_reader_version,
@@ -323,8 +323,8 @@ fn parquet_bytes_from_state(
     }))
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
-    .chain(files.iter().map(|f| {
-        checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
+    .chain(files.map(|f| {
+        checkpoint_add_from_state(&f, partition_col_data_types.as_slice(), &stats_conversions)
     }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
