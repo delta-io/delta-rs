@@ -501,7 +501,8 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
     use crate::{DeltaTable, TableProperty};
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::types::Int32Type;
+    use arrow::array::{Int32Array, ListArray, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -986,6 +987,67 @@ mod tests {
             .with_update("value", lit("a string"))
             .await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_with_array() {
+        let schema = StructType::new(vec![
+            StructField::new(
+                "id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "temp".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "items".to_string(),
+                DeltaDataType::Array(Box::new(crate::kernel::ArrayType::new(
+                    DeltaDataType::INTEGER,
+                    false,
+                ))),
+                true,
+            ),
+        ]);
+        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+
+        // Create the first batch
+        let arrow_field = Field::new("element", DataType::Int32, false);
+        let list_array = ListArray::new_null(arrow_field.clone().into(), 2);
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(0), Some(1)])),
+                Arc::new(Int32Array::from(vec![Some(30), Some(31)])),
+                Arc::new(list_array),
+            ],
+        )
+        .expect("Failed to create record batch");
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+        // Completed the first creation/write
+
+        // Update
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("id").eq(lit(1)))
+            .with_update("items", make_array(vec![lit(100)]))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
     }
 
     #[tokio::test]
