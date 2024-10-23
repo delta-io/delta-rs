@@ -183,7 +183,7 @@ impl DeltaTableState {
 
     /// Get the table config which is loaded with of the snapshot
     pub fn load_config(&self) -> &DeltaTableConfig {
-        &self.snapshot.load_config()
+        self.snapshot.load_config()
     }
 
     /// Well known table configuration
@@ -210,7 +210,7 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'_>>> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
         let current_metadata = self.metadata();
 
         let nonpartitioned_columns: Vec<String> = filters

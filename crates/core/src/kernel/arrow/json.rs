@@ -139,11 +139,11 @@ pub(crate) fn decode_stream<S: Stream<Item = ObjectStoreResult<Bytes>> + Unpin>(
     })
 }
 
-/// Decode data prvided by a reader into an iterator of record batches.
+/// Decode data provided by a reader into an iterator of record batches.
 pub(crate) fn decode_reader<'a, R: BufRead + 'a>(
     decoder: &'a mut Decoder,
     mut reader: R,
-) -> impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_ {
+) -> impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + 'a {
     let mut next = move || {
         loop {
             let buf = reader.fill_buf()?;
