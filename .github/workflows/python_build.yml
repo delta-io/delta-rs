@@ -31,7 +31,7 @@ jobs:
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.8 PyArrow 16.0.0)
+    name: Python Build (Python 3.9 PyArrow 16.0.0)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=line-tables-only"
@@ -43,7 +43,7 @@ jobs:
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:
-          python-version: 3.8
+          python-version: 3.9
 
       - name: Build and install deltalake
         run: |
@@ -135,7 +135,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v3

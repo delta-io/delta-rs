@@ -1439,6 +1439,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             }
             py_struct.to_object(py)
         }
+        Array(val) => todo!("how should this be converted!"),
     };
 
     Ok(val.into_bound(py))
