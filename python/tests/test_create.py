@@ -30,7 +30,11 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
     }
     assert dt.history()[0]["userName"] == "John Doe"
 
-    assert {*dt.protocol().writer_features} == {"appendOnly", "timestampNtz"}  # type: ignore
+    assert {*dt.protocol().writer_features} == {
+        "appendOnly",
+        "timestampNtz",
+        "invariants",
+    }  # type: ignore
 
 
 def test_create_modes(tmp_path: pathlib.Path, sample_data: pa.Table):

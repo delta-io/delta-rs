@@ -372,7 +372,10 @@ impl Protocol {
     /// Enable timestamp_ntz in the protocol
     pub fn enable_timestamp_ntz(mut self) -> Protocol {
         self = self.with_reader_features(vec![ReaderFeatures::TimestampWithoutTimezone]);
-        self = self.with_writer_features(vec![WriterFeatures::TimestampWithoutTimezone]);
+        self = self.with_writer_features(vec![
+            WriterFeatures::TimestampWithoutTimezone,
+            WriterFeatures::Invariants,
+        ]);
         self
     }
 }
