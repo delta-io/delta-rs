@@ -338,7 +338,7 @@ You can perform conditional updates for rows that have no match in the source da
 For example, given the following target_data and source_data:
 
 ```python
-target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+target_data = pa.table({"1 x": [1, 2, 3], "1y": [4, 5, 6]})
 write_deltalake("tmp", target_data)
 dt = DeltaTable("tmp")
 source_data = pa.table({"x": [2, 3, 4]})
@@ -354,8 +354,8 @@ Set y = 0 for all rows that have no matches in the new source data, provided tha
        source_alias='source',
        target_alias='target')
    .when_not_matched_by_source_update(
-       predicate = "y > 3",
-       updates = {"y": "0"})
+       predicate = "`1y` > 3",
+       updates = {"`1y`": "0"})
    .execute()
 )
 ```
@@ -372,4 +372,4 @@ This will result in:
 
 ## Notes
 
-- Column names with special characters, such as numbers or spaces should be encapsulated in backticks: "target.123column" or "target.my column"
+- Column names with special characters, such as numbers or spaces should be encapsulated in backticks: "target.`123column`" or "target.`my column`"
