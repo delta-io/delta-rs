@@ -356,10 +356,11 @@ fn parquet_bytes_from_state(
     for j in jsons {
         let buf = serde_json::to_string(&j?).unwrap();
         let _ = decoder.decode(buf.as_bytes())?;
+
+        while let Some(batch) = decoder.flush()? {
+            writer.write(&batch)?;
+        }
         total_actions += 1;
-    }
-    while let Some(batch) = decoder.flush()? {
-        writer.write(&batch)?;
     }
 
     let _ = writer.close()?;
