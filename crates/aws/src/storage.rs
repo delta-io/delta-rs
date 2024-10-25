@@ -526,6 +526,11 @@ mod tests {
                 "arn:aws:iam::123456789012:role/some_role",
             );
             std::env::set_var(constants::AWS_IAM_ROLE_SESSION_NAME, "session_name");
+            std::env::set_var(
+                constants::AWS_S3_ASSUME_ROLE_ARN,
+                "arn:aws:iam::123456789012:role/some_role",
+            );
+            std::env::set_var(constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
             std::env::set_var(constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
 
             let options = S3StorageOptions::try_default().unwrap();
