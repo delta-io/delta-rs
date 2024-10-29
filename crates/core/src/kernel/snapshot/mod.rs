@@ -48,7 +48,7 @@ pub(crate) mod log_segment;
 pub(crate) mod parse;
 mod replay;
 mod serde;
-mod visitors;
+pub mod visitors;
 
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
