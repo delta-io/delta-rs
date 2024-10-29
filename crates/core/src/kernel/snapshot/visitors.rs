@@ -14,6 +14,7 @@ use crate::kernel::Transaction;
 
 /// Allows hooking into the reading of commit files and checkpoints whenever a table is loaded or updated.
 pub trait ReplayVisitor: std::fmt::Debug + Send + Sync {
+    /// Return an [Any] type
     fn as_any(&self) -> &dyn std::any::Any;
 
     /// Process a batch
