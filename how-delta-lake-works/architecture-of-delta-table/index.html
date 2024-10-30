@@ -544,6 +544,8 @@
       
         
       
+        
+      
     
     
     
@@ -765,6 +767,26 @@
   
   
     <li class="md-nav__item">
+      <a href="../../usage/merging-tables/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Merging a table
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../usage/managing-tables/" class="md-nav__link">
         
   
@@ -804,7 +826,7 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_11" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_12" >
         
           
           
@@ -820,14 +842,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
             <span class="md-nav__icon md-icon"></span>
             Writing a table
           </label>
@@ -906,10 +928,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_13" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_14" >
         
           
-          <label class="md-nav__link" for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -920,8 +942,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_13">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14">
             <span class="md-nav__icon md-icon"></span>
             Optimize
           </label>
@@ -1893,7 +1915,7 @@
 <h2 id="delta-lake-transaction-examples">Delta Lake transaction examples</h2>
 <p>Start by creating a pandas DataFrame and writing it out to a Delta table.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">write_deltalake</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">]})</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
@@ -1958,7 +1980,7 @@
 </ul>
 <p>Create another pandas DataFrame and append it to the Delta table to see how this transaction is recorded.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;dd&quot;</span><span class="p">,</span> <span class="s2">&quot;ee&quot;</span><span class="p">]})</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cwd</span><span class="si">}</span><span class="s2">/tmp/delta-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Here are the files in storage:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>tmp/some-table
@@ -1994,7 +2016,7 @@
 <p>The transaction log records that the second file has been persisted in the Delta table.</p>
 <p>Now create a third pandas DataFrame and overwrite the Delta table with the new data.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;aa&quot;</span><span class="p">,</span> <span class="s2">&quot;bb&quot;</span><span class="p">]})</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cwd</span><span class="si">}</span><span class="s2">/tmp/delta-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;append&quot;</span><span class="p">)</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Here are the files in storage:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>tmp/some-table
@@ -2053,7 +2075,7 @@
 <h2 id="how-delta-table-operations-differ-from-data-lakes">How Delta table operations differ from data lakes</h2>
 <p>Data lakes consist of data files persisted in storage. They don't have a transaction log that retain metadata about the transactions.</p>
 <p>Data lakes perform transactions differently than Delta tables.</p>
-<p>When you perform an overwrite tranasction with a Delta table, you logically delete the exiting data without physically removing it.</p>
+<p>When you perform an overwrite transaction with a Delta table, you logically delete the exiting data without physically removing it.</p>
 <p>Data lakes don't support logical deletes, so you have to physically delete the data from storage.</p>
 <p>Logical data operations are safer because they can be rolled back if they don't complete successfully. Physically removing data from storage can be dangerous, especially if it's before a transaction is complete.</p>
 <p>We're now ready to look into <a href="../delta-lake-acid-transactions/">Delta Lake ACID transactions</a> in more detail.</p>
