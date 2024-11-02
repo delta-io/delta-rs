@@ -2,6 +2,7 @@ mod error;
 mod features;
 mod filesystem;
 mod merge;
+mod query;
 mod schema;
 mod utils;
 
@@ -20,12 +21,18 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use deltalake::arrow::pyarrow::ToPyArrow;
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use deltalake::datafusion::physical_plan::ExecutionPlan;
-use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::datafusion::prelude::{DataFrame, SessionContext};
+use deltalake::delta_datafusion::{
+    DataFusionMixins, DeltaDataChecker, DeltaScanConfigBuilder, DeltaSessionConfig,
+    DeltaTableProvider,
+};
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
@@ -69,6 +76,7 @@ use crate::error::PythonError;
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
+use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
@@ -2095,6 +2103,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<PyMergeBuilder>()?;
+    m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
     m.add_class::<PyTransaction>()?;
