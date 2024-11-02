@@ -826,9 +826,12 @@ impl TableProvider for DeltaTableProvider {
 
     fn supports_filters_pushdown(
         &self,
-        _filter: &[&Expr],
+        filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact])
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
