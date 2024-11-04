@@ -343,7 +343,15 @@ impl StatsScalar {
                     });
                 };
 
-                let val = val / 10.0_f64.powi(*scale);
+                let mut val = val / 10.0_f64.powi(*scale);
+
+                if val.is_normal() {
+                    if (val.trunc() as i128).to_string().len() > (precision - scale) as usize {
+                        // For normal values with integer parts that get rounded to a number beyond
+                        // the precision - scale range take the next smaller (by magnitude) value
+                        val = f64::from_bits(val.to_bits() - 1);
+                    }
+                }
                 Ok(Self::Decimal(val))
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
@@ -739,6 +747,32 @@ mod tests {
                     precision: 5,
                 }),
                 Value::from(10.0),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![
+                        75, 59, 76, 168, 90, 134, 196, 122, 9, 138, 34, 63, 255, 255, 255, 255
+                    ])
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 6,
+                    precision: 38,
+                }),
+                Value::from(9.999999999999999e31),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![
+                        180, 196, 179, 87, 165, 121, 59, 133, 246, 117, 221, 192, 0, 0, 0, 1
+                    ])
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 6,
+                    precision: 38,
+                }),
+                Value::from(-9.999999999999999e31),
             ),
             (
                 simple_parquet_stat!(
