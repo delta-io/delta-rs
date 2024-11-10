@@ -45,15 +45,15 @@ object_store = { version = "0.11" }
 parquet = { version = "53" }
 
 # datafusion
-datafusion = { version = "42" }
-datafusion-expr = { version = "42" }
-datafusion-common = { version = "42" }
-datafusion-proto = { version = "42" }
-datafusion-sql = { version = "42" }
-datafusion-physical-expr = { version = "42" }
-datafusion-physical-plan = { version = "42" }
-datafusion-functions = { version = "42" }
-datafusion-functions-aggregate = { version = "42" }
+datafusion = { version = "43" }
+datafusion-expr = { version = "43" }
+datafusion-common = { version = "43" }
+datafusion-proto = { version = "43" }
+datafusion-sql = { version = "43" }
+datafusion-physical-expr = { version = "43" }
+datafusion-physical-plan = { version = "43" }
+datafusion-functions = { version = "43" }
+datafusion-functions-aggregate = { version = "43" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
