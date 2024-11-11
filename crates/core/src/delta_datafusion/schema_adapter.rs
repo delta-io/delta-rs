@@ -13,14 +13,22 @@ use crate::operations::cast::cast_record_batch;
 pub(crate) struct DeltaSchemaAdapterFactory {}
 
 impl SchemaAdapterFactory for DeltaSchemaAdapterFactory {
-    fn create(&self, schema: SchemaRef) -> Box<dyn SchemaAdapter> {
+    fn create(
+        &self,
+        projected_table_schema: SchemaRef,
+        table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
         Box::new(DeltaSchemaAdapter {
-            table_schema: schema,
+            projected_table_schema,
+            table_schema,
         })
     }
 }
 
 pub(crate) struct DeltaSchemaAdapter {
+    /// The schema for the table, projected to include only the fields being output (projected) by
+    /// the this mapping.
+    projected_table_schema: SchemaRef,
     /// Schema for the table
     table_schema: SchemaRef,
 }
