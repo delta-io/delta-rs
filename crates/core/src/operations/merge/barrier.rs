@@ -393,7 +393,7 @@ impl RecordBatchStream for MergeBarrierStream {
     }
 }
 
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, Hash, Eq, PartialEq, PartialOrd)]
 pub(crate) struct MergeBarrier {
     pub input: LogicalPlan,
     pub expr: Expr,

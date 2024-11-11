@@ -581,7 +581,7 @@ pub struct MergeMetrics {
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct MergeMetricExtensionPlanner {}
 
 #[async_trait]
