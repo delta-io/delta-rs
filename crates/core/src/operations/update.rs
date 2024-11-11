@@ -180,7 +180,7 @@ impl UpdateBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct UpdateMetricExtensionPlanner {}
 
 #[async_trait]
