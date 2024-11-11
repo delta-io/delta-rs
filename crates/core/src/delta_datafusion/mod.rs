@@ -748,6 +748,7 @@ impl TableProvider for DeltaTable {
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
+#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     log_store: LogStoreRef,
@@ -1366,6 +1367,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 }
 
 /// Responsible for creating deltatables
+#[derive(Debug)]
 pub struct DeltaTableFactory {}
 
 #[async_trait]
