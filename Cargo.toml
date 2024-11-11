@@ -64,7 +64,7 @@ bytes = { version = "1" }
 chrono = { version = ">0.4.34", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
-thiserror = { version = "1" }
+thiserror = { version = "2" }
 url = { version = "2" }
 urlencoding = "2.1.3"
 uuid = { version = "1" }
