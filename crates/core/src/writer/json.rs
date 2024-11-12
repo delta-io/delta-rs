@@ -41,6 +41,8 @@ pub struct JsonWriter {
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, DataArrowWriter>,
+    num_indexed_cols: i32,
+    stats_columns: Option<Vec<String>>,
 }
 
 /// Writes messages to an underlying arrow buffer.
@@ -187,22 +189,37 @@ impl JsonWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaTableError> {
-        let storage = DeltaTableBuilder::from_uri(table_uri)
+        let delta_table = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
-            .build_storage()?;
-
+            .build()?;
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
             // NOTE: Consider extracting config for writer properties and setting more than just compression
             .set_compression(Compression::SNAPPY)
             .build();
 
+        // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
+        let configuration: HashMap<String, Option<String>> = delta_table.metadata().map_or_else(
+            |_| HashMap::new(),
+            |metadata| metadata.configuration.clone(),
+        );
+
         Ok(Self {
-            storage: storage.object_store(),
+            storage: delta_table.object_store(),
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
             arrow_writers: HashMap::new(),
+            num_indexed_cols: configuration
+                .get("delta.dataSkippingNumIndexedCols")
+                .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
+                .unwrap_or(DEFAULT_NUM_INDEX_COLS),
+            stats_columns: configuration
+                .get("delta.dataSkippingStatsColumns")
+                .and_then(|v| {
+                    v.as_ref()
+                        .map(|v| v.split(',').map(|s| s.to_string()).collect())
+                }),
         })
     }
 
@@ -219,6 +236,8 @@ impl JsonWriter {
             // NOTE: Consider extracting config for writer properties and setting more than just compression
             .set_compression(Compression::SNAPPY)
             .build();
+        let configuration: HashMap<String, Option<String>> =
+            table.metadata()?.configuration.clone();
 
         Ok(Self {
             storage: table.object_store(),
@@ -226,6 +245,16 @@ impl JsonWriter {
             writer_properties,
             partition_columns,
             arrow_writers: HashMap::new(),
+            num_indexed_cols: configuration
+                .get("delta.dataSkippingNumIndexedCols")
+                .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
+                .unwrap_or(DEFAULT_NUM_INDEX_COLS),
+            stats_columns: configuration
+                .get("delta.dataSkippingStatsColumns")
+                .and_then(|v| {
+                    v.as_ref()
+                        .map(|v| v.split(',').map(|s| s.to_string()).collect())
+                }),
         })
     }
 
@@ -372,8 +401,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 path.to_string(),
                 file_size,
                 &metadata,
-                DEFAULT_NUM_INDEX_COLS,
-                &None,
+                self.num_indexed_cols,
+                &self.stats_columns,
             )?);
         }
         Ok(actions)
@@ -708,4 +737,105 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_json_write_data_skipping_stats_columns() {
+        use crate::operations::create::CreateBuilder;
+
+        let table_dir = tempfile::tempdir().unwrap();
+        let schema = get_delta_schema();
+        let path = table_dir.path().to_str().unwrap().to_string();
+        let config: HashMap<String, Option<String>> = vec![(
+            "delta.dataSkippingStatsColumns".to_string(),
+            Some("id,value".to_string()),
+        )]
+        .into_iter()
+        .collect();
+        let mut table = CreateBuilder::new()
+            .with_location(&path)
+            .with_table_name("test-table")
+            .with_comment("A table for running tests")
+            .with_columns(schema.fields().cloned())
+            .with_configuration(config)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+        let data = serde_json::json!(
+            {
+                "id" : "A",
+                "value": 42,
+                "modified": "2021-02-01"
+            }
+        );
+
+        writer.write(vec![data]).await.unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+        assert_eq!(table.version(), 1);
+        let add_actions = table.state.unwrap().file_actions().unwrap();
+        assert_eq!(add_actions.len(), 1);
+        let expected_stats = "{\"numRecords\":1,\"minValues\":{\"id\":\"A\",\"value\":42},\"maxValues\":{\"id\":\"A\",\"value\":42},\"nullCount\":{\"id\":0,\"value\":0}}";
+        assert_eq!(
+            expected_stats.parse::<serde_json::Value>().unwrap(),
+            add_actions
+                .into_iter()
+                .nth(0)
+                .unwrap()
+                .stats
+                .unwrap()
+                .parse::<serde_json::Value>()
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_json_write_data_skipping_num_indexed_cols() {
+        use crate::operations::create::CreateBuilder;
+
+        let table_dir = tempfile::tempdir().unwrap();
+        let schema = get_delta_schema();
+        let path = table_dir.path().to_str().unwrap().to_string();
+        let config: HashMap<String, Option<String>> = vec![(
+            "delta.dataSkippingNumIndexedCols".to_string(),
+            Some("1".to_string()),
+        )]
+        .into_iter()
+        .collect();
+        let mut table = CreateBuilder::new()
+            .with_location(&path)
+            .with_table_name("test-table")
+            .with_comment("A table for running tests")
+            .with_columns(schema.fields().cloned())
+            .with_configuration(config)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+        let data = serde_json::json!(
+            {
+                "id" : "A",
+                "value": 42,
+                "modified": "2021-02-01"
+            }
+        );
+
+        writer.write(vec![data]).await.unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+        assert_eq!(table.version(), 1);
+        let add_actions = table.state.unwrap().file_actions().unwrap();
+        assert_eq!(add_actions.len(), 1);
+        let expected_stats = "{\"numRecords\":1,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"A\"},\"nullCount\":{\"id\":0}}";
+        assert_eq!(
+            expected_stats.parse::<serde_json::Value>().unwrap(),
+            add_actions
+                .into_iter()
+                .nth(0)
+                .unwrap()
+                .stats
+                .unwrap()
+                .parse::<serde_json::Value>()
+                .unwrap()
+        );
+    }
+
 }
