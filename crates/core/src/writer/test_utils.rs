@@ -291,7 +291,7 @@ pub fn create_bare_table() -> DeltaTable {
 }
 
 pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
-    let table_schema = get_delta_schema();
+    let table_schema: StructType = get_delta_schema();
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
 
