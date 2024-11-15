@@ -17,6 +17,7 @@ use crate::data_catalog::models::ListSchemasResponse;
 use crate::DeltaTableBuilder;
 
 /// In-memory list of catalogs populated by unity catalog
+#[derive(Debug)]
 pub struct UnityCatalogList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
@@ -73,6 +74,7 @@ impl CatalogProviderList for UnityCatalogList {
 }
 
 /// A datafusion [`CatalogProvider`] backed by Databricks UnityCatalog
+#[derive(Debug)]
 pub struct UnityCatalogProvider {
     /// Parent catalog for schemas of interest.
     pub schemas: DashMap<String, Arc<dyn SchemaProvider>>,
@@ -124,6 +126,7 @@ impl CatalogProvider for UnityCatalogProvider {
 }
 
 /// A datafusion [`SchemaProvider`] backed by Databricks UnityCatalog
+#[derive(Debug)]
 pub struct UnitySchemaProvider {
     /// UnityCatalog Api client
     client: Arc<UnityCatalog>,

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
@@ -6,7 +7,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 
 /// Delta Lake specific operations
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub enum DeltaStatement {
     /// Get provenance information, including the operation,
     /// user, and so on, for each write to a table.
@@ -70,15 +71,15 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
         }
     }
 
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![]
+    }
+
     fn schema(&self) -> &DFSchemaRef {
         match self {
             Self::Vacuum(Vacuum { schema, .. }) => schema,
             _ => todo!(),
         }
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![]
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -134,6 +135,12 @@ pub struct Vacuum {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for Vacuum {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        None
+    }
+}
+
 impl Vacuum {
     pub fn new(table: TableReference, retention_hours: Option<i32>, dry_run: bool) -> Self {
         Self {
@@ -152,8 +159,14 @@ impl Vacuum {
 pub struct DescribeHistory {
     /// A reference to the table
     pub table: TableReference,
-    /// Schema for commit provenence information
+    /// Schema for commit provenance information
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for DescribeHistory {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        None
+    }
 }
 
 impl DescribeHistory {
@@ -176,6 +189,12 @@ pub struct DescribeDetails {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for DescribeDetails {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        None
+    }
+}
+
 impl DescribeDetails {
     pub fn new(table: TableReference) -> Self {
         Self {
@@ -191,8 +210,14 @@ impl DescribeDetails {
 pub struct DescribeFiles {
     /// A reference to the table
     pub table: TableReference,
-    /// Schema for commit provenence information
+    /// Schema for commit provenance information
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for DescribeFiles {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        None
+    }
 }
 
 impl DescribeFiles {
