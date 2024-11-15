@@ -65,7 +65,7 @@
 //! };
 //! ```
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 

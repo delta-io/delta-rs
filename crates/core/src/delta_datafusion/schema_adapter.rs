@@ -27,7 +27,7 @@ impl SchemaAdapterFactory for DeltaSchemaAdapterFactory {
 
 pub(crate) struct DeltaSchemaAdapter {
     /// The schema for the table, projected to include only the fields being output (projected) by
-    /// the this mapping.
+    /// the mapping.
     projected_table_schema: SchemaRef,
     /// Schema for the table
     table_schema: SchemaRef,
@@ -53,6 +53,7 @@ impl SchemaAdapter for DeltaSchemaAdapter {
 
         Ok((
             Arc::new(SchemaMapping {
+                projected_schema: self.projected_table_schema.clone(),
                 table_schema: self.table_schema.clone(),
             }),
             projection,
@@ -62,12 +63,13 @@ impl SchemaAdapter for DeltaSchemaAdapter {
 
 #[derive(Debug)]
 pub(crate) struct SchemaMapping {
+    projected_schema: SchemaRef,
     table_schema: SchemaRef,
 }
 
 impl SchemaMapper for SchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
-        let record_batch = cast_record_batch(&batch, self.table_schema.clone(), false, true)?;
+        let record_batch = cast_record_batch(&batch, self.projected_schema.clone(), false, true)?;
         Ok(record_batch)
     }
 
