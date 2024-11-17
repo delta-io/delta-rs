@@ -419,6 +419,7 @@ impl PartitionWriter {
         Ok(())
     }
 
+    /// Retrieves the list of [Add] actions associated with the files written.
     pub async fn drain_files_written(&self) -> Vec<Add> {
         self.files_written.write().await.drain(..).collect()
     }
