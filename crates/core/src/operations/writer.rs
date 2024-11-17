@@ -6,12 +6,12 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
-use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::crate_version;
@@ -218,18 +218,11 @@ impl DeltaWriter {
     /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
-        let actions = futures::stream::iter(writers)
-            .map(|(_, writer)| async move {
-                let writer_actions = writer.close().await?;
-                Ok::<_, DeltaTableError>(writer_actions)
-            })
-            .buffered(num_cpus::get())
-            .try_fold(Vec::new(), |mut acc, actions| {
-                acc.extend(actions);
-                futures::future::ready(Ok(acc))
-            })
-            .await?;
-
+        let mut actions = Vec::new();
+        for (_, writer) in writers {
+            let writer_actions = writer.close().await?;
+            actions.extend(writer_actions);
+        }
         Ok(actions)
     }
 }
@@ -294,7 +287,7 @@ pub struct PartitionWriter {
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
     part_counter: usize,
-    files_written: Vec<Add>,
+    files_written: RwLock<Vec<Add>>,
     /// Num index cols to collect stats for
     num_indexed_cols: i32,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
@@ -323,7 +316,7 @@ impl PartitionWriter {
             buffer,
             arrow_writer,
             part_counter: 0,
-            files_written: Vec::new(),
+            files_written: RwLock::new(Vec::new()),
             num_indexed_cols,
             stats_columns,
         })
@@ -378,19 +371,18 @@ impl PartitionWriter {
         // write file to object store
         self.object_store.put(&path, buffer.into()).await?;
 
-        self.files_written.push(
-            create_add(
-                &self.config.partition_values,
-                path.to_string(),
-                file_size,
-                &metadata,
-                self.num_indexed_cols,
-                &self.stats_columns,
-            )
-            .map_err(|err| WriteError::CreateAdd {
-                source: Box::new(err),
-            })?,
-        );
+        let add_metadata = create_add(
+            &self.config.partition_values,
+            path.to_string(),
+            file_size,
+            &metadata,
+            self.num_indexed_cols,
+            &self.stats_columns,
+        )
+        .map_err(|err| WriteError::CreateAdd {
+            source: Box::new(err),
+        })?;
+        self.files_written.write().await.push(add_metadata);
 
         Ok(())
     }
@@ -427,10 +419,14 @@ impl PartitionWriter {
         Ok(())
     }
 
+    pub async fn drain_files_written(&self) -> Vec<Add> {
+        self.files_written.write().await.drain(..).collect()
+    }
+
     /// Close the writer and get the new [Add] actions.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         self.flush_arrow_writer().await?;
-        Ok(self.files_written)
+        Ok(self.files_written.read().await.clone())
     }
 }
 
