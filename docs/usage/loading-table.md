@@ -131,7 +131,7 @@ wish to load:
 >>> dt = DeltaTable("../rust/tests/data/simple_table", version=2)
 ```
 
-Once you\'ve loaded a table, you can also change versions using either a
+Once you've loaded a table, you can also change versions using either a
 version number or datetime string:
 
 ```python
