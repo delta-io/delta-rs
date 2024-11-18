@@ -81,7 +81,7 @@ storage_options = {
     "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
     ...
 }
-DeltaTable.is_deltatable(bucket_table_path)
+DeltaTable.is_deltatable(bucket_table_path, storage_options)
 # True
 ```
 
