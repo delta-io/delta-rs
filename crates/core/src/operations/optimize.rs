@@ -1054,7 +1054,7 @@ fn build_zorder_plan(
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
             .add(object_meta);
-        error!("partition_files inside the zorder plan: {partition_files:?}");
+        debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
     let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files);

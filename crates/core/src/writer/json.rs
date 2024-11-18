@@ -659,4 +659,53 @@ mod tests {
             assert_eq!(table.version(), 1);
         }
     }
+
+    #[tokio::test]
+    async fn test_json_write_checkpoint() {
+        use crate::operations::create::CreateBuilder;
+        use std::fs;
+
+        let table_dir = tempfile::tempdir().unwrap();
+        let schema = get_delta_schema();
+        let path = table_dir.path().to_str().unwrap().to_string();
+        let config: HashMap<String, Option<String>> = vec![
+            (
+                "delta.checkpointInterval".to_string(),
+                Some("5".to_string()),
+            ),
+            ("delta.checkpointPolicy".to_string(), Some("v2".to_string())),
+        ]
+        .into_iter()
+        .collect();
+        let mut table = CreateBuilder::new()
+            .with_location(&path)
+            .with_table_name("test-table")
+            .with_comment("A table for running tests")
+            .with_columns(schema.fields().cloned())
+            .with_configuration(config)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+        let data = serde_json::json!(
+            {
+                "id" : "A",
+                "value": 42,
+                "modified": "2021-02-01"
+            }
+        );
+        for _ in 1..6 {
+            writer.write(vec![data.clone()]).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+        }
+        let dir_path = path + "/_delta_log";
+
+        let target_file = "00000000000000000004.checkpoint.parquet";
+        let entries: Vec<_> = fs::read_dir(dir_path)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().into_string().unwrap() == target_file)
+            .collect();
+        assert_eq!(entries.len(), 1);
+    }
 }

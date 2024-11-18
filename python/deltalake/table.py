@@ -43,6 +43,7 @@ from deltalake._internal import (
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
+    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -158,6 +159,7 @@ class CommitProperties:
         self,
         custom_metadata: Optional[Dict[str, str]] = None,
         max_commit_retries: Optional[int] = None,
+        app_transactions: Optional[List[Transaction]] = None,
     ):
         """Custom metadata to be stored in the commit. Controls the number of retries for the commit.
 
@@ -167,6 +169,7 @@ class CommitProperties:
         """
         self.custom_metadata = custom_metadata
         self.max_commit_retries = max_commit_retries
+        self.app_transactions = app_transactions
 
 
 def _commit_properties_from_custom_metadata(
@@ -1416,6 +1419,9 @@ class DeltaTable:
             post_commithook_properties,
         )
         return json.loads(metrics)
+
+    def transaction_versions(self) -> Dict[str, Transaction]:
+        return self._table.transaction_versions()
 
 
 class TableMerger:

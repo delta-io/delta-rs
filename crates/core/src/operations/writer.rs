@@ -6,6 +6,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
+use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -217,11 +218,18 @@ impl DeltaWriter {
     /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
-        let mut actions = Vec::new();
-        for (_, writer) in writers {
-            let writer_actions = writer.close().await?;
-            actions.extend(writer_actions);
-        }
+        let actions = futures::stream::iter(writers)
+            .map(|(_, writer)| async move {
+                let writer_actions = writer.close().await?;
+                Ok::<_, DeltaTableError>(writer_actions)
+            })
+            .buffered(num_cpus::get())
+            .try_fold(Vec::new(), |mut acc, actions| {
+                acc.extend(actions);
+                futures::future::ready(Ok(acc))
+            })
+            .await?;
+
         Ok(actions)
     }
 }

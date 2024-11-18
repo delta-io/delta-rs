@@ -12,5 +12,5 @@ Here's how to Z Order a Delta table:
 
 ```python
 dt = DeltaTable("tmp")
-dt.optimize.z_order([country])
+dt.optimize.z_order(["country"])
 ```

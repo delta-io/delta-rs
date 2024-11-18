@@ -25,7 +25,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
+    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
 };
 use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::add_feature::AddTableFeatureBuilder;
@@ -1232,6 +1232,14 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
+
+    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
+        self._table
+            .get_app_transaction_version()
+            .into_iter()
+            .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
+            .collect()
+    }
 }
 
 fn set_post_commithook_properties(
@@ -1378,6 +1386,11 @@ fn maybe_create_commit_properties(
         if let Some(max_retries) = commit_props.max_commit_retries {
             commit_properties = commit_properties.with_max_retries(max_retries);
         };
+
+        if let Some(app_transactions) = commit_props.app_transactions {
+            let app_transactions = app_transactions.iter().map(Transaction::from).collect();
+            commit_properties = commit_properties.with_application_transactions(app_transactions);
+        }
     }
 
     if let Some(post_commit_hook_props) = post_commithook_properties {
@@ -1656,10 +1669,65 @@ pub struct PyPostCommitHookProperties {
     cleanup_expired_logs: Option<bool>,
 }
 
+#[derive(Clone)]
+#[pyclass(name = "Transaction", module = "deltalake._internal")]
+pub struct PyTransaction {
+    #[pyo3(get)]
+    pub app_id: String,
+    #[pyo3(get)]
+    pub version: i64,
+    #[pyo3(get)]
+    pub last_updated: Option<i64>,
+}
+
+#[pymethods]
+impl PyTransaction {
+    #[new]
+    #[pyo3(signature = (app_id, version, last_updated = None))]
+    fn new(app_id: String, version: i64, last_updated: Option<i64>) -> Self {
+        Self {
+            app_id,
+            version,
+            last_updated,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Transaction(app_id={}, version={}, last_updated={})",
+            self.app_id,
+            self.version,
+            self.last_updated
+                .map_or("None".to_owned(), |n| n.to_string())
+        )
+    }
+}
+
+impl From<Transaction> for PyTransaction {
+    fn from(value: Transaction) -> Self {
+        PyTransaction {
+            app_id: value.app_id,
+            version: value.version,
+            last_updated: value.last_updated,
+        }
+    }
+}
+
+impl From<&PyTransaction> for Transaction {
+    fn from(value: &PyTransaction) -> Self {
+        Transaction {
+            app_id: value.app_id.clone(),
+            version: value.version,
+            last_updated: value.last_updated,
+        }
+    }
+}
+
 #[derive(FromPyObject)]
 pub struct PyCommitProperties {
     custom_metadata: Option<HashMap<String, String>>,
     max_commit_retries: Option<usize>,
+    app_transactions: Option<Vec<PyTransaction>>,
 }
 
 #[pyfunction]
@@ -2003,6 +2071,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
+    m.add_class::<PyTransaction>()?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;

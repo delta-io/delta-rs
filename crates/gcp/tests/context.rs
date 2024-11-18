@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tracing::info;
 
 /// Kinds of storage integration
 #[derive(Debug)]
@@ -64,21 +65,21 @@ pub async fn copy_table(
 }
 
 impl StorageIntegration for GcpIntegration {
+    fn create_bucket(&self) -> std::io::Result<ExitStatus> {
+        gs_cli::create_bucket(self.bucket_name())
+    }
+
     fn prepare_env(&self) {
         gs_cli::prepare_env();
         let base_url = std::env::var("GOOGLE_BASE_URL").unwrap();
         let token = serde_json::json!({"gcs_base_url": base_url, "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""});
         let account_path = self.temp_dir.path().join("gcs.json");
-        println!("accoutn_path: {account_path:?}");
+        info!("account_path: {account_path:?}");
         std::fs::write(&account_path, serde_json::to_vec(&token).unwrap()).unwrap();
         std::env::set_var(
             "GOOGLE_SERVICE_ACCOUNT",
             account_path.as_path().to_str().unwrap(),
         );
-    }
-
-    fn create_bucket(&self) -> std::io::Result<ExitStatus> {
-        gs_cli::create_bucket(self.bucket_name())
     }
 
     fn bucket_name(&self) -> String {
@@ -113,7 +114,7 @@ pub mod gs_cli {
         let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
             .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
         let payload = serde_json::json!({ "name": container_name.as_ref() });
-        let mut child = Command::new("curl")
+        Command::new("curl")
             .args([
                 "--insecure",
                 "-v",
@@ -126,15 +127,15 @@ pub mod gs_cli {
                 &endpoint,
             ])
             .spawn()
-            .expect("curl command is installed");
-        child.wait()
+            .expect("curl command is installed")
+            .wait()
     }
 
     pub fn delete_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
             .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
         let payload = serde_json::json!({ "name": container_name.as_ref() });
-        let mut child = Command::new("curl")
+        Command::new("curl")
             .args([
                 "--insecure",
                 "-v",
@@ -147,8 +148,8 @@ pub mod gs_cli {
                 &endpoint,
             ])
             .spawn()
-            .expect("curl command is installed");
-        child.wait()
+            .expect("curl command is installed")
+            .wait()
     }
 
     /// prepare_env
