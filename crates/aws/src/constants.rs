@@ -96,6 +96,7 @@ pub const AWS_FORCE_CREDENTIAL_LOAD: &str = "AWS_FORCE_CREDENTIAL_LOAD";
 /// The list of option keys owned by the S3 module.
 /// Option keys not contained in this list will be added to the `extra_opts`
 /// field of [crate::storage::s3::S3StorageOptions].
+#[allow(deprecated)]
 pub const S3_OPTS: &[&str] = &[
     AWS_ENDPOINT_URL,
     AWS_ENDPOINT_URL_DYNAMODB,
