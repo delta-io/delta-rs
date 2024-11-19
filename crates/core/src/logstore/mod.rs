@@ -243,7 +243,9 @@ pub trait LogStore: Sync + Send {
         let mut stream = object_store.list(Some(self.log_path()));
         if let Some(res) = stream.next().await {
             match res {
-                Ok(meta) => Ok(meta.location.is_commit_file()),
+                Ok(meta) => {
+                    Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file())
+                }
                 Err(ObjectStoreError::NotFound { .. }) => Ok(false),
                 Err(err) => Err(err)?,
             }
@@ -589,6 +591,66 @@ mod tests {
             .is_delta_table_location()
             .await
             .expect("Failed to look at table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_commit() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save a commit to the transaction log
+        let payload = PutPayload::from_static(b"test");
+        let _put = store
+            .object_store()
+            .put_opts(
+                &Path::from("_delta_log/0.json"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_checkpoint() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save a "checkpoint" file to the transaction log directory
+        let payload = PutPayload::from_static(b"test");
+        let _put = store
+            .object_store()
+            .put_opts(
+                &Path::from("_delta_log/0.checkpoint.parquet"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
     }
 }
 
