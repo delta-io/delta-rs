@@ -1,6 +1,17 @@
 # The deltalake package
 
-This is the documentation for the native Rust/Python implementation of Delta Lake. It is based on the delta-rs Rust library and requires no Spark or JVM dependencies. For the PySpark implementation, see [delta-spark](https://docs.delta.io/latest/api/python/spark/index.html) instead.
+`deltalake` is an open source library that makes it easier to manage tabular datasets. With `deltalake` you can:
+- add, delete or overwrite rows in a dataset as new data arrives
+- compact small files into larger files to improve query performance
+- time travel back to previous versions of your dataset
+- store data in partitioned directories for faster queries
+- make faster queries on your dataset by using metadata to skip reading unnecessary files
+
+`deltalake` can be used to manage data stored on a local file system or in the cloud. `deltalake` integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion for fast queries on your dataset.
+
+deltalake is a lakehouse framework for managing data storage. With this lakehouse approach you manage your datasets with a `DeltaTable` object and then deltalake takes care of the underlying files. Within a `DeltaTable` your data is stored in Parquet files while deltalake stores metadata about the DeltaTable in a set of JSON files called a transaction log.
+
+deltalake is a Rust-based re-implementation of the DeltaLake protocol originally developed  DataBricks. The deltalake library has APIs in Rust and Python. The deltalake library implementation has no dependencies on Java, Spark or DataBricks.
 
 This module provides the capability to read, write, and manage [Delta Lake](https://delta.io/) tables with Python or Rust without Spark or Java. It uses [Apache Arrow](https://arrow.apache.org/) under the hood, so is compatible with other Arrow-native or integrated libraries such as [pandas](https://pandas.pydata.org/), [DuckDB](https://duckdb.org/), and [Polars](https://www.pola.rs/).
 
