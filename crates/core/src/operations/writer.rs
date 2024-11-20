@@ -287,7 +287,7 @@ pub struct PartitionWriter {
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
     part_counter: usize,
-    files_written: RwLock<Vec<Add>>,
+    files_written: Vec<Add>,
     /// Num index cols to collect stats for
     num_indexed_cols: i32,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
@@ -316,7 +316,7 @@ impl PartitionWriter {
             buffer,
             arrow_writer,
             part_counter: 0,
-            files_written: RwLock::new(Vec::new()),
+            files_written: Vec::new(),
             num_indexed_cols,
             stats_columns,
         })
@@ -382,7 +382,7 @@ impl PartitionWriter {
         .map_err(|err| WriteError::CreateAdd {
             source: Box::new(err),
         })?;
-        self.files_written.write().await.push(add_metadata);
+        self.files_written.push(add_metadata);
 
         Ok(())
     }
@@ -420,14 +420,14 @@ impl PartitionWriter {
     }
 
     /// Retrieves the list of [Add] actions associated with the files written.
-    pub async fn drain_files_written(&self) -> Vec<Add> {
-        self.files_written.write().await.drain(..).collect()
+    pub async fn drain_files_written(&mut self) -> Vec<Add> {
+        self.files_written.drain(..).collect()
     }
 
     /// Close the writer and get the new [Add] actions.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         self.flush_arrow_writer().await?;
-        Ok(self.files_written.read().await.clone())
+        Ok(self.files_written.clone())
     }
 }
 
