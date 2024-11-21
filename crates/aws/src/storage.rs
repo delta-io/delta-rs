@@ -154,6 +154,10 @@ pub struct S3StorageOptions {
     pub virtual_hosted_style_request: bool,
     pub locking_provider: Option<String>,
     pub dynamodb_endpoint: Option<String>,
+    pub dynamodb_region: Option<String>,
+    pub dynamodb_access_key_id: Option<String>,
+    pub dynamodb_secret_access_key: Option<String>,
+    pub dynamodb_session_token: Option<String>,
     pub s3_pool_idle_timeout: Duration,
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
@@ -168,6 +172,10 @@ impl PartialEq for S3StorageOptions {
         self.virtual_hosted_style_request == other.virtual_hosted_style_request
             && self.locking_provider == other.locking_provider
             && self.dynamodb_endpoint == other.dynamodb_endpoint
+            && self.dynamodb_region == other.dynamodb_region
+            && self.dynamodb_access_key_id == other.dynamodb_access_key_id
+            && self.dynamodb_secret_access_key == other.dynamodb_secret_access_key
+            && self.dynamodb_session_token == other.dynamodb_session_token
             && self.s3_pool_idle_timeout == other.s3_pool_idle_timeout
             && self.sts_pool_idle_timeout == other.sts_pool_idle_timeout
             && self.s3_get_internal_server_error_retries
@@ -231,6 +239,13 @@ impl S3StorageOptions {
             virtual_hosted_style_request,
             locking_provider: str_option(options, constants::AWS_S3_LOCKING_PROVIDER),
             dynamodb_endpoint: str_option(options, constants::AWS_ENDPOINT_URL_DYNAMODB),
+            dynamodb_region: str_option(options, constants::AWS_REGION_DYNAMODB),
+            dynamodb_access_key_id: str_option(options, constants::AWS_ACCESS_KEY_ID_DYNAMODB),
+            dynamodb_secret_access_key: str_option(
+                options,
+                constants::AWS_SECRET_ACCESS_KEY_DYNAMODB,
+            ),
+            dynamodb_session_token: str_option(options, constants::AWS_SESSION_TOKEN_DYNAMODB),
             s3_pool_idle_timeout: Duration::from_secs(s3_pool_idle_timeout),
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
             s3_get_internal_server_error_retries,
@@ -550,6 +565,10 @@ mod tests {
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
                     dynamodb_endpoint: None,
+                    dynamodb_region: Some("us-west-1".to_string()),
+                    dynamodb_access_key_id: None,
+                    dynamodb_secret_access_key: None,
+                    dynamodb_session_token: None,
                     s3_pool_idle_timeout: Duration::from_secs(15),
                     sts_pool_idle_timeout: Duration::from_secs(10),
                     s3_get_internal_server_error_retries: 10,
@@ -696,6 +715,10 @@ mod tests {
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
                     dynamodb_endpoint: Some("http://localhost:dynamodb".to_string()),
+                    dynamodb_region: Some("us-west-2".to_string()),
+                    dynamodb_access_key_id: None,
+                    dynamodb_secret_access_key: None,
+                    dynamodb_session_token: None,
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
