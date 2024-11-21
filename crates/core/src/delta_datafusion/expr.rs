@@ -28,7 +28,6 @@ use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDate};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::execution::FunctionRegistry;
 use datafusion::functions_array::make_array::MakeArray;
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
