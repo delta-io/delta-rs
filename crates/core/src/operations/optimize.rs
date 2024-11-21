@@ -40,7 +40,6 @@ use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use tracing::*;
-use url::Url;
 
 use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
@@ -1213,6 +1212,8 @@ pub(super) mod zorder {
     #[cfg(feature = "datafusion")]
     pub(super) mod datafusion {
         use super::*;
+        use url::Url;
+
         use ::datafusion::{
             execution::{
                 memory_pool::FairSpillPool,
@@ -1245,7 +1246,7 @@ pub(super) mod zorder {
 
                 let memory_pool = FairSpillPool::new(max_spill_size);
                 let config = RuntimeConfig::new().with_memory_pool(Arc::new(memory_pool));
-                let runtime = Arc::new(RuntimeEnv::new(config)?);
+                let runtime = Arc::new(RuntimeEnv::try_new(config)?);
                 runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
 
                 let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
