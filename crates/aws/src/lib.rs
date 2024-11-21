@@ -10,7 +10,9 @@ pub mod logstore;
 #[cfg(feature = "native-tls")]
 mod native;
 pub mod storage;
+use aws_config::Region;
 use aws_config::SdkConfig;
+pub use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::{
     operation::{
@@ -23,6 +25,10 @@ use aws_sdk_dynamodb::{
     },
     Client,
 };
+use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
+use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
+use deltalake_core::{DeltaResult, Path};
+use errors::{DynamoDbConfigError, LockClientError};
 use lazy_static::lazy_static;
 use object_store::aws::AmazonS3ConfigKey;
 use regex::Regex;
@@ -32,15 +38,9 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use tracing::debug;
-
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
-use deltalake_core::{DeltaResult, Path};
-use url::Url;
-
-use errors::{DynamoDbConfigError, LockClientError};
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
+use tracing::debug;
+use url::Url;
 
 #[derive(Clone, Debug, Default)]
 pub struct S3LogStoreFactory {}
@@ -160,9 +160,19 @@ impl DynamoDbLockClient {
         billing_mode: Option<String>,
         max_elapsed_request_time: Option<String>,
         dynamodb_override_endpoint: Option<String>,
+        dynamodb_override_region: Option<String>,
+        dynamodb_override_access_key_id: Option<String>,
+        dynamodb_override_secret_access_key: Option<String>,
+        dynamodb_override_session_token: Option<String>,
     ) -> Result<Self, DynamoDbConfigError> {
-        let dynamodb_sdk_config =
-            Self::create_dynamodb_sdk_config(sdk_config, dynamodb_override_endpoint);
+        let dynamodb_sdk_config = Self::create_dynamodb_sdk_config(
+            sdk_config,
+            dynamodb_override_endpoint,
+            dynamodb_override_region,
+            dynamodb_override_access_key_id,
+            dynamodb_override_secret_access_key,
+            dynamodb_override_session_token,
+        );
 
         let dynamodb_client = aws_sdk_dynamodb::Client::new(&dynamodb_sdk_config);
 
@@ -202,20 +212,45 @@ impl DynamoDbLockClient {
     fn create_dynamodb_sdk_config(
         sdk_config: &SdkConfig,
         dynamodb_override_endpoint: Option<String>,
+        dynamodb_override_region: Option<String>,
+        dynamodb_override_access_key_id: Option<String>,
+        dynamodb_override_secret_access_key: Option<String>,
+        dynamodb_override_session_token: Option<String>,
     ) -> SdkConfig {
         /*
         if dynamodb_override_endpoint exists/AWS_ENDPOINT_URL_DYNAMODB is specified by user
-        use dynamodb_override_endpoint to create dynamodb client
+        override the endpoint in the sdk_config
+        if dynamodb_override_region exists/AWS_REGION_DYNAMODB is specified by user
+        override the region in the sdk_config
+        if dynamodb_override_access_key_id exists/AWS_ACCESS_KEY_ID_DYNAMODB is specified by user
+        override the access_key_id in the sdk_config
+        if dynamodb_override_secret_access_key exists/AWS_SECRET_ACCESS_KEY_DYNAMODB is specified by user
+        override the secret_access_key in the sdk_config
         */
 
-        match dynamodb_override_endpoint {
-            Some(dynamodb_endpoint_url) => sdk_config
-                .to_owned()
-                .to_builder()
-                .endpoint_url(dynamodb_endpoint_url)
-                .build(),
-            None => sdk_config.to_owned(),
+        let mut config_builder = sdk_config.to_owned().to_builder();
+
+        if let Some(dynamodb_endpoint_url) = dynamodb_override_endpoint {
+            config_builder = config_builder.endpoint_url(dynamodb_endpoint_url);
         }
+
+        if let Some(dynamodb_region) = dynamodb_override_region {
+            config_builder = config_builder.region(Region::new(dynamodb_region));
+        }
+
+        if let (Some(access_key_id), Some(secret_access_key)) = (
+            dynamodb_override_access_key_id,
+            dynamodb_override_secret_access_key,
+        ) {
+            config_builder = config_builder.credentials_provider(SharedCredentialsProvider::new(
+                aws_credential_types::Credentials::from_keys(
+                    access_key_id,
+                    secret_access_key,
+                    dynamodb_override_session_token,
+                ),
+            ));
+        }
+        config_builder.build()
     }
 
     /// Create the lock table where DynamoDb stores the commit information for all delta tables.
@@ -692,9 +727,11 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_config::Region;
+    use aws_sdk_sts::config::{ProvideCredentials, ResolveCachedIdentity};
+    use futures::future::Shared;
     use object_store::memory::InMemory;
     use serial_test::serial;
+    use tracing::instrument::WithSubscriber;
 
     fn commit_entry_roundtrip(c: &CommitEntry) -> Result<(), LockClientError> {
         let item_data: HashMap<String, AttributeValue> = create_value_map(c, "some_table");
@@ -752,6 +789,10 @@ mod tests {
         let dynamodb_sdk_config = DynamoDbLockClient::create_dynamodb_sdk_config(
             &sdk_config,
             Some("http://localhost:2345".to_string()),
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(
             dynamodb_sdk_config.endpoint_url(),
@@ -761,8 +802,66 @@ mod tests {
             dynamodb_sdk_config.region().unwrap().to_string(),
             "eu-west-1".to_string(),
         );
-        let dynamodb_sdk_no_override_config =
-            DynamoDbLockClient::create_dynamodb_sdk_config(&sdk_config, None);
+        let dynamodb_sdk_no_override_config = DynamoDbLockClient::create_dynamodb_sdk_config(
+            &sdk_config,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            dynamodb_sdk_no_override_config.endpoint_url(),
+            Some("http://localhost:1234"),
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_dynamodb_sdk_config_override_credentials() {
+        let sdk_config = SdkConfig::builder()
+            .region(Region::from_static("eu-west-1"))
+            .endpoint_url("http://localhost:1234")
+            .build();
+        let dynamodb_sdk_config = DynamoDbLockClient::create_dynamodb_sdk_config(
+            &sdk_config,
+            Some("http://localhost:2345".to_string()),
+            Some("us-west-1".to_string()),
+            Some("access_key_dynamodb".to_string()),
+            Some("secret_access_key_dynamodb".to_string()),
+            None,
+        );
+        assert_eq!(
+            dynamodb_sdk_config.endpoint_url(),
+            Some("http://localhost:2345"),
+        );
+        assert_eq!(
+            dynamodb_sdk_config.region().unwrap().to_string(),
+            "us-west-1".to_string(),
+        );
+
+        // check that access key and secret access key are overridden
+        let credentials_provider = dynamodb_sdk_config
+            .credentials_provider()
+            .unwrap()
+            .provide_credentials()
+            .await
+            .unwrap();
+
+        assert_eq!(credentials_provider.access_key_id(), "access_key_dynamodb");
+        assert_eq!(
+            credentials_provider.secret_access_key(),
+            "secret_access_key_dynamodb"
+        );
+
+        let dynamodb_sdk_no_override_config = DynamoDbLockClient::create_dynamodb_sdk_config(
+            &sdk_config,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             dynamodb_sdk_no_override_config.endpoint_url(),
             Some("http://localhost:1234"),

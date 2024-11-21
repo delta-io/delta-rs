@@ -372,7 +372,7 @@ mod tests {
         });
         let sdk_config = resolve_credentials(options)
             .await
-            .expect("Failed to resolve credentijals for the test");
+            .expect("Failed to resolve credentials for the test");
         let provider = AWSForObjectStore::new(sdk_config);
         let _credential = provider
             .get_credential()
