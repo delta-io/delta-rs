@@ -57,11 +57,13 @@ Or we can load the data into a Polars `DataFrame` with `pl.read_delta`:
 import polars as pl
 new_df = pl.read_delta("delta_table_dir")
 ```
+
 Or we can load the data with DuckDB:
 ```python
 import duckdb
 duckdb.query("SELECT * FROM delta_scan('./delta_table_dir')")
 ```
+
 Or we can load the data with DataFusion:
 ```python
 from datafusion import SessionContext
