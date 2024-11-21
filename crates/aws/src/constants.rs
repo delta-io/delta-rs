@@ -15,7 +15,7 @@ pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
 pub const AWS_ENDPOINT_URL_DYNAMODB: &str = "AWS_ENDPOINT_URL_DYNAMODB";
 /// If DynamoDB region is different from S3 region, set this to the DynamoDB region.
 /// If it is supplied, this region takes precedence over the global region set in AWS_REGION for DynamoDB
-pub const AWS_REGION_DYNAMODB: &str = "AWS_REGION";
+pub const AWS_REGION_DYNAMODB: &str = "AWS_REGION_DYNAMODB";
 /// If DynamoDB access key is different from S3 access key, set this to the DynamoDB access key.
 /// If it is supplied, this access key takes precedence over the global access key set in AWS_ACCESS_KEY_ID for DynamoDB
 pub const AWS_ACCESS_KEY_ID_DYNAMODB: &str = "AWS_ACCESS_KEY_ID_DYNAMODB";
