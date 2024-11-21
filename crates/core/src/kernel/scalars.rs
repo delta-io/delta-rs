@@ -73,6 +73,7 @@ impl ScalarExt for Scalar {
             Self::Binary(val) => create_escaped_binary_string(val.as_slice()),
             Self::Null(_) => "null".to_string(),
             Self::Struct(_) => unimplemented!(),
+            Self::Array(_) => unimplemented!(),
         }
     }
 
@@ -269,6 +270,7 @@ impl ScalarExt for Scalar {
             Self::Binary(val) => Value::String(create_escaped_binary_string(val.as_slice())),
             Self::Null(_) => Value::Null,
             Self::Struct(_) => unimplemented!(),
+            Self::Array(_) => unimplemented!(),
         }
     }
 }

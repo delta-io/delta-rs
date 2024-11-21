@@ -21,6 +21,7 @@
 //! ```
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -707,7 +708,7 @@ impl TableProvider for DeltaTable {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -747,6 +748,7 @@ impl TableProvider for DeltaTable {
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
+#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     log_store: LogStoreRef,
@@ -796,7 +798,7 @@ impl TableProvider for DeltaTableProvider {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -1365,6 +1367,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 }
 
 /// Responsible for creating deltatables
+#[derive(Debug)]
 pub struct DeltaTableFactory {}
 
 #[async_trait]

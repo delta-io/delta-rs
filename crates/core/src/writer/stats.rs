@@ -343,7 +343,15 @@ impl StatsScalar {
                     });
                 };
 
-                let val = val / 10.0_f64.powi(*scale);
+                let mut val = val / 10.0_f64.powi(*scale);
+
+                if val.is_normal() {
+                    if (val.trunc() as i128).to_string().len() > (precision - scale) as usize {
+                        // For normal values with integer parts that get rounded to a number beyond
+                        // the precision - scale range take the next smaller (by magnitude) value
+                        val = f64::from_bits(val.to_bits() - 1);
+                    }
+                }
                 Ok(Self::Decimal(val))
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
@@ -474,6 +482,10 @@ impl AddAssign for AggregatedStats {
 /// the list and items fields from the path, but also need to handle the
 /// peculiar case where the user named the list field "list" or "item".
 ///
+/// NOTE: As of delta_kernel 0.3.1 the name switched from `item` to `element` to line up with the
+/// parquet spec, see
+/// [here](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists)
+///
 /// For example:
 ///
 /// * ["some_nested_list", "list", "item", "list", "item"] -> "some_nested_list"
@@ -495,9 +507,9 @@ fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
     while let Some(part) = column_path_parts.pop() {
         match (part.as_str(), lists_seen, items_seen) {
             ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
-            ("item", _, seen) if seen == max_rep_levels => return Some("item".to_string()),
+            ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
             ("list", _, _) => lists_seen += 1,
-            ("item", _, _) => items_seen += 1,
+            ("element", _, _) => items_seen += 1,
             (other, _, _) => return Some(other.to_string()),
         }
     }
@@ -613,7 +625,7 @@ mod tests {
                 Some($value),
                 Some($value),
                 None,
-                0,
+                Some(0),
                 false,
             ))
         };
@@ -739,6 +751,32 @@ mod tests {
             (
                 simple_parquet_stat!(
                     Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![
+                        75, 59, 76, 168, 90, 134, 196, 122, 9, 138, 34, 63, 255, 255, 255, 255
+                    ])
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 6,
+                    precision: 38,
+                }),
+                Value::from(9.999999999999999e31),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![
+                        180, 196, 179, 87, 165, 121, 59, 133, 246, 117, 221, 192, 0, 0, 0, 1
+                    ])
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 6,
+                    precision: 38,
+                }),
+                Value::from(-9.999999999999999e31),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
                     FixedLenByteArray::from(
                         [
                             0xc2, 0xe8, 0xc7, 0xf7, 0xd1, 0xf9, 0x4b, 0x49, 0xa5, 0xd9, 0x4b, 0xfe,
@@ -789,9 +827,21 @@ mod tests {
         let mut null_count_keys = vec!["some_list", "some_nested_list"];
         null_count_keys.extend_from_slice(min_max_keys.as_slice());
 
-        assert_eq!(min_max_keys.len(), stats.min_values.len());
-        assert_eq!(min_max_keys.len(), stats.max_values.len());
-        assert_eq!(null_count_keys.len(), stats.null_count.len());
+        assert_eq!(
+            min_max_keys.len(),
+            stats.min_values.len(),
+            "min values don't match"
+        );
+        assert_eq!(
+            min_max_keys.len(),
+            stats.max_values.len(),
+            "max values don't match"
+        );
+        assert_eq!(
+            null_count_keys.len(),
+            stats.null_count.len(),
+            "null counts don't match"
+        );
 
         // assert on min values
         for (k, v) in stats.min_values.iter() {
@@ -820,7 +870,7 @@ mod tests {
                 ("uuid", ColumnValueStat::Value(v)) => {
                     assert_eq!("176c770d-92af-4a21-bf76-5d8c5261d659", v.as_str().unwrap())
                 }
-                _ => panic!("Key should not be present"),
+                k => panic!("Key {k:?} should not be present in min_values"),
             }
         }
 
@@ -851,7 +901,7 @@ mod tests {
                 ("uuid", ColumnValueStat::Value(v)) => {
                     assert_eq!("a98bea04-d119-4f21-8edc-eb218b5849af", v.as_str().unwrap())
                 }
-                _ => panic!("Key should not be present"),
+                k => panic!("Key {k:?} should not be present in max_values"),
             }
         }
 
@@ -878,7 +928,7 @@ mod tests {
                 ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 ("uuid", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
-                _ => panic!("Key should not be present"),
+                k => panic!("Key {k:?} should not be present in null_count"),
             }
         }
     }
