@@ -1,6 +1,6 @@
-# The deltalake package
+`deltalake` is an open source library that makes working with tabular datasets easier, more robust and more performant. With deltalake you can add, remove or update rows in a dataset as new data arrives. You can time travel back to earlier versions of a dataset. You can optimize dataset storage from small files to large files. 
 
-`deltalake` is an open source library that makes working with tabular datasets easier, more robust and more performant. With deltalake you can add, remove or update rows in a dataset as new data arrives. You can time travel back to earlier versions of a dataset. You can optimize dataset storage from small files to large files. `deltalake` can be used to manage data stored on a local file system or in the cloud. `deltalake` integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion.
+`deltalake` can be used to manage data stored on a local file system or in the cloud. `deltalake` integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion.
 
 `deltalake` uses a lakehouse framework for managing datasets. With this lakehouse approach you manage your datasets with a `DeltaTable` object and then `deltalake` takes care of the underlying files. Within a `DeltaTable` your data is stored in high performance Parquet files while metadata is stored in a set of JSON files called a transaction log.
 
