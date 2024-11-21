@@ -517,7 +517,6 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
     use crate::{DeltaTable, TableProperty};
-    use arrow::array::types::Int32Type;
     use arrow::array::{Int32Array, ListArray, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
