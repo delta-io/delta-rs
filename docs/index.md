@@ -2,14 +2,14 @@
 
 `deltalake` is an open source library that makes working with tabular datasets easier, more robust and more performant. With deltalake you can add, remove or update rows in a dataset as new data arrives. You can time travel back to earlier versions of a dataset. You can optimize dataset storage from small files to large files. `deltalake` can be used to manage data stored on a local file system or in the cloud. `deltalake` integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion.
 
-`deltalake` uses a lakehouse framework for managing datasets. With this lakehouse approach you manage your datasets with a `DeltaTable` object and then `deltalake` takes care of the underlying files. Within a `DeltaTable` your data is stored in high performance Parquet files while `deltalake` stores metadata in a set of JSON files called a transaction log.
+`deltalake` uses a lakehouse framework for managing datasets. With this lakehouse approach you manage your datasets with a `DeltaTable` object and then `deltalake` takes care of the underlying files. Within a `DeltaTable` your data is stored in high performance Parquet files while metadata is stored in a set of JSON files called a transaction log.
 
 `deltalake` is a Rust-based re-implementation of the DeltaLake protocol originally developed at DataBricks. The `deltalake` library has APIs in Rust and Python. The `deltalake` implementation has no dependencies on Java, Spark or DataBricks.
 
 
 ## Important terminology
 
-* `deltalake` refers to the Rust or Python API of delta-rs (no Spark dependency)
+* `deltalake` refers to the Rust or Python API of delta-rs
 * "Delta Spark" refers to the Scala implementation of the Delta Lake transaction log protocol.  This depends on Spark and Java.
 
 ## Why implement the Delta Lake transaction log protocol in Rust?
@@ -47,10 +47,30 @@ We create a `DeltaTable` object that holds the metadata for the Delta table:
 ```python
 dt = DeltaTable("delta_table_dir")
 ```
-We load the `DeltaTable` into a Pandas `DataFrame`:
+We load the `DeltaTable` into a Pandas `DataFrame` with `to_pandas` on a `DeltaTable`:
 ```python
-df = dt.to_pandas()
+new_df = dt.to_pandas()
 ```
+
+Or we can load the data into a Polars `DataFrame` with `pl.read_delta`:
+```python
+import polars as pl
+new_df = pl.read_delta("delta_table_dir")
+```
+Or we can load the data with DuckDB:
+```python
+import duckdb
+duckdb.query("SELECT * FROM delta_scan('./delta_table_dir')")
+```
+Or we can load the data with DataFusion:
+```python
+from datafusion import SessionContext
+
+ctx = SessionContext()
+ctx.register_dataset("my_delta_table", dt.to_pyarrow_dataset())
+ctx.sql("select * from my_delta_table")
+```
+
 
 ## Contributing
 
