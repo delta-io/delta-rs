@@ -2,9 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray, UInt64Array,
-};
+use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
 use chrono::{DateTime, Utc};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -484,7 +482,7 @@ mod datafusion {
     use ::datafusion::physical_plan::Accumulator;
     use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
-    use arrow_array::{ArrayRef, BooleanArray, Int64Array};
+    use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
