@@ -6,13 +6,16 @@ mod schema;
 mod utils;
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
 use std::future::IntoFuture;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
@@ -58,7 +61,7 @@ use futures::future::join_all;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyDict, PyFrozenSet};
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
@@ -1239,6 +1242,17 @@ impl RawDeltaTable {
             .into_iter()
             .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
             .collect()
+    }
+
+    fn __datafusion_table_provider__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyCapsule>> {
+        let name = CString::new("datafusion_table_provider").unwrap();
+
+        let provider = FFI_TableProvider::new(Arc::new(self._table.clone()), false);
+
+        PyCapsule::new_bound(py, provider, Some(name.clone()))
     }
 }
 
