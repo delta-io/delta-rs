@@ -48,12 +48,13 @@ parquet = { version = "53" }
 datafusion = { version = "43" }
 datafusion-expr = { version = "43" }
 datafusion-common = { version = "43" }
-datafusion-proto = { version = "43" }
-datafusion-sql = { version = "43" }
-datafusion-physical-expr = { version = "43" }
-datafusion-physical-plan = { version = "43" }
+datafusion-ffi = { version = "43" }
 datafusion-functions = { version = "43" }
 datafusion-functions-aggregate = { version = "43" }
+datafusion-physical-expr = { version = "43" }
+datafusion-physical-plan = { version = "43" }
+datafusion-proto = { version = "43" }
+datafusion-sql = { version = "43" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
