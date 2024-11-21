@@ -727,8 +727,11 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_sts::config::{ProvideCredentials, ResolveCachedIdentity};
+    use futures::future::Shared;
     use object_store::memory::InMemory;
     use serial_test::serial;
+    use tracing::instrument::WithSubscriber;
 
     fn commit_entry_roundtrip(c: &CommitEntry) -> Result<(), LockClientError> {
         let item_data: HashMap<String, AttributeValue> = create_value_map(c, "some_table");
@@ -799,6 +802,58 @@ mod tests {
             dynamodb_sdk_config.region().unwrap().to_string(),
             "eu-west-1".to_string(),
         );
+        let dynamodb_sdk_no_override_config = DynamoDbLockClient::create_dynamodb_sdk_config(
+            &sdk_config,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            dynamodb_sdk_no_override_config.endpoint_url(),
+            Some("http://localhost:1234"),
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_create_dynamodb_sdk_config_override_credentials() {
+        let sdk_config = SdkConfig::builder()
+            .region(Region::from_static("eu-west-1"))
+            .endpoint_url("http://localhost:1234")
+            .build();
+        let dynamodb_sdk_config = DynamoDbLockClient::create_dynamodb_sdk_config(
+            &sdk_config,
+            Some("http://localhost:2345".to_string()),
+            Some("us-west-1".to_string()),
+            Some("access_key_dynamodb".to_string()),
+            Some("secret_access_key_dynamodb".to_string()),
+            None,
+        );
+        assert_eq!(
+            dynamodb_sdk_config.endpoint_url(),
+            Some("http://localhost:2345"),
+        );
+        assert_eq!(
+            dynamodb_sdk_config.region().unwrap().to_string(),
+            "us-west-1".to_string(),
+        );
+
+        // check that access key and secret access key are overridden
+        let credentials_provider = dynamodb_sdk_config
+            .credentials_provider()
+            .unwrap()
+            .provide_credentials()
+            .await
+            .unwrap();
+
+        assert_eq!(credentials_provider.access_key_id(), "access_key_dynamodb");
+        assert_eq!(
+            credentials_provider.secret_access_key(),
+            "secret_access_key_dynamodb"
+        );
+
         let dynamodb_sdk_no_override_config = DynamoDbLockClient::create_dynamodb_sdk_config(
             &sdk_config,
             None,
