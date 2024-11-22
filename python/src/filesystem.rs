@@ -503,10 +503,12 @@ impl ObjectInputFile {
         Err(PyNotImplementedError::new_err("'truncate' not implemented"))
     }
 
+    #[pyo3(signature = (_size=None))]
     fn readline(&self, _size: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err("'readline' not implemented"))
     }
 
+    #[pyo3(signature = (_hint=None))]
     fn readlines(&self, _hint: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err(
             "'readlines' not implemented",
@@ -666,10 +668,12 @@ impl ObjectOutputStream {
         Err(PyNotImplementedError::new_err("'truncate' not implemented"))
     }
 
+    #[pyo3(signature = (_size=None))]
     fn readline(&self, _size: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err("'readline' not implemented"))
     }
 
+    #[pyo3(signature = (_hint=None))]
     fn readlines(&self, _hint: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err(
             "'readlines' not implemented",
