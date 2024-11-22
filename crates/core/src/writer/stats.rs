@@ -26,7 +26,7 @@ pub fn create_add(
     size: i64,
     file_metadata: &FileMetaData,
     num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
@@ -99,7 +99,7 @@ fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
     num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
@@ -126,7 +126,7 @@ fn stats_from_metadata(
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
     num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -138,7 +138,7 @@ fn stats_from_metadata(
             .into_iter()
             .map(|v| {
                 match sqlparser::parser::Parser::new(&dialect)
-                    .try_with_sql(v)
+                    .try_with_sql(v.as_ref())
                     .map_err(|e| DeltaTableError::generic(e.to_string()))?
                     .parse_multipart_identifier()
                 {
