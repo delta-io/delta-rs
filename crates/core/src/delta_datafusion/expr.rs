@@ -28,7 +28,8 @@ use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDate};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::functions_array::make_array::MakeArray;
+use datafusion::functions_nested::make_array::MakeArray;
+use datafusion::functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::expr::InList;
@@ -104,6 +105,7 @@ impl ScalarUDFImpl for MakeParquetArray {
             data_type = arg.data_type();
         }
 
+        #[allow(deprecated)]
         match self.actual.invoke(args)? {
             ColumnarValue::Scalar(ScalarValue::List(df_array)) => {
                 let field = Arc::new(Field::new("element", data_type, true));
@@ -126,7 +128,7 @@ impl ScalarUDFImpl for MakeParquetArray {
     }
 
     fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
-        self.actual.invoke_no_args(number_rows)
+        self.actual.invoke_batch(&[], number_rows)
     }
 
     fn aliases(&self) -> &[String] {
@@ -142,9 +144,7 @@ impl ScalarUDFImpl for MakeParquetArray {
     }
 }
 
-use datafusion::functions_array::planner::{FieldAccessPlanner, NestedFunctionPlanner};
-
-/// This exists becxause the NestedFunctionPlanner _not_ the UserDefinedFunctionPlanner handles the
+/// This exists because the NestedFunctionPlanner, _not_ the UserDefinedFunctionPlanner, handles the
 /// insertion of "make_array" which is used to turn [100] into List<field=element, values=[100]>
 ///
 /// **screaming intensifies**
@@ -567,8 +567,8 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
 #[cfg(test)]
 mod test {
     use arrow_schema::DataType as ArrowDataType;
-    use datafusion::functions_array::expr_fn::cardinality;
     use datafusion::functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
+    use datafusion::functions_nested::expr_fn::cardinality;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{Column, ScalarValue, ToDFSchema};
     use datafusion_expr::expr::ScalarFunction;
