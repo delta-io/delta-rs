@@ -2,8 +2,8 @@ use deltalake::kernel::TableFeatures as KernelTableFeatures;
 use pyo3::pyclass;
 
 /// High level table features
-#[pyclass]
-#[derive(Clone)]
+#[pyclass(eq, eq_int)]
+#[derive(Clone, PartialEq)]
 pub enum TableFeatures {
     /// Mapping of one column to another
     ColumnMapping,

@@ -252,9 +252,9 @@ impl StatsScalar {
         macro_rules! get_stat {
             ($val: expr) => {
                 if use_min {
-                    *$val.min()
+                    *$val.min_opt().unwrap()
                 } else {
-                    *$val.max()
+                    *$val.max_opt().unwrap()
                 }
             };
         }
@@ -304,10 +304,11 @@ impl StatsScalar {
             (Statistics::Double(v), _) => Ok(Self::Float64(get_stat!(v))),
             (Statistics::ByteArray(v), logical_type) => {
                 let bytes = if use_min {
-                    v.min_bytes()
+                    v.min_bytes_opt()
                 } else {
-                    v.max_bytes()
-                };
+                    v.max_bytes_opt()
+                }
+                .unwrap_or_default();
                 match logical_type {
                     None => Ok(Self::Bytes(bytes.to_vec())),
                     Some(LogicalType::String) => {
@@ -326,10 +327,11 @@ impl StatsScalar {
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal { scale, precision })) => {
                 let val = if use_min {
-                    v.min_bytes()
+                    v.min_bytes_opt()
                 } else {
-                    v.max_bytes()
-                };
+                    v.max_bytes_opt()
+                }
+                .unwrap_or_default();
 
                 let val = if val.len() <= 16 {
                     i128::from_be_bytes(sign_extend_be(val)) as f64
@@ -356,10 +358,11 @@ impl StatsScalar {
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
                 let val = if use_min {
-                    v.min_bytes()
+                    v.min_bytes_opt()
                 } else {
-                    v.max_bytes()
-                };
+                    v.max_bytes_opt()
+                }
+                .unwrap_or_default();
 
                 if val.len() != 16 {
                     return Err(DeltaWriterError::StatsParsingFailed {
@@ -432,8 +435,8 @@ struct AggregatedStats {
 impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
     fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
         let (stats, logical_type) = value;
-        let null_count = stats.null_count();
-        if stats.has_min_max_set() {
+        let null_count = stats.null_count_opt().unwrap_or_default();
+        if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
             let min = StatsScalar::try_from_stats(stats, logical_type, true).ok();
             let max = StatsScalar::try_from_stats(stats, logical_type, false).ok();
             Self {
