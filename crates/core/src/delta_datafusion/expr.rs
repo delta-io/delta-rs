@@ -505,7 +505,7 @@ impl<'a> fmt::Display for ScalarValueFormat<'a> {
             ScalarValue::Date32(e) => match e {
                 Some(e) => write!(
                     f,
-                    "{}",
+                    "'{}'::date",
                     NaiveDate::from_num_days_from_ce_opt(EPOCH_DAYS_FROM_CE + (*e)).ok_or(Error)?
                 )?,
                 None => write!(f, "NULL")?,
@@ -871,6 +871,18 @@ mod test {
                                 lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
                                 lit(ScalarValue::Utf8(Some("Timestamp(Microsecond, Some(\"UTC\"))".into())))
                             ]
+                        }
+                    )
+                )),
+            },
+            ParseTest {
+                expr: col("_date").eq(lit(ScalarValue::Date32(Some(18262)))),
+                expected: "_date = '2020-01-01'::date".to_string(),
+                override_expected_expr: Some(col("_date").eq(
+                    Expr::Cast(
+                        Cast {
+                            expr: Box::from(lit("2020-01-01")),
+                            data_type: arrow_schema::DataType::Date32
                         }
                     )
                 )),
