@@ -287,6 +287,7 @@ impl RawDeltaTable {
         })
     }
 
+    #[pyo3(signature = (partition_filters=None))]
     pub fn files(
         &self,
         py: Python,
@@ -316,6 +317,7 @@ impl RawDeltaTable {
         })
     }
 
+    #[pyo3(signature = (partition_filters=None))]
     pub fn file_uris(
         &self,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
@@ -828,6 +830,7 @@ impl RawDeltaTable {
     }
 
     /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
+    #[pyo3(signature = (limit=None))]
     pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
         let history = rt()
             .block_on(self._table.history(limit))
@@ -845,6 +848,7 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
+    #[pyo3(signature = (schema, partition_filters=None))]
     pub fn dataset_partitions<'py>(
         &mut self,
         py: Python<'py>,
@@ -876,6 +880,7 @@ impl RawDeltaTable {
             .collect()
     }
 
+    #[pyo3(signature = (partitions_filters=None))]
     fn get_active_partitions<'py>(
         &self,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
@@ -969,6 +974,7 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (add_actions, mode, partition_by, schema, partitions_filters=None, commit_properties=None, post_commithook_properties=None))]
     fn create_write_transaction(
         &mut self,
         py: Python,
@@ -1431,7 +1437,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Double(val) => val.to_object(py),
         Timestamp(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
-            // the scalar value to pa.timestamp("us","UTC")
+            // scalar value to pa.timestamp("us","UTC")
             let value = value.serialize();
             format!("{}Z", value).to_object(py)
         }
@@ -1453,7 +1459,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             }
             py_struct.to_object(py)
         }
-        Array(val) => todo!("how should this be converted!"),
+        Array(_val) => todo!("how should this be converted!"),
     };
 
     Ok(val.into_bound(py))
@@ -1747,6 +1753,7 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (table_uri, data, mode, table=None, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
@@ -1828,6 +1835,7 @@ fn write_to_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
 fn create_deltalake(
     py: Python,
     table_uri: String,
@@ -1884,6 +1892,7 @@ fn create_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (table_uri, schema, add_actions, _mode, partition_by, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
 fn write_new_deltalake(
     py: Python,
     table_uri: String,
@@ -1938,6 +1947,7 @@ fn write_new_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
 fn convert_to_deltalake(
     py: Python,
     uri: String,
@@ -1992,6 +2002,7 @@ fn convert_to_deltalake(
 }
 
 #[pyfunction]
+#[pyo3(signature = (table=None, configuration=None))]
 fn get_num_idx_cols_and_stats_columns(
     table: Option<&RawDeltaTable>,
     configuration: Option<HashMap<String, Option<String>>>,

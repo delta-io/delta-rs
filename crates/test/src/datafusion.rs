@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 pub fn context_with_delta_table_factory() -> SessionContext {
     let cfg = RuntimeConfig::new();
-    let env = RuntimeEnv::new(cfg).unwrap();
+    let env = RuntimeEnv::try_new(cfg).unwrap();
     let ses = SessionConfig::new();
     let mut state = SessionStateBuilder::new()
         .with_config(ses)
