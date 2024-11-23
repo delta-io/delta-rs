@@ -79,7 +79,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#the-deltalake-package" class="md-skip">
+        <a href="#important-terminology" class="md-skip">
           Skip to content
         </a>
       
@@ -1811,8 +1811,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1828,8 +1826,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-implement-the-delta-lake-transaction-log-protocol-in-rust-and-scala" class="md-nav__link">
-    Why implement the Delta Lake transaction log protocol in Rust and Scala?
+  <a href="#why-implement-the-delta-lake-transaction-log-protocol-in-rust" class="md-nav__link">
+    Why implement the Delta Lake transaction log protocol in Rust?
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    Quick start
   </a>
   
 </li>
@@ -1866,19 +1871,63 @@
   
 
 
-<h1 id="the-deltalake-package">The deltalake package</h1>
-<p>This is the documentation for the native Rust/Python implementation of Delta Lake. It is based on the delta-rs Rust library and requires no Spark or JVM dependencies. For the PySpark implementation, see <a href="https://docs.delta.io/latest/api/python/spark/index.html">delta-spark</a> instead.</p>
-<p>This module provides the capability to read, write, and manage <a href="https://delta.io/">Delta Lake</a> tables with Python or Rust without Spark or Java. It uses <a href="https://arrow.apache.org/">Apache Arrow</a> under the hood, so is compatible with other Arrow-native or integrated libraries such as <a href="https://pandas.pydata.org/">pandas</a>, <a href="https://duckdb.org/">DuckDB</a>, and <a href="https://www.pola.rs/">Polars</a>.</p>
+  <h1>Home</h1>
+
+<p><code>deltalake</code> is an open source library that makes working with tabular datasets easier, more robust and more performant. With deltalake you can add, remove or update rows in a dataset as new data arrives. You can time travel back to earlier versions of a dataset. You can optimize dataset storage from small files to large files. </p>
+<p><code>deltalake</code> can be used to manage data stored on a local file system or in the cloud. <code>deltalake</code> integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion.</p>
+<p><code>deltalake</code> uses a lakehouse framework for managing datasets. With this lakehouse approach you manage your datasets with a <code>DeltaTable</code> object and then <code>deltalake</code> takes care of the underlying files. Within a <code>DeltaTable</code> your data is stored in high performance Parquet files while metadata is stored in a set of JSON files called a transaction log.</p>
+<p><code>deltalake</code> is a Rust-based re-implementation of the DeltaLake protocol originally developed at DataBricks. The <code>deltalake</code> library has APIs in Rust and Python. The <code>deltalake</code> implementation has no dependencies on Java, Spark or DataBricks.</p>
 <h2 id="important-terminology">Important terminology</h2>
 <ul>
-<li>"Rust deltalake" refers to the Rust API of delta-rs (no Spark dependency)</li>
-<li>"Python deltalake" refers to the Python API of delta-rs (no Spark dependency)</li>
+<li><code>deltalake</code> refers to the Rust or Python API of delta-rs</li>
 <li>"Delta Spark" refers to the Scala implementation of the Delta Lake transaction log protocol.  This depends on Spark and Java.</li>
 </ul>
-<h2 id="why-implement-the-delta-lake-transaction-log-protocol-in-rust-and-scala">Why implement the Delta Lake transaction log protocol in Rust and Scala?</h2>
-<p>Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.  delta-rs allows using Delta Lake in Rust or other native projects when using a JVM is often not an option.</p>
-<p>Python deltalake lets you query Delta tables without depending on Java/Scala.</p>
-<p>Suppose you want to query a Delta table with pandas on your local machine.  Python deltalake makes it easy to query the table with a simple <code>pip install</code> command - no need to install Java.</p>
+<h2 id="why-implement-the-delta-lake-transaction-log-protocol-in-rust">Why implement the Delta Lake transaction log protocol in Rust?</h2>
+<p>Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.  <code>deltalake</code> allows you to manage your dataset using a Delta Lake approach without any Java or Spark dependencies.</p>
+<p>A <code>DeltaTable</code> on disk is simply a directory that stores metadata in JSON files and data in Parquet files.  </p>
+<h2 id="quick-start">Quick start</h2>
+<p>You can install <code>deltalake</code> in Python with <code>pip</code>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>deltalake
+</span></code></pre></div>
+We create a Pandas <code>DataFrame</code> and write it to a <code>DeltaTable</code>:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span><span class="n">write_deltalake</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="p">{</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>        <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;Aadhya&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Chen&quot;</span><span class="p">],</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="p">}</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="p">)</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="p">(</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>        <span class="n">table_or_uri</span><span class="o">=</span><span class="s2">&quot;delta_table_dir&quot;</span><span class="p">,</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="n">data</span><span class="o">=</span><span class="n">df</span><span class="p">,</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="p">)</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="p">)</span>
+</span></code></pre></div>
+We create a <code>DeltaTable</code> object that holds the metadata for the Delta table:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;delta_table_dir&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+We load the <code>DeltaTable</code> into a Pandas <code>DataFrame</code> with <code>to_pandas</code> on a <code>DeltaTable</code>:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">new_df</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</span></code></pre></div></p>
+<p>Or we can load the data into a Polars <code>DataFrame</code> with <code>pl.read_delta</code>:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span> <span class="nn">polars</span> <span class="k">as</span> <span class="nn">pl</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">new_df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_delta</span><span class="p">(</span><span class="s2">&quot;delta_table_dir&quot;</span><span class="p">)</span>
+</span></code></pre></div></p>
+<p>Or we can load the data with DuckDB:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">import</span> <span class="nn">duckdb</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">duckdb</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM delta_scan(&#39;./delta_table_dir&#39;)&quot;</span><span class="p">)</span>
+</span></code></pre></div></p>
+<p>Or we can load the data with DataFusion:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span> <span class="nn">datafusion</span> <span class="kn">import</span> <span class="n">SessionContext</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">ctx</span> <span class="o">=</span> <span class="n">SessionContext</span><span class="p">()</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_dataset</span><span class="p">(</span><span class="s2">&quot;my_delta_table&quot;</span><span class="p">,</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">())</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select * from my_delta_table&quot;</span><span class="p">)</span>
+</span></code></pre></div></p>
 <h2 id="contributing">Contributing</h2>
 <p>The Delta Lake community welcomes contributors from all developers, regardless of your experience or programming background.</p>
 <p>You can write Rust code, Python code, documentation, submit bugs, or give talks to the community.  We welcome all of these contributions.</p>

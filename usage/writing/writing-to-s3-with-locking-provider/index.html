@@ -913,6 +913,19 @@
     DynamoDB
   </a>
   
+    <nav class="md-nav" aria-label="DynamoDB">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#override-dynamodb-config" class="md-nav__link">
+    Override DynamoDB config
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1895,6 +1908,19 @@
     DynamoDB
   </a>
   
+    <nav class="md-nav" aria-label="DynamoDB">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#override-dynamodb-config" class="md-nav__link">
+    Override DynamoDB config
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1940,7 +1966,7 @@
 <p>Delta lake guarantees <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/">ACID transactions</a> when writing data. This is done by default when writing to all supported object stores except AWS S3. (Some S3 clients like CloudFlare R2 or MinIO may enable concurrent writing without a locking provider, refer to <a href="#enabling-concurrent-writes-for-alternative-clients">this section</a> for more information).</p>
 <p>When writing to S3, delta-rs provides a locking mechanism to ensure that concurrent writes are safe. This is done by default when writing to S3, but you can opt-out by setting the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true</code>.</p>
 <p>To enable safe concurrent writes to AWS S3, we must provide an external locking mechanism.</p>
-<h3 id="dynamodb">DynamoDB</h3>
+<h2 id="dynamodb">DynamoDB</h2>
 <p>DynamoDB is the only available locking provider at the moment in delta-rs. To enable DynamoDB as the locking provider, you need to set the <code>AWS_S3_LOCKING_PROVIDER</code> to 'dynamodb' as a <code>storage_options</code> or as an environment variable.</p>
 <p>Additionally, you must create a DynamoDB table with the name <code>delta_log</code>
 so that it can be automatically recognized by delta-rs. Alternatively, you can
@@ -1986,6 +2012,7 @@ table is as follows:</p>
 </span></code></pre></div>
 <p>This locking mechanism is compatible with the one used by Apache Spark. The <code>tablePath</code> property, denoting the root url of the delta table itself, is part of the primary key, and all writers intending to write to the same table must match this property precisely. In Spark, S3 URLs are prefixed with <code>s3a://</code>, and a table in delta-rs must be configured accordingly.</p>
 <p>Note that <code>delta-rs</code> does not read credentials from your local <code>.aws/config</code> or <code>.aws/creds</code> file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can pass credentials to <code>storage_options</code> using <code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code>.</p>
+<p>To use a custom endpoint (e.g., LocalStack), set <code>AWS_ENDPOINT_URL_DYNAMODB</code> in the <code>storage_options</code>.</p>
 <p>The following code allows creating the necessary DynamoDB table from the AWS cli:</p>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>aws<span class="w"> </span>dynamodb<span class="w"> </span>create-table<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--table-name<span class="w"> </span>delta_log<span class="w"> </span><span class="se">\</span>
@@ -1994,10 +2021,39 @@ table is as follows:</p>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--provisioned-throughput<span class="w"> </span><span class="nv">ReadCapacityUnits</span><span class="o">=</span><span class="m">5</span>,WriteCapacityUnits<span class="o">=</span><span class="m">5</span>
 </span></code></pre></div>
 <p>You can find additional information in the <a href="https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup">Delta Lake documentation</a>, which also includes recommendations on configuring a time-to-live (TTL) for the table to avoid growing the table indefinitely.</p>
-<h3 id="enable-unsafe-writes-in-s3-opt-in">Enable unsafe writes in S3 (opt-in)</h3>
+<h3 id="override-dynamodb-config">Override DynamoDB config</h3>
+<p>In some cases, you may want to override the default DynamoDB configuration. For instance, you use an S3-compatible storage on another cloud provider which is not AWS. Or you need to have another set of credentials for DynamoDB. In this case, you can configure the <code>storage_options</code> with extra environment variables:</p>
+<ul>
+<li><code>AWS_ENDPOINT_URL_DYNAMODB</code> overrides <code>AWS_ENDPOINT_URL</code>,</li>
+<li><code>AWS_REGION_DYNAMODB</code> overrides <code>AWS_REGION</code>,</li>
+<li><code>AWS_ACCESS_KEY_ID_DYNAMODB</code> overrides <code>AWS_ACCESS_KEY_ID</code>,</li>
+<li><code>AWS_SECRET_ACCESS_KEY_DYNAMODB</code> overrides <code>AWS_SECRET_ACCESS_KEY</code>.</li>
+</ul>
+<p>Example:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]})</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s2">&quot;endpoint_url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://&lt;your-s3-compatible-storage&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="s2">&quot;REGION&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;s3-region&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="s2">&quot;AWS_ACCESS_KEY_ID&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;s3-access-key-id&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="s2">&quot;AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;s3-secret-access-key&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="c1"># override dynamodb config</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="s2">&quot;AWS_S3_LOCKING_PROVIDER&quot;</span><span class="p">:</span> <span class="s2">&quot;dynamodb&quot;</span><span class="p">,</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="s2">&quot;AWS_ENDPOINT_URL_DYNAMODB&quot;</span><span class="p">:</span> <span class="s2">&quot;https://dynamodb.&lt;dynamodb-region&gt;.amazonaws.com&quot;</span><span class="p">,</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="s2">&quot;AWS_REGION_DYNAMODB&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;dynamodb-region&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="s2">&quot;AWS_ACCESS_KEY_ID_DYNAMODB&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;dynamodb-access-key-id&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="s2">&quot;AWS_SECRET_ACCESS_KEY_DYNAMODB&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;dynamodb-secret-access-key&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="p">}</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="s1">&#39;s3a://path/to/table&#39;</span><span class="p">,</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="enable-unsafe-writes-in-s3-opt-in">Enable unsafe writes in S3 (opt-in)</h2>
 <p>If for some reason you don't want to use dynamodb as your locking mechanism you can
 choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true</code> in order to enable S3 unsafe writes.</p>
-<h3 id="required-permissions">Required permissions</h3>
+<h2 id="required-permissions">Required permissions</h2>
 <p>You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the deltalake, because there are temporary files into the log folder that are deleted after usage.</p>
 <p>In AWS, those would be the required permissions:</p>
 <ul>
@@ -2011,15 +2067,15 @@ choose to set the <code>AWS_S3_ALLOW_UNSAFE_RENAME</code> variable to <code>true
 <li>dynamodb:Query</li>
 <li>dynamodb:PutItem</li>
 <li>dynamodb:UpdateItem</li>
-<li>dynamodb:DeleteItem </li>
+<li>dynamodb:DeleteItem</li>
 </ul>
-<h3 id="enabling-concurrent-writes-for-alternative-clients">Enabling concurrent writes for alternative clients</h3>
+<h2 id="enabling-concurrent-writes-for-alternative-clients">Enabling concurrent writes for alternative clients</h2>
 <p>Unlike AWS S3, some S3 clients support atomic renames by passing some headers
 in requests.</p>
 <p>For CloudFlare R2 or Minio passing this in the storage_options will enable concurrent writes:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;conditional_put&quot;</span><span class="p">:</span> <span class="s2">&quot;etag&quot;</span><span class="p">,</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">&quot;conditional_put&quot;</span><span class="p">:</span> <span class="s2">&quot;etag&quot;</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
 </span></code></pre></div>
 
 

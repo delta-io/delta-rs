@@ -1849,7 +1849,7 @@
 <p>If you Z Order the data by the <code>country</code> column, then individuals from the same country will be stored in the same files.  When you subquently query the data for individuals from a given country, it will execute faster because more data can be skipped.</p>
 <p>Here's how to Z Order a Delta table:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">z_order</span><span class="p">([</span><span class="n">country</span><span class="p">])</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">z_order</span><span class="p">([</span><span class="s2">&quot;country&quot;</span><span class="p">])</span>
 </span></code></pre></div>
 
 

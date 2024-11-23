@@ -2015,7 +2015,7 @@ the <code>DeltaTable.is_deltatable()</code> method.</p>
 </span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    <span class="s2">&quot;AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">:</span> <span class="s2">&quot;THE_AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">,</span>
 </span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>    <span class="o">...</span>
 </span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="p">}</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="n">DeltaTable</span><span class="o">.</span><span class="n">is_deltatable</span><span class="p">(</span><span class="n">bucket_table_path</span><span class="p">)</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="n">DeltaTable</span><span class="o">.</span><span class="n">is_deltatable</span><span class="p">(</span><span class="n">bucket_table_path</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">)</span>
 </span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="c1"># True</span>
 </span></code></pre></div>
 <h2 id="custom-storage-backends">Custom Storage Backends</h2>
@@ -2051,7 +2051,7 @@ like:</p>
 wish to load:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 </span></code></pre></div>
-<p>Once you\'ve loaded a table, you can also change versions using either a
+<p>Once you've loaded a table, you can also change versions using either a
 version number or datetime string:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">load_version</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="o">&gt;&gt;&gt;</span> <span class="n">dt</span><span class="o">.</span><span class="n">load_with_datetime</span><span class="p">(</span><span class="s2">&quot;2021-11-04 00:05:23.283+00:00&quot;</span><span class="p">)</span>
