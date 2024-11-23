@@ -509,7 +509,9 @@ mod datafusion {
         fn collect_count(&self, name: &str) -> Precision<usize> {
             let num_records = extract_and_cast_opt::<Int64Array>(self.stats, name);
             if let Some(num_records) = num_records {
-                if let Some(null_count_mulls) = num_records.nulls() {
+                if num_records.len() == 0 {
+                    Precision::Exact(0)
+                } else if let Some(null_count_mulls) = num_records.nulls() {
                     if null_count_mulls.null_count() > 0 {
                         Precision::Absent
                     } else {

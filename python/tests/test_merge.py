@@ -805,7 +805,10 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
 
     assert last_action["operation"] == "MERGE"
     assert result == data
-    assert last_action["operationParameters"].get("predicate") == "2022-02-01 = date"
+    assert (
+        last_action["operationParameters"].get("predicate")
+        == "'2022-02-01'::date = date"
+    )
 
 
 @pytest.mark.parametrize(
