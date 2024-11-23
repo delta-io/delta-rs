@@ -62,6 +62,8 @@ This locking mechanism is compatible with the one used by Apache Spark. The `tab
 
 Note that `delta-rs` does not read credentials from your local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
+To use a custom endpoint (e.g., LocalStack), set `AWS_ENDPOINT_URL_DYNAMODB` in the `storage_options`.
+
 The following code allows creating the necessary DynamoDB table from the AWS cli:
 
 ```sh
