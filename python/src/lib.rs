@@ -697,7 +697,7 @@ impl RawDeltaTable {
             let ending_ts = DateTime::<Utc>::from_str(&et)
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
-            cdf_read = cdf_read.with_starting_timestamp(ending_ts);
+            cdf_read = cdf_read.with_ending_timestamp(ending_ts);
         }
 
         if let Some(columns) = columns {
