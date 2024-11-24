@@ -207,6 +207,7 @@ macro_rules! table_config {
 }
 
 /// Well known delta table configuration
+#[derive(Debug)]
 pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
 
 /// Default num index cols
