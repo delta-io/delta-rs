@@ -6,6 +6,7 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaProtocolError
 from deltalake.table import CommitProperties
 
 
@@ -1080,3 +1081,42 @@ def test_cdc_merge_planning_union_2908(tmp_path):
     assert last_action["operation"] == "MERGE"
     assert dt.version() == 1
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
+
+
+@pytest.mark.pandas
+def test_merge_non_nullable(tmp_path):
+    import re
+
+    import pandas as pd
+
+    from deltalake.schema import Field, PrimitiveType, Schema
+
+    schema = Schema(
+        [
+            Field("id", PrimitiveType("integer"), nullable=False),
+            Field("bool", PrimitiveType("boolean"), nullable=False),
+        ]
+    )
+
+    dt = DeltaTable.create(tmp_path, schema=schema)
+    df = pd.DataFrame(
+        columns=["id", "bool"],
+        data=[
+            [1, True],
+            [2, None],
+            [3, False],
+        ],
+    )
+
+    with pytest.raises(
+        DeltaProtocolError,
+        match=re.escape(
+            'Invariant violations: ["Non-nullable column violation for bool, found 1 null values"]'
+        ),
+    ):
+        dt.merge(
+            source=df,
+            source_alias="s",
+            target_alias="t",
+            predicate="s.id = t.id",
+        ).when_matched_update_all().when_not_matched_insert_all().execute()

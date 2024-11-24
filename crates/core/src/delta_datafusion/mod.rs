@@ -1150,11 +1150,12 @@ pub(crate) async fn execute_plan_to_batch(
     Ok(concat_batches(&plan.schema(), data.iter())?)
 }
 
-/// Responsible for checking batches of data conform to table's invariants.
-#[derive(Clone)]
+/// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
+#[derive(Clone, Default)]
 pub struct DeltaDataChecker {
     constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
+    non_nullable_columns: Vec<String>,
     ctx: SessionContext,
 }
 
@@ -1164,6 +1165,7 @@ impl DeltaDataChecker {
         Self {
             invariants: vec![],
             constraints: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1173,6 +1175,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1182,6 +1185,7 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1202,9 +1206,21 @@ impl DeltaDataChecker {
     pub fn new(snapshot: &DeltaTableState) -> Self {
         let invariants = snapshot.schema().get_invariants().unwrap_or_default();
         let constraints = snapshot.table_config().get_constraints();
+        let non_nullable_columns = snapshot
+            .schema()
+            .fields()
+            .filter_map(|f| {
+                if !f.is_nullable() {
+                    Some(f.name().clone())
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
         Self {
             invariants,
             constraints,
+            non_nullable_columns,
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1214,8 +1230,33 @@ impl DeltaDataChecker {
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        self.check_nullability(record_batch)?;
         self.enforce_checks(record_batch, &self.invariants).await?;
         self.enforce_checks(record_batch, &self.constraints).await
+    }
+
+    /// Return true if all the nullability checks are valid
+    fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
+        let mut violations = Vec::new();
+        for col in self.non_nullable_columns.iter() {
+            if let Some(arr) = record_batch.column_by_name(col) {
+                if arr.null_count() > 0 {
+                    violations.push(format!(
+                        "Non-nullable column violation for {col}, found {} null values",
+                        arr.null_count()
+                    ));
+                }
+            } else {
+                violations.push(format!(
+                    "Non-nullable column violation for {col}, not found in batch!"
+                ));
+            }
+        }
+        if !violations.is_empty() {
+            Err(DeltaTableError::InvalidData { violations })
+        } else {
+            Ok(true)
+        }
     }
 
     async fn enforce_checks<C: DataCheck>(
@@ -2597,5 +2638,39 @@ mod tests {
         let actual = df.collect().await.unwrap();
 
         assert_eq!(actual.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_nullability() -> DeltaResult<()> {
+        use arrow::array::StringArray;
+
+        let data_checker = DeltaDataChecker {
+            non_nullable_columns: vec!["zed".to_string(), "yap".to_string()],
+            ..Default::default()
+        };
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let nulls: Arc<dyn Array> = Arc::new(StringArray::new_null(1));
+        let batch = RecordBatch::try_from_iter(vec![("a", arr), ("zed", nulls)]).unwrap();
+
+        let result = data_checker.check_nullability(&batch);
+        assert!(
+            result.is_err(),
+            "The result should have errored! {result:?}"
+        );
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter(vec![("zed", arr)]).unwrap();
+        let result = data_checker.check_nullability(&batch);
+        assert!(
+            result.is_err(),
+            "The result should have errored! {result:?}"
+        );
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter(vec![("zed", arr.clone()), ("yap", arr)]).unwrap();
+        let _ = data_checker.check_nullability(&batch)?;
+
+        Ok(())
     }
 }
