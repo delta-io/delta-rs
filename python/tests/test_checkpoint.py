@@ -468,3 +468,33 @@ def test_checkpoint_with_nullable_false(tmp_path: pathlib.Path):
     assert checkpoint_path.exists()
 
     assert DeltaTable(str(tmp_table_path)).to_pyarrow_table() == data
+
+
+@pytest.mark.pandas
+def test_checkpoint_with_multiple_writes(tmp_path: pathlib.Path):
+    import pandas as pd
+
+    write_deltalake(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "a": ["a"],
+                "b": [3],
+            }
+        ),
+    )
+    DeltaTable(tmp_path).create_checkpoint()
+
+    dt = DeltaTable(tmp_path)
+    print(dt.to_pandas())
+
+    write_deltalake(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "a": ["a"],
+                "b": [100],
+            }
+        ),
+        mode="overwrite",
+    )

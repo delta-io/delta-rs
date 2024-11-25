@@ -567,6 +567,7 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
+    use crate::DeltaResult;
 
     #[tokio::test]
     async fn test_create_checkpoint_for() {
@@ -1102,7 +1103,7 @@ mod tests {
 
     #[ignore = "This test is only useful if the batch size has been made small"]
     #[tokio::test]
-    async fn test_checkpoint_large_table() -> crate::DeltaResult<()> {
+    async fn test_checkpoint_large_table() -> DeltaResult<()> {
         use crate::writer::test_utils::get_arrow_schema;
 
         let table_schema = get_delta_schema();
@@ -1158,6 +1159,46 @@ mod tests {
             post_checkpoint_actions.len(),
             "The number of actions read from the table after checkpointing is wrong!"
         );
+        Ok(())
+    }
+
+    /// <https://github.com/delta-io/delta-rs/issues/3030>
+    #[tokio::test]
+    async fn test_create_checkpoint_overwrite() -> DeltaResult<()> {
+        use crate::protocol::SaveMode;
+        use crate::writer::test_utils::get_arrow_schema;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&get_arrow_schema(&None)),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![30])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-03"])),
+            ],
+        )
+        .unwrap();
+        let table = DeltaOps::try_from_uri_with_storage_options("memory://", HashMap::default())
+            .await?
+            .write(vec![batch])
+            .await?;
+        assert_eq!(table.version(), 0);
+
+        create_checkpoint_for(0, table.snapshot().unwrap(), table.log_store.as_ref()).await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&get_arrow_schema(&None)),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-02"])),
+            ],
+        )
+        .unwrap();
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await?;
+        assert_eq!(table.version(), 1);
         Ok(())
     }
 }
