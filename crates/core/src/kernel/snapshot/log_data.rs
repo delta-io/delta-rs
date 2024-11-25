@@ -245,14 +245,23 @@ impl LogicalFile<'_> {
 
     /// Defines a deletion vector
     pub fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
-        self.deletion_vector.as_ref().and_then(|arr| {
-            arr.storage_type
-                .is_valid(self.index)
-                .then_some(DeletionVectorView {
+        if let Some(arr) = self.deletion_vector.as_ref() {
+            // With v0.22 and the upgrade to a more recent arrow. Reading nullable structs with
+            // non-nullable entries back out of parquet is resulting in the DeletionVector having
+            // an empty string rather than a null. The addition check on the value ensures that a
+            // [DeletionVectorView] is not created in this scenario
+            //
+            // <https://github.com/delta-io/delta-rs/issues/3030>
+            if arr.storage_type.is_valid(self.index)
+                && !arr.storage_type.value(self.index).is_empty()
+            {
+                return Some(DeletionVectorView {
                     data: arr,
                     index: self.index,
-                })
-        })
+                });
+            }
+        }
+        None
     }
 
     /// The number of records stored in the data file.
@@ -509,7 +518,7 @@ mod datafusion {
         fn collect_count(&self, name: &str) -> Precision<usize> {
             let num_records = extract_and_cast_opt::<Int64Array>(self.stats, name);
             if let Some(num_records) = num_records {
-                if num_records.len() == 0 {
+                if num_records.is_empty() {
                     Precision::Exact(0)
                 } else if let Some(null_count_mulls) = num_records.nulls() {
                     if null_count_mulls.null_count() > 0 {
