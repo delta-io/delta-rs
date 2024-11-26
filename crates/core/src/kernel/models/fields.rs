@@ -258,11 +258,11 @@ fn deletion_vector_field() -> StructField {
     StructField::new(
         "deletionVector",
         DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("storageType", DataType::STRING, true),
-            StructField::new("pathOrInlineDv", DataType::STRING, true),
+            StructField::new("storageType", DataType::STRING, false),
+            StructField::new("pathOrInlineDv", DataType::STRING, false),
             StructField::new("offset", DataType::INTEGER, true),
-            StructField::new("sizeInBytes", DataType::INTEGER, true),
-            StructField::new("cardinality", DataType::LONG, true),
+            StructField::new("sizeInBytes", DataType::INTEGER, false),
+            StructField::new("cardinality", DataType::LONG, false),
         ]))),
         true,
     )
