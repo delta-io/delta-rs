@@ -3,7 +3,7 @@ use std::future::Future;
 
 use futures::Stream;
 
-use crate::data_catalog::DataCatalogResult;
+use deltalake_core::data_catalog::DataCatalogResult;
 
 /// Takes a paginated operation `op` that when called with:
 ///
