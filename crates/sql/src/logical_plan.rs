@@ -33,7 +33,7 @@ impl DeltaStatement {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
-                    DeltaStatement::Vacuum(Vacuum {
+                    &DeltaStatement::Vacuum(Vacuum {
                         ref table,
                         ref dry_run,
                         ref retention_hours,

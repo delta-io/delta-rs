@@ -76,10 +76,12 @@ impl StorageIntegration for GcpIntegration {
         let account_path = self.temp_dir.path().join("gcs.json");
         info!("account_path: {account_path:?}");
         std::fs::write(&account_path, serde_json::to_vec(&token).unwrap()).unwrap();
-        std::env::set_var(
-            "GOOGLE_SERVICE_ACCOUNT",
-            account_path.as_path().to_str().unwrap(),
-        );
+        unsafe {
+            std::env::set_var(
+                "GOOGLE_SERVICE_ACCOUNT",
+                account_path.as_path().to_str().unwrap(),
+            );
+        }
     }
 
     fn bucket_name(&self) -> String {

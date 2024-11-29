@@ -1,8 +1,8 @@
 //! Generic utilities reqwest based Catalog implementations
 
 pub mod backoff;
-#[cfg(test)]
-pub mod mock_server;
+// #[cfg(test)]
+// pub mod mock_server;
 #[allow(unused)]
 pub mod pagination;
 pub mod retry;
