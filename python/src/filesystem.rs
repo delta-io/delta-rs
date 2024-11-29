@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 const DEFAULT_MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
     pub(crate) root_url: String,
     pub(crate) options: HashMap<String, String>,
