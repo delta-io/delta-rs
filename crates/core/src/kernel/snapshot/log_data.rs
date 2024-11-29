@@ -486,13 +486,13 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
-    use ::datafusion::physical_plan::Accumulator;
     use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
+    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
+    use ::datafusion::physical_plan::Accumulator;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::Column;

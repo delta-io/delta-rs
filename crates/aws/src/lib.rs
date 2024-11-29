@@ -727,11 +727,9 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_sts::config::{ProvideCredentials, ResolveCachedIdentity};
-    use futures::future::Shared;
+    use aws_sdk_sts::config::ProvideCredentials;
     use object_store::memory::InMemory;
     use serial_test::serial;
-    use tracing::instrument::WithSubscriber;
 
     fn commit_entry_roundtrip(c: &CommitEntry) -> Result<(), LockClientError> {
         let item_data: HashMap<String, AttributeValue> = create_value_map(c, "some_table");
@@ -772,7 +770,7 @@ mod tests {
         let factory = S3LogStoreFactory::default();
         let store = InMemory::new();
         let url = Url::parse("s3://test-bucket").unwrap();
-        std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER);
+        unsafe { std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER); }
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();

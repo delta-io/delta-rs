@@ -2,15 +2,8 @@
 
 use std::fmt::Debug;
 
-#[cfg(feature = "unity-experimental")]
-pub use unity::*;
-
-#[cfg(feature = "unity-experimental")]
-pub mod client;
 #[cfg(feature = "datafusion")]
 pub mod storage;
-#[cfg(feature = "unity-experimental")]
-pub mod unity;
 
 /// A result type for data catalog implementations
 pub type DataCatalogResult<T> = Result<T, DataCatalogError>;
@@ -25,15 +18,6 @@ pub enum DataCatalogError {
         catalog: &'static str,
         /// Error message
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    /// A generic error qualified in the message
-    #[cfg(feature = "unity-experimental")]
-    #[error("{source}")]
-    Retry {
-        /// Error message
-        #[from]
-        source: client::retry::RetryError,
     },
 
     #[error("Request error: {source}")]
