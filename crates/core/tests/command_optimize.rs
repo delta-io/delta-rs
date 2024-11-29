@@ -77,8 +77,8 @@ fn generate_random_batch<T: Into<String>>(
     let s = partition.into();
 
     for _ in 0..rows {
-        x_vec.push(rng.gen());
-        y_vec.push(rng.gen());
+        x_vec.push(rng.r#gen());
+        y_vec.push(rng.r#gen());
         date_vec.push(s.clone());
     }
 
