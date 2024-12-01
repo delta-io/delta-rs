@@ -119,21 +119,66 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<Remove>>,
     )> {
         let start = self.starting_version;
-        let latest_version = self.log_store.get_latest_version(start).await?;
+        let latest_version = self.log_store.get_latest_version(0).await?; // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let mut end = self.ending_version.unwrap_or(latest_version);
+
+        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
+        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
+        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
 
         if end > latest_version {
             end = latest_version;
         }
 
+        if start > latest_version {
+            return if self.allow_out_of_range {
+                Ok((change_files, add_files, remove_files))
+            } else {
+                Err(DeltaTableError::InvalidVersion(start))
+            };
+        }
+
         if end < start {
-            return Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end });
+            return if self.allow_out_of_range {
+                Ok((change_files, add_files, remove_files))
+            } else {
+                Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
+            };
         }
 
         let starting_timestamp = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         let ending_timestamp = self
             .ending_timestamp
             .unwrap_or(DateTime::from(SystemTime::now()));
+
+        // Check that starting_timestmp is within boundaries of the latest version
+        let latest_snapshot_bytes = self
+            .log_store
+            .read_commit_entry(latest_version)
+            .await?
+            .ok_or(DeltaTableError::InvalidVersion(latest_version));
+
+        let latest_version_actions: Vec<Action> =
+            get_actions(latest_version, latest_snapshot_bytes?).await?;
+        let latest_version_commit = latest_version_actions
+            .iter()
+            .find(|a| matches!(a, Action::CommitInfo(_)));
+
+        if let Some(Action::CommitInfo(CommitInfo {
+            timestamp: Some(latest_timestamp),
+            ..
+        })) = latest_version_commit
+        {
+            if starting_timestamp.timestamp_millis() > *latest_timestamp {
+                return if self.allow_out_of_range {
+                    Ok((change_files, add_files, remove_files))
+                } else {
+                    Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit {
+                        ending_timestamp: ending_timestamp,
+                    })
+                };
+            }
+        }
 
         log::debug!(
             "starting timestamp = {:?}, ending timestamp = {:?}",
@@ -142,20 +187,12 @@ impl CdfLoadBuilder {
         );
         log::debug!("starting version = {}, ending version = {:?}", start, end);
 
-        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
-        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
-        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
-
         for version in start..=end {
             let snapshot_bytes = self
                 .log_store
                 .read_commit_entry(version)
                 .await?
                 .ok_or(DeltaTableError::InvalidVersion(version));
-
-            if snapshot_bytes.is_err() && version >= end && self.allow_out_of_range {
-                break;
-            }
 
             let version_actions: Vec<Action> = get_actions(version, snapshot_bytes?).await?;
 
@@ -251,17 +288,6 @@ impl CdfLoadBuilder {
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
             }
-        }
-
-        // All versions were skipped due to date our of range
-        if !self.allow_out_of_range
-            && change_files.is_empty()
-            && add_files.is_empty()
-            && remove_files.is_empty()
-        {
-            return Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit {
-                ending_timestamp: ending_timestamp,
-            });
         }
 
         Ok((change_files, add_files, remove_files))
