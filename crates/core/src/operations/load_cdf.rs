@@ -44,7 +44,7 @@ pub struct CdfLoadBuilder {
     /// Ending timestamp of commits to accept
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
-    enable_out_of_range: bool,
+    allow_out_of_range: bool,
     /// Provided Datafusion context
     ctx: SessionContext,
 }
@@ -60,7 +60,7 @@ impl CdfLoadBuilder {
             ending_version: None,
             starting_timestamp: None,
             ending_timestamp: None,
-            enable_out_of_range: false,
+            allow_out_of_range: false,
             ctx: SessionContext::new(),
         }
     }
@@ -96,8 +96,8 @@ impl CdfLoadBuilder {
     }
 
     /// Enable ending version or timestamp exceeding the last commit
-    pub fn with_out_of_range(mut self) -> Self {
-        self.enable_out_of_range = true;
+    pub fn with_allow_out_of_range(mut self) -> Self {
+        self.allow_out_of_range = true;
         self
     }
 
@@ -120,11 +120,11 @@ impl CdfLoadBuilder {
     )> {
         let start = self.starting_version;
         let latest_version = self.log_store.get_latest_version(start).await?;
-        let mut end = self
-            .ending_version
-            .unwrap_or(latest_version);
+        let mut end = self.ending_version.unwrap_or(latest_version);
 
-        if end > latest_version { end = latest_version; }
+        if end > latest_version {
+            end = latest_version;
+        }
 
         if end < start {
             return Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end });
@@ -153,7 +153,7 @@ impl CdfLoadBuilder {
                 .await?
                 .ok_or(DeltaTableError::InvalidVersion(version));
 
-            if snapshot_bytes.is_err() && version >= end && self.enable_out_of_range {
+            if snapshot_bytes.is_err() && version >= end && self.allow_out_of_range {
                 break;
             }
 
@@ -254,8 +254,14 @@ impl CdfLoadBuilder {
         }
 
         // All versions were skipped due to date our of range
-        if !self.enable_out_of_range && change_files.is_empty() && add_files.is_empty() && remove_files.is_empty() {
-            return Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp: ending_timestamp });
+        if !self.allow_out_of_range
+            && change_files.is_empty()
+            && add_files.is_empty()
+            && remove_files.is_empty()
+        {
+            return Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit {
+                ending_timestamp: ending_timestamp,
+            });
         }
 
         Ok((change_files, add_files, remove_files))
@@ -608,7 +614,7 @@ pub(crate) mod tests {
             .with_starting_version(5)
             .build()
             .await;
-        
+
         assert!(table.is_err());
         assert!(matches!(
             table.unwrap_err(),
@@ -624,7 +630,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_version(5)
-            .with_out_of_range()
+            .with_allow_out_of_range()
             .build()
             .await?;
 
@@ -650,7 +656,7 @@ pub(crate) mod tests {
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build()
             .await;
-        
+
         assert!(table.is_err());
         assert!(matches!(
             table.unwrap_err(),
@@ -667,10 +673,10 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
-            .with_out_of_range()
+            .with_allow_out_of_range()
             .build()
             .await?;
-        
+
         let ctx = SessionContext::new();
         let batches = collect_batches(
             table.properties().output_partitioning().partition_count(),
