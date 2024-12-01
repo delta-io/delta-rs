@@ -99,14 +99,13 @@ impl ScalarUDFImpl for MakeParquetArray {
         r_type
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         let mut data_type = DataType::Null;
         for arg in args {
             data_type = arg.data_type();
         }
 
-        #[allow(deprecated)]
-        match self.actual.invoke(args)? {
+        match self.actual.invoke_batch(args, number_rows)? {
             ColumnarValue::Scalar(ScalarValue::List(df_array)) => {
                 let field = Arc::new(Field::new("element", data_type, true));
                 let result = Ok(ColumnarValue::Scalar(ScalarValue::List(Arc::new(
@@ -125,10 +124,6 @@ impl ScalarUDFImpl for MakeParquetArray {
                 Ok(others)
             }
         }
-    }
-
-    fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
-        self.actual.invoke_batch(&[], number_rows)
     }
 
     fn aliases(&self) -> &[String] {
