@@ -542,6 +542,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .filter
             .map(|expr| context.create_physical_expr(expr, &df_schema).unwrap());
 
+        // dbg!(logical_filter.clone());
         // Perform Pruning of files to scan
         let (files, files_scanned, files_pruned) = match self.files {
             Some(files) => {
@@ -550,9 +551,12 @@ impl<'a> DeltaScanBuilder<'a> {
                 (files, files_scanned, 0)
             }
             None => {
+                println!("im here now");
                 if let Some(predicate) = &logical_filter {
+                    // dbg!(logical_schema.clone());
                     let pruning_predicate =
                         PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
+                    // dbg!(pruning_predicate.clone());
                     let files_to_prune = pruning_predicate.prune(self.snapshot)?;
                     let mut files_pruned = 0usize;
                     let files = self
@@ -570,6 +574,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         .collect::<Vec<_>>();
 
                     let files_scanned = files.len();
+                    dbg!(files_scanned.clone());
                     (files, files_scanned, files_pruned)
                 } else {
                     let files = self.snapshot.file_actions()?;

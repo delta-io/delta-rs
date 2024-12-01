@@ -725,12 +725,14 @@ mod datafusion {
                 return None;
             }
             let expression = if self.metadata.partition_columns.contains(&column.name) {
-                Expression::column(vec![format!("add.partitionValues_parsed.{}", column.name)])
+                Expression::column(vec!["add", "partitionValues_parsed", &column.name])
             } else {
-                Expression::column(vec![format!(
-                    "add.stats_parsed.{}.{}",
-                    stats_field, column.name
-                )])
+                Expression::column(vec![
+                    "add",
+                    "stats_parsed",
+                    stats_field, 
+                    &column.name,
+                ])
             };
             let evaluator = ARROW_HANDLER.get_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
@@ -751,6 +753,8 @@ mod datafusion {
                 results.push(result.record_batch().clone());
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+
+            dbg!(batch.clone());
             batch.column_by_name("output").cloned()
         }
     }
