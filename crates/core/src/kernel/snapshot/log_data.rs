@@ -486,6 +486,9 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use super::*;
+    use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
+    use crate::kernel::ARROW_HANDLER;
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
@@ -499,11 +502,8 @@ mod datafusion {
     use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
+    use delta_kernel::AsAny;
     use delta_kernel::{ExpressionEvaluator, ExpressionHandler};
-
-    use super::*;
-    use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
-    use crate::kernel::ARROW_HANDLER;
 
     #[derive(Debug, Default, Clone)]
     enum AccumulatorType {
@@ -725,9 +725,12 @@ mod datafusion {
                 return None;
             }
             let expression = if self.metadata.partition_columns.contains(&column.name) {
-                Expression::Column(format!("add.partitionValues_parsed.{}", column.name))
+                Expression::column(vec![format!("add.partitionValues_parsed.{}", column.name)])
             } else {
-                Expression::Column(format!("add.stats_parsed.{}.{}", stats_field, column.name))
+                Expression::column(vec![format!(
+                    "add.stats_parsed.{}.{}",
+                    stats_field, column.name
+                )])
             };
             let evaluator = ARROW_HANDLER.get_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
@@ -737,9 +740,9 @@ mod datafusion {
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
                 let engine = ArrowEngineData::new(batch.clone());
-                let result = evaluator.evaluate(&engine).ok()?;
+                let result = Arc::new(evaluator.evaluate(&engine).ok()?);
                 let result = result
-                    .as_any()
+                    .any_ref()
                     .downcast_ref::<ArrowEngineData>()
                     .ok_or(DeltaTableError::generic(
                         "failed to downcast evaluator result to ArrowEngineData.",
@@ -748,7 +751,7 @@ mod datafusion {
                 results.push(result.record_batch().clone());
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
-            batch.column_by_name("output").map(|c| c.clone())
+            batch.column_by_name("output").cloned()
         }
     }
 
@@ -803,16 +806,16 @@ mod datafusion {
             lazy_static::lazy_static! {
                 static ref ROW_COUNTS_EVAL: Arc<dyn ExpressionEvaluator> =  ARROW_HANDLER.get_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column("add.stats_parsed.numRecords"),
+                    Expression::column(vec!["add.stats_parsed.numRecords"].into_iter()),
                     DataType::Primitive(PrimitiveType::Long),
                 );
             }
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
                 let engine = ArrowEngineData::new(batch.clone());
-                let result = ROW_COUNTS_EVAL.evaluate(&engine).ok()?;
+                let result = Arc::new(ROW_COUNTS_EVAL.evaluate(&engine).ok()?);
                 let result = result
-                    .as_any()
+                    .any_ref()
                     .downcast_ref::<ArrowEngineData>()
                     .ok_or(DeltaTableError::generic(
                         "failed to downcast evaluator result to ArrowEngineData.",

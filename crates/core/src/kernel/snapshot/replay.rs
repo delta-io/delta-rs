@@ -54,7 +54,7 @@ impl<'a, S> ReplayStream<'a, S> {
         visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
-        let partitions_schema = snapshot.partitions_schema(None)?.map(|s| Arc::new(s));
+        let partitions_schema = snapshot.partitions_schema(None)?.map(Arc::new);
         let mapper = Arc::new(LogMapper {
             stats_schema,
             partitions_schema,
@@ -83,9 +83,7 @@ impl LogMapper {
     ) -> DeltaResult<Self> {
         Ok(Self {
             stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
-            partitions_schema: snapshot
-                .partitions_schema(table_schema)?
-                .map(|s| Arc::new(s)),
+            partitions_schema: snapshot.partitions_schema(table_schema)?.map(Arc::new),
             config: snapshot.config.clone(),
         })
     }
