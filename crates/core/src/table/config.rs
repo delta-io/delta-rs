@@ -2,7 +2,7 @@
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
-use delta_kernel::features::ColumnMappingMode;
+use delta_kernel::table_features::ColumnMappingMode;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
@@ -343,7 +343,7 @@ impl TableConfig<'_> {
         self.0
             .get(TableProperty::ColumnMappingMode.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
-            .unwrap_or_default()
+            .unwrap_or(ColumnMappingMode::None)
     }
 
     /// Return the check constraints on the current table

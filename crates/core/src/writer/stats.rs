@@ -135,7 +135,7 @@ fn stats_from_metadata(
 
     let idx_to_iterate = if let Some(stats_cols) = stats_columns {
         let stats_cols = stats_cols
-            .into_iter()
+            .iter()
             .map(|v| {
                 match sqlparser::parser::Parser::new(&dialect)
                     .try_with_sql(v.as_ref())
@@ -143,13 +143,11 @@ fn stats_from_metadata(
                     .parse_multipart_identifier()
                 {
                     Ok(parts) => Ok(parts.into_iter().map(|v| v.value).join(".")),
-                    Err(e) => {
-                        return Err(DeltaWriterError::DeltaTable(
-                            DeltaTableError::GenericError {
-                                source: Box::new(e),
-                            },
-                        ))
-                    }
+                    Err(e) => Err(DeltaWriterError::DeltaTable(
+                        DeltaTableError::GenericError {
+                            source: Box::new(e),
+                        },
+                    )),
                 }
             })
             .collect::<Result<Vec<String>, DeltaWriterError>>()?;

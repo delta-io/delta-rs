@@ -523,7 +523,7 @@ impl EagerSnapshot {
 
     /// Get the table config which is loaded with of the snapshot
     pub fn load_config(&self) -> &DeltaTableConfig {
-        &self.snapshot.load_config()
+        self.snapshot.load_config()
     }
 
     /// Well known table configuration
@@ -696,7 +696,7 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
 
 pub(crate) fn partitions_schema(
     schema: &StructType,
-    partition_columns: &Vec<String>,
+    partition_columns: &[String],
 ) -> DeltaResult<Option<StructType>> {
     if partition_columns.is_empty() {
         return Ok(None);
@@ -705,7 +705,7 @@ pub(crate) fn partitions_schema(
         partition_columns
             .iter()
             .map(|col| {
-                schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                schema.field(col).cloned().ok_or_else(|| {
                     DeltaTableError::Generic(format!(
                         "Partition column {} not found in schema",
                         col
