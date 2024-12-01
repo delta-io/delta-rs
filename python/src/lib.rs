@@ -675,7 +675,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None))]
+    #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, enable_out_of_range = false))]
     pub fn load_cdf(
         &mut self,
         py: Python,
@@ -684,6 +684,7 @@ impl RawDeltaTable {
         starting_timestamp: Option<String>,
         ending_timestamp: Option<String>,
         columns: Option<Vec<String>>,
+        enable_out_of_range: bool,
     ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
         let mut cdf_read = CdfLoadBuilder::new(
@@ -706,6 +707,10 @@ impl RawDeltaTable {
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
             cdf_read = cdf_read.with_ending_timestamp(ending_ts);
+        }
+
+        if enable_out_of_range {
+            cdf_read = cdf_read.with_out_of_range();
         }
 
         if let Some(columns) = columns {
