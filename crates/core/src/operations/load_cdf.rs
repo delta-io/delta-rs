@@ -43,6 +43,8 @@ pub struct CdfLoadBuilder {
     starting_timestamp: Option<DateTime<Utc>>,
     /// Ending timestamp of commits to accept
     ending_timestamp: Option<DateTime<Utc>>,
+    /// Enable ending version or timestamp exceeding the last commit
+    enable_out_of_range: bool,
     /// Provided Datafusion context
     ctx: SessionContext,
 }
@@ -58,6 +60,7 @@ impl CdfLoadBuilder {
             ending_version: None,
             starting_timestamp: None,
             ending_timestamp: None,
+            enable_out_of_range: false,
             ctx: SessionContext::new(),
         }
     }
@@ -92,6 +95,12 @@ impl CdfLoadBuilder {
         self
     }
 
+    /// Enable ending version or timestamp exceeding the last commit
+    pub fn with_out_of_range(mut self) -> Self {
+        self.enable_out_of_range = true;
+        self
+    }
+
     /// Columns to select
     pub fn with_columns(mut self, columns: Vec<String>) -> Self {
         self.columns = Some(columns);
@@ -110,9 +119,12 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<Remove>>,
     )> {
         let start = self.starting_version;
-        let end = self
+        let latest_version = self.log_store.get_latest_version(start).await?;
+        let mut end = self
             .ending_version
-            .unwrap_or(self.log_store.get_latest_version(start).await?);
+            .unwrap_or(latest_version);
+
+        if end > latest_version { end = latest_version; }
 
         if end < start {
             return Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end });
@@ -139,8 +151,13 @@ impl CdfLoadBuilder {
                 .log_store
                 .read_commit_entry(version)
                 .await?
-                .ok_or(DeltaTableError::InvalidVersion(version))?;
-            let version_actions = get_actions(version, snapshot_bytes).await?;
+                .ok_or(DeltaTableError::InvalidVersion(version));
+
+            if snapshot_bytes.is_err() && version >= end && self.enable_out_of_range {
+                break;
+            }
+
+            let version_actions: Vec<Action> = get_actions(version, snapshot_bytes?).await?;
 
             let mut ts = 0;
             let mut cdc_actions = vec![];
@@ -234,6 +251,11 @@ impl CdfLoadBuilder {
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
             }
+        }
+
+        // All versions were skipped due to date our of range
+        if !self.enable_out_of_range && change_files.is_empty() && add_files.is_empty() && remove_files.is_empty() {
+            return Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp: ending_timestamp });
         }
 
         Ok((change_files, add_files, remove_files))
@@ -574,6 +596,90 @@ pub(crate) mod tests {
             table.unwrap_err(),
             DeltaTableError::ChangeDataInvalidVersionRange { .. }
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_version_out_of_range() -> TestResult {
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_version(5)
+            .build()
+            .await;
+        
+        assert!(table.is_err());
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::InvalidVersion { .. }
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_version_out_of_range_with_flag() -> TestResult {
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_version(5)
+            .with_out_of_range()
+            .build()
+            .await?;
+
+        let ctx = SessionContext::new();
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table.clone(),
+            ctx,
+        )
+        .await?;
+
+        assert!(batches.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_timestamp_out_of_range() -> TestResult {
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_timestamp(ending_timestamp.and_utc())
+            .build()
+            .await;
+        
+        assert!(table.is_err());
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::ChangeDataTimestampGreaterThanCommit { .. }
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_timestamp_out_of_range_with_flag() -> TestResult {
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_timestamp(ending_timestamp.and_utc())
+            .with_out_of_range()
+            .build()
+            .await?;
+        
+        let ctx = SessionContext::new();
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table.clone(),
+            ctx,
+        )
+        .await?;
+
+        assert!(batches.is_empty());
 
         Ok(())
     }

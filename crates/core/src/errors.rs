@@ -1,4 +1,5 @@
 //! Exceptions for the deltalake crate
+use chrono::{DateTime, Utc};
 use object_store::Error as ObjectStoreError;
 
 use crate::operations::transaction::{CommitBuilderError, TransactionError};
@@ -232,6 +233,9 @@ pub enum DeltaTableError {
 
     #[error("Invalid version start version {start} is greater than version {end}")]
     ChangeDataInvalidVersionRange { start: i64, end: i64 },
+
+    #[error("End timestamp {ending_timestamp} is greater than latest commit timestamp")]
+    ChangeDataTimestampGreaterThanCommit { ending_timestamp: DateTime<Utc> },
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
