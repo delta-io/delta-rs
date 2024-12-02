@@ -104,6 +104,7 @@ reqwest = { version = "0.12.9", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
+reqwest-middleware = { version = "0.4.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -137,4 +138,4 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-unity-experimental = ["reqwest"]
+unity-experimental = ["reqwest", "reqwest-middleware"]

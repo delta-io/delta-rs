@@ -585,7 +585,9 @@ mod tests {
     fn storage_options_with_only_region_and_credentials() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            unsafe { std::env::remove_var(constants::AWS_ENDPOINT_URL); }
+            unsafe {
+                std::env::remove_var(constants::AWS_ENDPOINT_URL);
+            }
             let options = S3StorageOptions::from_map(&hashmap! {
                 constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
                 constants::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),

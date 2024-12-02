@@ -29,6 +29,15 @@ pub enum DataCatalogError {
         source: reqwest::Error,
     },
 
+    #[error("Request error: {source}")]
+    #[cfg(feature = "unity-experimental")]
+    /// Error from reqwest library
+    RequestMiddlewareError {
+        /// The underlying reqwest_middleware::Error
+        #[from]
+        source: reqwest_middleware::Error,
+    },
+
     /// Error caused by missing environment variable for Unity Catalog.
     #[cfg(feature = "unity-experimental")]
     #[error("Missing Unity Catalog environment variable: {var_name}")]

@@ -21,8 +21,8 @@ pub mod client;
 pub mod credential;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
-pub mod models;
 pub mod error;
+pub mod models;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
@@ -451,17 +451,15 @@ impl UnityCatalogBuilder {
             client,
             workspace_url,
             credential,
-            retry_config: self.retry_config,
         })
     }
 }
 
 /// Databricks Unity Catalog
 pub struct UnityCatalog {
-    client: reqwest::Client,
+    client: reqwest_middleware::ClientWithMiddleware,
     credential: CredentialProvider,
     workspace_url: String,
-    retry_config: RetryConfig,
 }
 
 impl UnityCatalog {
@@ -479,7 +477,7 @@ impl UnityCatalog {
             }
             CredentialProvider::TokenCredential(cache, cred) => {
                 let token = cache
-                    .get_or_insert_with(|| cred.fetch_token(&self.client, &self.retry_config))
+                    .get_or_insert_with(|| cred.fetch_token(&self.client))
                     .await?;
 
                 // we do the conversion to a HeaderValue here, since it is fallible
@@ -509,7 +507,7 @@ impl UnityCatalog {
             .client
             .get(format!("{}/catalogs", self.catalog_url()))
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
+            .send()
             .await?;
         Ok(resp.json().await?)
     }
@@ -534,8 +532,7 @@ impl UnityCatalog {
             .get(format!("{}/schemas", self.catalog_url()))
             .header(AUTHORIZATION, token)
             .query(&[("catalog_name", catalog_name.as_ref())])
-
-            .send_retry(&self.retry_config)
+            .send()
             .await?;
         Ok(resp.json().await?)
     }
@@ -560,7 +557,7 @@ impl UnityCatalog {
                 schema_name.as_ref()
             ))
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
+            .send()
             .await?;
         Ok(resp.json().await?)
     }
@@ -591,7 +588,7 @@ impl UnityCatalog {
                 ("schema_name_pattern", schema_name_pattern.as_ref()),
             ])
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
+            .send()
             .await?;
 
         Ok(resp.json().await?)
@@ -622,7 +619,7 @@ impl UnityCatalog {
                 table_name.as_ref()
             ))
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
+            .send()
             .await?;
 
         Ok(resp.json().await?)
@@ -664,60 +661,64 @@ impl std::fmt::Debug for UnityCatalog {
 
 #[cfg(test)]
 mod tests {
+    use crate::client::ClientOptions;
+    use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
+    use crate::models::*;
+    use crate::UnityCatalogBuilder;
     use httpmock::prelude::*;
 
-    // #[tokio::test]
-    // async fn test_unity_client() {
-    //     let server = MockServer::new();
-    //
-    //     let options = ClientOptions::default().with_allow_http(true);
-    //     let client = UnityCatalogBuilder::new()
-    //         .with_workspace_url(server.url())
-    //         .with_bearer_token("bearer_token")
-    //         .with_client_options(options)
-    //         .build()
-    //         .unwrap();
-    //
-    //     server.push_fn(move |req| {
-    //         assert_eq!(req.uri().path(), "/api/2.1/unity-catalog/schemas");
-    //         assert_eq!(req.method(), Method::GET);
-    //         Response::new(Body::from(LIST_SCHEMAS_RESPONSE))
-    //     });
-    //
-    //     let list_schemas_response = client.list_schemas("catalog_name").await.unwrap();
-    //     assert!(matches!(
-    //         list_schemas_response,
-    //         ListSchemasResponse::Success { .. }
-    //     ));
-    //
-    //     server.push_fn(move |req| {
-    //         assert_eq!(
-    //             req.uri().path(),
-    //             "/api/2.1/unity-catalog/schemas/catalog_name.schema_name"
-    //         );
-    //         assert_eq!(req.method(), &Method::GET);
-    //         Response::new(Body::from(GET_SCHEMA_RESPONSE))
-    //     });
-    //
-    //     let get_schema_response = client
-    //         .get_schema("catalog_name", "schema_name")
-    //         .await
-    //         .unwrap();
-    //     assert!(matches!(get_schema_response, GetSchemaResponse::Success(_)));
-    //
-    //     server.push_fn(move |req| {
-    //         assert_eq!(
-    //             req.uri().path(),
-    //             "/api/2.1/unity-catalog/tables/catalog_name.schema_name.table_name"
-    //         );
-    //         assert_eq!(req.method(), &Method::GET);
-    //         Response::new(Body::from(GET_TABLE_RESPONSE))
-    //     });
-    //
-    //     let get_table_response = client
-    //         .get_table("catalog_name", "schema_name", "table_name")
-    //         .await
-    //         .unwrap();
-    //     assert!(matches!(get_table_response, GetTableResponse::Success(_)));
-    // }
+    #[tokio::test]
+    async fn test_unity_client() {
+        let server = MockServer::start_async().await;
+
+        let options = ClientOptions::default().with_allow_http(true);
+
+        let client = UnityCatalogBuilder::new()
+            .with_workspace_url(server.url(""))
+            .with_bearer_token("bearer_token")
+            .with_client_options(options)
+            .build()
+            .unwrap();
+
+        server
+            .mock_async(|when, then| {
+                when.path("/api/2.1/unity-catalog/schemas").method("GET");
+                then.body(LIST_SCHEMAS_RESPONSE);
+            })
+            .await;
+
+        server
+            .mock_async(|when, then| {
+                when.path("/api/2.1/unity-catalog/schemas/catalog_name.schema_name")
+                    .method("GET");
+                then.body(GET_SCHEMA_RESPONSE);
+            })
+            .await;
+
+        server
+            .mock_async(|when, then| {
+                when.path("/api/2.1/unity-catalog/tables/catalog_name.schema_name.table_name")
+                    .method("GET");
+                then.body(GET_TABLE_RESPONSE);
+            })
+            .await;
+
+        let list_schemas_response = client.list_schemas("catalog_name").await.unwrap();
+        assert!(matches!(
+            list_schemas_response,
+            ListSchemasResponse::Success { .. }
+        ));
+
+        let get_schema_response = client
+            .get_schema("catalog_name", "schema_name")
+            .await
+            .unwrap();
+        assert!(matches!(get_schema_response, GetSchemaResponse::Success(_)));
+
+        let get_table_response = client
+            .get_table("catalog_name", "schema_name", "table_name")
+            .await
+            .unwrap();
+        assert!(matches!(get_table_response, GetTableResponse::Success(_)));
+    }
 }

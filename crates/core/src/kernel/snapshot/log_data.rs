@@ -79,8 +79,8 @@ pub struct DeletionVectorView<'a> {
     index: usize,
 }
 
-impl<'a> DeletionVectorView<'a> {
-    /// get a unique idenitfier for the deletion vector
+impl DeletionVectorView<'_> {
+    /// get a unique identifier for the deletion vector
     pub fn unique_id(&self) -> String {
         if let Some(offset) = self.offset() {
             format!(
@@ -486,13 +486,13 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
+    use ::datafusion::physical_plan::Accumulator;
     use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
-    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
-    use ::datafusion::physical_plan::Accumulator;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::Column;
@@ -573,32 +573,30 @@ mod datafusion {
             }
 
             match array.data_type() {
-                ArrowDataType::Struct(fields) => {
-                    return fields
-                        .iter()
-                        .map(|f| {
-                            self.column_bounds(
-                                path_step,
-                                &format!("{name}.{}", f.name()),
-                                fun_type.clone(),
-                            )
-                        })
-                        .map(|s| match s {
-                            Precision::Exact(s) => Some(s),
-                            _ => None,
-                        })
-                        .collect::<Option<Vec<_>>>()
-                        .map(|o| {
-                            let arrays = o
-                                .into_iter()
-                                .map(|sv| sv.to_array())
-                                .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
-                                .unwrap();
-                            let sa = StructArray::new(fields.clone(), arrays, None);
-                            Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
-                        })
-                        .unwrap_or(Precision::Absent);
-                }
+                ArrowDataType::Struct(fields) => fields
+                    .iter()
+                    .map(|f| {
+                        self.column_bounds(
+                            path_step,
+                            &format!("{name}.{}", f.name()),
+                            fun_type.clone(),
+                        )
+                    })
+                    .map(|s| match s {
+                        Precision::Exact(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .map(|o| {
+                        let arrays = o
+                            .into_iter()
+                            .map(|sv| sv.to_array())
+                            .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                            .unwrap();
+                        let sa = StructArray::new(fields.clone(), arrays, None);
+                        Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                    })
+                    .unwrap_or(Precision::Absent),
                 _ => Precision::Absent,
             }
         }
@@ -748,11 +746,11 @@ mod datafusion {
                 results.push(result.record_batch().clone());
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
-            batch.column_by_name("output").map(|c| c.clone())
+            batch.column_by_name("output").cloned()
         }
     }
 
-    impl<'a> PruningStatistics for LogDataHandler<'a> {
+    impl PruningStatistics for LogDataHandler<'_> {
         /// return the minimum values for the named column, if known.
         /// Note: the returned array must contain `num_containers()` rows
         fn min_values(&self, column: &Column) -> Option<ArrayRef> {

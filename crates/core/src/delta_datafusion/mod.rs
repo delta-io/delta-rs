@@ -229,7 +229,7 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
 pub(crate) fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
-) -> DeltaResult<impl Iterator<Item=Add> + 'a + use < 'a >> {
+) -> DeltaResult<impl Iterator<Item=Add> + 'a> {
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
@@ -1555,7 +1555,7 @@ fn join_batches_with_add_actions(
 }
 
 /// Determine which files contain a record that satisfies the predicate
-pub(crate) async fn find_files_scan<'a>(
+pub(crate) async fn find_files_scan(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -1668,7 +1668,7 @@ pub(crate) async fn scan_memory_table(
 }
 
 /// Finds files in a snapshot that match the provided predicate.
-pub async fn find_files<'a>(
+pub async fn find_files(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
