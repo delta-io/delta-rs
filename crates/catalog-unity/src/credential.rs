@@ -425,7 +425,7 @@ mod tests {
 
         let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
 
-        let retry_config = RetryConfig::default();
+        let _retry_config = RetryConfig::default();
 
         server
             .mock_async(|when, then| {
@@ -471,7 +471,7 @@ mod tests {
         std::fs::write(tokenfile.path(), "federated-token").unwrap();
 
         let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
-        let retry_config = RetryConfig::default();
+        let _retry_config = RetryConfig::default();
 
         server
             .mock_async(|when, then| {

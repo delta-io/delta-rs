@@ -3,7 +3,7 @@ use deltalake_aws::constants;
 use deltalake_aws::register_handlers;
 use deltalake_aws::storage::*;
 use deltalake_test::utils::*;
-use rand::{random, Rng};
+use rand::random;
 use std::process::{Command, ExitStatus, Stdio};
 
 #[derive(Clone, Debug)]
