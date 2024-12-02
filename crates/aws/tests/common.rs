@@ -46,13 +46,11 @@ impl StorageIntegration for S3Integration {
             format!("delta_log_it_{}", random::<u16>()),
         );
         match std::env::var(s3_constants::AWS_ENDPOINT_URL).ok() {
-            Some(endpoint_url) if endpoint_url.to_lowercase() == "none" =>
+            Some(endpoint_url) if endpoint_url.to_lowercase() == "none" => {
                 std::env::remove_var(s3_constants::AWS_ENDPOINT_URL)
-            ,
+            }
             Some(_) => (),
-            None =>
-                std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost:4566")
-            ,
+            None => std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost:4566"),
         }
         set_env_if_not_set(s3_constants::AWS_ACCESS_KEY_ID, "deltalake");
         set_env_if_not_set(s3_constants::AWS_SECRET_ACCESS_KEY, "weloverust");
