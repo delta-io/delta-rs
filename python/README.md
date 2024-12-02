@@ -8,7 +8,6 @@ Native [Delta Lake](https://delta.io/) Python binding based on
 [delta-rs](https://github.com/delta-io/delta-rs) with
 [Pandas](https://pandas.pydata.org/) integration.
 
-
 ## Example
 
 ```python
@@ -27,13 +26,17 @@ See the [user guide](https://delta-io.github.io/delta-rs/usage/installation/) fo
 ## Installation
 
 ```bash
+# with pip
 pip install deltalake
+# with uv
+uv add deltalake
+# with poetry
+poetry add deltalake
 ```
 
 NOTE: official binary wheels are linked against openssl statically for remote
 objection store communication. Please file Github issue to request for critical
 openssl upgrade.
-
 
 ## Build custom wheels
 
@@ -44,22 +47,25 @@ To compile the package, you will need the Rust compiler and [maturin](https://gi
 
 ```sh
 curl https://sh.rustup.rs -sSf | sh -s
-pip install maturin
-```
 
 Then you can build wheels for your own platform like so:
 
 ```sh
-maturin build --release --out wheels
+uvx maturin build --release --out wheels
 ```
+
+Note:
+
+- [`uvx`](https://docs.astral.sh/uv/guides/tools/) invokes a tool without installing it.
+- if you plan to often use `maturin`, you can install the "tool" with `uv tool install maturin`.
 
 For a build that is optimized for the system you are on (but sacrificing portability):
 
 ```sh
-RUSTFLAGS="-C target-cpu=native" maturin build --release --out wheels
+RUSTFLAGS="-C target-cpu=native" uvx maturin build --release --out wheels
 ```
 
-#### Cross compilation
+### Cross compilation
 
 The above command only works for your current platform. To create wheels for other
 platforms, you'll need to cross compile. Cross compilation requires installing
@@ -72,13 +78,12 @@ Rust `target` and Python `compatibility` tags.
 
 ```sh
 rustup target add x86_64-unknown-linux-gnu
-pip install ziglang
 ```
 
-Then you can build the wheel with:
+Then you can build wheels for the target platform like so:
 
 ```sh
-maturin build --release --zig \
+uvx --from 'maturin[zig]' maturin build --release --zig \
     --target x86_64-unknown-linux-gnu \
     --compatibility manylinux2014 \
     --out wheels
@@ -86,11 +91,11 @@ maturin build --release --zig \
 
 If you expect to only run on more modern system, you can set a newer `target-cpu`
 flag to Rust and use a newer compatibility tag for Linux. For example, here
-we set compatibility with CPUs newer than Haswell (2013) and Linux OS with 
+we set compatibility with CPUs newer than Haswell (2013) and Linux OS with
 glibc version of at least 2.24:
 
 ```sh
-RUSTFLAGS="-C target-cpu=haswell" maturin build --release --zig \
+RUSTFLAGS="-C target-cpu=haswell" uvx --from 'maturin[zig]' maturin build --release --zig \
     --target x86_64-unknown-linux-gnu \
     --compatibility manylinux_2_24 \
     --out wheels

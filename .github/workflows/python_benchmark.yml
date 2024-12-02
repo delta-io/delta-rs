@@ -28,8 +28,6 @@ jobs:
 
       - name: Build deltalake in release mode
         run: |
-          python -m venv venv
-          source venv/bin/activate
           MATURIN_EXTRA_ARGS=--release make develop
 
       # Download previous benchmark result from cache (if exists)
@@ -41,8 +39,7 @@ jobs:
 
       - name: Run benchmark
         run: |
-          source venv/bin/activate
-          pytest tests/test_benchmark.py -m benchmark --benchmark-json output.json
+          uv run pytest tests/test_benchmark.py -m benchmark --benchmark-json output.json
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
