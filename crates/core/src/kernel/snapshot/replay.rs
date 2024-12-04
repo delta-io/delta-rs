@@ -20,7 +20,7 @@ use hashbrown::HashSet;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
-use tracing::debug;
+use tracing::log::*;
 
 use super::parse::collect_map;
 use super::ReplayVisitor;
@@ -440,6 +440,14 @@ pub(super) struct DVInfo<'a> {
 fn seen_key(info: &FileInfo<'_>) -> String {
     let path = percent_decode_str(info.path).decode_utf8_lossy();
     if let Some(dv) = &info.dv {
+        // If storage_type is empty then delta-rs has somehow gotten an empty rather than a null
+        // deletion vector, oooof
+        //
+        // See #3030
+        if dv.storage_type.is_empty() {
+            warn!("An empty but not nullable deletionVector was seen for {info:?}");
+            return path.to_string();
+        }
         if let Some(offset) = &dv.offset {
             format!(
                 "{}::{}{}@{offset}",
