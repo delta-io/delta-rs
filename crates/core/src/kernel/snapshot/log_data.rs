@@ -245,23 +245,14 @@ impl LogicalFile<'_> {
 
     /// Defines a deletion vector
     pub fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
-        if let Some(arr) = self.deletion_vector.as_ref() {
-            // With v0.22 and the upgrade to a more recent arrow. Reading nullable structs with
-            // non-nullable entries back out of parquet is resulting in the DeletionVector having
-            // an empty string rather than a null. The addition check on the value ensures that a
-            // [DeletionVectorView] is not created in this scenario
-            //
-            // <https://github.com/delta-io/delta-rs/issues/3030>
-            if arr.storage_type.is_valid(self.index)
-                && !arr.storage_type.value(self.index).is_empty()
-            {
-                return Some(DeletionVectorView {
+        self.deletion_vector.as_ref().and_then(|arr| {
+            arr.storage_type
+                .is_valid(self.index)
+                .then_some(DeletionVectorView {
                     data: arr,
                     index: self.index,
-                });
-            }
-        }
-        None
+                })
+        })
     }
 
     /// The number of records stored in the data file.
@@ -380,18 +371,23 @@ impl<'a> FileStatsAccessor<'a> {
         );
         let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector");
         let deletion_vector = deletion_vector.and_then(|dv| {
-            let storage_type = extract_and_cast::<StringArray>(dv, "storageType").ok()?;
-            let path_or_inline_dv = extract_and_cast::<StringArray>(dv, "pathOrInlineDv").ok()?;
-            let size_in_bytes = extract_and_cast::<Int32Array>(dv, "sizeInBytes").ok()?;
-            let cardinality = extract_and_cast::<Int64Array>(dv, "cardinality").ok()?;
-            let offset = extract_and_cast_opt::<Int32Array>(dv, "offset");
-            Some(DeletionVector {
-                storage_type,
-                path_or_inline_dv,
-                size_in_bytes,
-                cardinality,
-                offset,
-            })
+            if dv.null_count() == dv.len() {
+                None
+            } else {
+                let storage_type = extract_and_cast::<StringArray>(dv, "storageType").ok()?;
+                let path_or_inline_dv =
+                    extract_and_cast::<StringArray>(dv, "pathOrInlineDv").ok()?;
+                let size_in_bytes = extract_and_cast::<Int32Array>(dv, "sizeInBytes").ok()?;
+                let cardinality = extract_and_cast::<Int64Array>(dv, "cardinality").ok()?;
+                let offset = extract_and_cast_opt::<Int32Array>(dv, "offset");
+                Some(DeletionVector {
+                    storage_type,
+                    path_or_inline_dv,
+                    size_in_bytes,
+                    cardinality,
+                    offset,
+                })
+            }
         });
 
         Ok(Self {
