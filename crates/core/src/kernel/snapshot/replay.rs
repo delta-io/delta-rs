@@ -20,7 +20,7 @@ use hashbrown::HashSet;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
-use tracing::debug;
+use tracing::log::*;
 
 use super::parse::collect_map;
 use super::ReplayVisitor;
@@ -438,6 +438,14 @@ pub(super) struct DVInfo<'a> {
 fn seen_key(info: &FileInfo<'_>) -> String {
     let path = percent_decode_str(info.path).decode_utf8_lossy();
     if let Some(dv) = &info.dv {
+        // If storage_type is empty then delta-rs has somehow gotten an empty rather than a null
+        // deletion vector, oooof
+        //
+        // See #3030
+        if dv.storage_type.is_empty() {
+            warn!("An empty but not nullable deletionVector was seen for {info:?}");
+            return path.to_string();
+        }
         if let Some(offset) = &dv.offset {
             format!(
                 "{}::{}{}@{offset}",
@@ -549,22 +557,32 @@ fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Opti
         let path_or_inline_dv = ex::extract_and_cast::<StringArray>(d, "pathOrInlineDv")?;
         let offset = ex::extract_and_cast::<Int32Array>(d, "offset")?;
 
-        Box::new(|idx: usize| {
-            if ex::read_str(storage_type, idx).is_ok() {
-                Ok(Some(DVInfo {
-                    storage_type: ex::read_str(storage_type, idx)?,
-                    path_or_inline_dv: ex::read_str(path_or_inline_dv, idx)?,
-                    offset: ex::read_primitive_opt(offset, idx),
-                }))
-            } else {
-                Ok(None)
-            }
-        })
+        // Column might exist but have nullability set for the whole array, so we just return Nones
+        if d.null_count() == d.len() {
+            Box::new(|_| Ok(None))
+        } else {
+            Box::new(|idx: usize| {
+                if d.is_valid(idx) {
+                    if ex::read_str(storage_type, idx).is_ok() {
+                        Ok(Some(DVInfo {
+                            storage_type: ex::read_str(storage_type, idx)?,
+                            path_or_inline_dv: ex::read_str(path_or_inline_dv, idx)?,
+                            offset: ex::read_primitive_opt(offset, idx),
+                        }))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            })
+        }
     } else {
         Box::new(|_| Ok(None))
     };
 
     let mut adds = Vec::with_capacity(path.len());
+
     for idx in 0..path.len() {
         let value = path
             .is_valid(idx)
@@ -577,6 +595,7 @@ fn read_file_info<'a>(arr: &'a dyn ProvidesColumnByName) -> DeltaResult<Vec<Opti
             .transpose()?;
         adds.push(value);
     }
+
     Ok(adds)
 }
 

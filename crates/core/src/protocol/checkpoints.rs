@@ -1163,10 +1163,16 @@ mod tests {
     }
 
     /// <https://github.com/delta-io/delta-rs/issues/3030>
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_checkpoint_overwrite() -> DeltaResult<()> {
         use crate::protocol::SaveMode;
+        use crate::writer::test_utils::datafusion::get_data_sorted;
         use crate::writer::test_utils::get_arrow_schema;
+        use datafusion::assert_batches_sorted_eq;
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let batch = RecordBatch::try_new(
             Arc::clone(&get_arrow_schema(&None)),
@@ -1177,13 +1183,15 @@ mod tests {
             ],
         )
         .unwrap();
-        let table = DeltaOps::try_from_uri_with_storage_options("memory://", HashMap::default())
+
+        let mut table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
             .await?
             .write(vec![batch])
             .await?;
+        table.load().await?;
         assert_eq!(table.version(), 0);
 
-        create_checkpoint_for(0, table.snapshot().unwrap(), table.log_store.as_ref()).await?;
+        create_checkpoint(&table).await?;
 
         let batch = RecordBatch::try_new(
             Arc::clone(&get_arrow_schema(&None)),
@@ -1194,11 +1202,23 @@ mod tests {
             ],
         )
         .unwrap();
-        let table = DeltaOps(table)
+
+        let table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+            .await?
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
             .await?;
         assert_eq!(table.version(), 1);
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 0     | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data_sorted(&table, "id,value,modified").await;
+        assert_batches_sorted_eq!(&expected, &actual);
         Ok(())
     }
 }
