@@ -33,7 +33,7 @@ develop: setup ## Install Python binding of delta-rs
 .PHONY: install
 install: build ## Install Python binding of delta-rs
 	$(info --- Uninstall Python binding ---)
-	uv remove deltalake || true
+	uv pip uninstall deltalake
 	$(info --- Install Python binding ---)
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
 	uv pip install $(TARGET_WHEEL)[devel,pandas]
