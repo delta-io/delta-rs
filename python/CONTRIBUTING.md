@@ -13,7 +13,7 @@ make setup
 ### Activate it
 
 ```bash
-source ./venv/bin/activate
+source ./.venv/bin/activate
 ```
 
 ### Ready to develop with maturin
