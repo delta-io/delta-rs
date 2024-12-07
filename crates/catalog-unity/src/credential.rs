@@ -411,7 +411,6 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
 mod tests {
     use super::*;
 
-    // use hyper::{ Response};
     use crate::client::retry::RetryConfig;
     use httpmock::prelude::*;
     use reqwest::Client;
