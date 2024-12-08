@@ -273,9 +273,7 @@ impl S3StorageOptions {
 
     fn ensure_env_var(map: &HashMap<String, String>, key: &str) {
         if let Some(val) = str_option(map, key) {
-            unsafe {
-                std::env::set_var(key, val);
-            }
+            std::env::set_var(key, val);
         }
     }
 
@@ -586,6 +584,7 @@ mod tests {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
             std::env::remove_var(constants::AWS_ENDPOINT_URL);
+
             let options = S3StorageOptions::from_map(&hashmap! {
                 constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
                 constants::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
@@ -696,6 +695,7 @@ mod tests {
             std::env::set_var(constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
             std::env::set_var(constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
             std::env::set_var(constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, "3");
+
             let options = S3StorageOptions::from_map(&hashmap! {
                 constants::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
                 constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
@@ -795,7 +795,6 @@ mod tests {
                 "AWS_SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
                 "AWS_REGION".to_string() => "options_key".to_string()
             };
-
             std::env::set_var("aws_access_key_id", "env_key");
             std::env::set_var("aws_endpoint", "env_key");
             std::env::set_var("aws_secret_access_key", "env_key");

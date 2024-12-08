@@ -217,7 +217,7 @@ impl<'a> DeltaContextProvider<'a> {
     }
 }
 
-impl<'a> ContextProvider for DeltaContextProvider<'a> {
+impl ContextProvider for DeltaContextProvider<'_> {
     fn get_table_source(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
         unimplemented!()
     }
@@ -234,16 +234,16 @@ impl<'a> ContextProvider for DeltaContextProvider<'a> {
         self.state.aggregate_functions().get(name).cloned()
     }
 
+    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+        self.state.window_functions().get(name).cloned()
+    }
+
     fn get_variable_type(&self, _var: &[String]) -> Option<DataType> {
         unimplemented!()
     }
 
     fn options(&self) -> &ConfigOptions {
         self.state.config_options()
-    }
-
-    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
-        self.state.window_functions().get(name).cloned()
     }
 
     fn udf_names(&self) -> Vec<String> {
@@ -304,7 +304,7 @@ struct BinaryExprFormat<'a> {
     expr: &'a BinaryExpr,
 }
 
-impl<'a> Display for BinaryExprFormat<'a> {
+impl Display for BinaryExprFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Put parentheses around child binary expressions so that we can see the difference
         // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
@@ -333,7 +333,7 @@ impl<'a> Display for BinaryExprFormat<'a> {
     }
 }
 
-impl<'a> Display for SqlFormat<'a> {
+impl Display for SqlFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expr {
             Expr::Column(c) => write!(f, "{c}"),
@@ -488,7 +488,7 @@ struct ScalarValueFormat<'a> {
     scalar: &'a ScalarValue,
 }
 
-impl<'a> fmt::Display for ScalarValueFormat<'a> {
+impl fmt::Display for ScalarValueFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.scalar {
             ScalarValue::Boolean(e) => format_option!(f, e)?,

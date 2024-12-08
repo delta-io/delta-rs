@@ -416,7 +416,7 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
-    pub async fn update<'a>(
+    pub async fn update(
         &mut self,
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
@@ -523,7 +523,7 @@ impl EagerSnapshot {
 
     /// Get the table config which is loaded with of the snapshot
     pub fn load_config(&self) -> &DeltaTableConfig {
-        &self.snapshot.load_config()
+        self.snapshot.load_config()
     }
 
     /// Well known table configuration
@@ -705,7 +705,7 @@ pub(crate) fn partitions_schema(
         partition_columns
             .iter()
             .map(|col| {
-                schema.field(col).map(|field| field.clone()).ok_or_else(|| {
+                schema.field(col).cloned().ok_or_else(|| {
                     DeltaTableError::Generic(format!(
                         "Partition column {} not found in schema",
                         col
