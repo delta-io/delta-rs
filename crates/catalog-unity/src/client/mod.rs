@@ -7,6 +7,7 @@ pub mod retry;
 pub mod token;
 
 use crate::client::retry::RetryConfig;
+use crate::UnityCatalogError;
 use deltalake_core::data_catalog::DataCatalogResult;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{ClientBuilder, Proxy};
@@ -229,7 +230,10 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(self.allow_insecure)
         }
 
-        let inner_client = builder.https_only(!self.allow_http).build()?;
+        let inner_client = builder
+            .https_only(!self.allow_http)
+            .build()
+            .map_err(UnityCatalogError::from)?;
         let retry_policy = self
             .retry_config
             .as_ref()

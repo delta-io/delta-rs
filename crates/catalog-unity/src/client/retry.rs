@@ -57,12 +57,6 @@ impl From<RetryError> for std::io::Error {
     }
 }
 
-// impl From<RetryError> for reqwest::Error {
-//     fn from(value: RetryError) -> Self {
-//         Into::into(value)
-//     }
-// }
-
 impl From<RetryError> for DataCatalogError {
     fn from(value: RetryError) -> Self {
         DataCatalogError::Generic {

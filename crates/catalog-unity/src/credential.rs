@@ -106,9 +106,11 @@ impl TokenCredential for ClientSecretOAuthProvider {
                 ("grant_type", "client_credentials"),
             ])
             .send()
-            .await?
+            .await
+            .map_err(UnityCatalogError::from)?
             .json()
-            .await?;
+            .await
+            .map_err(UnityCatalogError::from)?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -298,9 +300,11 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
                 ("grant_type", "client_credentials"),
             ])
             .send()
-            .await?
+            .await
+            .map_err(UnityCatalogError::from)?
             .json()
-            .await?;
+            .await
+            .map_err(UnityCatalogError::from)?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -398,7 +402,13 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             builder = builder.header("x-identity-header", val);
         };
 
-        let response: MsiTokenResponse = builder.send().await?.json().await?;
+        let response: MsiTokenResponse = builder
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?
+            .json()
+            .await
+            .map_err(UnityCatalogError::from)?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -410,8 +420,6 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::client::retry::RetryConfig;
     use httpmock::prelude::*;
     use reqwest::Client;
     use tempfile::NamedTempFile;
@@ -423,8 +431,6 @@ mod tests {
         std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
 
         let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
-
-        let _retry_config = RetryConfig::default();
 
         server
             .mock_async(|when, then| {
@@ -470,7 +476,6 @@ mod tests {
         std::fs::write(tokenfile.path(), "federated-token").unwrap();
 
         let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
-        let _retry_config = RetryConfig::default();
 
         server
             .mock_async(|when, then| {

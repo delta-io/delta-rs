@@ -21,7 +21,6 @@ pub mod client;
 pub mod credential;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
-pub mod error;
 pub mod models;
 
 /// Possible errors from the unity-catalog/tables API call
@@ -35,6 +34,13 @@ enum UnityCatalogError {
         source: reqwest::Error,
     },
 
+    #[error("Error in middleware: {source}")]
+    RequestMiddlewareError {
+        /// The underlying reqwest_middleware::Error
+        #[from]
+        source: reqwest_middleware::Error,
+    },
+
     /// Request returned error response
     #[error("Invalid table error: {error_code}: {message}")]
     InvalidTable {
@@ -45,8 +51,8 @@ enum UnityCatalogError {
     },
 
     /// Unknown configuration key
-    #[error("Unknown configuration key: {0}")]
-    UnknownConfigKey(String),
+    #[error("Unknown configuration key: {catalog} in catalog: {key}")]
+    UnknownConfigKey { catalog: &'static str, key: String },
 
     /// Unknown configuration key
     #[error("Missing configuration key: {0}")]
@@ -69,10 +75,9 @@ enum UnityCatalogError {
 impl From<UnityCatalogError> for DataCatalogError {
     fn from(value: UnityCatalogError) -> Self {
         match value {
-            UnityCatalogError::UnknownConfigKey(key) => DataCatalogError::UnknownConfigKey {
-                catalog: "Unity",
-                key,
-            },
+            UnityCatalogError::UnknownConfigKey { catalog, key } => {
+                DataCatalogError::UnknownConfigKey { catalog, key }
+            }
             _ => DataCatalogError::Generic {
                 catalog: "Unity",
                 source: Box::new(value),
@@ -221,7 +226,10 @@ impl FromStr for UnityCatalogConfigKey {
             "workspace_url" | "unity_workspace_url" | "databricks_workspace_url" => {
                 Ok(UnityCatalogConfigKey::WorkspaceUrl)
             }
-            _ => Err(UnityCatalogError::UnknownConfigKey(s.into()).into()),
+            _ => Err(DataCatalogError::UnknownConfigKey {
+                catalog: "",
+                key: s.to_string(),
+            }),
         }
     }
 }
@@ -324,7 +332,7 @@ impl UnityCatalogBuilder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn try_with_options<I: IntoIterator<Item=(impl AsRef<str>, impl Into<String>)>>(
+    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
     ) -> DataCatalogResult<Self> {
@@ -508,8 +516,9 @@ impl UnityCatalog {
             .get(format!("{}/catalogs", self.catalog_url()))
             .header(AUTHORIZATION, token)
             .send()
-            .await?;
-        Ok(resp.json().await?)
+            .await
+            .map_err(UnityCatalogError::from)?;
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// List all schemas for a catalog in the metastore.
@@ -533,8 +542,9 @@ impl UnityCatalog {
             .header(AUTHORIZATION, token)
             .query(&[("catalog_name", catalog_name.as_ref())])
             .send()
-            .await?;
-        Ok(resp.json().await?)
+            .await
+            .map_err(UnityCatalogError::from)?;
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// Gets the specified schema within the metastore.#
@@ -558,8 +568,9 @@ impl UnityCatalog {
             ))
             .header(AUTHORIZATION, token)
             .send()
-            .await?;
-        Ok(resp.json().await?)
+            .await
+            .map_err(UnityCatalogError::from)?;
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// Gets an array of summaries for tables for a schema and catalog within the metastore.
@@ -589,9 +600,10 @@ impl UnityCatalog {
             ])
             .header(AUTHORIZATION, token)
             .send()
-            .await?;
+            .await
+            .map_err(UnityCatalogError::from)?;
 
-        Ok(resp.json().await?)
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// Gets a table from the metastore for a specific catalog and schema.
@@ -620,9 +632,10 @@ impl UnityCatalog {
             ))
             .header(AUTHORIZATION, token)
             .send()
-            .await?;
+            .await
+            .map_err(UnityCatalogError::from)?;
 
-        Ok(resp.json().await?)
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 }
 
@@ -648,7 +661,7 @@ impl DataCatalog for UnityCatalog {
                 error_code: err.error_code,
                 message: err.message,
             }
-                .into()),
+            .into()),
         }
     }
 }
