@@ -1146,6 +1146,6 @@ def test_merge_when_wrong_but_castable_type_passed_while_merge(
     ).when_not_matched_insert_all().execute()
 
     table_schema = pq.read_table(
-        tmp_path / dt.get_add_actions().to_pandas()["path"].iloc[0]
+        tmp_path / dt.get_add_actions().column(0)[0].as_py()
     ).schema
     assert table_schema.field("price").type == sample_table["price"].type
