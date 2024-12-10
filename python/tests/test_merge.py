@@ -3,6 +3,7 @@ import os
 import pathlib
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
@@ -1120,3 +1121,31 @@ def test_merge_non_nullable(tmp_path):
             target_alias="t",
             predicate="s.id = t.id",
         ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+
+def test_merge_when_wrong_but_castable_type_passed_while_merge(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["7", "8"]),
+            "price": pa.array(["1", "2"], pa.string()),
+            "sold": pa.array([1, 2], pa.int32()),
+            "deleted": pa.array([False, False]),
+        }
+    )
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert_all().execute()
+
+    table_schema = pq.read_table(
+        tmp_path / dt.get_add_actions().to_pandas()["path"].iloc[0]
+    ).schema
+    assert table_schema.field("price").type == sample_table["price"].type
