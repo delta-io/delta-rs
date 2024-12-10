@@ -23,7 +23,7 @@ runs:
       uses: astral-sh/setup-uv@v3
       with:
         enable-cache: true
-        cache-dependency-glob: "uv.lock"
+        cache-dependency-glob: "python/uv.lock"
 
     - name: Set up Python ${{ inputs.python-version }}
       uses: actions/setup-python@v4
