@@ -20,7 +20,7 @@ delta_kernel.workspace = true
 # arrow
 arrow = { workspace = true }
 arrow-arith = { workspace = true }
-arrow-array = { workspace = true , features = ["chrono-tz"]}
+arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-ipc = { workspace = true }
@@ -58,7 +58,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
-urlencoding = { workspace = true}
+urlencoding = { workspace = true }
 
 # runtime
 async-trait = { workspace = true }
@@ -81,7 +81,6 @@ dashmap = "6"
 errno = "0.3"
 either = "1.8"
 fix-hidden-lifetime-bug = "0.2"
-hyper = { version = "0.14", optional = true }
 indexmap = "2.2.1"
 itertools = "0.13"
 lazy_static = "1"
@@ -97,13 +96,7 @@ tracing = { workspace = true }
 rand = "0.8"
 z85 = "3.0.5"
 maplit = "1"
-sqlparser = { version = "0.51" }
-
-# Unity
-reqwest = { version = "0.11.18", default-features = false, features = [
-    "rustls-tls",
-    "json",
-], optional = true }
+sqlparser = { version = "0.52.0" }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -111,7 +104,6 @@ ctor = "0"
 deltalake-test = { path = "../test", features = ["datafusion"] }
 dotenvy = "0"
 fs_extra = "1.2.0"
-hyper = { version = "0.14", features = ["server"] }
 maplit = "1"
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
@@ -137,4 +129,3 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-unity-experimental = ["reqwest", "hyper"]

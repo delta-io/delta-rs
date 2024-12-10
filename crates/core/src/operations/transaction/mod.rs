@@ -533,7 +533,7 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
 }
 
-impl<'a> PreparedCommit<'a> {
+impl PreparedCommit<'_> {
     /// The temporary commit file created
     pub fn commit_or_bytes(&self) -> &CommitOrBytes {
         &self.commit_or_bytes
@@ -648,7 +648,7 @@ pub struct PostCommit<'a> {
     table_data: Option<&'a dyn TableReference>,
 }
 
-impl<'a> PostCommit<'a> {
+impl PostCommit<'_> {
     /// Runs the post commit activities
     async fn run_post_commit_hook(&self) -> DeltaResult<DeltaTableState> {
         if let Some(table) = self.table_data {

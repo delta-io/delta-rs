@@ -143,13 +143,11 @@ fn stats_from_metadata(
                     .parse_multipart_identifier()
                 {
                     Ok(parts) => Ok(parts.into_iter().map(|v| v.value).join(".")),
-                    Err(e) => {
-                        return Err(DeltaWriterError::DeltaTable(
-                            DeltaTableError::GenericError {
-                                source: Box::new(e),
-                            },
-                        ))
-                    }
+                    Err(e) => Err(DeltaWriterError::DeltaTable(
+                        DeltaTableError::GenericError {
+                            source: Box::new(e),
+                        },
+                    )),
                 }
             })
             .collect::<Result<Vec<String>, DeltaWriterError>>()?;
@@ -347,13 +345,14 @@ impl StatsScalar {
 
                 let mut val = val / 10.0_f64.powi(*scale);
 
-                if val.is_normal() {
-                    if (val.trunc() as i128).to_string().len() > (precision - scale) as usize {
-                        // For normal values with integer parts that get rounded to a number beyond
-                        // the precision - scale range take the next smaller (by magnitude) value
-                        val = f64::from_bits(val.to_bits() - 1);
-                    }
+                if val.is_normal()
+                    && (val.trunc() as i128).to_string().len() > (precision - scale) as usize
+                {
+                    // For normal values with integer parts that get rounded to a number beyond
+                    // the precision - scale range take the next smaller (by magnitude) value
+                    val = f64::from_bits(val.to_bits() - 1);
                 }
+
                 Ok(Self::Decimal(val))
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {

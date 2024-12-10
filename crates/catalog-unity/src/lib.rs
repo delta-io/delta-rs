@@ -5,15 +5,19 @@ use std::str::FromStr;
 
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 
-use self::credential::{AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider};
-use self::models::{
+use crate::credential::{AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider};
+use crate::models::{
     GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
     ListTableSummariesResponse,
 };
-use super::client::retry::RetryExt;
-use super::{client::retry::RetryConfig, DataCatalog, DataCatalogError, DataCatalogResult};
-use crate::storage::str_is_truthy;
 
+use deltalake_core::data_catalog::DataCatalogResult;
+use deltalake_core::{DataCatalog, DataCatalogError};
+
+use crate::client::retry::*;
+use deltalake_core::storage::str_is_truthy;
+
+pub mod client;
 pub mod credential;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
@@ -30,6 +34,13 @@ enum UnityCatalogError {
         source: reqwest::Error,
     },
 
+    #[error("Error in middleware: {source}")]
+    RequestMiddlewareError {
+        /// The underlying reqwest_middleware::Error
+        #[from]
+        source: reqwest_middleware::Error,
+    },
+
     /// Request returned error response
     #[error("Invalid table error: {error_code}: {message}")]
     InvalidTable {
@@ -40,8 +51,8 @@ enum UnityCatalogError {
     },
 
     /// Unknown configuration key
-    #[error("Unknown configuration key: {0}")]
-    UnknownConfigKey(String),
+    #[error("Unknown configuration key: {catalog} in catalog: {key}")]
+    UnknownConfigKey { catalog: &'static str, key: String },
 
     /// Unknown configuration key
     #[error("Missing configuration key: {0}")]
@@ -64,10 +75,9 @@ enum UnityCatalogError {
 impl From<UnityCatalogError> for DataCatalogError {
     fn from(value: UnityCatalogError) -> Self {
         match value {
-            UnityCatalogError::UnknownConfigKey(key) => DataCatalogError::UnknownConfigKey {
-                catalog: "Unity",
-                key,
-            },
+            UnityCatalogError::UnknownConfigKey { catalog, key } => {
+                DataCatalogError::UnknownConfigKey { catalog, key }
+            }
             _ => DataCatalogError::Generic {
                 catalog: "Unity",
                 source: Box::new(value),
@@ -216,7 +226,10 @@ impl FromStr for UnityCatalogConfigKey {
             "workspace_url" | "unity_workspace_url" | "databricks_workspace_url" => {
                 Ok(UnityCatalogConfigKey::WorkspaceUrl)
             }
-            _ => Err(UnityCatalogError::UnknownConfigKey(s.into()).into()),
+            _ => Err(DataCatalogError::UnknownConfigKey {
+                catalog: "",
+                key: s.to_string(),
+            }),
         }
     }
 }
@@ -242,7 +255,7 @@ impl AsRef<str> for UnityCatalogConfigKey {
     }
 }
 
-/// Builder for crateing a UnityCatalogClient
+/// Builder for creating a UnityCatalogClient
 #[derive(Default)]
 pub struct UnityCatalogBuilder {
     /// Url of a Databricks workspace
@@ -282,7 +295,7 @@ pub struct UnityCatalogBuilder {
     retry_config: RetryConfig,
 
     /// Options for the underlying http client
-    client_options: super::client::ClientOptions,
+    client_options: client::ClientOptions,
 }
 
 #[allow(deprecated)]
@@ -385,7 +398,7 @@ impl UnityCatalogBuilder {
     }
 
     /// Sets the client options, overriding any already set
-    pub fn with_client_options(mut self, options: super::client::ClientOptions) -> Self {
+    pub fn with_client_options(mut self, options: client::ClientOptions) -> Self {
         self.client_options = options;
         self
     }
@@ -446,17 +459,15 @@ impl UnityCatalogBuilder {
             client,
             workspace_url,
             credential,
-            retry_config: self.retry_config,
         })
     }
 }
 
 /// Databricks Unity Catalog
 pub struct UnityCatalog {
-    client: reqwest::Client,
+    client: reqwest_middleware::ClientWithMiddleware,
     credential: CredentialProvider,
     workspace_url: String,
-    retry_config: RetryConfig,
 }
 
 impl UnityCatalog {
@@ -466,7 +477,7 @@ impl UnityCatalog {
                 // we do the conversion to a HeaderValue here, since it is fallible
                 // and we want to use it in an infallible function
                 HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
-                    super::DataCatalogError::Generic {
+                    DataCatalogError::Generic {
                         catalog: "Unity",
                         source: Box::new(err),
                     }
@@ -474,13 +485,13 @@ impl UnityCatalog {
             }
             CredentialProvider::TokenCredential(cache, cred) => {
                 let token = cache
-                    .get_or_insert_with(|| cred.fetch_token(&self.client, &self.retry_config))
+                    .get_or_insert_with(|| cred.fetch_token(&self.client))
                     .await?;
 
                 // we do the conversion to a HeaderValue here, since it is fallible
                 // and we want to use it in an infallible function
                 HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
-                    super::DataCatalogError::Generic {
+                    DataCatalogError::Generic {
                         catalog: "Unity",
                         source: Box::new(err),
                     }
@@ -504,9 +515,10 @@ impl UnityCatalog {
             .client
             .get(format!("{}/catalogs", self.catalog_url()))
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
-            .await?;
-        Ok(resp.json().await?)
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?;
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// List all schemas for a catalog in the metastore.
@@ -529,9 +541,10 @@ impl UnityCatalog {
             .get(format!("{}/schemas", self.catalog_url()))
             .header(AUTHORIZATION, token)
             .query(&[("catalog_name", catalog_name.as_ref())])
-            .send_retry(&self.retry_config)
-            .await?;
-        Ok(resp.json().await?)
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?;
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// Gets the specified schema within the metastore.#
@@ -554,9 +567,10 @@ impl UnityCatalog {
                 schema_name.as_ref()
             ))
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
-            .await?;
-        Ok(resp.json().await?)
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?;
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// Gets an array of summaries for tables for a schema and catalog within the metastore.
@@ -585,10 +599,11 @@ impl UnityCatalog {
                 ("schema_name_pattern", schema_name_pattern.as_ref()),
             ])
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
-            .await?;
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?;
 
-        Ok(resp.json().await?)
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 
     /// Gets a table from the metastore for a specific catalog and schema.
@@ -616,10 +631,11 @@ impl UnityCatalog {
                 table_name.as_ref()
             ))
             .header(AUTHORIZATION, token)
-            .send_retry(&self.retry_config)
-            .await?;
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?;
 
-        Ok(resp.json().await?)
+        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
     }
 }
 
@@ -658,31 +674,47 @@ impl std::fmt::Debug for UnityCatalog {
 
 #[cfg(test)]
 mod tests {
-    use crate::data_catalog::client::ClientOptions;
-
-    use super::super::client::mock_server::MockServer;
-    use super::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
-    use super::*;
-    use hyper::{Body, Response};
-    use reqwest::Method;
+    use crate::client::ClientOptions;
+    use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
+    use crate::models::*;
+    use crate::UnityCatalogBuilder;
+    use httpmock::prelude::*;
 
     #[tokio::test]
     async fn test_unity_client() {
-        let server = MockServer::new();
+        let server = MockServer::start_async().await;
 
         let options = ClientOptions::default().with_allow_http(true);
+
         let client = UnityCatalogBuilder::new()
-            .with_workspace_url(server.url())
+            .with_workspace_url(server.url(""))
             .with_bearer_token("bearer_token")
             .with_client_options(options)
             .build()
             .unwrap();
 
-        server.push_fn(move |req| {
-            assert_eq!(req.uri().path(), "/api/2.1/unity-catalog/schemas");
-            assert_eq!(req.method(), &Method::GET);
-            Response::new(Body::from(LIST_SCHEMAS_RESPONSE))
-        });
+        server
+            .mock_async(|when, then| {
+                when.path("/api/2.1/unity-catalog/schemas").method("GET");
+                then.body(LIST_SCHEMAS_RESPONSE);
+            })
+            .await;
+
+        server
+            .mock_async(|when, then| {
+                when.path("/api/2.1/unity-catalog/schemas/catalog_name.schema_name")
+                    .method("GET");
+                then.body(GET_SCHEMA_RESPONSE);
+            })
+            .await;
+
+        server
+            .mock_async(|when, then| {
+                when.path("/api/2.1/unity-catalog/tables/catalog_name.schema_name.table_name")
+                    .method("GET");
+                then.body(GET_TABLE_RESPONSE);
+            })
+            .await;
 
         let list_schemas_response = client.list_schemas("catalog_name").await.unwrap();
         assert!(matches!(
@@ -690,29 +722,11 @@ mod tests {
             ListSchemasResponse::Success { .. }
         ));
 
-        server.push_fn(move |req| {
-            assert_eq!(
-                req.uri().path(),
-                "/api/2.1/unity-catalog/schemas/catalog_name.schema_name"
-            );
-            assert_eq!(req.method(), &Method::GET);
-            Response::new(Body::from(GET_SCHEMA_RESPONSE))
-        });
-
         let get_schema_response = client
             .get_schema("catalog_name", "schema_name")
             .await
             .unwrap();
         assert!(matches!(get_schema_response, GetSchemaResponse::Success(_)));
-
-        server.push_fn(move |req| {
-            assert_eq!(
-                req.uri().path(),
-                "/api/2.1/unity-catalog/tables/catalog_name.schema_name.table_name"
-            );
-            assert_eq!(req.method(), &Method::GET);
-            Response::new(Body::from(GET_TABLE_RESPONSE))
-        });
 
         let get_table_response = client
             .get_table("catalog_name", "schema_name", "table_name")

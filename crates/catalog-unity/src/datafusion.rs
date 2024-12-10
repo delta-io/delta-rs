@@ -11,10 +11,12 @@ use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;
 use tracing::error;
 
-use super::models::{GetTableResponse, ListCatalogsResponse, ListTableSummariesResponse};
+use super::models::{
+    GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse,
+};
 use super::{DataCatalogResult, UnityCatalog};
-use crate::data_catalog::models::ListSchemasResponse;
-use crate::DeltaTableBuilder;
+
+use deltalake_core::DeltaTableBuilder;
 
 /// In-memory list of catalogs populated by unity catalog
 #[derive(Debug)]
@@ -56,16 +58,16 @@ impl CatalogProviderList for UnityCatalogList {
         self
     }
 
-    fn catalog_names(&self) -> Vec<String> {
-        self.catalogs.iter().map(|c| c.key().clone()).collect()
-    }
-
     fn register_catalog(
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         self.catalogs.insert(name, catalog)
+    }
+
+    fn catalog_names(&self) -> Vec<String> {
+        self.catalogs.iter().map(|c| c.key().clone()).collect()
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
