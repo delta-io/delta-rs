@@ -689,6 +689,7 @@ class DeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
         columns: Optional[List[str]] = None,
+        allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader:
         return self._table.load_cdf(
             columns=columns,
@@ -696,6 +697,7 @@ class DeltaTable:
             ending_version=ending_version,
             starting_timestamp=starting_timestamp,
             ending_timestamp=ending_timestamp,
+            allow_out_of_range=allow_out_of_range,
         )
 
     @property

@@ -44,7 +44,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
     physical_plan::ExecutionPlan,
-    prelude::{DataFrame, SessionContext},
+    prelude::{cast, DataFrame, SessionContext},
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
@@ -990,8 +990,10 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection
-            .push(Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()));
+        write_projection.push(cast(
+            Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
+            delta_field.data_type().try_into()?,
+        ));
         new_columns.push((name, case));
     }
 
