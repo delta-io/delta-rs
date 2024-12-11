@@ -14,7 +14,7 @@ use arrow_array::{
 use arrow_cast::cast;
 use arrow_cast::parse::Parser;
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
-use delta_kernel::features::ColumnMappingMode;
+use delta_kernel::table_features::ColumnMappingMode;
 use itertools::Itertools;
 
 use super::state::DeltaTableState;
@@ -190,6 +190,7 @@ impl DeltaTableState {
                 })
                 .collect::<Result<HashMap<String, &str>, DeltaTableError>>()?,
         };
+
         // Append values
         for action in files {
             for (name, maybe_value) in action.partition_values.iter() {

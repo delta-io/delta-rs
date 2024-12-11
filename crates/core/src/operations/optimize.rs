@@ -1623,7 +1623,7 @@ pub(super) mod zorder {
         fn get_bit(&self, bit_i: usize) -> bool;
     }
 
-    impl<'a> RowBitUtil for Row<'a> {
+    impl RowBitUtil for Row<'_> {
         /// Get the bit at the given index, or just give false if the index is out of bounds
         fn get_bit(&self, bit_i: usize) -> bool {
             let byte_i = bit_i / 8;
