@@ -79,7 +79,7 @@ pub struct DeletionVectorView<'a> {
     index: usize,
 }
 
-impl<'a> DeletionVectorView<'a> {
+impl DeletionVectorView<'_> {
     /// get a unique idenitfier for the deletion vector
     pub fn unique_id(&self) -> String {
         if let Some(offset) = self.offset() {
@@ -569,32 +569,30 @@ mod datafusion {
             }
 
             match array.data_type() {
-                ArrowDataType::Struct(fields) => {
-                    return fields
-                        .iter()
-                        .map(|f| {
-                            self.column_bounds(
-                                path_step,
-                                &format!("{name}.{}", f.name()),
-                                fun_type.clone(),
-                            )
-                        })
-                        .map(|s| match s {
-                            Precision::Exact(s) => Some(s),
-                            _ => None,
-                        })
-                        .collect::<Option<Vec<_>>>()
-                        .map(|o| {
-                            let arrays = o
-                                .into_iter()
-                                .map(|sv| sv.to_array())
-                                .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
-                                .unwrap();
-                            let sa = StructArray::new(fields.clone(), arrays, None);
-                            Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
-                        })
-                        .unwrap_or(Precision::Absent);
-                }
+                ArrowDataType::Struct(fields) => fields
+                    .iter()
+                    .map(|f| {
+                        self.column_bounds(
+                            path_step,
+                            &format!("{name}.{}", f.name()),
+                            fun_type.clone(),
+                        )
+                    })
+                    .map(|s| match s {
+                        Precision::Exact(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .map(|o| {
+                        let arrays = o
+                            .into_iter()
+                            .map(|sv| sv.to_array())
+                            .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                            .unwrap();
+                        let sa = StructArray::new(fields.clone(), arrays, None);
+                        Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                    })
+                    .unwrap_or(Precision::Absent),
                 _ => Precision::Absent,
             }
         }
@@ -721,9 +719,9 @@ mod datafusion {
                 return None;
             }
             let expression = if self.metadata.partition_columns.contains(&column.name) {
-                Expression::Column(format!("add.partitionValues_parsed.{}", column.name))
+                Expression::column(["add", "partitionValues_parsed", &column.name])
             } else {
-                Expression::Column(format!("add.stats_parsed.{}.{}", stats_field, column.name))
+                Expression::column(["add", "stats_parsed", stats_field, &column.name])
             };
             let evaluator = ARROW_HANDLER.get_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
@@ -735,7 +733,7 @@ mod datafusion {
                 let engine = ArrowEngineData::new(batch.clone());
                 let result = evaluator.evaluate(&engine).ok()?;
                 let result = result
-                    .as_any()
+                    .any_ref()
                     .downcast_ref::<ArrowEngineData>()
                     .ok_or(DeltaTableError::generic(
                         "failed to downcast evaluator result to ArrowEngineData.",
@@ -744,11 +742,11 @@ mod datafusion {
                 results.push(result.record_batch().clone());
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
-            batch.column_by_name("output").map(|c| c.clone())
+            batch.column_by_name("output").cloned()
         }
     }
 
-    impl<'a> PruningStatistics for LogDataHandler<'a> {
+    impl PruningStatistics for LogDataHandler<'_> {
         /// return the minimum values for the named column, if known.
         /// Note: the returned array must contain `num_containers()` rows
         fn min_values(&self, column: &Column) -> Option<ArrayRef> {
@@ -799,7 +797,7 @@ mod datafusion {
             lazy_static::lazy_static! {
                 static ref ROW_COUNTS_EVAL: Arc<dyn ExpressionEvaluator> =  ARROW_HANDLER.get_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column("add.stats_parsed.numRecords"),
+                    Expression::column(["add", "stats_parsed","numRecords"]),
                     DataType::Primitive(PrimitiveType::Long),
                 );
             }
@@ -808,7 +806,7 @@ mod datafusion {
                 let engine = ArrowEngineData::new(batch.clone());
                 let result = ROW_COUNTS_EVAL.evaluate(&engine).ok()?;
                 let result = result
-                    .as_any()
+                    .any_ref()
                     .downcast_ref::<ArrowEngineData>()
                     .ok_or(DeltaTableError::generic(
                         "failed to downcast evaluator result to ArrowEngineData.",

@@ -769,7 +769,7 @@ mod tests {
             expected_stats.parse::<serde_json::Value>().unwrap(),
             add_actions
                 .into_iter()
-                .nth(0)
+                .next()
                 .unwrap()
                 .stats
                 .unwrap()
@@ -817,7 +817,7 @@ mod tests {
             expected_stats.parse::<serde_json::Value>().unwrap(),
             add_actions
                 .into_iter()
-                .nth(0)
+                .next()
                 .unwrap()
                 .stats
                 .unwrap()

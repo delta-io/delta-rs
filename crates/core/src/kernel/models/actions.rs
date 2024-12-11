@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use maplit::hashset;
@@ -726,9 +726,9 @@ impl AsRef<str> for StorageType {
     }
 }
 
-impl ToString for StorageType {
-    fn to_string(&self) -> String {
-        self.as_ref().into()
+impl Display for StorageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
     }
 }
 

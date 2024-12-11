@@ -1017,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_data_skipping_stats_columns() {
         let batch = get_record_batch(None, false);
-        let partition_cols: &[String] = &vec![];
+        let partition_cols: &[String] = &[];
         let table_schema: StructType = get_delta_schema();
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
@@ -1053,7 +1053,7 @@ mod tests {
             expected_stats.parse::<serde_json::Value>().unwrap(),
             add_actions
                 .into_iter()
-                .nth(0)
+                .next()
                 .unwrap()
                 .stats
                 .unwrap()
@@ -1065,7 +1065,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_data_skipping_num_indexed_colsn() {
         let batch = get_record_batch(None, false);
-        let partition_cols: &[String] = &vec![];
+        let partition_cols: &[String] = &[];
         let table_schema: StructType = get_delta_schema();
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
@@ -1101,7 +1101,7 @@ mod tests {
             expected_stats.parse::<serde_json::Value>().unwrap(),
             add_actions
                 .into_iter()
-                .nth(0)
+                .next()
                 .unwrap()
                 .stats
                 .unwrap()

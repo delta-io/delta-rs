@@ -106,7 +106,7 @@ impl<'a> AddContainer<'a> {
     }
 }
 
-impl<'a> PruningStatistics for AddContainer<'a> {
+impl PruningStatistics for AddContainer<'_> {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
