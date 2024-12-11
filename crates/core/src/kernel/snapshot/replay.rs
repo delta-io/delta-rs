@@ -54,7 +54,7 @@ impl<'a, S> ReplayStream<'a, S> {
         visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<Self> {
         let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
-        let partitions_schema = snapshot.partitions_schema(None)?.map(|s| Arc::new(s));
+        let partitions_schema = snapshot.partitions_schema(None)?.map(Arc::new);
         let mapper = Arc::new(LogMapper {
             stats_schema,
             partitions_schema,
@@ -83,9 +83,7 @@ impl LogMapper {
     ) -> DeltaResult<Self> {
         Ok(Self {
             stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
-            partitions_schema: snapshot
-                .partitions_schema(table_schema)?
-                .map(|s| Arc::new(s)),
+            partitions_schema: snapshot.partitions_schema(table_schema)?.map(Arc::new),
             config: snapshot.config.clone(),
         })
     }
@@ -368,7 +366,7 @@ fn insert_field(batch: RecordBatch, array: StructArray, name: &str) -> DeltaResu
     )?)
 }
 
-impl<'a, S> Stream for ReplayStream<'a, S>
+impl<S> Stream for ReplayStream<'_, S>
 where
     S: Stream<Item = DeltaResult<RecordBatch>>,
 {
@@ -699,7 +697,7 @@ pub(super) mod tests {
         assert!(ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").is_some());
         assert!(ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed").is_none());
 
-        let stats_schema = stats_schema(&schema, table_config)?;
+        let stats_schema = stats_schema(schema, table_config)?;
         let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into()?), &config)?;
 
         assert!(ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").is_some());
@@ -764,7 +762,7 @@ pub(super) mod tests {
             ex::extract_and_cast_opt::<StructArray>(&batch, "add.partitionValues_parsed").is_none()
         );
 
-        let partitions_schema = partitions_schema(&schema, &partition_columns)?.unwrap();
+        let partitions_schema = partitions_schema(schema, &partition_columns)?.unwrap();
         let new_batch = parse_partitions(batch, &partitions_schema)?;
 
         assert!(

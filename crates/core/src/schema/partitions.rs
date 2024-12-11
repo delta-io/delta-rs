@@ -383,7 +383,7 @@ mod tests {
             DeltaTablePartition::try_from(path.as_ref()).unwrap(),
             DeltaTablePartition {
                 key: "year".into(),
-                value: Scalar::String(year.into()),
+                value: Scalar::String(year),
             }
         );
 

@@ -247,7 +247,7 @@ async fn execute(
     // [here](https://github.com/delta-io/delta-rs/pull/2886#issuecomment-2481550560>
     let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = state
         .optimizers()
-        .into_iter()
+        .iter()
         .filter(|rule| {
             rule.name() != "optimize_projections" && rule.name() != "simplify_expressions"
         })
