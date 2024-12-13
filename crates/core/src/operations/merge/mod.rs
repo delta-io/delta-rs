@@ -53,6 +53,7 @@ use datafusion_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 
+use delta_kernel::schema::StructType;
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use itertools::Itertools;
@@ -72,12 +73,16 @@ use crate::delta_datafusion::{
     register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
     DeltaSessionConfig, DeltaTableProvider,
 };
-use crate::kernel::Action;
+
+use crate::kernel::{Action, Metadata};
 use crate::logstore::LogStoreRef;
+use crate::operations::cast::merge_schema::merge_arrow_schema;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
-use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
+use crate::operations::write::{
+    write_execution_plan, write_execution_plan_cdc, SchemaMode, WriterStatsConfig,
+};
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -124,6 +129,7 @@ pub struct MergeBuilder {
     snapshot: DeltaTableState,
     /// The source data
     source: DataFrame,
+    schema_mode: Option<SchemaMode>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -158,6 +164,7 @@ impl MergeBuilder {
             state: None,
             commit_properties: CommitProperties::default(),
             writer_properties: None,
+            schema_mode: None,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
@@ -347,6 +354,11 @@ impl MergeBuilder {
     /// Rename columns in the target dataset to have a prefix of `alias`.`original column name`
     pub fn with_target_alias<S: ToString>(mut self, alias: S) -> Self {
         self.target_alias = Some(alias.to_string());
+        self
+    }
+    /// Add Schema Write Mode
+    pub fn with_schema_mode(mut self, schema_mode: SchemaMode) -> Self {
+        self.schema_mode = Some(schema_mode);
         self
     }
 
@@ -751,10 +763,18 @@ async fn execute(
         }),
     });
 
+    let source_schema = source.schema();
+
+    let merge_schema = merge_arrow_schema(
+        snapshot.input_schema()?,
+        Arc::new(source_schema.as_arrow().clone()),
+        true,
+    )?;
+
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(merge_schema.clone())
         .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
@@ -763,13 +783,28 @@ async fn execute(
         scan_config.clone(),
     )?);
 
+    // One possible way to make this progress work is to pretend the target dataframe have the merge_schema
+    // when merge schema mode is selected, then all the process should be the same
     let target_provider = provider_as_source(target_provider);
     let target =
         LogicalPlanBuilder::scan(target_name.clone(), target_provider.clone(), None)?.build()?;
 
     let source_schema = source.schema();
     let target_schema = target.schema();
+
+    //  we have the source schema and the target schema
+
+    // let merge_schema = merge_arrow_schema(
+    //     Arc::new(source_schema.as_arrow().clone()),
+    //     Arc::new(target_schema.as_arrow().clone()),
+    //     true,
+    // )?;
+
+    // println!("{}", merge_schema);
+
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
+
+    println!("{}", join_schema_df);
 
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
@@ -830,8 +865,13 @@ async fn execute(
     let target = DataFrame::new(state.clone(), target);
     let target = target.with_column(TARGET_COLUMN, lit(true))?;
 
+    //  start h
+    println!("{}", target.schema());
+
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
     let join_schema_df = join.schema().to_owned();
+
+    dbg!(&join_schema_df);
 
     let match_operations: Vec<MergeOperation> = match_operations
         .into_iter()
@@ -958,7 +998,9 @@ async fn execute(
     let mut new_columns = vec![];
     let mut write_projection = Vec::new();
 
-    for delta_field in snapshot.schema().fields() {
+    let test: StructType = merge_schema.clone().try_into()?;
+
+    for delta_field in test.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1159,6 +1201,9 @@ async fn execute(
             .clone()
             .filter(col(TARGET_COLUMN).is_true())?
             .select(write_projection.clone())?;
+        dbg!(&after.schema());
+
+        dbg!(target_schema.columns());
 
         // Extra select_columns is required so that before and after have same schema order
         // DataFusion doesn't have UnionByName yet, see https://github.com/apache/datafusion/issues/12650
@@ -1187,6 +1232,7 @@ async fn execute(
     }
 
     let project = filtered.clone().select(write_projection)?;
+    dbg!(&project.schema());
 
     let merge_final = &project.into_unoptimized_plan();
     let write = state.create_physical_plan(merge_final).await?;
@@ -1206,6 +1252,7 @@ async fn execute(
             .stats_columns()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
+    dbg!(&snapshot.schema());
 
     let rewrite_start = Instant::now();
     let mut add_actions = write_execution_plan(
@@ -1311,15 +1358,24 @@ async fn execute(
         not_matched_predicates: not_match_target_operations,
         not_matched_by_source_predicates: not_match_source_operations,
     };
+    let schema_action = Action::Metadata(Metadata::try_new(
+        test,
+        table_partition_cols.clone(),
+        snapshot.metadata().configuration.clone(),
+    )?);
+    actions.push(schema_action);
 
     if actions.is_empty() {
+        dbg!(&snapshot.schema());
         return Ok((snapshot, metrics));
     }
+    // looking at the write schema evolution I can see that an actions was push for the change to happen instead of mutating the snapshot
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
         .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
+    dbg!(&commit.snapshot().schema());
     Ok((commit.snapshot(), metrics))
 }
 
@@ -2442,6 +2498,90 @@ mod tests {
             "| C  | 20    | 2023-07-04 |",
             "| X  | 30    | 2023-07-04 |",
             "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_empty_table_schema_merge() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.modified").eq(lit("2021-02-02"))),
+            )
+            .with_schema_mode(crate::operations::write::SchemaMode::Merge)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 1);
+        assert!(table.get_files_count() >= 2);
+        assert!(metrics.num_target_files_added >= 2);
+        assert_eq!(metrics.num_target_files_removed, 0);
+        assert_eq!(metrics.num_target_rows_copied, 0);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 3);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_output_rows, 3);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+
+        assert_eq!(
+            parameters["predicate"],
+            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+        );
+
+        let expected = vec![
+            "+----+-------+-------------+------------+",
+            "| id | value | inserted_by | modified   |",
+            "+----+-------+-------------+------------+",
+            "| B  | 10    | B1          | 2021-02-02 |",
+            "| C  | 20    | C1          | 2023-07-04 |",
+            "| X  | 30    | X1          | 2023-07-04 |",
+            "+----+-------+-------------+------------+",
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
