@@ -187,9 +187,9 @@ impl Protocol {
             let mut converted_writer_features = configuration
                 .iter()
                 .filter(|(_, value)| {
-                    value.as_ref().map_or(false, |v| {
-                        v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
-                    })
+                    value
+                        .as_ref()
+                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 })
                 .collect::<HashMap<&String, &Option<String>>>()
                 .keys()
@@ -216,9 +216,9 @@ impl Protocol {
             let converted_reader_features = configuration
                 .iter()
                 .filter(|(_, value)| {
-                    value.as_ref().map_or(false, |v| {
-                        v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
-                    })
+                    value
+                        .as_ref()
+                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 })
                 .map(|(key, _)| (*key).clone().into())
                 .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
