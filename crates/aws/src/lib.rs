@@ -771,7 +771,9 @@ mod tests {
         let factory = S3LogStoreFactory::default();
         let store = InMemory::new();
         let url = Url::parse("s3://test-bucket").unwrap();
-        unsafe { std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER); }
+        unsafe {
+            std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER);
+        }
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();

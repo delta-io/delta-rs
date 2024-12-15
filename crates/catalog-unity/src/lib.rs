@@ -19,8 +19,8 @@ pub mod client;
 pub mod credential;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
-pub mod models;
 pub mod error;
+pub mod models;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
@@ -330,7 +330,7 @@ impl UnityCatalogBuilder {
     }
 
     /// Hydrate builder from key value pairs
-    pub fn try_with_options<I: IntoIterator<Item=(impl AsRef<str>, impl Into<String>)>>(
+    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
     ) -> DataCatalogResult<Self> {
@@ -496,7 +496,7 @@ impl UnityCatalog {
     /// all catalogs will be retrieved. Otherwise, only catalogs owned by the caller
     /// (or for which the caller has the USE_CATALOG privilege) will be retrieved.
     /// There is no guarantee of a specific ordering of the elements in the array.
-    pub async fn list_catalogs(&self) -> DataCatalogResult<ListCatalogsResponse> {
+    pub async fn list_catalogs(&self) -> Result<ListCatalogsResponse, UnityCatalogError> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/schemas/list
         let resp = self
@@ -504,9 +504,8 @@ impl UnityCatalog {
             .get(format!("{}/catalogs", self.catalog_url()))
             .header(AUTHORIZATION, token)
             .send()
-            .await
-            .map_err(UnityCatalogError::from)?;
-        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
+            .await?;
+        Ok(resp.json().await?)
     }
 
     /// List all schemas for a catalog in the metastore.
@@ -521,7 +520,7 @@ impl UnityCatalog {
     pub async fn list_schemas(
         &self,
         catalog_name: impl AsRef<str>,
-    ) -> DataCatalogResult<ListSchemasResponse> {
+    ) -> Result<ListSchemasResponse, UnityCatalogError> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/schemas/list
         let resp = self
@@ -530,9 +529,8 @@ impl UnityCatalog {
             .header(AUTHORIZATION, token)
             .query(&[("catalog_name", catalog_name.as_ref())])
             .send()
-            .await
-            .map_err(UnityCatalogError::from)?;
-        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
+            .await?;
+        Ok(resp.json().await?)
     }
 
     /// Gets the specified schema within the metastore.#
@@ -543,7 +541,7 @@ impl UnityCatalog {
         &self,
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
-    ) -> DataCatalogResult<GetSchemaResponse> {
+    ) -> Result<GetSchemaResponse, UnityCatalogError> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/schemas/get
         let resp = self
@@ -556,9 +554,8 @@ impl UnityCatalog {
             ))
             .header(AUTHORIZATION, token)
             .send()
-            .await
-            .map_err(UnityCatalogError::from)?;
-        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
+            .await?;
+        Ok(resp.json().await?)
     }
 
     /// Gets an array of summaries for tables for a schema and catalog within the metastore.
@@ -576,7 +573,7 @@ impl UnityCatalog {
         &self,
         catalog_name: impl AsRef<str>,
         schema_name_pattern: impl AsRef<str>,
-    ) -> DataCatalogResult<ListTableSummariesResponse> {
+    ) -> Result<ListTableSummariesResponse, UnityCatalogError> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/tables/listsummaries
         let resp = self
@@ -588,10 +585,9 @@ impl UnityCatalog {
             ])
             .header(AUTHORIZATION, token)
             .send()
-            .await
-            .map_err(UnityCatalogError::from)?;
+            .await?;
 
-        Ok(resp.json().await.map_err(UnityCatalogError::from)?)
+        Ok(resp.json().await?)
     }
 
     /// Gets a table from the metastore for a specific catalog and schema.
@@ -649,7 +645,7 @@ impl DataCatalog for UnityCatalog {
                 error_code: err.error_code,
                 message: err.message,
             }
-                .into()),
+            .into()),
         }
     }
 }
