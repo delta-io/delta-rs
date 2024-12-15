@@ -705,7 +705,7 @@ impl<'a> PostCommit<'a> {
     ) -> DeltaResult<()> {
         if !table_state.load_config().require_files {
             warn!("Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files.");
-            return Ok(())
+            return Ok(());
         }
 
         let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
