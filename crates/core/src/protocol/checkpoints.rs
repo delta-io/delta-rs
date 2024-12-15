@@ -145,6 +145,12 @@ pub async fn create_checkpoint_for(
     state: &DeltaTableState,
     log_store: &dyn LogStore,
 ) -> Result<(), ProtocolError> {
+    if !state.load_config().require_files {
+        return Err(ProtocolError::Generic(
+            "Table has not yet been initialized with files, therefore creating a checkpoint is not possible.".to_string()
+        ));
+    }
+
     if version != state.version() {
         error!(
             "create_checkpoint_for called with version {version} but table state contains: {}. The table state may need to be reloaded",
