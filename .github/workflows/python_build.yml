@@ -45,9 +45,9 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          make setup
           # Install minimum PyArrow version
-          uv pip install -e .[pandas,devel] pyarrow==16.0.0
+          uv sync --extra devel --extra pandas
+          uv pip install pyarrow==16.0.0
         env:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
 
@@ -130,8 +130,7 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          make setup
-          uvx run maturin develop
+          uv sync
 
       - name: Run deltalake
         run: |

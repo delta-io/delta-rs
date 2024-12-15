@@ -40,7 +40,7 @@ devel = [
 pyspark = [
     "pyspark",
     "delta-spark",
-    "numpy==1.22.2", # pyspark is not compatible with latest numpy
+    "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
 
 [project.urls]
