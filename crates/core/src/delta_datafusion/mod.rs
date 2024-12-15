@@ -229,7 +229,7 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
 pub(crate) fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
-) -> DeltaResult<impl Iterator<Item = Add> + 'a + use<'a>> {
+) -> DeltaResult<impl Iterator<Item = Add> + 'a> {
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
