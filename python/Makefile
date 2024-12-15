@@ -8,7 +8,7 @@ DAT_VERSION := 0.0.2
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	uv sync --all-extras
+	uv sync --extra devel --extra pandas
 
 .PHONY: setup-dat
 setup-dat: ## Download DAT test files
@@ -39,7 +39,8 @@ install: build ## Install Python binding of delta-rs
 	uv pip install $(TARGET_WHEEL)[devel,pandas]
 
 .PHONY: develop-pyspark
-develop-pyspark: setup
+develop-pyspark:
+	uv sync --all-extras
 	$(info --- Develop with Python binding ---)
 	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,pyspark $(MATURIN_EXTRA_ARGS)
 
