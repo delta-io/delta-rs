@@ -728,6 +728,7 @@ fn extract_version_from_filename(name: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use aws_sdk_sts::config::ProvideCredentials;
+
     use object_store::memory::InMemory;
     use serial_test::serial;
 

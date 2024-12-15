@@ -88,9 +88,9 @@ impl ListingSchemaProvider {
     }
 }
 
-// noramalizes a path fragment to be a valida table name in datafusion
+// normalizes a path fragment to be a valida table name in datafusion
 // - removes some reserved characters (-, +, ., " ")
-// - lowecase ascii
+// - lowercase ascii
 fn normalize_table_name(path: &Path) -> Result<String, DataFusionError> {
     Ok(path
         .file_name()

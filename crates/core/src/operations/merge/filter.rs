@@ -252,16 +252,13 @@ pub(crate) fn generalize_filter(
             }
         }
         Expr::InList(in_list) => {
-            let compare_expr = match generalize_filter(
+            let compare_expr = generalize_filter(
                 *in_list.expr,
                 partition_columns,
                 source_name,
                 target_name,
                 placeholders,
-            ) {
-                Some(expr) => expr,
-                None => return None, // Return early
-            };
+            )?;
 
             let mut list_expr = Vec::new();
             for item in in_list.list.into_iter() {

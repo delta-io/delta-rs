@@ -11,7 +11,9 @@ use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;
 use tracing::error;
 
-use super::models::{GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse};
+use super::models::{
+    GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse,
+};
 use super::{DataCatalogResult, UnityCatalog};
 
 use deltalake_core::DeltaTableBuilder;

@@ -234,16 +234,16 @@ impl ContextProvider for DeltaContextProvider<'_> {
         self.state.aggregate_functions().get(name).cloned()
     }
 
+    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+        self.state.window_functions().get(name).cloned()
+    }
+
     fn get_variable_type(&self, _var: &[String]) -> Option<DataType> {
         unimplemented!()
     }
 
     fn options(&self) -> &ConfigOptions {
         self.state.config_options()
-    }
-
-    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
-        self.state.window_functions().get(name).cloned()
     }
 
     fn udf_names(&self) -> Vec<String> {

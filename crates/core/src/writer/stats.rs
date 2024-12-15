@@ -352,6 +352,7 @@ impl StatsScalar {
                     // the precision - scale range take the next smaller (by magnitude) value
                     val = f64::from_bits(val.to_bits() - 1);
                 }
+
                 Ok(Self::Decimal(val))
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {

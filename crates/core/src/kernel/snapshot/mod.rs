@@ -416,7 +416,7 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
-    pub async fn update<'a>(
+    pub async fn update(
         &mut self,
         log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
