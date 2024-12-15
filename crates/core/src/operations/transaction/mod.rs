@@ -649,7 +649,7 @@ pub struct PostCommit<'a> {
     table_data: Option<&'a dyn TableReference>,
 }
 
-impl<'a> PostCommit<'a> {
+impl PostCommit<'_> {
     /// Runs the post commit activities
     async fn run_post_commit_hook(&self) -> DeltaResult<DeltaTableState> {
         if let Some(table) = self.table_data {

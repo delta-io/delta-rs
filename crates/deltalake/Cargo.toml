@@ -22,6 +22,7 @@ deltalake-azure = { version = "0.5.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.6.0", path = "../gcp", optional = true }
 deltalake-hdfs = { version = "0.6.0", path = "../hdfs", optional = true }
 deltalake-catalog-glue = { version = "0.6.0", path = "../catalog-glue", optional = true }
+deltalake-catalog-unity = { version = "0.6.0", path = "../catalog-unity", optional = true }
 
 [features]
 # All of these features are just reflected into the core crate until that
@@ -37,7 +38,7 @@ json = ["deltalake-core/json"]
 python = ["deltalake-core/python"]
 s3-native-tls = ["deltalake-aws/native-tls"]
 s3 = ["deltalake-aws/rustls"]
-unity-experimental = ["deltalake-core/unity-experimental"]
+unity-experimental = ["deltalake-catalog-unity"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
