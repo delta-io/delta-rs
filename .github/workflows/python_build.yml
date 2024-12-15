@@ -22,9 +22,7 @@ jobs:
 
       - name: Check Python
         run: |
-          python -m venv venv
-          source venv/bin/activate
-          pip install ruff==0.5.2 mypy==1.10.1 types-dataclasses typing-extensions
+          uv pip install ruff==0.5.2 mypy==1.10.1 types-dataclasses typing-extensions --system
           make check-python
 
       - name: Check Rust
@@ -47,18 +45,14 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          python -m venv venv
-          source venv/bin/activate
-          make setup
           # Install minimum PyArrow version
-          pip install -e .[pandas,devel] pyarrow==16.0.0
+          uv sync --extra devel --extra pandas
+          uv pip install pyarrow==16.0.0
         env:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
 
       - name: Run tests
-        run: |
-          source venv/bin/activate
-          make unit-test
+        run: make unit-test
 
   test:
     name: Python Build (Python 3.10 PyArrow latest)
@@ -77,25 +71,19 @@ jobs:
         run: docker compose up -d
 
       - name: Build and install deltalake
-        run: |
-          python -m venv venv
-          source venv/bin/activate
-          make develop
+        run: make develop
 
       - name: Download Data Acceptance Tests (DAT) files
         run: make setup-dat
 
       - name: Run tests
-        run: |
-          source venv/bin/activate
-          python -m pytest -m '((s3 or azure) and integration) or not integration and not benchmark' --doctest-modules
+        run: uv run pytest -m '((s3 or azure) and integration) or not integration and not benchmark' --doctest-modules
 
       - name: Test without pandas
         run: |
-          source venv/bin/activate
-          pip uninstall --yes pandas
-          python -m pytest -m "not pandas and not integration and not benchmark"
-          pip install pandas
+          uv pip uninstall pandas
+          uv run pytest -m "not pandas and not integration and not benchmark"
+          uv pip install pandas
 
   test-pyspark:
     name: PySpark Integration Tests
@@ -116,15 +104,10 @@ jobs:
           java-version: "11"
 
       - name: Build and install deltalake
-        run: |
-          python -m venv venv
-          source venv/bin/activate
-          make develop-pyspark
+        run: make develop-pyspark
 
       - name: Run tests
-        run: |
-          source venv/bin/activate
-          make test-pyspark
+        run: make test-pyspark
 
   multi-python-running:
     name: Running with Python ${{ matrix.python-version }}
@@ -147,12 +130,8 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          python -m venv venv
-          source venv/bin/activate
-          make setup
-          maturin develop
+          uv sync
 
       - name: Run deltalake
         run: |
-          source venv/bin/activate
-          python -c 'import deltalake'
+          uv run python -c 'import deltalake'

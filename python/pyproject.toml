@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-license = {file = "licenses/deltalake_license.txt"}
+license = { file = "licenses/deltalake_license.txt" }
 requires-python = ">=3.9"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
@@ -14,16 +14,12 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12"
+    "Programming Language :: Python :: 3.12",
 ]
-dependencies = [
-    "pyarrow>=16",
-]
+dependencies = ["pyarrow>=16"]
 
 [project.optional-dependencies]
-pandas = [
-    "pandas"
-]
+pandas = ["pandas"]
 devel = [
     "azure-storage-blob==12.20.0",
     "packaging>=20",
@@ -35,15 +31,16 @@ devel = [
     "sphinx-rtd-theme",
     "toml",
     "wheel",
+    "pip>=24.0",
     "pytest-benchmark",
     # keep ruff and mypy versions in sync with .github/workflows/python_build.yml
     "mypy==1.10.1",
-    "ruff==0.5.2"
+    "ruff==0.5.2",
 ]
 pyspark = [
     "pyspark",
     "delta-spark",
-    "numpy==1.22.2" # pyspark is not compatible with latest numpy
+    "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
 
 [project.urls]
@@ -80,7 +77,7 @@ select = [
     # isort
     "I",
     # ruff-specific rules
-    "RUF"
+    "RUF",
 ]
 ignore = ["E501"]
 
@@ -89,10 +86,7 @@ known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
 addopts = "-v -m 'not integration and not benchmark'"
-testpaths = [
-    "tests",
-    "deltalake",
-]
+testpaths = ["tests", "deltalake"]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
