@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.22.3"
+version = "0.22.4"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
