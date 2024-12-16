@@ -21,3 +21,4 @@ docs/build
 dat-data
 
 wheels/
+uv.lock
