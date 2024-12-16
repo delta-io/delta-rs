@@ -774,7 +774,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .with_schema(merge_schema.clone())
+        .with_schema(snapshot.input_schema()?.clone())
         .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
@@ -792,19 +792,7 @@ async fn execute(
     let source_schema = source.schema();
     let target_schema = target.schema();
 
-    //  we have the source schema and the target schema
-
-    // let merge_schema = merge_arrow_schema(
-    //     Arc::new(source_schema.as_arrow().clone()),
-    //     Arc::new(target_schema.as_arrow().clone()),
-    //     true,
-    // )?;
-
-    // println!("{}", merge_schema);
-
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
-
-    println!("{}", join_schema_df);
 
     let predicate = match predicate {
         Expression::DataFusion(expr) => expr,
@@ -862,15 +850,17 @@ async fn execute(
             enable_pushdown,
         }),
     });
-    let target = DataFrame::new(state.clone(), target);
+    let target = DataFrame::new(state.clone(), target); // probably assigned the table alias
+    let target = target.with_column("__add_inserted_by", lit(ScalarValue::Null))?;
     let target = target.with_column(TARGET_COLUMN, lit(true))?;
+    //TODO add a new column when there is a schema change
+    // Join already has the new columns from schema dift we need to add a operation column that results in the added column to surface
 
-    //  start h
-    println!("{}", target.schema());
+    println!("{:?}", &target.clone().show().await?);
+    &source.clone().show().await?;
 
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
     let join_schema_df = join.schema().to_owned();
-
     dbg!(&join_schema_df);
 
     let match_operations: Vec<MergeOperation> = match_operations
@@ -1000,7 +990,7 @@ async fn execute(
 
     let test: StructType = merge_schema.clone().try_into()?;
 
-    for delta_field in test.fields() {
+    for delta_field in snapshot.schema().fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1038,6 +1028,7 @@ async fn execute(
         ));
         new_columns.push((name, case));
     }
+    dbg!(&write_projection);
 
     let mut insert_when = Vec::with_capacity(ops.len());
     let mut insert_then = Vec::with_capacity(ops.len());
@@ -1234,9 +1225,11 @@ async fn execute(
     }
 
     let project = filtered.clone().select(write_projection)?;
-    dbg!(&project.schema());
+    println!("{:?}", &project.clone().collect().await?);
 
+    //TODO this is where the write happends
     let merge_final = &project.into_unoptimized_plan();
+
     let write = state.create_physical_plan(merge_final).await?;
 
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
@@ -1254,7 +1247,6 @@ async fn execute(
             .stats_columns()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
-    dbg!(&snapshot.schema());
 
     let rewrite_start = Instant::now();
     let mut add_actions = write_execution_plan(
@@ -1377,7 +1369,6 @@ async fn execute(
         .with_actions(actions)
         .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
-    dbg!(&commit.snapshot().schema());
     Ok((commit.snapshot(), metrics))
 }
 
@@ -1637,6 +1628,69 @@ mod tests {
         );
 
         assert_merge(table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_evolution() {
+        let (table, _) = setup().await;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["notMatchedPredicates"],
+            json!(r#"[{"actionType":"insert"}]"#)
+        );
+        let expected = vec![
+            "+----+-------+-------------+------------+",
+            "| id | value | inserted_by | modified   |",
+            "+----+-------+-------------+------------+",
+            "| B  | 10    | B1          | 2021-02-02 |",
+            "| C  | 20    | C1          | 2023-07-04 |",
+            "| X  | 30    | X1          | 2023-07-04 |",
+            "+----+-------+-------------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
@@ -2506,7 +2560,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_empty_table_schema_merge() {
+    async fn test_empty_table_schema_evo_merge() {
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", ArrowDataType::Utf8, true),
             Field::new("value", ArrowDataType::Int32, true),
