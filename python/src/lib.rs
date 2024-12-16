@@ -796,6 +796,77 @@ impl RawDeltaTable {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    fn write(
+        &mut self,
+        py: Python,
+        data: PyArrowType<ArrowArrayStreamReader>,
+        mode: String,
+        schema_mode: Option<String>,
+        partition_by: Option<Vec<String>>,
+        predicate: Option<String>,
+        target_file_size: Option<usize>,
+        name: Option<String>,
+        description: Option<String>,
+        configuration: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+            let save_mode = mode.parse().map_err(PythonError::from)?;
+
+            let table = DeltaOps(self._table.clone());
+
+            let mut builder = table.write(batches).with_save_mode(save_mode);
+            if let Some(schema_mode) = schema_mode {
+                builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
+            }
+            if let Some(partition_columns) = partition_by {
+                builder = builder.with_partition_columns(partition_columns);
+            }
+
+            if let Some(writer_props) = writer_properties {
+                builder = builder.with_writer_properties(
+                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                );
+            }
+
+            if let Some(name) = &name {
+                builder = builder.with_table_name(name);
+            };
+
+            if let Some(description) = &description {
+                builder = builder.with_description(description);
+            };
+
+            if let Some(predicate) = predicate {
+                builder = builder.with_replace_where(predicate);
+            };
+
+            if let Some(target_file_size) = target_file_size {
+                builder = builder.with_target_file_size(target_file_size)
+            };
+
+            if let Some(config) = configuration {
+                builder = builder.with_configuration(config);
+            };
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                builder = builder.with_commit_properties(commit_properties);
+            };
+            rt().block_on(builder.into_future())
+                .map_err(PythonError::from)
+        })?;
+
+        self._table.state = table.state;
+        Ok(())
+    }
+
     // Run the restore command on the Delta Table: restore table to a given version or datetime
     #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, commit_properties=None))]
     pub fn restore(
@@ -1127,14 +1198,12 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn cleanup_metadata(&self, py: Python) -> PyResult<()> {
-        py.allow_threads(|| {
-            Ok::<_, pyo3::PyErr>(
-                rt().block_on(cleanup_metadata(&self._table))
-                    .map_err(PythonError::from)?,
-            )
+    pub fn cleanup_metadata(&mut self, py: Python) -> PyResult<()> {
+        let (state, _) = py.allow_threads(|| {
+            rt().block_on(cleanup_metadata(&self._table))
+                .map_err(PythonError::from)
         })?;
-
+        self._table.state = state;
         Ok(())
     }
 
@@ -1760,13 +1829,12 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, data, mode, table=None, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (table_uri, data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
-    table: Option<&RawDeltaTable>,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
@@ -1784,14 +1852,11 @@ fn write_to_deltalake(
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
-        let table = if let Some(table) = table {
-            DeltaOps(table._table.clone())
-        } else {
-            rt().block_on(DeltaOps::try_from_uri_with_storage_options(
+        let table = rt()
+            .block_on(DeltaOps::try_from_uri_with_storage_options(
                 &table_uri, options,
             ))
-            .map_err(PythonError::from)?
-        };
+            .map_err(PythonError::from)?;
 
         let mut builder = table.write(batches).with_save_mode(save_mode);
         if let Some(schema_mode) = schema_mode {

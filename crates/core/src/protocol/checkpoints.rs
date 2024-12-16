@@ -10,6 +10,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use object_store::path::Path;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -27,7 +28,7 @@ use crate::kernel::{
 use crate::logstore::LogStore;
 use crate::table::state::DeltaTableState;
 use crate::table::{get_partition_col_data_types, CheckPoint, CheckPointBuilder};
-use crate::{open_table_with_version, DeltaTable};
+use crate::{open_table_with_version, DeltaTable, DeltaTableError};
 
 type SchemaPath = Vec<String>;
 
@@ -96,9 +97,11 @@ pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> 
     Ok(())
 }
 
-/// Delete expires log files before given version from table. The table log retention is based on
-/// the `logRetentionDuration` property of the Delta Table, 30 days by default.
-pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError> {
+// / Delete expires log files before given version from table. The table log retention is based on
+// / the `logRetentionDuration` property of the Delta Table, 30 days by default.
+pub async fn cleanup_metadata(
+    table: &DeltaTable,
+) -> Result<(Option<DeltaTableState>, usize), ProtocolError> {
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - table
             .snapshot()
@@ -106,12 +109,16 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<usize, ProtocolError
             .table_config()
             .log_retention_duration()
             .as_millis() as i64;
-    cleanup_expired_logs_for(
-        table.version(),
-        table.log_store.as_ref(),
-        log_retention_timestamp,
-    )
-    .await
+    let version = table.version();
+
+    let mut state: Option<DeltaTableState> = table.state.clone();
+    let size = state
+        .as_mut()
+        .ok_or(ProtocolError::NoMetaData)?
+        .snapshot
+        .clean_up_logs(version, table.log_store.as_ref(), log_retention_timestamp)
+        .await?;
+    Ok((state, size))
 }
 
 /// Loads table from given `table_uri` at given `version` and creates checkpoint for it.
@@ -132,7 +139,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
         cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
 
     if table.version() >= 0 && enable_expired_log_cleanup {
-        let deleted_log_num = cleanup_metadata(&table).await?;
+        let (_, deleted_log_num) = cleanup_metadata(&table).await?;
         debug!("Deleted {:?} log files.", deleted_log_num);
     }
 
@@ -198,7 +205,7 @@ pub async fn cleanup_expired_logs_for(
     until_version: i64,
     log_store: &dyn LogStore,
     cutoff_timestamp: i64,
-) -> Result<usize, ProtocolError> {
+) -> Result<Vec<Path>, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
             Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap();
@@ -210,7 +217,7 @@ pub async fn cleanup_expired_logs_for(
         .await;
 
     if let Err(Error::NotFound { path: _, source: _ }) = maybe_last_checkpoint {
-        return Ok(0);
+        return Ok(vec![]);
     }
 
     let last_checkpoint = maybe_last_checkpoint?.bytes().await?;
@@ -255,7 +262,7 @@ pub async fn cleanup_expired_logs_for(
         .await?;
 
     debug!("Deleted {} expired logs", deleted.len());
-    Ok(deleted.len())
+    Ok(deleted)
 }
 
 fn parquet_bytes_from_state(
@@ -889,7 +896,8 @@ mod tests {
             log_retention_timestamp,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .len();
         assert_eq!(count, 0);
         println!("{:?}", count);
 
@@ -917,7 +925,8 @@ mod tests {
             log_retention_timestamp,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .len();
         assert_eq!(count, 1);
 
         let log_store = table.log_store();
