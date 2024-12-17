@@ -85,7 +85,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
+use crate::checkpoints::create_checkpoint_for;
 use crate::errors::DeltaTableError;
 use crate::kernel::{
     Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Transaction,
@@ -664,7 +664,7 @@ impl PostCommit<'_> {
             } else {
                 snapshot.advance(vec![&self.data])?;
             }
-            let state = DeltaTableState { snapshot };
+            let mut state = DeltaTableState { snapshot };
             // Execute each hook
             if self.create_checkpoint {
                 self.create_checkpoint(&state, &self.log_store, self.version)
@@ -677,13 +677,15 @@ impl PostCommit<'_> {
             };
 
             if cleanup_logs {
-                cleanup_expired_logs_for(
-                    self.version,
-                    self.log_store.as_ref(),
-                    Utc::now().timestamp_millis()
-                        - state.table_config().log_retention_duration().as_millis() as i64,
-                )
-                .await?;
+                state
+                    .snapshot
+                    .clean_up_logs(
+                        self.version,
+                        self.log_store.as_ref(),
+                        Utc::now().timestamp_millis()
+                            - state.table_config().log_retention_duration().as_millis() as i64,
+                    )
+                    .await?;
             }
             Ok(state)
         } else {

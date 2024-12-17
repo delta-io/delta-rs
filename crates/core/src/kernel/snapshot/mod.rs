@@ -15,7 +15,7 @@
 //!
 //!
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
@@ -34,10 +34,12 @@ use super::{
     Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
     Transaction,
 };
+use crate::checkpoints::cleanup_expired_logs_for;
 use crate::kernel::parse::read_cdf_adds;
 use crate::kernel::{ActionType, StructType};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
+use crate::protocol::ProtocolError;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -565,6 +567,44 @@ impl EagerSnapshot {
                 "Transactions are not available. Please enable tracking of transactions."
                     .to_string(),
             ))
+    }
+
+    pub async fn clean_up_logs(
+        &mut self,
+        until_version: i64,
+        log_store: &dyn LogStore,
+        cutoff_timestamp: i64,
+    ) -> Result<usize, ProtocolError> {
+        let mut deleted =
+            cleanup_expired_logs_for(until_version, log_store, cutoff_timestamp).await?;
+        let mut survived_files = VecDeque::new();
+
+        while !deleted.is_empty() {
+            if deleted.is_empty() {
+                break;
+            }
+            if self.snapshot.log_segment.commit_files.is_empty() {
+                break;
+            }
+
+            match self.snapshot.log_segment.commit_files.pop_back() {
+                Some(end) => {
+                    if let Ok(idx) = deleted.binary_search(&end.location) {
+                        deleted.remove(idx);
+                    } else {
+                        survived_files.push_front(end.clone());
+                    }
+                }
+                None => (),
+            }
+        }
+
+        self.snapshot
+            .log_segment
+            .commit_files
+            .append(&mut survived_files);
+
+        Ok(deleted.len())
     }
 
     /// Advance the snapshot based on the given commit actions
