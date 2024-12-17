@@ -1,5 +1,7 @@
 use chrono::{DateTime, FixedOffset, Utc};
+use std::fs::{FileTimes, OpenOptions};
 use std::path::Path;
+use std::time::SystemTime;
 
 #[tokio::test]
 async fn time_travel_by_ds() {
@@ -13,8 +15,11 @@ async fn time_travel_by_ds() {
         ("00000000000000000004.json", "2020-05-05T22:47:31-07:00"),
     ];
     for (fname, ds) in log_mtime_pair {
-        let ts = ds_to_ts(ds);
-        utime::set_file_times(Path::new(log_dir).join(fname), ts, ts).unwrap();
+        let ts: SystemTime = ds_to_ts(ds).into();
+        let full_path = Path::new(log_dir).join(fname);
+        let file = OpenOptions::new().write(true).open(full_path).unwrap();
+        let times = FileTimes::new().set_accessed(ts).set_modified(ts);
+        file.set_times(times).unwrap()
     }
 
     let mut table = deltalake_core::open_table_with_ds(
@@ -83,7 +88,7 @@ async fn time_travel_by_ds() {
     assert_eq!(table.version(), 4);
 }
 
-fn ds_to_ts(ds: &str) -> i64 {
+fn ds_to_ts(ds: &str) -> DateTime<Utc> {
     let fixed_dt = DateTime::<FixedOffset>::parse_from_rfc3339(ds).unwrap();
-    DateTime::<Utc>::from(fixed_dt).timestamp()
+    DateTime::<Utc>::from(fixed_dt)
 }

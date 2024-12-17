@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use maplit::hashset;
@@ -86,7 +86,7 @@ impl Metadata {
             configuration,
             name: None,
             description: None,
-            created_time: None,
+            created_time: Some(chrono::Utc::now().timestamp_millis()),
         })
     }
 
@@ -177,7 +177,7 @@ impl Protocol {
         self
     }
 
-    /// Converts existing properties into features if the reader_version is >=3 or writer_version >=3
+    /// Converts existing properties into features if the reader_version is >=3 or writer_version >=7
     /// only converts features that are "true"
     pub fn move_table_properties_into_features(
         mut self,
@@ -187,9 +187,9 @@ impl Protocol {
             let mut converted_writer_features = configuration
                 .iter()
                 .filter(|(_, value)| {
-                    value.as_ref().map_or(false, |v| {
-                        v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
-                    })
+                    value
+                        .as_ref()
+                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 })
                 .collect::<HashMap<&String, &Option<String>>>()
                 .keys()
@@ -212,13 +212,13 @@ impl Protocol {
                 None => self.writer_features = Some(converted_writer_features),
             }
         }
-        if self.min_reader_version > 3 {
+        if self.min_reader_version >= 3 {
             let converted_reader_features = configuration
                 .iter()
                 .filter(|(_, value)| {
-                    value.as_ref().map_or(false, |v| {
-                        v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
-                    })
+                    value
+                        .as_ref()
+                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 })
                 .map(|(key, _)| (*key).clone().into())
                 .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
@@ -726,9 +726,9 @@ impl AsRef<str> for StorageType {
     }
 }
 
-impl ToString for StorageType {
-    fn to_string(&self) -> String {
-        self.as_ref().into()
+impl Display for StorageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
     }
 }
 

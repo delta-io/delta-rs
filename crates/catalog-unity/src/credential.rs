@@ -4,13 +4,12 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderValue, ACCEPT};
-use reqwest::{Client, Method};
+use reqwest::Method;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 
 use super::UnityCatalogError;
-use crate::data_catalog::client::retry::{RetryConfig, RetryExt};
-use crate::data_catalog::client::token::{TemporaryToken, TokenCache};
-use crate::data_catalog::DataCatalogResult;
+use crate::client::token::{TemporaryToken, TokenCache};
 
 // https://learn.microsoft.com/en-us/azure/databricks/dev-tools/api/latest/authentication
 
@@ -37,9 +36,8 @@ pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
     /// get the token
     async fn fetch_token(
         &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> DataCatalogResult<TemporaryToken<String>>;
+        client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError>;
 }
 
 /// Provides credentials for use when signing requests
@@ -95,9 +93,8 @@ impl TokenCredential for ClientSecretOAuthProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> DataCatalogResult<TemporaryToken<String>> {
+        client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError> {
         let response: TokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
@@ -107,10 +104,12 @@ impl TokenCredential for ClientSecretOAuthProvider {
                 ("scope", &format!("{}/.default", DATABRICKS_RESOURCE_SCOPE)),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry(retry)
-            .await?
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?
             .json()
-            .await?;
+            .await
+            .map_err(UnityCatalogError::from)?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -167,9 +166,8 @@ impl TokenCredential for AzureCliCredential {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        _client: &Client,
-        _retry: &RetryConfig,
-    ) -> DataCatalogResult<TemporaryToken<String>> {
+        _client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError> {
         // on window az is a cmd and it should be called like this
         // see https://doc.rust-lang.org/nightly/std/process/struct.Command.html
         let program = if cfg!(target_os = "windows") {
@@ -281,9 +279,8 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> DataCatalogResult<TemporaryToken<String>> {
+        client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| UnityCatalogError::FederatedTokenFile)?;
 
@@ -301,10 +298,12 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
                 ("scope", &format!("{}/.default", DATABRICKS_RESOURCE_SCOPE)),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry(retry)
-            .await?
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?
             .json()
-            .await?;
+            .await
+            .map_err(UnityCatalogError::from)?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -340,7 +339,7 @@ pub struct ImdsManagedIdentityOAuthProvider {
     client_id: Option<String>,
     object_id: Option<String>,
     msi_res_id: Option<String>,
-    client: Client,
+    client: ClientWithMiddleware,
 }
 
 impl ImdsManagedIdentityOAuthProvider {
@@ -350,7 +349,7 @@ impl ImdsManagedIdentityOAuthProvider {
         object_id: Option<String>,
         msi_res_id: Option<String>,
         msi_endpoint: Option<String>,
-        client: Client,
+        client: ClientWithMiddleware,
     ) -> Self {
         let msi_endpoint = msi_endpoint
             .unwrap_or_else(|| "http://169.254.169.254/metadata/identity/oauth2/token".to_owned());
@@ -370,9 +369,8 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        _client: &Client,
-        retry: &RetryConfig,
-    ) -> DataCatalogResult<TemporaryToken<String>> {
+        _client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError> {
         let resource_scope = format!("{}/.default", DATABRICKS_RESOURCE_SCOPE);
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
@@ -403,7 +401,13 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             builder = builder.header("x-identity-header", val);
         };
 
-        let response: MsiTokenResponse = builder.send_retry(retry).await?.json().await?;
+        let response: MsiTokenResponse = builder
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?
+            .json()
+            .await
+            .map_err(UnityCatalogError::from)?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -415,39 +419,27 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_catalog::client::mock_server::MockServer;
-    use futures::executor::block_on;
-    use hyper::body::to_bytes;
-    use hyper::{Body, Response};
-    use reqwest::{Client, Method};
+    use httpmock::prelude::*;
+    use reqwest::Client;
     use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_managed_identity() {
-        let server = MockServer::new();
+        let server = MockServer::start_async().await;
 
         std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
 
-        let endpoint = server.url();
-        let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
 
-        // Test IMDS
-        server.push_fn(|req| {
-            assert_eq!(req.uri().path(), "/metadata/identity/oauth2/token");
-            assert!(req.uri().query().unwrap().contains("client_id=client_id"));
-            assert_eq!(req.method(), &Method::GET);
-            let t = req
-                .headers()
-                .get("x-identity-header")
-                .unwrap()
-                .to_str()
-                .unwrap();
-            assert_eq!(t, "env-secret");
-            let t = req.headers().get("metadata").unwrap().to_str().unwrap();
-            assert_eq!(t, "true");
-            Response::new(Body::from(
-                r#"
+        server
+            .mock_async(|when, then| {
+                when.path("/metadata/identity/oauth2/token")
+                    .query_param("client_id", "client_id")
+                    .method("GET")
+                    .header("x-identity-header", "env-secret")
+                    .header("metadata", "true");
+                then.body(
+                    r#"
             {
                 "access_token": "TOKEN",
                 "refresh_token": "",
@@ -458,45 +450,40 @@ mod tests {
                 "token_type": "Bearer"
               }
             "#,
-            ))
-        });
+                );
+            })
+            .await;
 
         let credential = ImdsManagedIdentityOAuthProvider::new(
             Some("client_id".into()),
             None,
             None,
-            Some(format!("{endpoint}/metadata/identity/oauth2/token")),
+            Some(server.url("/metadata/identity/oauth2/token")),
             client.clone(),
         );
 
-        let token = credential
-            .fetch_token(&client, &retry_config)
-            .await
-            .unwrap();
+        let token = credential.fetch_token(&client).await.unwrap();
 
         assert_eq!(&token.token, "TOKEN");
     }
 
     #[tokio::test]
     async fn test_workload_identity() {
-        let server = MockServer::new();
+        let server = MockServer::start_async().await;
         let tokenfile = NamedTempFile::new().unwrap();
         let tenant = "tenant";
         std::fs::write(tokenfile.path(), "federated-token").unwrap();
 
-        let endpoint = server.url();
-        let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
 
-        // Test IMDS
-        server.push_fn(move |req| {
-            assert_eq!(req.uri().path(), format!("/{tenant}/oauth2/v2.0/token"));
-            assert_eq!(req.method(), &Method::POST);
-            let body = block_on(to_bytes(req.into_body())).unwrap();
-            let body = String::from_utf8(body.to_vec()).unwrap();
-            assert!(body.contains("federated-token"));
-            Response::new(Body::from(
-                r#"
+        server
+            .mock_async(|when, then| {
+                when.path_includes(format!("/{tenant}/oauth2/v2.0/token"))
+                    .method("POST")
+                    .body_includes("federated-token");
+
+                then.body(
+                    r#"
             {
                 "access_token": "TOKEN",
                 "refresh_token": "",
@@ -507,20 +494,18 @@ mod tests {
                 "token_type": "Bearer"
               }
             "#,
-            ))
-        });
+                );
+            })
+            .await;
 
         let credential = WorkloadIdentityOAuthProvider::new(
             "client_id",
             tokenfile.path().to_str().unwrap(),
             tenant,
-            Some(endpoint.to_string()),
+            Some(server.url(format!("/{tenant}/oauth2/v2.0/token"))),
         );
 
-        let token = credential
-            .fetch_token(&client, &retry_config)
-            .await
-            .unwrap();
+        let token = credential.fetch_token(&client).await.unwrap();
 
         assert_eq!(&token.token, "TOKEN");
     }

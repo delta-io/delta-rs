@@ -5,15 +5,10 @@ MATURIN_VERSION := $(shell grep 'requires =' pyproject.toml | cut -d= -f2- | tr 
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
 DAT_VERSION := 0.0.2
 
-.PHONY: setup-venv
-setup-venv: ## Setup the virtualenv
-	$(info --- Setup virtualenv ---)
-	python -m venv $(VENV)
-
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	pip install "$(MATURIN_VERSION)"
+	uv sync --extra devel --extra pandas
 
 .PHONY: setup-dat
 setup-dat: ## Download DAT test files
@@ -28,33 +23,34 @@ setup-dat: ## Download DAT test files
 .PHONY: build
 build: setup ## Build Python binding of delta-rs
 	$(info --- Build Python binding ---)
-	maturin build $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin build $(MATURIN_EXTRA_ARGS)
 
 .PHONY: develop
 develop: setup ## Install Python binding of delta-rs
 	$(info --- Develop with Python binding ---)
-	maturin develop --extras=devel,pandas $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
 	$(info --- Uninstall Python binding ---)
-	pip uninstall -y deltalake
+	uv pip uninstall deltalake
 	$(info --- Install Python binding ---)
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
-	pip install $(TARGET_WHEEL)[devel,pandas]
+	uv pip install $(TARGET_WHEEL)[devel,pandas]
 
 .PHONY: develop-pyspark
-develop-pyspark: setup
+develop-pyspark:
+	uv sync --all-extras
 	$(info --- Develop with Python binding ---)
-	maturin develop --extras=devel,pandas,pyspark $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,pyspark $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	ruff check . --fix
-	ruff format .
+	uv run ruff check . --fix
+	uv run ruff format .
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust
@@ -66,35 +62,35 @@ check-rust: ## Run check on Rust
 .PHONY: check-python
 check-python: ## Run check on Python
 	$(info Check Python format)
-	ruff format --check --diff .
+	uv run ruff format --check --diff .
 	$(info Check Python linting)
-	ruff check .
+	uv run ruff check .
 	$(info Check Python mypy)
-	mypy
+	uv run mypy
 
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	python -m pytest --doctest-modules 
+	uv run pytest --doctest-modules 
 
 .PHONY: test-cov
 test-cov: ## Create coverage report
 	$(info --- Run Python unit-test ---)
-	python -m pytest --doctest-modules --cov --cov-config=pyproject.toml --cov-report=term --cov-report=html
+	uv run pytest --doctest-modules --cov --cov-config=pyproject.toml --cov-report=term --cov-report=html
 
 .PHONY: test-pyspark
 test-pyspark:
-	python -m pytest -m 'pyspark and integration'
+	uv run pytest -m 'pyspark and integration'
 
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx
 	$(info --- Run build of the Sphinx documentation ---)
-	sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
+	uv run sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
 
 .PHONY: build-docs
 build-docs: ## Build documentation with mkdocs
 	$(info --- Run build of the documentation ---)
-	(cd ..; pip install -r docs/requirements.txt; mkdocs build)
+	(cd ..; uv pip install -r docs/requirements.txt; mkdocs build)
 
 .PHONY: clean
 clean: ## Run clean

@@ -1,0 +1,40 @@
+[package]
+name = "deltalake-catalog-unity"
+version = "0.6.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+deltalake-core = { version = "0.22", path = "../core" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+reqwest-retry = "0.7"
+reqwest-middleware = "0.4.0"
+rand = "0.8"
+futures = "0.3"
+chrono = "0.4"
+dashmap = "6"
+tracing = "0.1"
+datafusion = { version = "43", optional = true }
+datafusion-common = { version = "43", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+httpmock = { version = "0.8.0-alpha.1" }
+
+[features]
+default = []
+datafusion = ["dep:datafusion", "datafusion-common"]
+

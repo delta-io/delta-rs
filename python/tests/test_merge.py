@@ -1,9 +1,13 @@
+import datetime
+import os
 import pathlib
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaProtocolError
 from deltalake.table import CommitProperties
 
 
@@ -803,7 +807,10 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
 
     assert last_action["operation"] == "MERGE"
     assert result == data
-    assert last_action["operationParameters"].get("predicate") == "2022-02-01 = date"
+    assert (
+        last_action["operationParameters"].get("predicate")
+        == "'2022-02-01'::date = date"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1038,3 +1045,107 @@ def test_merge_isin_partition_pruning(
     assert result == expected
     assert metrics["num_target_files_scanned"] == 2
     assert metrics["num_target_files_skipped_during_scan"] == 3
+
+
+def test_cdc_merge_planning_union_2908(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/2908"""
+    cdc_path = f"{tmp_path}/_change_data"
+
+    data = {
+        "id": pa.array([1, 2], pa.int64()),
+        "date": pa.array(
+            [datetime.date(1970, 1, 1), datetime.date(1970, 1, 2)], pa.date32()
+        ),
+    }
+
+    table = pa.Table.from_pydict(data)
+
+    dt = DeltaTable.create(
+        table_uri=tmp_path,
+        schema=table.schema,
+        mode="overwrite",
+        partition_by=["id"],
+        configuration={
+            "delta.enableChangeDataFeed": "true",
+        },
+    )
+
+    dt.merge(
+        source=table,
+        predicate="s.id = t.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert_all().execute()
+
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert dt.version() == 1
+    assert os.path.exists(cdc_path), "_change_data doesn't exist"
+
+
+@pytest.mark.pandas
+def test_merge_non_nullable(tmp_path):
+    import re
+
+    import pandas as pd
+
+    from deltalake.schema import Field, PrimitiveType, Schema
+
+    schema = Schema(
+        [
+            Field("id", PrimitiveType("integer"), nullable=False),
+            Field("bool", PrimitiveType("boolean"), nullable=False),
+        ]
+    )
+
+    dt = DeltaTable.create(tmp_path, schema=schema)
+    df = pd.DataFrame(
+        columns=["id", "bool"],
+        data=[
+            [1, True],
+            [2, None],
+            [3, False],
+        ],
+    )
+
+    with pytest.raises(
+        DeltaProtocolError,
+        match=re.escape(
+            'Invariant violations: ["Non-nullable column violation for bool, found 1 null values"]'
+        ),
+    ):
+        dt.merge(
+            source=df,
+            source_alias="s",
+            target_alias="t",
+            predicate="s.id = t.id",
+        ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+
+def test_merge_when_wrong_but_castable_type_passed_while_merge(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["7", "8"]),
+            "price": pa.array(["1", "2"], pa.string()),
+            "sold": pa.array([1, 2], pa.int32()),
+            "deleted": pa.array([False, False]),
+        }
+    )
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert_all().execute()
+
+    table_schema = pq.read_table(
+        tmp_path / dt.get_add_actions().column(0)[0].as_py()
+    ).schema
+    assert table_schema.field("price").type == sample_table["price"].type

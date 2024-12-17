@@ -135,7 +135,7 @@ impl DeleteBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DeleteMetricExtensionPlanner {}
 
 #[async_trait]

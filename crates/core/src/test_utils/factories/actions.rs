@@ -43,7 +43,7 @@ impl ActionFactory {
         partition_columns: Vec<String>,
         data_change: bool,
     ) -> Add {
-        let partitions_schema = partitions_schema(&schema, &partition_columns).unwrap();
+        let partitions_schema = partitions_schema(schema, &partition_columns).unwrap();
         let partition_values = if let Some(p_schema) = partitions_schema {
             let batch = DataFactory::record_batch(&p_schema, 1, &bounds).unwrap();
             p_schema
@@ -76,8 +76,7 @@ impl ActionFactory {
             schema
                 .fields()
                 .filter(|f| !partition_columns.contains(f.name()))
-                .cloned()
-                .collect(),
+                .cloned(),
         );
 
         let batch = DataFactory::record_batch(&data_schema, 10, &bounds).unwrap();

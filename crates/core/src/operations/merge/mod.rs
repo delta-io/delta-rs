@@ -44,7 +44,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
     physical_plan::ExecutionPlan,
-    prelude::{DataFrame, SessionContext},
+    prelude::{cast, DataFrame, SessionContext},
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
@@ -581,7 +581,7 @@ pub struct MergeMetrics {
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct MergeMetricExtensionPlanner {}
 
 #[async_trait]
@@ -990,8 +990,10 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection
-            .push(Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()));
+        write_projection.push(cast(
+            Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
+            delta_field.data_type().try_into()?,
+        ));
         new_columns.push((name, case));
     }
 
@@ -1154,6 +1156,14 @@ async fn execute(
                 .select(write_projection.clone())?
                 .with_column(CDC_COLUMN_NAME, lit("insert"))?,
         );
+
+        let after = cdc_projection
+            .clone()
+            .filter(col(TARGET_COLUMN).is_true())?
+            .select(write_projection.clone())?;
+
+        // Extra select_columns is required so that before and after have same schema order
+        // DataFusion doesn't have UnionByName yet, see https://github.com/apache/datafusion/issues/12650
         let before = cdc_projection
             .clone()
             .filter(col(crate::delta_datafusion::PATH_COLUMN).is_not_null())?
@@ -1164,12 +1174,15 @@ async fn execute(
                     .filter(|c| c.name != crate::delta_datafusion::PATH_COLUMN)
                     .map(|c| Expr::Column(c.clone()))
                     .collect_vec(),
+            )?
+            .select_columns(
+                &after
+                    .schema()
+                    .columns()
+                    .iter()
+                    .map(|v| v.name())
+                    .collect::<Vec<_>>(),
             )?;
-
-        let after = cdc_projection
-            .clone()
-            .filter(col(TARGET_COLUMN).is_true())?
-            .select(write_projection.clone())?;
 
         let tracker = CDCTracker::new(before, after);
         change_data.push(tracker.collect()?);

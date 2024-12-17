@@ -59,6 +59,10 @@ impl S3DynamoDbLogStore {
                 .get(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME)
                 .cloned(),
             s3_options.dynamodb_endpoint.clone(),
+            s3_options.dynamodb_region.clone(),
+            s3_options.dynamodb_access_key_id.clone(),
+            s3_options.dynamodb_secret_access_key.clone(),
+            s3_options.dynamodb_session_token.clone(),
         )
         .map_err(|err| DeltaTableError::ObjectStore {
             source: ObjectStoreError::Generic {
@@ -294,6 +298,10 @@ impl LogStore for S3DynamoDbLogStore {
         } else {
             get_latest_version(self, current_version).await
         }
+    }
+
+    async fn get_earliest_version(&self, current_version: i64) -> DeltaResult<i64> {
+        get_earliest_version(self, current_version).await
     }
 
     fn object_store(&self) -> ObjectStoreRef {

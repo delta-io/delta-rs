@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-hdfs"
-version = "0.4.0"
+version = "0.6.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,8 +12,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.20.0", path = "../core" }
-hdfs-native-object-store = "0.11"
+deltalake-core = { version = "0.22.0", path = "../core" }
+hdfs-native-object-store = "0.12"
 
 # workspace dependecies
 object_store = { workspace = true }
@@ -23,7 +23,7 @@ url = { workspace = true }
 [dev-dependencies]
 serial_test = "3"
 deltalake-test = { path = "../test" }
-which = "6"
+which = "7"
 
 [features]
 integration_test = ["hdfs-native-object-store/integration-test"]

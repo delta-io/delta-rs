@@ -311,6 +311,11 @@ impl DeltaTable {
         self.log_store.get_latest_version(self.version()).await
     }
 
+    /// returns the earliest available version of the table
+    pub async fn get_earliest_version(&self) -> Result<i64, DeltaTableError> {
+        self.log_store.get_earliest_version(self.version()).await
+    }
+
     /// Currently loaded version of the table
     pub fn version(&self) -> i64 {
         self.state.as_ref().map(|s| s.version()).unwrap_or(-1)
@@ -413,7 +418,7 @@ impl DeltaTable {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'_>>> + '_, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
         self.state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?

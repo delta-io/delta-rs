@@ -11,12 +11,15 @@ use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;
 use tracing::error;
 
-use super::models::{GetTableResponse, ListCatalogsResponse, ListTableSummariesResponse};
+use super::models::{
+    GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse,
+};
 use super::{DataCatalogResult, UnityCatalog};
-use crate::data_catalog::models::ListSchemasResponse;
-use crate::DeltaTableBuilder;
+
+use deltalake_core::DeltaTableBuilder;
 
 /// In-memory list of catalogs populated by unity catalog
+#[derive(Debug)]
 pub struct UnityCatalogList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
@@ -55,10 +58,6 @@ impl CatalogProviderList for UnityCatalogList {
         self
     }
 
-    fn catalog_names(&self) -> Vec<String> {
-        self.catalogs.iter().map(|c| c.key().clone()).collect()
-    }
-
     fn register_catalog(
         &self,
         name: String,
@@ -67,12 +66,17 @@ impl CatalogProviderList for UnityCatalogList {
         self.catalogs.insert(name, catalog)
     }
 
+    fn catalog_names(&self) -> Vec<String> {
+        self.catalogs.iter().map(|c| c.key().clone()).collect()
+    }
+
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.catalogs.get(name).map(|c| c.value().clone())
     }
 }
 
 /// A datafusion [`CatalogProvider`] backed by Databricks UnityCatalog
+#[derive(Debug)]
 pub struct UnityCatalogProvider {
     /// Parent catalog for schemas of interest.
     pub schemas: DashMap<String, Arc<dyn SchemaProvider>>,
@@ -124,6 +128,7 @@ impl CatalogProvider for UnityCatalogProvider {
 }
 
 /// A datafusion [`SchemaProvider`] backed by Databricks UnityCatalog
+#[derive(Debug)]
 pub struct UnitySchemaProvider {
     /// UnityCatalog Api client
     client: Arc<UnityCatalog>,

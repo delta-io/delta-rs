@@ -21,6 +21,7 @@
 //! ```
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -91,7 +92,6 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 
-mod find_files;
 mod schema_adapter;
 
 impl From<DeltaTableError> for DataFusionError {
@@ -644,7 +644,15 @@ impl<'a> DeltaScanBuilder<'a> {
         let mut exec_plan_builder = ParquetExecBuilder::new(FileScanConfig {
             object_store_url: self.log_store.object_store_url(),
             file_schema,
-            file_groups: file_groups.into_values().collect(),
+            // If all files were filtered out, we still need to emit at least one partition to
+            // pass datafusion sanity checks.
+            //
+            // See https://github.com/apache/datafusion/issues/11322
+            file_groups: if file_groups.is_empty() {
+                vec![vec![]]
+            } else {
+                file_groups.into_values().collect()
+            },
             statistics: stats,
             projection: self.projection.cloned(),
             limit: self.limit,
@@ -700,7 +708,7 @@ impl TableProvider for DeltaTable {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -740,6 +748,7 @@ impl TableProvider for DeltaTable {
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
+#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     log_store: LogStoreRef,
@@ -789,7 +798,7 @@ impl TableProvider for DeltaTableProvider {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -817,9 +826,12 @@ impl TableProvider for DeltaTableProvider {
 
     fn supports_filters_pushdown(
         &self,
-        _filter: &[&Expr],
+        filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact])
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -1141,11 +1153,12 @@ pub(crate) async fn execute_plan_to_batch(
     Ok(concat_batches(&plan.schema(), data.iter())?)
 }
 
-/// Responsible for checking batches of data conform to table's invariants.
-#[derive(Clone)]
+/// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
+#[derive(Clone, Default)]
 pub struct DeltaDataChecker {
     constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
+    non_nullable_columns: Vec<String>,
     ctx: SessionContext,
 }
 
@@ -1155,6 +1168,7 @@ impl DeltaDataChecker {
         Self {
             invariants: vec![],
             constraints: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1164,6 +1178,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1173,6 +1188,7 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1193,9 +1209,21 @@ impl DeltaDataChecker {
     pub fn new(snapshot: &DeltaTableState) -> Self {
         let invariants = snapshot.schema().get_invariants().unwrap_or_default();
         let constraints = snapshot.table_config().get_constraints();
+        let non_nullable_columns = snapshot
+            .schema()
+            .fields()
+            .filter_map(|f| {
+                if !f.is_nullable() {
+                    Some(f.name().clone())
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
         Self {
             invariants,
             constraints,
+            non_nullable_columns,
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1205,8 +1233,33 @@ impl DeltaDataChecker {
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        self.check_nullability(record_batch)?;
         self.enforce_checks(record_batch, &self.invariants).await?;
         self.enforce_checks(record_batch, &self.constraints).await
+    }
+
+    /// Return true if all the nullability checks are valid
+    fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
+        let mut violations = Vec::new();
+        for col in self.non_nullable_columns.iter() {
+            if let Some(arr) = record_batch.column_by_name(col) {
+                if arr.null_count() > 0 {
+                    violations.push(format!(
+                        "Non-nullable column violation for {col}, found {} null values",
+                        arr.null_count()
+                    ));
+                }
+            } else {
+                violations.push(format!(
+                    "Non-nullable column violation for {col}, not found in batch!"
+                ));
+            }
+        }
+        if !violations.is_empty() {
+            Err(DeltaTableError::InvalidData { violations })
+        } else {
+            Ok(true)
+        }
     }
 
     async fn enforce_checks<C: DataCheck>(
@@ -1358,6 +1411,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 }
 
 /// Responsible for creating deltatables
+#[derive(Debug)]
 pub struct DeltaTableFactory {}
 
 #[async_trait]
@@ -1501,7 +1555,7 @@ fn join_batches_with_add_actions(
 }
 
 /// Determine which files contain a record that satisfies the predicate
-pub(crate) async fn find_files_scan<'a>(
+pub(crate) async fn find_files_scan(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -1614,7 +1668,7 @@ pub(crate) async fn scan_memory_table(
 }
 
 /// Finds files in a snapshot that match the provided predicate.
-pub async fn find_files<'a>(
+pub async fn find_files(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -1764,8 +1818,10 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::StructArray;
-    use arrow_schema::Schema;
+    use crate::operations::write::SchemaMode;
+    use crate::writer::test_utils::get_delta_schema;
+    use arrow::array::StructArray;
+    use arrow::datatypes::{Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::ParquetExec;
@@ -1779,8 +1835,6 @@ mod tests {
     use std::ops::Deref;
 
     use super::*;
-    use crate::operations::write::SchemaMode;
-    use crate::writer::test_utils::get_delta_schema;
 
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
@@ -2565,5 +2619,61 @@ mod tests {
             }
             Ok(true)
         }
+    }
+
+    #[tokio::test]
+    async fn passes_sanity_checker_when_all_files_filtered() {
+        // Run a query that filters out all files and sorts.
+        // Verify that it returns an empty set of rows without panicing.
+        //
+        // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
+        // datafusion rejected.
+        let table = crate::open_table("../test/tests/data/delta-2.2.0-partitioned-types")
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table)).unwrap();
+
+        let df = ctx
+            .sql("select * from test where c3 = 100 ORDER BY c1 ASC")
+            .await
+            .unwrap();
+        let actual = df.collect().await.unwrap();
+
+        assert_eq!(actual.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_nullability() -> DeltaResult<()> {
+        use arrow::array::StringArray;
+
+        let data_checker = DeltaDataChecker {
+            non_nullable_columns: vec!["zed".to_string(), "yap".to_string()],
+            ..Default::default()
+        };
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let nulls: Arc<dyn Array> = Arc::new(StringArray::new_null(1));
+        let batch = RecordBatch::try_from_iter(vec![("a", arr), ("zed", nulls)]).unwrap();
+
+        let result = data_checker.check_nullability(&batch);
+        assert!(
+            result.is_err(),
+            "The result should have errored! {result:?}"
+        );
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter(vec![("zed", arr)]).unwrap();
+        let result = data_checker.check_nullability(&batch);
+        assert!(
+            result.is_err(),
+            "The result should have errored! {result:?}"
+        );
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter(vec![("zed", arr.clone()), ("yap", arr)]).unwrap();
+        let _ = data_checker.check_nullability(&batch)?;
+
+        Ok(())
     }
 }

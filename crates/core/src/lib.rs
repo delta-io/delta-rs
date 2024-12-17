@@ -65,7 +65,7 @@
 //! };
 //! ```
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 
@@ -145,6 +145,7 @@ pub async fn open_table_with_version(
 }
 
 /// Creates a DeltaTable from the given path.
+///
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
 ///

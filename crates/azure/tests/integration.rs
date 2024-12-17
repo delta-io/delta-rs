@@ -1,6 +1,10 @@
 #![cfg(feature = "integration_test")]
 
+use std::assert_eq;
+use std::collections::HashMap;
+
 use bytes::Bytes;
+use deltalake_core::data_catalog::storage::ListingSchemaProvider;
 use deltalake_core::DeltaTableBuilder;
 use deltalake_test::read::read_table_paths;
 use deltalake_test::{test_concurrent_writes, test_read_tables, IntegrationContext, TestResult};
@@ -87,5 +91,44 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
         assert_eq!(&data[..], &expected[range])
     }
 
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestResult {
+    let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
+    // Removing the the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
+    std::env::remove_var("AZURE_STORAGE_USE_EMULATOR");
+    std::env::remove_var("AZURE_STORAGE_ACCOUNT_NAME");
+    std::env::remove_var("AZURE_STORAGE_TOKEN");
+    std::env::remove_var("AZURE_STORAGE_ACCOUNT_KEY");
+
+    let storage_options = HashMap::<String, String>::new();
+    if let Err(read_error) =
+        ListingSchemaProvider::try_new(&context.root_uri(), Some(storage_options))
+    {
+        assert_eq!(read_error.to_string(), "Failed to read delta log object: Generic MicrosoftAzure error: Account must be specified".to_string());
+    };
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn list_delta_tables_using_listing_provider_with_account_name() -> TestResult {
+    let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
+    // Removing the the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
+    std::env::remove_var("AZURE_STORAGE_USE_EMULATOR");
+    std::env::remove_var("AZURE_STORAGE_ACCOUNT_NAME");
+    std::env::remove_var("AZURE_STORAGE_TOKEN");
+    std::env::remove_var("AZURE_STORAGE_ACCOUNT_KEY");
+
+    let mut storage_options = HashMap::<String, String>::new();
+    storage_options.insert("account_name".to_string(), "test_account".to_string());
+    let schema = ListingSchemaProvider::try_new(&context.root_uri(), Some(storage_options));
+    assert!(
+        schema.is_ok(),
+        "Capable of reading the storage options. Fails if e.g. `account_name` is missing"
+    );
     Ok(())
 }
