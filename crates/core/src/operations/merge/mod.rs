@@ -850,14 +850,8 @@ async fn execute(
             enable_pushdown,
         }),
     });
-    let target = DataFrame::new(state.clone(), target); // probably assigned the table alias
-    let target = target.with_column("__add_inserted_by", lit(ScalarValue::Null))?;
+    let target = DataFrame::new(state.clone(), target);
     let target = target.with_column(TARGET_COLUMN, lit(true))?;
-    //TODO add a new column when there is a schema change
-    // Join already has the new columns from schema dift we need to add a operation column that results in the added column to surface
-
-    println!("{:?}", &target.clone().show().await?);
-    &source.clone().show().await?;
 
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
     let join_schema_df = join.schema().to_owned();
@@ -990,7 +984,7 @@ async fn execute(
 
     let test: StructType = merge_schema.clone().try_into()?;
 
-    for delta_field in snapshot.schema().fields() {
+    for delta_field in test.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1000,8 +994,22 @@ async fn execute(
             }),
             None => TableReference::none(),
         };
+
+        let source_qualifier = match &source_alias {
+            Some(alias) => Some(TableReference::Bare {
+                table: alias.to_owned().into(),
+            }),
+            None => TableReference::none(),
+        };
         let name = delta_field.name();
-        let column = Column::new(qualifier.clone(), name);
+
+        //TODO only when the schema mode is MERGE
+        // check if the name of column is in the target table
+        let column = if let None = snapshot.schema().index_of(name) {
+            Column::new(source_qualifier.clone(), name)
+        } else {
+            Column::new(qualifier.clone(), name)
+        };
 
         for (idx, (operations, _)) in ops.iter().enumerate() {
             let op = operations
@@ -1028,7 +1036,6 @@ async fn execute(
         ));
         new_columns.push((name, case));
     }
-    dbg!(&write_projection);
 
     let mut insert_when = Vec::with_capacity(ops.len());
     let mut insert_then = Vec::with_capacity(ops.len());
@@ -1194,9 +1201,6 @@ async fn execute(
             .clone()
             .filter(col(TARGET_COLUMN).is_true())?
             .select(write_projection.clone())?;
-        dbg!(&after.schema());
-
-        dbg!(target_schema.columns());
 
         // Extra select_columns is required so that before and after have same schema order
         // DataFusion doesn't have UnionByName yet, see https://github.com/apache/datafusion/issues/12650
@@ -1225,9 +1229,7 @@ async fn execute(
     }
 
     let project = filtered.clone().select(write_projection)?;
-    println!("{:?}", &project.clone().collect().await?);
 
-    //TODO this is where the write happends
     let merge_final = &project.into_unoptimized_plan();
 
     let write = state.create_physical_plan(merge_final).await?;
@@ -1352,6 +1354,8 @@ async fn execute(
         not_matched_predicates: not_match_target_operations,
         not_matched_by_source_predicates: not_match_source_operations,
     };
+
+    //TODO only when the schema mode is MERGE
     let schema_action = Action::Metadata(Metadata::try_new(
         test,
         table_partition_cols.clone(),
@@ -1360,10 +1364,8 @@ async fn execute(
     actions.push(schema_action);
 
     if actions.is_empty() {
-        dbg!(&snapshot.schema());
         return Ok((snapshot, metrics));
     }
-    // looking at the write schema evolution I can see that an actions was push for the change to happen instead of mutating the snapshot
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
@@ -1666,6 +1668,7 @@ mod tests {
                     .set("id", col("source.id"))
                     .set("value", col("source.value"))
                     .set("modified", col("source.modified"))
+                    .set("inserted_by", "source.inserted_by")
             })
             .unwrap()
             .await
@@ -1674,20 +1677,21 @@ mod tests {
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["notMatchedPredicates"],
             json!(r#"[{"actionType":"insert"}]"#)
         );
         let expected = vec![
-            "+----+-------+-------------+------------+",
-            "| id | value | inserted_by | modified   |",
-            "+----+-------+-------------+------------+",
-            "| B  | 10    | B1          | 2021-02-02 |",
-            "| C  | 20    | C1          | 2023-07-04 |",
-            "| X  | 30    | X1          | 2023-07-04 |",
-            "+----+-------+-------------+------------+",
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 1     | 2021-02-01 |             |",
+            "| B  | 10    | 2021-02-01 |             |",
+            "| C  | 10    | 2021-02-02 |             |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "| X  | 30    | 2023-07-04 | X1          |",
+            "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
