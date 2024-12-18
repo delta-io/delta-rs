@@ -228,7 +228,7 @@ pub trait LogStore: Sync + Send {
     async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64>;
 
     /// Get the list of actions for the next commit
-    async fn peek_next_commit(&self, current_version: i64) -> Result<PeekCommit, DeltaTableError> {
+    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
         let next_version = current_version + 1;
         let commit_log_bytes = match self.read_commit_entry(next_version).await {
             Ok(Some(bytes)) => Ok(bytes),
