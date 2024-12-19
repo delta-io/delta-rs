@@ -162,6 +162,16 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
+/// The next commit that's available from underlying storage
+///
+#[derive(Debug)]
+pub enum PeekCommit {
+    /// The next commit version and associated actions
+    New(i64, Vec<Action>),
+    /// Provided DeltaVersion is up to date
+    UpToDate,
+}
+
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -216,6 +226,19 @@ pub trait LogStore: Sync + Send {
 
     /// Find earliest version currently stored in the delta log.
     async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64>;
+
+    /// Get the list of actions for the next commit
+    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
+        let next_version = current_version + 1;
+        let commit_log_bytes = match self.read_commit_entry(next_version).await {
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => return Ok(PeekCommit::UpToDate),
+            Err(err) => Err(err),
+        }?;
+
+        let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
+        Ok(PeekCommit::New(next_version, actions.unwrap()))
+    }
 
     /// Get underlying object store.
     fn object_store(&self) -> Arc<dyn ObjectStore>;

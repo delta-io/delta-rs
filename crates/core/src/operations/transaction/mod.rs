@@ -82,7 +82,7 @@ use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
 use serde_json::Value;
-use tracing::warn;
+use tracing::*;
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
@@ -566,12 +566,51 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             }
 
             // unwrap() is safe here due to the above check
-            // TODO: refactor to only depend on TableReference Trait
             let read_snapshot = this.table_data.unwrap().eager_snapshot();
 
             let mut attempt_number = 1;
             while attempt_number <= this.max_retries {
-                let version = read_snapshot.version() + attempt_number as i64;
+                let latest_version = this
+                    .log_store
+                    .get_latest_version(read_snapshot.version())
+                    .await?;
+
+                if latest_version > read_snapshot.version() {
+                    warn!("Attempting to write a transaction {} but the underlying table has been updated to {latest_version}\n{:?}", read_snapshot.version() + 1, this.log_store);
+                    let mut steps = latest_version - read_snapshot.version();
+
+                    // Need to check for conflicts with each version between the read_snapshot and
+                    // the latest!
+                    while steps != 0 {
+                        let summary = WinningCommitSummary::try_new(
+                            this.log_store.as_ref(),
+                            latest_version - steps,
+                            (latest_version - steps) + 1,
+                        )
+                        .await?;
+                        let transaction_info = TransactionInfo::try_new(
+                            read_snapshot,
+                            this.data.operation.read_predicate(),
+                            &this.data.actions,
+                            this.data.operation.read_whole_table(),
+                        )?;
+                        let conflict_checker = ConflictChecker::new(
+                            transaction_info,
+                            summary,
+                            Some(&this.data.operation),
+                        );
+
+                        match conflict_checker.check_conflicts() {
+                            Ok(_) => {}
+                            Err(err) => {
+                                return Err(TransactionError::CommitConflict(err).into());
+                            }
+                        }
+                        steps -= 1;
+                    }
+                }
+                let version: i64 = latest_version + 1;
+
                 match this
                     .log_store
                     .write_commit_entry(version, commit_or_bytes.clone())
@@ -594,34 +633,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         });
                     }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
-                        let summary = WinningCommitSummary::try_new(
-                            this.log_store.as_ref(),
-                            version - 1,
-                            version,
-                        )
-                        .await?;
-                        let transaction_info = TransactionInfo::try_new(
-                            read_snapshot,
-                            this.data.operation.read_predicate(),
-                            &this.data.actions,
-                            this.data.operation.read_whole_table(),
-                        )?;
-                        let conflict_checker = ConflictChecker::new(
-                            transaction_info,
-                            summary,
-                            Some(&this.data.operation),
-                        );
-                        match conflict_checker.check_conflicts() {
-                            Ok(_) => {
-                                attempt_number += 1;
-                            }
-                            Err(err) => {
-                                this.log_store
-                                    .abort_commit_entry(version, commit_or_bytes)
-                                    .await?;
-                                return Err(TransactionError::CommitConflict(err).into());
-                            }
-                        };
+                        error!("The transaction {version} already exists, will retry!");
+                        // If the version already exists, loop through again and re-check
+                        // conflicts
+                        attempt_number += 1;
                     }
                     Err(err) => {
                         this.log_store
