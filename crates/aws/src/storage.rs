@@ -142,7 +142,9 @@ fn is_aws(options: &StorageOptions) -> bool {
     if options.0.contains_key(constants::AWS_S3_LOCKING_PROVIDER) {
         return true;
     }
-    !options.0.contains_key(constants::AWS_ENDPOINT_URL)
+    // Options at this stage should only contain 'aws_endpoint' in lowercase
+    // due to with_env_s3
+    !(options.0.contains_key("aws_endpoint") || options.0.contains_key(constants::AWS_ENDPOINT_URL))
 }
 
 /// Options used to configure the [S3StorageBackend].
@@ -819,9 +821,15 @@ mod tests {
         let options = StorageOptions::from(minio);
         assert!(!is_aws(&options));
 
+        let minio: HashMap<String, String> = hashmap! {
+            "aws_endpoint".to_string() => "http://minio:8080".to_string(),
+        };
+        let options = StorageOptions::from(minio);
+        assert!(!is_aws(&options));
+
         let localstack: HashMap<String, String> = hashmap! {
             constants::AWS_FORCE_CREDENTIAL_LOAD.to_string() => "true".to_string(),
-            constants::AWS_ENDPOINT_URL.to_string() => "http://minio:8080".to_string(),
+            "aws_endpoint".to_string() => "http://minio:8080".to_string(),
         };
         let options = StorageOptions::from(localstack);
         assert!(is_aws(&options));
