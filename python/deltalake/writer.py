@@ -320,25 +320,38 @@ def write_deltalake(
             conversion_mode=ArrowSchemaConversionMode.PASSTHROUGH,
         )
         data = RecordBatchReader.from_batches(schema, (batch for batch in data))
-        write_deltalake_rust(
-            table_uri=table_uri,
-            data=data,
-            partition_by=partition_by,
-            mode=mode,
-            table=table._table if table is not None else None,
-            schema_mode=schema_mode,
-            predicate=predicate,
-            target_file_size=target_file_size,
-            name=name,
-            description=description,
-            configuration=configuration,
-            storage_options=storage_options,
-            writer_properties=writer_properties,
-            commit_properties=commit_properties,
-            post_commithook_properties=post_commithook_properties,
-        )
         if table:
-            table.update_incremental()
+            table._table.write(
+                data=data,
+                partition_by=partition_by,
+                mode=mode,
+                schema_mode=schema_mode,
+                predicate=predicate,
+                target_file_size=target_file_size,
+                name=name,
+                description=description,
+                configuration=configuration,
+                writer_properties=writer_properties,
+                commit_properties=commit_properties,
+                post_commithook_properties=post_commithook_properties,
+            )
+        else:
+            write_deltalake_rust(
+                table_uri=table_uri,
+                data=data,
+                partition_by=partition_by,
+                mode=mode,
+                schema_mode=schema_mode,
+                predicate=predicate,
+                target_file_size=target_file_size,
+                name=name,
+                description=description,
+                configuration=configuration,
+                storage_options=storage_options,
+                writer_properties=writer_properties,
+                commit_properties=commit_properties,
+                post_commithook_properties=post_commithook_properties,
+            )
     elif engine == "pyarrow":
         warnings.warn(
             "pyarrow engine is deprecated and will be removed in v1.0",
