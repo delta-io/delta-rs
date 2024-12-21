@@ -1054,6 +1054,7 @@ fn partitioned_file_from_action(
         range: None,
         extensions: None,
         statistics: None,
+        metadata_size_hint: None,
     }
 }
 
@@ -1821,6 +1822,7 @@ mod tests {
     use crate::operations::write::SchemaMode;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
+    use arrow::datatypes::DataType;
     use arrow::datatypes::{Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
@@ -1948,6 +1950,7 @@ mod tests {
             range: None,
             extensions: None,
             statistics: None,
+            metadata_size_hint: None,
         };
         assert_eq!(file.partition_values, ref_file.partition_values)
     }

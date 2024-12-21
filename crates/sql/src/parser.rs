@@ -224,9 +224,9 @@ impl<'a> DeltaParser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_sql::sqlparser::ast::Ident;
-
     use super::*;
+    use datafusion_sql::sqlparser::ast::Ident;
+    use datafusion_sql::sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DeltaParser::parse_sql(sql)?;
@@ -245,6 +245,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: None,
             dry_run: false,
@@ -255,6 +256,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: Some(10),
             dry_run: false,
@@ -265,6 +267,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: Some(10),
             dry_run: true,
@@ -275,6 +278,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: None,
             dry_run: true,
