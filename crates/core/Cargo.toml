@@ -96,7 +96,7 @@ tracing = { workspace = true }
 rand = "0.8"
 z85 = "3.0.5"
 maplit = "1"
-sqlparser = { version = "0.52.0" }
+sqlparser = { version = "0.53.0" }
 
 [dev-dependencies]
 criterion = "0.5"
