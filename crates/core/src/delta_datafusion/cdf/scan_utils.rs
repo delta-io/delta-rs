@@ -84,7 +84,6 @@ pub fn create_partition_values<F: FileAction>(
                 extensions: None,
                 range: None,
                 statistics: None,
-                metadata_size_hint: None,
             };
 
             file_groups.entry(new_part_values).or_default().push(part);
