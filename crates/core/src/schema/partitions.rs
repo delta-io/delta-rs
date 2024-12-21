@@ -3,11 +3,14 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{ArrayData, BinaryOperator, Expression, Scalar, UnaryOperator};
+use delta_kernel::schema::{ArrayType, Schema};
+use delta_kernel::DeltaResult as KernelResult;
 use serde::{Serialize, Serializer};
 
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, DataType, PrimitiveType};
+use crate::DeltaResult;
 
 /// A special value used in Hive to represent the null partition in partitioned tables
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -78,6 +81,53 @@ pub struct PartitionFilter {
     pub value: PartitionValue,
 }
 
+fn filter_to_expression(filter: &PartitionFilter, schema: &Schema) -> DeltaResult<Expression> {
+    let field = schema.field(&filter.key).ok_or_else(|| {
+        DeltaTableError::generic(format!(
+            "Partition column not defined in schema: {}",
+            &filter.key
+        ))
+    })?;
+    let col = Expression::column([field.name().as_str()]);
+    let partion_type = field.data_type().as_primitive_opt().ok_or_else(|| {
+        DeltaTableError::InvalidPartitionFilter {
+            partition_filter: filter.key.to_string(),
+        }
+    })?;
+    let to_literal = |value: &str| -> KernelResult<_> {
+        Ok(Expression::literal(partion_type.parse_scalar(value)?))
+    };
+
+    match &filter.value {
+        PartitionValue::Equal(value) => Ok(col.eq(to_literal(value.as_str())?)),
+        PartitionValue::NotEqual(value) => Ok(Expression::unary(
+            UnaryOperator::Not,
+            col.eq(to_literal(value.as_str())?),
+        )),
+        PartitionValue::GreaterThan(value) => Ok(col.gt(to_literal(value.as_str())?)),
+        PartitionValue::GreaterThanOrEqual(value) => Ok(col.gt_eq(to_literal(value.as_str())?)),
+        PartitionValue::LessThan(value) => Ok(col.lt(to_literal(value.as_str())?)),
+        PartitionValue::LessThanOrEqual(value) => Ok(col.lt_eq(to_literal(value.as_str())?)),
+        PartitionValue::In(values) | PartitionValue::NotIn(values) => {
+            let values = values
+                .iter()
+                .map(|v| partion_type.parse_scalar(v))
+                .collect::<KernelResult<Vec<_>>>()?;
+            let array = Expression::literal(Scalar::Array(ArrayData::new(
+                ArrayType::new(field.data_type().clone(), false),
+                values,
+            )));
+            match &filter.value {
+                PartitionValue::In(_) => Ok(Expression::binary(BinaryOperator::In, col, array)),
+                PartitionValue::NotIn(_) => {
+                    Ok(Expression::binary(BinaryOperator::NotIn, col, array))
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
 fn compare_typed_value(
     partition_value: &Scalar,
     filter_value: &str,
@@ -95,6 +145,10 @@ fn compare_typed_value(
 
 /// Partition filters methods for filtering the DeltaTable partitions.
 impl PartitionFilter {
+    pub fn to_expression(&self, schema: &Schema) -> DeltaResult<Expression> {
+        filter_to_expression(self, schema)
+    }
+
     /// Indicates if a DeltaTable partition matches with the partition filter by key and value.
     pub fn match_partition(&self, partition: &DeltaTablePartition, data_type: &DataType) -> bool {
         if self.key != partition.key {

@@ -3,14 +3,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_select::filter::filter_record_batch;
 use chrono::{DateTime, Utc};
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::{Expression, ExpressionHandler};
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
 
 use super::super::scalars::ScalarExt;
+use super::super::ARROW_HANDLER;
 use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
     DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
@@ -338,6 +341,7 @@ pub struct FileStatsAccessor<'a> {
     stats: &'a StructArray,
     deletion_vector: Option<DeletionVector<'a>>,
     partition_values: &'a MapArray,
+    partition_values_parsed: Option<&'a StructArray>,
     length: usize,
     pointer: usize,
 }
@@ -353,6 +357,8 @@ impl<'a> FileStatsAccessor<'a> {
         let modification_times = extract_and_cast::<Int64Array>(data, "add.modificationTime")?;
         let stats = extract_and_cast::<StructArray>(data, "add.stats_parsed")?;
         let partition_values = extract_and_cast::<MapArray>(data, "add.partitionValues")?;
+        let partition_values_parsed =
+            extract_and_cast_opt::<StructArray>(data, "add.partitionValues_parsed");
         let partition_fields = Arc::new(
             metadata
                 .partition_columns
@@ -398,6 +404,7 @@ impl<'a> FileStatsAccessor<'a> {
             stats,
             deletion_vector,
             partition_values,
+            partition_values_parsed,
             length: data.num_rows(),
             pointer: 0,
         })
@@ -434,6 +441,30 @@ impl<'a> Iterator for FileStatsAccessor<'a> {
         let file_stats = self.get(self.pointer).unwrap();
         self.pointer += 1;
         Some(file_stats)
+    }
+}
+
+pub struct LogDataIterator<'a> {
+    data: &'a RecordBatch,
+    pointer: usize,
+}
+
+impl<'a> LogDataIterator<'a> {
+    pub(crate) fn new(data: &'a RecordBatch) -> Self {
+        Self { data, pointer: 0 }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.data.num_rows()
+    }
+
+    pub fn path(&self) -> &str {
+        let paths = self
+            .data
+            .column_by_name("path")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .unwrap();
+        paths.value(self.pointer)
     }
 }
 

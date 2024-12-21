@@ -9,7 +9,7 @@ use std::sync::Arc;
 use arrow_array::types::{Date32Type, TimestampMicrosecondType};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, NullArray,
-    StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    RecordBatch, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
 };
 use arrow_cast::cast;
 use arrow_cast::parse::Parser;
@@ -23,7 +23,7 @@ use crate::kernel::{Add, DataType as DeltaDataType, StructType};
 use crate::protocol::{ColumnCountStat, ColumnValueStat, Stats};
 
 impl DeltaTableState {
-    /// Get an [arrow::record_batch::RecordBatch] containing add action data.
+    /// Get an [RecordBatch] containing add action data.
     ///
     /// # Arguments
     ///
@@ -50,10 +50,7 @@ impl DeltaTableState {
     /// * `max.{col_name}` (matches column type): maximum value of column in file
     ///   (if available).
     /// * `tag.{tag_key}` (String): value of a metadata tag for the file.
-    pub fn add_actions_table(
-        &self,
-        flatten: bool,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+    pub fn add_actions_table(&self, flatten: bool) -> Result<RecordBatch, DeltaTableError> {
         let files = self.file_actions()?;
         let mut paths = arrow::array::StringBuilder::with_capacity(
             files.len(),
@@ -133,14 +130,14 @@ impl DeltaTableState {
             );
         }
 
-        Ok(arrow::record_batch::RecordBatch::try_from_iter(arrays)?)
+        Ok(RecordBatch::try_from_iter(arrays)?)
     }
 
     fn partition_columns_as_batch(
         &self,
         flatten: bool,
         files: &Vec<Add>,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+    ) -> Result<RecordBatch, DeltaTableError> {
         let metadata = self.metadata();
         let column_mapping_mode = self.table_config().column_mapping_mode();
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
@@ -172,7 +169,6 @@ impl DeltaTableState {
             .collect::<HashMap<&str, _>>();
 
         validate_schema_column_mapping(self.schema(), column_mapping_mode)?;
-
         let physical_name_to_logical_name = match column_mapping_mode {
             ColumnMappingMode::None => HashMap::with_capacity(0), // No column mapping, no need for this HashMap
             ColumnMappingMode::Id | ColumnMappingMode::Name => metadata
@@ -258,16 +254,14 @@ impl DeltaTableState {
             }
         };
 
-        Ok(arrow::record_batch::RecordBatch::try_from_iter(
-            partition_columns,
-        )?)
+        Ok(RecordBatch::try_from_iter(partition_columns)?)
     }
 
     fn tags_as_batch(
         &self,
         flatten: bool,
         files: &Vec<Add>,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+    ) -> Result<RecordBatch, DeltaTableError> {
         let tag_keys: HashSet<&str> = files
             .iter()
             .flat_map(|add| add.tags.as_ref().map(|tags| tags.keys()))
@@ -306,7 +300,7 @@ impl DeltaTableState {
         // Sorted for consistent order
         arrays.sort_by(|(key1, _), (key2, _)| key1.cmp(key2));
         if flatten {
-            Ok(arrow::record_batch::RecordBatch::try_from_iter(
+            Ok(RecordBatch::try_from_iter(
                 arrays
                     .into_iter()
                     .map(|(key, array)| (format!("tags.{key}"), array)),
@@ -316,7 +310,7 @@ impl DeltaTableState {
                 .into_iter()
                 .map(|(key, array)| (Field::new(key, array.data_type().clone(), true), array))
                 .unzip();
-            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
+            Ok(RecordBatch::try_from_iter(vec![(
                 "tags",
                 Arc::new(StructArray::new(Fields::from(fields), arrays, None)) as ArrayRef,
             )])?)
@@ -327,7 +321,7 @@ impl DeltaTableState {
         &self,
         flatten: bool,
         files: &Vec<Add>,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+    ) -> Result<RecordBatch, DeltaTableError> {
         let capacity = files.len();
         let mut storage_type = arrow::array::StringBuilder::with_capacity(capacity, 1);
         let mut path_or_inline_div = arrow::array::StringBuilder::with_capacity(capacity, 64);
@@ -355,7 +349,7 @@ impl DeltaTableState {
             }
         }
         if flatten {
-            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![
+            Ok(RecordBatch::try_from_iter(vec![
                 (
                     "deletionVector.storageType",
                     Arc::new(storage_type.finish()) as ArrayRef,
@@ -378,7 +372,7 @@ impl DeltaTableState {
                 ),
             ])?)
         } else {
-            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
+            Ok(RecordBatch::try_from_iter(vec![(
                 "deletionVector",
                 Arc::new(StructArray::new(
                     Fields::from(vec![
@@ -401,10 +395,7 @@ impl DeltaTableState {
         }
     }
 
-    fn stats_as_batch(
-        &self,
-        flatten: bool,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+    fn stats_as_batch(&self, flatten: bool) -> Result<RecordBatch, DeltaTableError> {
         let stats: Vec<Option<Stats>> = self
             .file_actions_iter()?
             .map(|f| {
@@ -628,9 +619,7 @@ impl DeltaTableState {
             }
         }
 
-        Ok(arrow::record_batch::RecordBatch::try_from_iter(
-            out_columns,
-        )?)
+        Ok(RecordBatch::try_from_iter(out_columns)?)
     }
 }
 
@@ -689,7 +678,7 @@ impl<'a> SchemaLeafIterator<'a> {
     }
 }
 
-impl<'a> std::iter::Iterator for SchemaLeafIterator<'a> {
+impl<'a> Iterator for SchemaLeafIterator<'a> {
     type Item = (Vec<&'a str>, &'a DeltaDataType);
 
     fn next(&mut self) -> Option<Self::Item> {

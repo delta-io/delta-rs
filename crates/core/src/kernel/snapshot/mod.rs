@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
+use delta_kernel::Expression;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
