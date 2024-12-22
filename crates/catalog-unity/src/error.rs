@@ -10,7 +10,6 @@ pub enum UnityCatalogError {
     },
 
     /// A generic error qualified in the message
-
     #[error("{source}")]
     Retry {
         /// Error message
@@ -19,7 +18,6 @@ pub enum UnityCatalogError {
     },
 
     #[error("Request error: {source}")]
-
     /// Error from reqwest library
     RequestError {
         /// The underlying reqwest_middleware::Error
@@ -35,7 +33,6 @@ pub enum UnityCatalogError {
     },
 
     /// Error caused by invalid access token value
-
     #[error("Invalid Databricks personal access token")]
     InvalidAccessToken,
 }

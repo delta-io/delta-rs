@@ -1215,10 +1215,7 @@ pub(super) mod zorder {
         use url::Url;
 
         use ::datafusion::{
-            execution::{
-                memory_pool::FairSpillPool,
-                runtime_env::{RuntimeConfig, RuntimeEnv},
-            },
+            execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder},
             prelude::{SessionConfig, SessionContext},
         };
         use arrow_schema::DataType;
@@ -1245,8 +1242,9 @@ pub(super) mod zorder {
                 let columns = columns.into();
 
                 let memory_pool = FairSpillPool::new(max_spill_size);
-                let config = RuntimeConfig::new().with_memory_pool(Arc::new(memory_pool));
-                let runtime = Arc::new(RuntimeEnv::try_new(config)?);
+                let runtime = RuntimeEnvBuilder::new()
+                    .with_memory_pool(Arc::new(memory_pool))
+                    .build_arc()?;
                 runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
 
                 let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);

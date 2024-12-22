@@ -1825,7 +1825,6 @@ mod tests {
     use crate::storage::ObjectStoreRef;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
-    use arrow::datatypes::DataType;
     use arrow::datatypes::{Field, Schema};
     use arrow_array::cast::AsArray;
     use bytes::Bytes;
