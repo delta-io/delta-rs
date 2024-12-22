@@ -570,13 +570,16 @@ mod tests {
             .unwrap()
             .log_data()
             .into_iter()
-            .flat_map(|add| {
-                add.partition_values()
-                    .unwrap()
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.clone()))
-                    .collect::<Vec<_>>()
+            .filter_map(|add| {
+                add.partition_values_scalar().map(|pv| {
+                    pv.fields()
+                        .iter()
+                        .zip(pv.values().iter())
+                        .map(|(k, v)| (k.name().to_owned(), v.clone()))
+                        .collect::<Vec<_>>()
+                })
             })
+            .flatten()
             .collect::<Vec<_>>();
         partition_values.sort_by_key(|(k, v)| (k.clone(), v.serialize()));
         assert_eq!(partition_values, expected_partition_values);

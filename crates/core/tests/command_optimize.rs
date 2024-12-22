@@ -5,7 +5,7 @@ use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use deltalake_core::errors::DeltaTableError;
-use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
+use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructDataExt, StructField};
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
@@ -246,7 +246,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
         .get_active_add_actions_by_partitions(&filter)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(partition_adds.len(), 1);
-    let partition_values = partition_adds[0].partition_values()?;
+    let partition_values = partition_adds[0].partition_values_scalar().unwrap();
     assert_eq!(
         partition_values.get("date"),
         Some(&delta_kernel::expressions::Scalar::String(

@@ -27,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{Scalar, StructData};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -394,12 +394,9 @@ enum OptimizeOperations {
     ///
     /// Bins are determined by the bin-packing algorithm to reach an optimal size.
     /// Files that are large enough already are skipped. Bins of size 1 are dropped.
-    Compact(HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)>),
+    Compact(HashMap<String, (StructData, Vec<MergeBin>)>),
     /// Plan to Z-order each partition
-    ZOrder(
-        Vec<String>,
-        HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
-    ),
+    ZOrder(Vec<String>, HashMap<String, (StructData, MergeBin)>),
     // TODO: Sort
 }
 
@@ -706,9 +703,15 @@ impl MergePlan {
                         .try_flatten()
                         .boxed();
 
+                    let pv_map = partition
+                        .fields()
+                        .iter()
+                        .zip(partition.values())
+                        .map(|(k, v)| (k.name().to_owned(), v.clone()))
+                        .collect::<IndexMap<_, _>>();
                     let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                         self.task_parameters.clone(),
-                        partition,
+                        pv_map,
                         files,
                         log_store.object_store().clone(),
                         futures::future::ready(Ok(batch_stream)),
@@ -742,9 +745,15 @@ impl MergePlan {
                 futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
                         let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
+                        let pv_map = partition
+                            .fields()
+                            .iter()
+                            .zip(partition.values())
+                            .map(|(k, v)| (k.name().to_owned(), v.clone()))
+                            .collect::<IndexMap<_, _>>();
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
-                            partition,
+                            pv_map,
                             files,
                             log_store.object_store(),
                             batch_stream,
@@ -932,8 +941,7 @@ fn build_compaction_plan(
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<ObjectMeta>)> =
-        HashMap::new();
+    let mut partition_files: HashMap<String, (StructData, Vec<ObjectMeta>)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
         metrics.total_considered_files += 1;
@@ -943,13 +951,11 @@ fn build_compaction_plan(
             continue;
         }
         let partition_values = add
-            .partition_values()?
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<IndexMap<_, _>>();
+            .partition_values_scalar()
+            .unwrap_or_else(|| StructData::try_new(vec![], vec![]).unwrap());
 
         partition_files
-            .entry(add.partition_values()?.hive_partition_path())
+            .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, vec![]))
             .1
             .push(object_meta);
@@ -960,7 +966,7 @@ fn build_compaction_plan(
         file.sort_by(|a, b| b.size.cmp(&a.size));
     }
 
-    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    let mut operations: HashMap<String, (StructData, Vec<MergeBin>)> = HashMap::new();
     for (part, (partition, files)) in partition_files {
         let mut merge_bins = vec![MergeBin::new()];
 
@@ -1037,14 +1043,12 @@ fn build_zorder_plan(
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
+    let mut partition_files: HashMap<String, (StructData, MergeBin)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
         let partition_values = add
-            .partition_values()?
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<IndexMap<_, _>>();
+            .partition_values_scalar()
+            .unwrap_or_else(|| StructData::try_new(vec![], vec![]).unwrap());
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;
 

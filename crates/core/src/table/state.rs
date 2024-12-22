@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use chrono::Utc;
 use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
@@ -27,7 +28,7 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
-    /// Create a new DeltaTableState
+    /// Create a new [`DeltaTableState`]
     pub async fn try_new(
         table_root: &Path,
         store: Arc<dyn ObjectStore>,

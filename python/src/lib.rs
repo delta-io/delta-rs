@@ -29,7 +29,8 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
+    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructDataExt, StructType,
+    Transaction,
 };
 use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::add_feature::AddTableFeatureBuilder;
@@ -963,8 +964,13 @@ impl RawDeltaTable {
                         .flat_map(|col| {
                             Ok::<_, PythonError>((
                                 *col,
-                                add.partition_values()
-                                    .map_err(PythonError::from)?
+                                add.partition_values_scalar()
+                                    .ok_or_else(|| {
+                                        PythonError::DeltaTable(DeltaTableError::generic(format!(
+                                            "Partition value missing for column: {}",
+                                            col
+                                        )))
+                                    })?
                                     .get(*col)
                                     .map(|v| v.serialize()),
                             ))
@@ -1026,14 +1032,13 @@ impl RawDeltaTable {
                             deletion_timestamp: Some(current_timestamp()),
                             data_change: true,
                             extended_file_metadata: Some(true),
-                            partition_values: Some(
-                                old_add
-                                    .partition_values()
-                                    .map_err(PythonError::from)?
+                            partition_values: old_add.partition_values_scalar().map(|pv| {
+                                pv.fields()
                                     .iter()
+                                    .zip(pv.values().iter())
                                     .map(|(k, v)| {
                                         (
-                                            k.to_string(),
+                                            k.name().to_owned(),
                                             if v.is_null() {
                                                 None
                                             } else {
@@ -1041,8 +1046,8 @@ impl RawDeltaTable {
                                             },
                                         )
                                     })
-                                    .collect(),
-                            ),
+                                    .collect()
+                            }),
                             size: Some(old_add.size()),
                             deletion_vector: None,
                             tags: None,
@@ -1509,9 +1514,9 @@ fn filestats_to_expression_next<'py>(
             .call_method1("cast", (column_type,))
     };
 
-    if let Ok(partitions_values) = file_info.partition_values() {
-        for (column, value) in partitions_values.iter() {
-            let column = column.to_string();
+    if let Some(pv) = file_info.partition_values_scalar() {
+        for (field, value) in pv.fields().iter().zip(pv.values().iter()) {
+            let column = field.name().to_owned();
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
