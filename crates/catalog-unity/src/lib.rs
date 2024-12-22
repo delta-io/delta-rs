@@ -1,12 +1,11 @@
 //! Databricks Unity Catalog.
-use std::str::FromStr;
-
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
+use std::str::FromStr;
 
 use crate::credential::{AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider};
 use crate::models::{
-    GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
-    ListTableSummariesResponse,
+    ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
+    ListTableSummariesResponse, TableTempCredentialsResponse, TemporaryTableCredentialsRequest,
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
@@ -19,8 +18,8 @@ pub mod client;
 pub mod credential;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
-pub mod error;
 pub mod models;
+pub mod prelude;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
@@ -71,6 +70,19 @@ pub enum UnityCatalogError {
 
     #[error("Missing or corrupted federated token file for WorkloadIdentity.")]
     FederatedTokenFile,
+
+    #[cfg(feature = "datafusion")]
+    #[error("Datafusion error: {0}")]
+    DatafusionError(#[from] datafusion_common::DataFusionError),
+}
+
+impl From<ErrorResponse> for UnityCatalogError {
+    fn from(value: ErrorResponse) -> Self {
+        UnityCatalogError::InvalidTable {
+            error_code: value.error_code,
+            message: value.message,
+        }
+    }
 }
 
 impl From<UnityCatalogError> for DataCatalogError {
@@ -348,6 +360,7 @@ impl UnityCatalogBuilder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("UNITY_") || key.starts_with("DATABRICKS_") {
+                    tracing::info!("Found relevant env: {}", key);
                     if let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
                     {
@@ -619,6 +632,39 @@ impl UnityCatalog {
             .await?;
 
         Ok(resp.json().await?)
+    }
+
+    pub async fn get_temp_table_credentials(
+        &self,
+        catalog_id: impl AsRef<str>,
+        database_name: impl AsRef<str>,
+        table_name: impl AsRef<str>,
+    ) -> Result<TableTempCredentialsResponse, UnityCatalogError> {
+        let token = self.get_credential().await?;
+        let table_info = self
+            .get_table(catalog_id, database_name, table_name)
+            .await?;
+        let response = match table_info {
+            GetTableResponse::Success(table) => {
+                let request = TemporaryTableCredentialsRequest::new(&table.table_id, "READ");
+                Ok(self
+                    .client
+                    .post(format!(
+                        "{}/temporary-table-credentials",
+                        self.catalog_url()
+                    ))
+                    .header(AUTHORIZATION, token)
+                    .json(&request)
+                    .send()
+                    .await?)
+            }
+            GetTableResponse::Error(err) => Err(UnityCatalogError::InvalidTable {
+                error_code: err.error_code,
+                message: err.message,
+            }),
+        }?;
+
+        Ok(response.json().await?)
     }
 }
 

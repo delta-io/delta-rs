@@ -1,18 +1,31 @@
 //! Api models for databricks unity catalog APIs
-
-use core::fmt;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-use serde::Deserialize;
+use std::fmt;
 
 /// Error response from unity API
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct ErrorResponse {
     /// The error code
     pub error_code: String,
     /// The error message
     pub message: String,
+    #[serde(default)]
+    pub details: Vec<ErrorDetails>,
 }
+
+#[derive(Deserialize, Default, Debug)]
+#[serde(default)]
+pub struct ErrorDetails {
+    #[serde(rename = "@type")]
+    tpe: String,
+    reason: String,
+    domain: String,
+    metadata: HashMap<String, String>,
+    request_id: String,
+    serving_data: String,
+}
+
 impl fmt::Display for ErrorResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "[{}] {}", self.error_code, self.message)
@@ -21,20 +34,21 @@ impl fmt::Display for ErrorResponse {
 impl std::error::Error for ErrorResponse {}
 
 /// List catalogs response
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum ListCatalogsResponse {
     /// Successful response
     Success {
         /// The schemas within the parent catalog
         catalogs: Vec<Catalog>,
+        next_page_token: Option<String>,
     },
     /// Error response
     Error(ErrorResponse),
 }
 
 /// List schemas response
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum ListSchemasResponse {
     /// Successful response
@@ -47,7 +61,7 @@ pub enum ListSchemasResponse {
 }
 
 /// Get table response
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum GetTableResponse {
     /// Successful response
@@ -57,7 +71,7 @@ pub enum GetTableResponse {
 }
 
 /// List schemas response
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum GetSchemaResponse {
     /// Successful response
@@ -67,7 +81,7 @@ pub enum GetSchemaResponse {
 }
 
 /// List table summaries response
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum ListTableSummariesResponse {
     /// Successful response
@@ -82,18 +96,25 @@ pub enum ListTableSummariesResponse {
     Error(ErrorResponse),
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum TableTempCredentialsResponse {
+    Success(TemporaryTableCredentials),
+    Error(ErrorResponse),
+}
+
+#[derive(Deserialize, Default, Debug)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Whether the current securable is accessible from all workspaces or a specific set of workspaces.
-pub enum IsomationMode {
+pub enum IsolationMode {
     #[default]
     Undefined,
     Open,
     Isolated,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// The type of the catalog.
@@ -106,67 +127,62 @@ pub enum CatalogType {
 }
 
 /// A catalog within a metastore
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
+#[serde(default)]
 pub struct Catalog {
-    /// Username of schema creator.
-    #[serde(default)]
     pub created_by: String,
-
-    /// Name of schema, relative to parent catalog.
     pub name: String,
-
-    /// Username of user who last modified schema.
-    #[serde(default)]
     pub updated_by: String,
-
-    #[serde(default)]
-    /// Whether the current securable is accessible from all workspaces or a specific set of workspaces.
-    pub isolation_mode: IsomationMode,
-
-    #[serde(default)]
-    /// The type of the catalog.
+    pub isolation_mode: IsolationMode,
     pub catalog_type: CatalogType,
-
-    /// Storage root URL for managed tables within catalog.
     pub storage_root: String,
-
-    /// The name of delta sharing provider.
-    ///
-    /// A Delta Sharing catalog is a catalog that is based on a Delta share on a remote sharing server.
-    pub provider_name: Option<String>,
-
-    /// Storage Location URL (full path) for managed tables within catalog.
+    pub provider_name: String,
     pub storage_location: String,
-
-    /// A map of key-value properties attached to the securable.
-    #[serde(default)]
     pub properties: HashMap<String, String>,
-
-    /// The name of the share under the share provider.
-    pub share_name: Option<String>,
-
-    /// User-provided free-form text description.
-    #[serde(default)]
+    pub share_name: String,
     pub comment: String,
-
-    /// Time at which this schema was created, in epoch milliseconds.
-    #[serde(default)]
     pub created_at: i64,
-
-    /// Username of current owner of schema.
-    #[serde(default)]
     pub owner: String,
-
-    /// Time at which this schema was created, in epoch milliseconds.
-    #[serde(default)]
     pub updated_at: i64,
-
-    /// Unique identifier of parent metastore.
     pub metastore_id: String,
+    pub enabled_predictive_optimization: String,
+    pub effective_predictive_optimization_flag: EffectivePredictiveOptimizationFlag,
+    pub connection_name: String,
+    pub full_name: String,
+    pub options: HashMap<String, String>,
+    pub securable_type: String,
+    pub provisioning_info: ProvisioningInfo,
+    pub browse_only: Option<bool>,
+    pub accessible_in_current_workspace: bool,
+    pub id: String,
+    pub securable_kind: String,
+    pub delta_sharing_valid_through_timestamp: u64,
+}
+
+#[derive(Deserialize, Default, Debug)]
+pub struct ProvisioningInfo {
+    state: ProvisioningState,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub enum ProvisioningState {
+    #[default]
+    Provisioning,
+    Active,
+    Failed,
+    Deleting,
+    Updating,
+}
+
+#[derive(Deserialize, Default, Debug)]
+pub struct EffectivePredictiveOptimizationFlag {
+    pub value: String,
+    pub inherited_from_type: String,
+    pub inherited_from_name: String,
 }
 
 /// A schema within a catalog
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 pub struct Schema {
     /// Username of schema creator.
     #[serde(default)]
@@ -220,7 +236,7 @@ pub struct Schema {
     pub metastore_id: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
@@ -238,7 +254,7 @@ pub enum DataSourceFormat {
     Deltasharing,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
@@ -252,7 +268,7 @@ pub enum TableType {
     StreamingTable,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 /// Summary of the table
 pub struct TableSummary {
     /// The full name of the table.
@@ -262,37 +278,122 @@ pub struct TableSummary {
 }
 
 /// A table within a schema
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
+#[serde(default)]
 pub struct Table {
-    /// Username of table creator.
-    #[serde(default)]
-    pub created_by: String,
-
-    /// Name of table, relative to parent schema.
     pub name: String,
-
-    /// Username of user who last modified the table.
-    #[serde(default)]
-    pub updated_by: String,
-
-    /// List of schemes whose objects can be referenced without qualification.
-    #[serde(default)]
-    pub sql_path: String,
-
-    /// Data source format
-    pub data_source_format: DataSourceFormat,
-
-    /// Full name of table, in form of catalog_name.schema_name.table_name
-    pub full_name: String,
-
-    /// Name of parent schema relative to its parent catalog.
+    pub catalog_name: String,
     pub schema_name: String,
-
-    /// Storage root URL for table (for MANAGED, EXTERNAL tables)
+    pub table_type: TableType,
+    pub data_source_format: DataSourceFormat,
     pub storage_location: String,
-
-    /// Unique identifier of parent metastore.
+    pub view_definition: String,
+    pub sql_path: String,
+    pub owner: String,
+    pub comment: String,
+    pub properties: HashMap<String, String>,
+    pub storage_credential_name: String,
+    pub enable_predictive_optimization: String,
     pub metastore_id: String,
+    pub full_name: String,
+    pub created_at: u64,
+    pub created_by: String,
+    pub updated_at: u64,
+    pub updated_by: String,
+    pub deleted_at: u64,
+    pub table_id: String,
+    pub delta_runtime_properties_kvpairs: DeltaRuntimeProperties,
+    pub effective_predictive_optimization_flag: EffectivePredictiveOptimizationFlag,
+    pub access_point: String,
+    pub pipeline_id: String,
+    pub browse_only: bool,
+}
+
+#[derive(Deserialize, Default, Debug)]
+#[serde(default)]
+pub struct DeltaRuntimeProperties {
+    pub delta_runtime_properties: HashMap<String, String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TemporaryTableCredentials {
+    pub aws_temp_credentials: Option<AwsTempCredentials>,
+    pub azure_user_delegation_sas: Option<AzureUserDelegationSas>,
+    pub gcp_oauth_token: Option<GcpOauthToken>,
+    pub r2_temp_credentials: Option<R2TempCredentials>,
+    #[serde(with = "chrono::serde::ts_milliseconds")]
+    pub expiration_time: chrono::DateTime<chrono::Utc>,
+    pub url: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct AwsTempCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+    pub access_point: Option<String>,
+}
+
+#[cfg(feature = "aws")]
+impl From<AwsTempCredentials> for HashMap<String, String> {
+    fn from(value: AwsTempCredentials) -> Self {
+        let mut result = HashMap::from_iter([
+            (
+                deltalake_aws::constants::AWS_ACCESS_KEY_ID.to_string(),
+                value.access_key_id,
+            ),
+            (
+                deltalake_aws::constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                value.secret_access_key,
+            ),
+        ]);
+        if let Some(st) = value.session_token {
+            result.insert(deltalake_aws::constants::AWS_SESSION_TOKEN.to_string(), st);
+        }
+        if let Some(ap) = value.access_point {
+            result.insert(deltalake_aws::constants::AWS_ENDPOINT_URL.to_string(), ap);
+        }
+        result
+    }
+}
+
+#[cfg(feature = "azure")]
+impl From<AzureUserDelegationSas> for HashMap<String, String> {
+    fn from(value: AzureUserDelegationSas) -> Self {
+        HashMap::from_iter([("azure_storage_sas_key".to_string(), value.sas_token)])
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct AzureUserDelegationSas {
+    pub sas_token: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct GcpOauthToken {
+    pub oauth_token: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct R2TempCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct TemporaryTableCredentialsRequest {
+    pub table_id: String,
+    pub operation: String,
+}
+
+impl TemporaryTableCredentialsRequest {
+    pub fn new(table_id: &str, operation: &str) -> Self {
+        Self {
+            table_id: table_id.to_string(),
+            operation: operation.to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
