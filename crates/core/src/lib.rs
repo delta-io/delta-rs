@@ -548,7 +548,11 @@ mod tests {
         let path = "../test/tests/data/simple_table_with_checkpoint";
         let mut table = crate::open_table_with_version(path, 9).await.unwrap();
         assert_eq!(table.version(), 9);
-        let peek = table.peek_next_commit(table.version()).await.unwrap();
+        let peek = table
+            .log_store()
+            .peek_next_commit(table.version())
+            .await
+            .unwrap();
         assert!(matches!(peek, PeekCommit::New(..)));
 
         if let PeekCommit::New(version, actions) = peek {
@@ -570,7 +574,11 @@ mod tests {
                 )));
         };
 
-        let peek = table.peek_next_commit(table.version()).await.unwrap();
+        let peek = table
+            .log_store()
+            .peek_next_commit(table.version())
+            .await
+            .unwrap();
         assert!(matches!(peek, PeekCommit::UpToDate));
     }
 
