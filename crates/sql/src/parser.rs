@@ -5,7 +5,7 @@ use datafusion_sql::parser::{DFParser, Statement as DFStatement};
 use datafusion_sql::sqlparser::ast::{ObjectName, Value};
 use datafusion_sql::sqlparser::dialect::{keywords::Keyword, Dialect, GenericDialect};
 use datafusion_sql::sqlparser::parser::{Parser, ParserError};
-use datafusion_sql::sqlparser::tokenizer::{Token, TokenWithLocation, Tokenizer};
+use datafusion_sql::sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -129,7 +129,7 @@ impl<'a> DeltaParser<'a> {
     }
 
     /// Report an unexpected token
-    fn expected<T>(&self, expected: &str, found: TokenWithLocation) -> Result<T, ParserError> {
+    fn expected<T>(&self, expected: &str, found: TokenWithSpan) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
