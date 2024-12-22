@@ -201,9 +201,10 @@ impl FromStr for UnityCatalogConfigKey {
     #[allow(deprecated)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "access_token" | "unity_access_token" | "databricks_access_token" => {
-                Ok(UnityCatalogConfigKey::AccessToken)
-            }
+            "access_token"
+            | "unity_access_token"
+            | "databricks_access_token"
+            | "databricks_token" => Ok(UnityCatalogConfigKey::AccessToken),
             "authority_host" | "unity_authority_host" | "databricks_authority_host" => {
                 Ok(UnityCatalogConfigKey::AuthorityHost)
             }

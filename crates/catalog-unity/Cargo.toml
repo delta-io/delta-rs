@@ -39,7 +39,7 @@ httpmock = { version = "0.8.0-alpha.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
-default = []
+default = ["datafusion", "aws"]
 aws = ["deltalake-aws"]
 azure = ["deltalake-azure"]
 datafusion = ["dep:datafusion", "datafusion-common", "deltalake-core/datafusion", "moka"]
