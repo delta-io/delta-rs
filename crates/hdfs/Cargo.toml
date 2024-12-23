@@ -25,7 +25,7 @@ serial_test = "3"
 deltalake-test = { path = "../test" }
 which = "7"
 # 0.5.11 and later require Rust 1.81
-home = "=0.5.9"
+home = "=0.5.11"
 
 [features]
 integration_test = ["hdfs-native-object-store/integration-test"]
