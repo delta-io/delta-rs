@@ -21,7 +21,7 @@ If you want to claim an issue to work on, you can write the word `take` as a com
     python -m venv .venv
     ```
 
-- Build the project for development (this requires an active virtual environment and will also install `deltalake` in that virtual environment)
+- Build the project for development (this requires an active virtual environment and will also install `deltalake` in that virtual environment. [Uv](https://github.com/astral-sh/uv) packet manager needs to be installed)
     ```sh
     cd python
     make develop
