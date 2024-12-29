@@ -24,6 +24,55 @@ You can easily write a DataFrame to a Delta table.
     df.write_delta("tmp/some-table")
     ```
 
+=== "Rust"
+
+    ```rust
+    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await.unwrap();
+    let mut table = delta_ops
+        .create()
+        .with_table_name("some-table")
+        .with_save_mode(SaveMode::Overwrite)
+        .with_columns(
+            StructType::new(vec![
+                StructField::new(
+                    "num".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ),
+                StructField::new(
+                    "letter".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    true,
+                ),
+            ])
+            .fields()
+            .cloned(),
+        )
+        .await
+        .unwrap();
+
+    let mut record_batch_writer =
+        deltalake::writer::RecordBatchWriter::for_table(&mut table).unwrap();
+    record_batch_writer
+        .write(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    arrow::datatypes::Field::new("num", arrow::datatypes::DataType::Int32, false),
+                    arrow::datatypes::Field::new("letter", arrow::datatypes::DataType::Utf8, false),
+                ])),
+                vec![
+                    Arc::new(datafusion::arrow::array::Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(datafusion::arrow::array::StringArray::from(vec![
+                        "a", "b", "c",
+                    ])),
+                ],
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    ```
+
 Here are the contents of the Delta table in storage:
 
 ```
