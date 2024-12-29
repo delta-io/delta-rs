@@ -2,6 +2,8 @@
 
 Reading the CDF data from a table with change data is easy.
 
+The `delta.enableChangeDataFeed` configuration needs to be set to `true` when creating the delta table.
+
 ## Reading CDF Log
 
 {{ code_example('read_cdf', None, []) }}

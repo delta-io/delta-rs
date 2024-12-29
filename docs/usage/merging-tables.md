@@ -41,41 +41,105 @@ You can define the rules for the update using the `updates` keyword. If a `predi
 
 For example, let’s update the value of a column in the target table based on a matching row in the source table.
 
-```python
-from deltalake import DeltaTable, write_deltalake
-import pyarrow as pa
+=== "Python"
+    ```python
+    from deltalake import DeltaTable, write_deltalake
+    import pyarrow as pa
 
-# define target table
-> target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-> write_deltalake("tmp_table", target_data)
-> dt = DeltaTable("tmp_table")
-> dt.to_pandas().sort_values("x", ignore_index=True)
+    # define target table
+    > target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+    > write_deltalake("tmp_table", target_data)
+    > dt = DeltaTable("tmp_table")
+    > dt.to_pandas().sort_values("x", ignore_index=True)
 
-   x  y
-0  1  4
-1  2  5
-2  3  6
+    x  y
+    0  1  4
+    1  2  5
+    2  3  6
 
-# define source table
-> source_data = pa.table({"x": [2, 3], "y": [5,8]})
-> source_data
+    # define source table
+    > source_data = pa.table({"x": [2, 3], "y": [5,8]})
+    > source_data
 
-   x  y
-0  2  5
-1  3  8
+    x  y
+    0  2  5
+    1  3  8
 
-# define merge logic
-> (
->     dt.merge(
->         source=source_data,
->         predicate="target.x = source.x",
->         source_alias="source",
->         target_alias="target")
->     .when_matched_update(
->         updates={"x": "source.x", "y":"source.y"})
->     .execute()
-> )
-```
+    # define merge logic
+    > (
+    >     dt.merge(
+    >         source=source_data,
+    >         predicate="target.x = source.x",
+    >         source_alias="source",
+    >         target_alias="target")
+    >     .when_matched_update(
+    >         updates={"x": "source.x", "y":"source.y"})
+    >     .execute()
+    > )
+    ```
+
+=== "Rust"
+    ```rust
+    // define target table
+    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await?;
+    let mut table = delta_ops
+        .create()
+        .with_table_name("some-table")
+        .with_save_mode(SaveMode::Overwrite)
+        .with_columns(
+            StructType::new(vec![
+                StructField::new(
+                    "x".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ),
+                StructField::new(
+                    "y".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ),
+            ])
+            .fields()
+            .cloned(),
+        )
+        .await?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", arrow::datatypes::DataType::Int32, true),
+        Field::new("y", arrow::datatypes::DataType::Int32, true),
+    ]));
+    let mut record_batch_writer = deltalake::writer::RecordBatchWriter::for_table(&mut table)?;
+    record_batch_writer
+        .write(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+            ],
+        )?)
+        .await?;
+
+    record_batch_writer.flush_and_commit(&mut table).await?;
+
+    let ctx = SessionContext::new();
+    let source_data = ctx.read_batch(RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![2, 3])),
+            Arc::new(Int32Array::from(vec![5, 6])),
+        ],
+    )?)?;
+
+    DeltaOps(table)
+        .merge(source_data, "target.x = source.x")
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .when_matched_update(|update| 
+            update
+            .update("x", "source.x")
+            .update("y", "source.y"))?
+        .await?;
+    ```
 
 First, we match rows for which the `x` values are the same using `predicate="target.x = source.x"`. We then update the `x` and `y` values of the matched row with the new (source) values using `updates={"x": "source.x", "y":"source.y"}`.
 
@@ -99,51 +163,119 @@ Use [`when_not_matched_insert`][deltalake.table.TableMerger.when_not_matched_ins
 
 For example, let’s say we start with the same target table:
 
-```python
-> target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-> write_deltalake("tmp_table", target_data)
-> dt = DeltaTable("tmp_table")
+=== "Python"
+    ```python
+    > target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+    > write_deltalake("tmp_table", target_data)
+    > dt = DeltaTable("tmp_table")
 
-   x  y
-0  1  4
-1  2  5
-2  3  6
-```
+    x  y
+    0  1  4
+    1  2  5
+    2  3  6
+    ```
+=== "Rust"
+    ```rust
+    let delta_ops = DeltaOps::try_from_uri("./data/simple_table").await?;
+    let mut table = delta_ops
+        .create()
+        .with_table_name("some-table")
+        .with_save_mode(SaveMode::Overwrite)
+        .with_columns(
+            StructType::new(vec![
+                StructField::new(
+                    "x".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ),
+                StructField::new(
+                    "y".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                ),
+            ])
+            .fields()
+            .cloned(),
+        )
+        .await?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", arrow::datatypes::DataType::Int32, true),
+        Field::new("y", arrow::datatypes::DataType::Int32, true),
+    ]));
+    let mut record_batch_writer = deltalake::writer::RecordBatchWriter::for_table(&mut table)?;
+    record_batch_writer
+        .write(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+            ],
+        )?)
+        .await?;
+
+    record_batch_writer.flush_and_commit(&mut table).await?;
+    ```
 
 And we want to merge only new records from our source data, without duplication:
 
-```python
-> source_data = pa.table({"x": [2,3,7], "y": [4,5,8]})
+=== "Python"
+    ```python
+    > source_data = pa.table({"x": [2,3,7], "y": [4,5,8]})
 
-   x  y
-0  2  5
-1  3  6
-2  7  8
-```
+    x  y
+    0  2  5
+    1  3  6
+    2  7  8
+    ```
+=== "Rust"
+    ```rust
+        let ctx = SessionContext::new();
+    let source_data = ctx.read_batch(RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![2, 3])),
+            Arc::new(Int32Array::from(vec![5, 6])),
+        ],
+    )?)?;
+    ```
+
 
 The `MERGE` syntax would be as follows:
 
-```python
-(
-    dt.merge(
-        source=source_data,
-        predicate="target.x = source.x",
-        source_alias="source",
-        target_alias="target")
+== "Python"
+    ```python
+    (
+        dt.merge(
+            source=source_data,
+            predicate="target.x = source.x",
+            source_alias="source",
+            target_alias="target")
+        .when_not_matched_insert(
+            updates={"x": "source.x", "y":"source.y"})
+        .execute()
+    )
+
+    > # inspect result
+    > print(dt.to_pandas().sort_values("x", ignore_index=True))
+
+    x  y
+    0  1  4
+    1  2  5
+    2  3  6
+    3  7  8
+    ```
+
+=== "Rust"
+    ```rust
+    DeltaOps(table)
+    .merge(source_data, "target.x = source.x")
+    .with_source_alias("source")
+    .with_target_alias("target")
     .when_not_matched_insert(
-        updates={"x": "source.x", "y":"source.y"})
-    .execute()
-)
-
-> # inspect result
-> print(dt.to_pandas().sort_values("x", ignore_index=True))
-
-   x  y
-0  1  4
-1  2  5
-2  3  6
-3  7  8
-```
+        |insert| insert.set("x", "source.x").set("y", "source.y")
+    )?.await?;
+    ```
 
 The new row has been successfully added to the target dataset.
 
@@ -164,18 +296,29 @@ source_data = pa.table({"x": [2, 3], "deleted": [False, True]})
 
 You can delete the rows that match a predicate (in this case `"deleted" = True`) using:
 
-```python
-(
-    dt.merge(
-        source=source_data,
-        predicate="target.x = source.x",
-        source_alias="source",
-        target_alias="target")
+=== "Python"
+    ```python
+    (
+        dt.merge(
+            source=source_data,
+            predicate="target.x = source.x",
+            source_alias="source",
+            target_alias="target")
+        .when_matched_delete(
+            predicate="source.deleted = true")
+        .execute()
+    )
+    ```
+=== "Rust"
+    ```rust
+    DeltaOps(table)
+    .merge(source_data, "target.x = source.x")
+    .with_source_alias("source")
+    .with_target_alias("target")
     .when_matched_delete(
-        predicate="source.deleted = true")
-    .execute()
-)
-```
+        |delete| delete.predicate("source.deleted = true")
+    )?.await?;
+    ```
 
 This will result in:
 
@@ -197,25 +340,41 @@ To perform an upsert operation, use `when_matched_update` and `when_not_matched_
 
 For example:
 
-```python
-target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-write_deltalake("tmp_table", target_data)
-dt = DeltaTable("tmp_table")
-source_data = pa.table({"x": [2, 3, 5], "y": [5, 8, 11]})
+=== "Python"
 
-(
-    dt.merge(
-        source=source_data,
-        predicate="target.x = source.x",
-        source_alias="source",
-        target_alias="target")
+    ```python
+    target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+    write_deltalake("tmp_table", target_data)
+    dt = DeltaTable("tmp_table")
+    source_data = pa.table({"x": [2, 3, 5], "y": [5, 8, 11]})
+
+    (
+        dt.merge(
+            source=source_data,
+            predicate="target.x = source.x",
+            source_alias="source",
+            target_alias="target")
+        .when_matched_update(
+            updates={"x": "source.x", "y":"source.y"})
+        .when_not_matched_insert(
+            updates={"x": "source.x", "y":"source.y"})
+        .execute()
+    )
+    ```
+=== "Rust"
+    ```rust
+    DeltaOps(table)
+    .merge(source_data, "target.x = source.x")
+    .with_source_alias("source")
+    .with_target_alias("target")
     .when_matched_update(
-        updates={"x": "source.x", "y":"source.y"})
+        |update| update.update("x", "source.x").update("y", "source.y"),
+    )?
     .when_not_matched_insert(
-        updates={"x": "source.x", "y":"source.y"})
-    .execute()
-)
-```
+        |insert| insert.set("x", "source.x").set("y", "source.y"),
+    )?
+    .await?;
+    ```
 
 This will give you the following output:
 
@@ -235,21 +394,38 @@ Use the [`when_matched_delete`][deltalake.table.TableMerger.when_matched_delete]
 
 For example, given the same `target_data` and `source_data` used in the section above:
 
-```python
-(
-    dt.merge(
-        source=source_data,
-        predicate="target.x = source.x",
-        source_alias="source",
-        target_alias="target")
+=== "Python"
+    ```python
+    (
+        dt.merge(
+            source=source_data,
+            predicate="target.x = source.x",
+            source_alias="source",
+            target_alias="target")
+        .when_matched_update(
+            updates={"x": "source.x", "y":"source.y"})
+        .when_not_matched_insert(
+            updates={"x": "source.x", "y":"source.y"})
+        .when_not_matched_by_source_delete()
+        .execute()
+    )
+    ```
+=== "Rust"
+    ```rust
+    DeltaOps(table)
+    .merge(source_data, "target.x = source.x")
+    .with_source_alias("source")
+    .with_target_alias("target")
     .when_matched_update(
-        updates={"x": "source.x", "y":"source.y"})
+        |update| update.update("x", "source.x").update("y", "source.y"),
+    )?
     .when_not_matched_insert(
-        updates={"x": "source.x", "y":"source.y"})
-    .when_not_matched_by_source_delete()
-    .execute()
-)
-```
+        |insert| insert.set("x", "source.x").set("y", "source.y"),
+    )?
+    .when_not_matched_by_source_delete(|delete| delete)?
+    .await?;
+    ```
+
 
 This will result in:
 
