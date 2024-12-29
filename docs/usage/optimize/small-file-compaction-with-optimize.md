@@ -16,55 +16,172 @@ Let’s start by creating a Delta table with a lot of small files so we can demo
 
 Start by writing a function that generates on thousand rows of random data given a timestamp.
 
-```python
-def record_observations(date: datetime) -> pa.Table:
-    """Pulls data for a certain datetime"""
-    nrows = 1000
-    return pa.table(
-        {
-            "date": pa.array([date.date()] * nrows),
-            "timestamp": pa.array([date] * nrows),
-            "value": pc.random(nrows),
-        }
-    )
-```
+=== "Python"
+    ```python
+    def record_observations(date: datetime) -> pa.Table:
+        """Pulls data for a certain datetime"""
+        nrows = 1000
+        return pa.table(
+            {
+                "date": pa.array([date.date()] * nrows),
+                "timestamp": pa.array([date] * nrows),
+                "value": pc.random(nrows),
+            }
+        )
+    ```
+
+=== "Rust"
+    ```rust
+    pub fn record_observations(timestamp: DateTime<Utc>) -> RecordBatch {
+        let nrows = 1000;
+        let date = timestamp.date_naive();
+        let timestamp = timestamp;
+        let value = (0..nrows)
+            .map(|_| rand::random::<f64>())
+            .collect::<Vec<f64>>();
+        let date = (0..nrows).map(|_| date).collect::<Vec<NaiveDate>>();
+        let timestamp = (0..nrows)
+            .map(|_| timestamp.timestamp_micros())
+            .collect::<Vec<i64>>();
+
+        let schema = Schema::new(vec![
+            Field::new("date", arrow::datatypes::DataType::Date32, false),
+            Field::new(
+                "timestamp",
+                arrow::datatypes::DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into())),
+                false,
+            ),
+            Field::new("value", arrow::datatypes::DataType::Float64, false),
+        ]);
+
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Date32Array::from(
+                    date.iter()
+                        .map(|d| Date32Type::from_naive_date(*d))
+                        .collect::<Vec<i32>>(),
+                )),
+                Arc::new(TimestampMicrosecondArray::from(timestamp).with_timezone("UTC")),
+                Arc::new(Float64Array::from(value)),
+            ],
+        )
+        .unwrap()
+    }
+    ```
 
 Let’s run this function and observe the output:
 
-```python
-record_observations(datetime(2021, 1, 1, 12)).to_pandas()
+=== "Python"
+    ```python
+    record_observations(datetime(2021, 1, 1, 12)).to_pandas()
 
-	date				timestamp	value
-0	2021-01-01	2021-01-01 12:00:00	0.3186397383362023
-1	2021-01-01	2021-01-01 12:00:00	0.04253766974259088
-2	2021-01-01	2021-01-01 12:00:00	0.9355682965171573
-…
-999	2021-01-01	2021-01-01 12:00:00	0.23207037062879843
-```
+      date				timestamp	value
+    0	2021-01-01	2021-01-01 12:00:00	0.3186397383362023
+    1	2021-01-01	2021-01-01 12:00:00	0.04253766974259088
+    2	2021-01-01	2021-01-01 12:00:00	0.9355682965171573
+    …
+    999	2021-01-01	2021-01-01 12:00:00	0.23207037062879843
+    ```
+
+=== "Rust"
+    ```rust
+    let batch = record_observations("2021-01-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap());
+    println!("{}", pretty_format_batches(&vec![batch])?);
+    // +------------+---------------------+------------------------+
+    // | date       | timestamp           | value                  |
+    // +------------+---------------------+------------------------+
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.4061923494886005     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.9987878410434536     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.5731950954440364     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.44535166836074713    |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.7122994421129841     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.09947198303405769    |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.02835490232344251    |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.565059582551305      |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.2149121627261419     |
+    // ...
+
+    ```
 
 Let’s write 100 hours worth of data to the Delta table.
 
-```python
-# Every hour starting at midnight on 2021-01-01
-hours_iter = (datetime(2021, 1, 1) + timedelta(hours=i) for i in itertools.count())
+=== "Python"
 
-# Write 100 hours worth of data
-for timestamp in itertools.islice(hours_iter, 100):
-    write_deltalake(
-        "observation_data",
-        record_observations(timestamp),
-        partition_by=["date"],
-        mode="append",
-    )
-```
+    ```python
+    # Every hour starting at midnight on 2021-01-01
+    hours_iter = (datetime(2021, 1, 1) + timedelta(hours=i) for i in itertools.count())
+
+    # Write 100 hours worth of data
+    for timestamp in itertools.islice(hours_iter, 100):
+        write_deltalake(
+            "observation_data",
+            record_observations(timestamp),
+            partition_by=["date"],
+            mode="append",
+        )
+    ```
+
+=== "Rust"
+    ```rust
+    let mut table = DeltaOps::try_from_uri("observation_data")
+      .await?
+      .create()
+      .with_table_name("observations_data")
+      .with_columns(
+          StructType::new(vec![
+              StructField::new(
+                  "date".to_string(),
+                  DataType::Primitive(PrimitiveType::Date),
+                  false,
+              ),
+              StructField::new(
+                  "timestamp".to_string(),
+                  DataType::Primitive(PrimitiveType::Timestamp),
+                  false,
+              ),
+              StructField::new(
+                  "value".to_string(),
+                  DataType::Primitive(PrimitiveType::Double),
+                  false,
+              ),
+          ])
+          .fields()
+          .cloned(),
+      )
+      .with_partition_columns(vec!["date"])
+      .with_save_mode(SaveMode::Append)
+      .await?;
+
+    let hours_iter = (0..).map(|i| {
+        "2021-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::hours(i)
+    });
+
+    // write 100 hours worth of data
+    for timestamp in hours_iter.take(100) {
+        let batch = record_observations(timestamp);
+        let mut writer =  deltalake::writer::RecordBatchWriter::for_table(&table)?;
+        writer
+            .write(batch)
+            .await?;
+        writer.flush_and_commit(&mut table).await?;
+    }
+    ```
 
 This data was appended to the Delta table in 100 separate transactions, so the table will contain 100 transaction log entries and 100 data files.  You can see the number of files with the `files()` method.
 
-```python
-dt = DeltaTable("observation_data")
-len(dt.files()) # 100
-```
+=== "Python"
+    ```python
+    dt = DeltaTable("observation_data")
+    len(dt.files()) # 100
+    ```
 
+=== "Rust"
+    ```rust
+    let table = open_table("observation_data").await?;
+    let files = table.get_files_iter()?;
+    println!("len: {}", files.count()); // len: 100
+    ```
 Here’s how the files are persisted in storage.
 
 ```
@@ -101,11 +218,19 @@ Each of these Parquet files are tiny - they’re only 10 KB.  Let’s see how to
 
 Let’s run the optimize command to compact the existing small files into larger files:
 
-```python
-dt = DeltaTable("observation_data")
+=== "Python"
+    ```python
+    dt = DeltaTable("observation_data")
 
-dt.optimize.compact()
-```
+    dt.optimize.compact()
+    ```
+
+=== "Rust"
+    ```rust
+    let table = open_table("observation_data").await?;
+    let (table, metrics) = DeltaOps(table).optimize().with_type(OptimizeType::Compact).await?;
+    println!("{:?}", metrics);
+    ```
 
 Here’s the output of the command:
 
@@ -137,36 +262,93 @@ Let’s append some more data to the Delta table and see how we can selectively 
 
 Let’s append another 24 hours of data to the Delta table:
 
-```python
-for timestamp in itertools.islice(hours_iter, 24):
-    write_deltalake(
-        dt,
-        record_observations(timestamp),
-        partition_by=["date"],
-        mode="append",
-    )
-```
+=== "Python"
+    ```python
+    for timestamp in itertools.islice(hours_iter, 24):
+        write_deltalake(
+            dt,
+            record_observations(timestamp),
+            partition_by=["date"],
+            mode="append",
+        )
+    ```
+=== "Rust"
+    ```rust
+    let mut table = open_table("observation_data").await?;
+    let hours_iter = (0..).map(|i| {
+        "2021-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::hours(i)
+    });
+    for timestamp in hours_iter.skip(100).take(24) {
+        let batch = record_observations(timestamp);
+        let mut writer =  deltalake::writer::RecordBatchWriter::for_table(&table)?;
+        writer
+            .write(batch)
+            .await?;
+        writer.flush_and_commit(&mut table).await?;
+    }
+    ```
 
 We can use `get_add_actions()` to introspect the table state. We can see that `2021-01-06` has only a few hours of data so far, so we don't want to optimize that yet. But `2021-01-05` has all 24 hours of data, so it's ready to be optimized.
 
-```python
-dt.get_add_actions(flatten=True).to_pandas()[
-    "partition.date"
-].value_counts().sort_index()
+=== "Python"
+    ```python
+    dt.get_add_actions(flatten=True).to_pandas()[
+        "partition.date"
+    ].value_counts().sort_index()
 
-2021-01-01     1
-2021-01-02     1
-2021-01-03     1
-2021-01-04     1
-2021-01-05    21
-2021-01-06     4
-```
+    2021-01-01     1
+    2021-01-02     1
+    2021-01-03     1
+    2021-01-04     1
+    2021-01-05    21
+    2021-01-06     4
+    ```
+
+=== "Rust"
+    ```rust
+    let table = open_table("observation_data").await?;
+    let batch = table.snapshot()?.add_actions_table(true)?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("observations", batch.clone())?;
+    let df = ctx.sql("
+    SELECT \"partition.date\", 
+            COUNT(*) 
+    FROM observations 
+    GROUP BY \"partition.date\" 
+    ORDER BY \"partition.date\"").await?;
+    df.show().await?;
+
+
+    +----------------+----------+
+    | partition.date | count(*) |
+    +----------------+----------+
+    | 2021-01-01     | 1        |
+    | 2021-01-02     | 1        |
+    | 2021-01-03     | 1        |
+    | 2021-01-04     | 1        |
+    | 2021-01-05     | 21       |
+    | 2021-01-06     | 4        |
+    +----------------+----------+
+    ```
 
 To optimize a single partition, you can pass in a `partition_filters` argument speficying which partitions to optimize.
+=== "Python"
+    ```python
+    dt.optimize(partition_filters=[("date", "=", "2021-01-05")])
+    ```
+
+=== "Rust"
+    ```rust
+      let table = open_table("observation_data").await?;
+      let (table, metrics) = DeltaOps(table)
+          .optimize()
+          .with_type(OptimizeType::Compact)
+          .with_filters(&vec![("date", "=", "2021-01-05").try_into()?])
+          .await?;
+      println!("{:?}", metrics);
+    ```
 
 ```python
-dt.optimize(partition_filters=[("date", "=", "2021-01-05")])
-
 {'numFilesAdded': 1,
  'numFilesRemoved': 21,
  'filesAdded': {'min': 238282,
@@ -247,10 +429,22 @@ The vacuum command deletes all files from storage that are marked for removal in
 It’s normally a good idea to have a retention period of at least 7 days.  For purposes of this example, we will set the retention period to zero, just so you can see how the files get removed from storage.  Adjusting the retention period in this manner isn’t recommended for production use cases.
 
 Let’s run the vacuum command:
+=== "Python"
+      ```python
+      dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
+      ```
+=== "Rust"
+    ```rust
+    let table = open_table("observation_data").await?;
+    let (table, metrics) = DeltaOps(table)
+        .vacuum()
+        .with_retention_period(chrono::Duration::days(0))
+        .with_enforce_retention_duration(false)
+        .with_dry_run(false)
+        .await?;
+    println!("{:?}", metrics);
+    ```
 
-```python
-dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
-```
 
 The command returns a list of all the files that are removed from storage:
 
