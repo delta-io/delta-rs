@@ -75,3 +75,6 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+
+[patch.crates-io]
+path-tree = { git = "https://github.com/viz-rs/path-tree.git", rev = "03f85c289cea8a3ae9ee7bcadba5633fb465b8da"} # pin to 0.8.1 due to nightly features
