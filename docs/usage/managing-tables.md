@@ -43,3 +43,15 @@ A table `dt = DeltaTable(...)` has two methods for optimizing it:
 - `dt.optimize.z_order()` to compact and apply Z Ordering.
 
 See the section [Small file compaction](./optimize/small-file-compaction-with-optimize.md) for more information and a detailed example on `compact`, and the section [Z Order](./optimize/delta-lake-z-order.md) for more information on `z_order`.
+
+=== "Python"
+    ```python
+    dt = DeltaTable(...)
+    dt.optimize.compact()
+    ```
+
+=== "Rust"
+    ```rust
+    let mut table = open_table("./data/simple_table").await.unwrap();
+    let (table, metrics) = DeltaOps(table).optimize().with_type(OptimizeType::Compact).await.unwrap();
+    ```
