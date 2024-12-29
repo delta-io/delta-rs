@@ -27,7 +27,7 @@ You can easily write a DataFrame to a Delta table.
 === "Rust"
 
     ```rust
-    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await.unwrap();
+    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await?;
     let mut table = delta_ops
         .create()
         .with_table_name("some-table")
@@ -48,11 +48,10 @@ You can easily write a DataFrame to a Delta table.
             .fields()
             .cloned(),
         )
-        .await
-        .unwrap();
+        .await?;
 
     let mut record_batch_writer =
-        deltalake::writer::RecordBatchWriter::for_table(&mut table).unwrap();
+        deltalake::writer::RecordBatchWriter::for_table(&mut table).unwrap()?;
     record_batch_writer
         .write(
             RecordBatch::try_new(
@@ -66,11 +65,9 @@ You can easily write a DataFrame to a Delta table.
                         "a", "b", "c",
                     ])),
                 ],
-            )
-            .unwrap(),
+            )?,
         )
-        .await
-        .unwrap();
+        .await?;
     ```
 
 Here are the contents of the Delta table in storage:
