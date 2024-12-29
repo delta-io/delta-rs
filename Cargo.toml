@@ -69,6 +69,7 @@ thiserror = { version = "2" }
 url = { version = "2" }
 urlencoding = "2.1.3"
 uuid = { version = "1" }
+path-tree = { version = "0.8.1"} # pin to 0.8.1 due to nightly features
 
 # runtime / async
 async-trait = { version = "0.1" }
