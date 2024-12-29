@@ -110,24 +110,19 @@ fn aws_storage_handler(
     store: ObjectStoreRef,
     options: &StorageOptions,
 ) -> DeltaResult<ObjectStoreRef> {
-    // If the copy-if-not-exists env var is set or ConditionalPut is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-    if options
-        .0
-        .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
-        || options
-            .0
-            .contains_key(AmazonS3ConfigKey::ConditionalPut.as_ref())
+    let s3_options = S3StorageOptions::from_map(&options.0)?;
+    // Nearly all S3 Object stores support conditional put, so we change the default to always returning an S3 Object store
+    // unless explicitly passing a locking provider key or allow_unsafe_rename. Then we will pass it to the old S3StorageBackend.
+    if s3_options.locking_provider.as_deref() == Some("dynamodb") || s3_options.allow_unsafe_rename
     {
-        Ok(store)
-    } else {
-        let s3_options = S3StorageOptions::from_map(&options.0)?;
-
         let store = S3StorageBackend::try_new(
             store,
             Some("dynamodb") == s3_options.locking_provider.as_deref()
                 || s3_options.allow_unsafe_rename,
         )?;
         Ok(Arc::new(store))
+    } else {
+        Ok(store)
     }
 }
 
