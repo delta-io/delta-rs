@@ -51,7 +51,7 @@ You can easily write a DataFrame to a Delta table.
         .await?;
 
     let mut record_batch_writer =
-        deltalake::writer::RecordBatchWriter::for_table(&mut table).unwrap()?;
+        deltalake::writer::RecordBatchWriter::for_table(&mut table)?;
     record_batch_writer
         .write(
             RecordBatch::try_new(
