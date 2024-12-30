@@ -2025,3 +2025,43 @@ def test_write_transactions(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert transaction_2.app_id == "app_2"
     assert transaction_2.version == 2
     assert transaction_2.last_updated == 123456
+
+
+# <https://github.com/delta-io/delta-rs/issues/3063>
+@pytest.mark.polars
+def test_write_structs(tmp_path: pathlib.Path):
+    import polars as pl
+
+    dt = DeltaTable.create(
+        tmp_path,
+        schema=pa.schema(
+            [
+                ("a", pa.int32()),
+                ("b", pa.string()),
+                ("c", pa.struct({"d": pa.int16(), "e": pa.int16()})),
+            ]
+        ),
+    )
+
+    df = pl.DataFrame(
+        {
+            "a": [0, 1],
+            "b": ["x", "y"],
+            "c": [
+                {"d": -55, "e": -32},
+                {"d": 0, "e": 0},
+            ],
+        }
+    )
+
+    dt.merge(
+        source=df.to_arrow(),
+        predicate=" AND ".join([f"target.{x} = source.{x}" for x in ["a"]]),
+        source_alias="source",
+        target_alias="target",
+        large_dtypes=False,
+    ).when_not_matched_insert_all().execute()
+
+    arrow_dt = dt.to_pyarrow_dataset()
+    new_df = pl.scan_pyarrow_dataset(arrow_dt)
+    new_df.collect()

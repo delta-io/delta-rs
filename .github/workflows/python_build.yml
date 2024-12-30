@@ -46,7 +46,7 @@ jobs:
       - name: Build and install deltalake
         run: |
           # Install minimum PyArrow version
-          uv sync --extra devel --extra pandas
+          uv sync --extra devel --extra pandas --extra polars
           uv pip install pyarrow==16.0.0
         env:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
