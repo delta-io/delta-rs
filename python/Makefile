@@ -8,7 +8,7 @@ DAT_VERSION := 0.0.2
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	uv sync --extra devel --extra pandas
+	uv sync --extra devel --extra pandas --extra polars
 
 .PHONY: setup-dat
 setup-dat: ## Download DAT test files
@@ -28,7 +28,7 @@ build: setup ## Build Python binding of delta-rs
 .PHONY: develop
 develop: setup ## Install Python binding of delta-rs
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
@@ -36,13 +36,13 @@ install: build ## Install Python binding of delta-rs
 	uv pip uninstall deltalake
 	$(info --- Install Python binding ---)
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
-	uv pip install $(TARGET_WHEEL)[devel,pandas]
+	uv pip install $(TARGET_WHEEL)[devel,pandas,polars]
 
 .PHONY: develop-pyspark
 develop-pyspark:
 	uv sync --all-extras
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,pyspark $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars,pyspark $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
