@@ -26,11 +26,11 @@ use aws_sdk_dynamodb::{
     Client,
 };
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
+use deltalake_core::storage::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
 use lazy_static::lazy_static;
-use object_store::aws::AmazonS3ConfigKey;
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -78,28 +78,6 @@ impl LogStoreFactory for S3LogStoreFactory {
                 store,
             )?));
         }
-
-        // All S3-like Object Stores use conditional put, object-store crate however still requires you to explicitly
-        // set this behaviour. We will however assume, when a locking provider/copy-if-not-exists keys are not provided
-        // that PutIfAbsent is supported.
-        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
-        let inner = if !options.0.keys().any(|key| {
-            let key = key.to_ascii_lowercase();
-            [
-                AmazonS3ConfigKey::ConditionalPut.as_ref(),
-                "conditional_put",
-            ]
-            .contains(&key.as_str())
-        }) {
-            let mut inner = options.0.clone();
-            inner.insert("aws_conditional_put".to_string(), "etag".to_string());
-            inner
-        } else {
-            options.0.clone()
-        };
-
-        let options = StorageOptions::from(inner);
-        debug!("S3LogStoreFactory has been asked to create a default LogStore where the underlying store has Conditonal Put enabled - no locking provider required");
         Ok(default_logstore(store, location, &options))
     }
 }

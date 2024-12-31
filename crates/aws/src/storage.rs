@@ -60,6 +60,21 @@ impl S3ObjectStoreFactory {
                 }
             }
         }
+
+        // All S3-like Object Stores use conditional put, object-store crate however still requires you to explicitly
+        // set this behaviour. We will however assume, when a locking provider/copy-if-not-exists keys are not provided
+        // that PutIfAbsent is supported.
+        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
+        if !options.0.keys().any(|key| {
+            let key = key.to_ascii_lowercase();
+            [
+                AmazonS3ConfigKey::ConditionalPut.as_ref(),
+                "conditional_put",
+            ]
+            .contains(&key.as_str())
+        }) {
+            options.0.insert("conditional_put".into(), "etag".into());
+        }
         options
     }
 }
@@ -772,10 +787,13 @@ mod tests {
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-            assert_eq!(combined_options.0.len(), 4);
+            // Four and then the conditional_put built-in
+            assert_eq!(combined_options.0.len(), 5);
 
-            for v in combined_options.0.values() {
-                assert_eq!(v, "env_key");
+            for (key, v) in combined_options.0 {
+                if key != "conditional_put" {
+                    assert_eq!(v, "env_key");
+                }
             }
         });
     }
@@ -799,8 +817,10 @@ mod tests {
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-            for v in combined_options.0.values() {
-                assert_eq!(v, "options_key");
+            for (key, v) in combined_options.0 {
+                if key != "conditional_put" {
+                    assert_eq!(v, "options_key");
+                }
             }
         });
     }
