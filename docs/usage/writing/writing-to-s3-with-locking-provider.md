@@ -6,7 +6,7 @@ When writing to S3, delta-rs provides a locking mechanism to ensure that concurr
 
 To enable safe concurrent writes to AWS S3, we must provide an external locking mechanism.
 
-### DynamoDB
+## DynamoDB
 
 DynamoDB is the only available locking provider at the moment in delta-rs. To enable DynamoDB as the locking provider, you need to set the `AWS_S3_LOCKING_PROVIDER` to 'dynamodb' as a `storage_options` or as an environment variable.
 
@@ -62,6 +62,8 @@ This locking mechanism is compatible with the one used by Apache Spark. The `tab
 
 Note that `delta-rs` does not read credentials from your local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
+To use a custom endpoint (e.g., LocalStack), set `AWS_ENDPOINT_URL_DYNAMODB` in the `storage_options`.
+
 The following code allows creating the necessary DynamoDB table from the AWS cli:
 
 ```sh
@@ -74,12 +76,45 @@ aws dynamodb create-table \
 
 You can find additional information in the [Delta Lake documentation](https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup), which also includes recommendations on configuring a time-to-live (TTL) for the table to avoid growing the table indefinitely.
 
-### Enable unsafe writes in S3 (opt-in)
+### Override DynamoDB config
+
+In some cases, you may want to override the default DynamoDB configuration. For instance, you use an S3-compatible storage on another cloud provider which is not AWS. Or you need to have another set of credentials for DynamoDB. In this case, you can configure the `storage_options` with extra environment variables:
+
+- `AWS_ENDPOINT_URL_DYNAMODB` overrides `AWS_ENDPOINT_URL`,
+- `AWS_REGION_DYNAMODB` overrides `AWS_REGION`,
+- `AWS_ACCESS_KEY_ID_DYNAMODB` overrides `AWS_ACCESS_KEY_ID`,
+- `AWS_SECRET_ACCESS_KEY_DYNAMODB` overrides `AWS_SECRET_ACCESS_KEY`.
+
+Example:
+
+```python
+from deltalake import write_deltalake
+df = pd.DataFrame({'x': [1, 2, 3]})
+storage_options = {
+    "endpoint_url": "https://<your-s3-compatible-storage>",
+    "REGION": "<s3-region>",
+    "AWS_ACCESS_KEY_ID": "<s3-access-key-id>",
+    "AWS_SECRET_ACCESS_KEY": "<s3-secret-access-key>",
+    # override dynamodb config
+    "AWS_S3_LOCKING_PROVIDER": "dynamodb",
+    "AWS_ENDPOINT_URL_DYNAMODB": "https://dynamodb.<dynamodb-region>.amazonaws.com",
+    "AWS_REGION_DYNAMODB": "<dynamodb-region>",
+    "AWS_ACCESS_KEY_ID_DYNAMODB": "<dynamodb-access-key-id>",
+    "AWS_SECRET_ACCESS_KEY_DYNAMODB": "<dynamodb-secret-access-key>",
+}
+write_deltalake(
+    's3a://path/to/table',
+    df,
+    storage_options=storage_options
+)
+```
+
+## Enable unsafe writes in S3 (opt-in)
 
 If for some reason you don't want to use dynamodb as your locking mechanism you can
 choose to set the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to `true` in order to enable S3 unsafe writes.
 
-### Required permissions
+## Required permissions
 
 You need to have permissions to get, put and delete objects in the S3 bucket you're storing your data in. Please note that you must be allowed to delete objects even if you're just appending to the deltalake, because there are temporary files into the log folder that are deleted after usage.
 
@@ -95,9 +130,9 @@ In DynamoDB, you need those permissions:
 - dynamodb:Query
 - dynamodb:PutItem
 - dynamodb:UpdateItem
-- dynamodb:DeleteItem 
+- dynamodb:DeleteItem
 
-### Enabling concurrent writes for alternative clients
+## Enabling concurrent writes for alternative clients
 
 Unlike AWS S3, some S3 clients support atomic renames by passing some headers
 in requests.

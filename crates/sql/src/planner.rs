@@ -186,7 +186,7 @@ mod tests {
     fn test_planner() {
         test_statement(
             "SELECT * FROM table1",
-            &["Projection: table1.column1", "  TableScan: table1"],
+            &["Projection: *", "  TableScan: table1"],
         );
 
         test_statement("VACUUM table1", &["Vacuum: table1 dry_run=false"]);

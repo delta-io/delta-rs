@@ -2,7 +2,6 @@ name: "Setup Python and Rust Environment"
 description: "Set up Python, virtual environment, and Rust toolchain"
 
 inputs:
-
   python-version:
     description: "The Python version to set up"
     required: true
@@ -17,7 +16,12 @@ runs:
   using: "composite"
 
   steps:
-  
+    - name: checkout
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+
     - name: Set up Python ${{ inputs.python-version }}
       uses: actions/setup-python@v4
       with:

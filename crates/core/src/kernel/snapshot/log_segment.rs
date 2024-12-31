@@ -38,7 +38,6 @@ lazy_static! {
 /// parse the version number from a log file path
 // TODO handle compaction files
 pub(crate) trait PathExt {
-    fn child(&self, path: impl AsRef<str>) -> DeltaResult<Path>;
     /// Returns the last path segment if not terminated with a "/"
     fn filename(&self) -> Option<&str>;
 
@@ -65,10 +64,6 @@ pub(crate) trait PathExt {
 }
 
 impl PathExt for Path {
-    fn child(&self, path: impl AsRef<str>) -> DeltaResult<Path> {
-        Ok(self.child(path.as_ref()))
-    }
-
     fn filename(&self) -> Option<&str> {
         self.filename()
     }

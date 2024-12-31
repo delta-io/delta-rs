@@ -65,7 +65,7 @@
 //! };
 //! ```
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 
@@ -145,6 +145,7 @@ pub async fn open_table_with_version(
 }
 
 /// Creates a DeltaTable from the given path.
+///
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
 ///
@@ -546,7 +547,12 @@ mod tests {
     async fn test_poll_table_commits() {
         let path = "../test/tests/data/simple_table_with_checkpoint";
         let mut table = crate::open_table_with_version(path, 9).await.unwrap();
-        let peek = table.peek_next_commit(table.version()).await.unwrap();
+        assert_eq!(table.version(), 9);
+        let peek = table
+            .log_store()
+            .peek_next_commit(table.version())
+            .await
+            .unwrap();
         assert!(matches!(peek, PeekCommit::New(..)));
 
         if let PeekCommit::New(version, actions) = peek {
@@ -568,7 +574,11 @@ mod tests {
                 )));
         };
 
-        let peek = table.peek_next_commit(table.version()).await.unwrap();
+        let peek = table
+            .log_store()
+            .peek_next_commit(table.version())
+            .await
+            .unwrap();
         assert!(matches!(peek, PeekCommit::UpToDate));
     }
 

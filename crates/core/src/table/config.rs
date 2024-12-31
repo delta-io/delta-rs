@@ -2,7 +2,7 @@
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
-use delta_kernel::features::ColumnMappingMode;
+use delta_kernel::table_features::ColumnMappingMode;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,7 @@ use super::Constraint;
 use crate::errors::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
+///
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
 #[derive(PartialEq, Eq, Hash)]
@@ -206,6 +207,7 @@ macro_rules! table_config {
 }
 
 /// Well known delta table configuration
+#[derive(Debug)]
 pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
 
 /// Default num index cols
@@ -213,7 +215,7 @@ pub const DEFAULT_NUM_INDEX_COLS: i32 = 32;
 /// Default target file size
 pub const DEFAULT_TARGET_FILE_SIZE: i64 = 104857600;
 
-impl<'a> TableConfig<'a> {
+impl TableConfig<'_> {
     table_config!(
         (
             "true for this Delta table to be append-only",
@@ -341,7 +343,7 @@ impl<'a> TableConfig<'a> {
         self.0
             .get(TableProperty::ColumnMappingMode.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
-            .unwrap_or_default()
+            .unwrap_or(ColumnMappingMode::None)
     }
 
     /// Return the check constraints on the current table

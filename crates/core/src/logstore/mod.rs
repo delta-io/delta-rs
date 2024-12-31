@@ -162,6 +162,16 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
+/// The next commit that's available from underlying storage
+///
+#[derive(Debug)]
+pub enum PeekCommit {
+    /// The next commit version and associated actions
+    New(i64, Vec<Action>),
+    /// Provided DeltaVersion is up to date
+    UpToDate,
+}
+
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -217,6 +227,19 @@ pub trait LogStore: Sync + Send {
     /// Find earliest version currently stored in the delta log.
     async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64>;
 
+    /// Get the list of actions for the next commit
+    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
+        let next_version = current_version + 1;
+        let commit_log_bytes = match self.read_commit_entry(next_version).await {
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => return Ok(PeekCommit::UpToDate),
+            Err(err) => Err(err),
+        }?;
+
+        let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
+        Ok(PeekCommit::New(next_version, actions.unwrap()))
+    }
+
     /// Get underlying object store.
     fn object_store(&self) -> Arc<dyn ObjectStore>;
 
@@ -243,7 +266,9 @@ pub trait LogStore: Sync + Send {
         let mut stream = object_store.list(Some(self.log_path()));
         if let Some(res) = stream.next().await {
             match res {
-                Ok(meta) => Ok(meta.location.is_commit_file()),
+                Ok(meta) => {
+                    Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file())
+                }
                 Err(ObjectStoreError::NotFound { .. }) => Ok(false),
                 Err(err) => Err(err)?,
             }
@@ -589,6 +614,66 @@ mod tests {
             .is_delta_table_location()
             .await
             .expect("Failed to look at table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_commit() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save a commit to the transaction log
+        let payload = PutPayload::from_static(b"test");
+        let _put = store
+            .object_store()
+            .put_opts(
+                &Path::from("_delta_log/0.json"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_checkpoint() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save a "checkpoint" file to the transaction log directory
+        let payload = PutPayload::from_static(b"test");
+        let _put = store
+            .object_store()
+            .put_opts(
+                &Path::from("_delta_log/0.checkpoint.parquet"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
     }
 }
 

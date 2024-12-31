@@ -7,10 +7,25 @@ use std::time::Duration;
 
 /// Custom S3 endpoint.
 pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
-/// Custom DynamoDB endpoint.
+
+/// Custom DynamoDB
+///
 /// If DynamoDB endpoint is not supplied, will use S3 endpoint (AWS_ENDPOINT_URL)
 /// If it is supplied, this endpoint takes precedence over the global endpoint set in AWS_ENDPOINT_URL for DynamoDB
 pub const AWS_ENDPOINT_URL_DYNAMODB: &str = "AWS_ENDPOINT_URL_DYNAMODB";
+/// If DynamoDB region is different from S3 region, set this to the DynamoDB region.
+/// If it is supplied, this region takes precedence over the global region set in AWS_REGION for DynamoDB
+pub const AWS_REGION_DYNAMODB: &str = "AWS_REGION_DYNAMODB";
+/// If DynamoDB access key is different from S3 access key, set this to the DynamoDB access key.
+/// If it is supplied, this access key takes precedence over the global access key set in AWS_ACCESS_KEY_ID for DynamoDB
+pub const AWS_ACCESS_KEY_ID_DYNAMODB: &str = "AWS_ACCESS_KEY_ID_DYNAMODB";
+/// If DynamoDB secret key is different from S3 secret key, set this to the DynamoDB secret key.
+/// If it is supplied, this secret key takes precedence over the global secret key set in AWS_SECRET_ACCESS_KEY for DynamoDB
+pub const AWS_SECRET_ACCESS_KEY_DYNAMODB: &str = "AWS_SECRET_ACCESS_KEY_DYNAMODB";
+/// If DynamoDB session token is different from S3 session token, set this to the DynamoDB session token.
+/// If it is supplied, this session token takes precedence over the global session token set in AWS_SESSION_TOKEN for DynamoDB
+pub const AWS_SESSION_TOKEN_DYNAMODB: &str = "AWS_SESSION_TOKEN_DYNAMODB";
+
 /// The AWS region.
 pub const AWS_REGION: &str = "AWS_REGION";
 /// The AWS profile.
@@ -41,7 +56,9 @@ pub const AWS_IAM_ROLE_SESSION_NAME: &str = "AWS_IAM_ROLE_SESSION_NAME";
     note = "Please use AWS_IAM_ROLE_SESSION_NAME instead"
 )]
 pub const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
-/// The `pool_idle_timeout` option of aws http client. Has to be lower than 20 seconds, which is
+/// The `pool_idle_timeout` option of aws http client.
+///
+/// Has to be lower than 20 seconds, which is
 /// default S3 server timeout <https://aws.amazon.com/premiumsupport/knowledge-center/s3-socket-connection-timeout-error/>.
 /// However, since rusoto uses hyper as a client, its default timeout is 90 seconds
 /// <https://docs.rs/hyper/0.13.2/hyper/client/struct.Builder.html#method.keep_alive_timeout>.
@@ -55,16 +72,19 @@ pub const AWS_STS_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_STS_POOL_IDLE_TIMEOUT_S
 pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
     "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES";
 /// The web identity token file to use when using a web identity provider.
+///
 /// NOTE: web identity related options are set in the environment when
 /// creating an instance of [crate::storage::s3::S3StorageOptions].
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 /// The role name to use for web identity.
+///
 /// NOTE: web identity related options are set in the environment when
 /// creating an instance of [crate::storage::s3::S3StorageOptions].
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_ROLE_ARN: &str = "AWS_ROLE_ARN";
 /// The role session name to use for web identity.
+///
 /// NOTE: web identity related options are set in the environment when
 /// creating an instance of [crate::storage::s3::S3StorageOptions].
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
@@ -90,6 +110,7 @@ pub const AWS_FORCE_CREDENTIAL_LOAD: &str = "AWS_FORCE_CREDENTIAL_LOAD";
 /// The list of option keys owned by the S3 module.
 /// Option keys not contained in this list will be added to the `extra_opts`
 /// field of [crate::storage::s3::S3StorageOptions].
+#[allow(deprecated)]
 pub const S3_OPTS: &[&str] = &[
     AWS_ENDPOINT_URL,
     AWS_ENDPOINT_URL_DYNAMODB,
@@ -99,6 +120,8 @@ pub const S3_OPTS: &[&str] = &[
     AWS_SECRET_ACCESS_KEY,
     AWS_SESSION_TOKEN,
     AWS_S3_LOCKING_PROVIDER,
+    AWS_IAM_ROLE_ARN,
+    AWS_IAM_ROLE_SESSION_NAME,
     AWS_S3_ASSUME_ROLE_ARN,
     AWS_S3_ROLE_SESSION_NAME,
     AWS_WEB_IDENTITY_TOKEN_FILE,

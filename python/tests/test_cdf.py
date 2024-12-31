@@ -5,8 +5,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
+import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaError
 
 
 def test_read_cdf_partitioned():
@@ -677,3 +679,38 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
     ).sort_by(sort_values).select(expected_data.column_names) == pa.concat_tables(
         [first_batch, expected_data]
     ).sort_by(sort_values)
+
+
+def test_read_cdf_version_out_of_range():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+
+    with pytest.raises(DeltaError) as e:
+        dt.load_cdf(4).read_all().to_pydict()
+
+    assert "invalid table version" in str(e).lower()
+
+
+def test_read_cdf_version_out_of_range_with_flag():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+    b = dt.load_cdf(4, allow_out_of_range=True).read_all()
+
+    assert len(b) == 0
+
+
+def test_read_timestamp_cdf_out_of_range():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+    start = "2033-12-22T17:10:21.675Z"
+
+    with pytest.raises(DeltaError) as e:
+        dt.load_cdf(starting_timestamp=start).read_all().to_pydict()
+
+    assert "is greater than latest commit timestamp" in str(e).lower()
+
+
+def test_read_timestamp_cdf_out_of_range_with_flag():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+
+    start = "2033-12-22T17:10:21.675Z"
+    b = dt.load_cdf(starting_timestamp=start, allow_out_of_range=True).read_all()
+
+    assert len(b) == 0

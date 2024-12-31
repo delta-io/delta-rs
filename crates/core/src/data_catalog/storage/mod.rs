@@ -30,6 +30,7 @@ const DELTA_LOG_FOLDER: &str = "_delta_log";
 ///
 /// assuming it contains valid deltalake data, i.e a `_delta_log` folder:
 /// s3://host.example.com:3000/data/tpch/customer/_delta_log/
+#[derive(Debug)]
 pub struct ListingSchemaProvider {
     authority: String,
     /// Underlying object store
@@ -47,9 +48,9 @@ impl ListingSchemaProvider {
         storage_options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let storage_options = storage_options.unwrap_or_default().into();
+        let storage_options: StorageOptions = storage_options.unwrap_or_default().into();
         // We already parsed the url, so unwrapping is safe.
-        let store = store_for(&uri)?;
+        let store = store_for(&uri, &storage_options)?;
         Ok(Self {
             authority: uri.to_string(),
             store,
@@ -87,9 +88,9 @@ impl ListingSchemaProvider {
     }
 }
 
-// noramalizes a path fragment to be a valida table name in datafusion
+// normalizes a path fragment to be a valida table name in datafusion
 // - removes some reserved characters (-, +, ., " ")
-// - lowecase ascii
+// - lowercase ascii
 fn normalize_table_name(path: &Path) -> Result<String, DataFusionError> {
     Ok(path
         .file_name()

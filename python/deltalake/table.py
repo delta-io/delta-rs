@@ -43,6 +43,7 @@ from deltalake._internal import (
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
+    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -158,6 +159,7 @@ class CommitProperties:
         self,
         custom_metadata: Optional[Dict[str, str]] = None,
         max_commit_retries: Optional[int] = None,
+        app_transactions: Optional[List[Transaction]] = None,
     ):
         """Custom metadata to be stored in the commit. Controls the number of retries for the commit.
 
@@ -167,6 +169,7 @@ class CommitProperties:
         """
         self.custom_metadata = custom_metadata
         self.max_commit_retries = max_commit_retries
+        self.app_transactions = app_transactions
 
 
 def _commit_properties_from_custom_metadata(
@@ -686,6 +689,7 @@ class DeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
         columns: Optional[List[str]] = None,
+        allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader:
         return self._table.load_cdf(
             columns=columns,
@@ -693,6 +697,7 @@ class DeltaTable:
             ending_version=ending_version,
             starting_timestamp=starting_timestamp,
             ending_timestamp=ending_timestamp,
+            allow_out_of_range=allow_out_of_range,
         )
 
     @property
@@ -1416,6 +1421,46 @@ class DeltaTable:
             post_commithook_properties,
         )
         return json.loads(metrics)
+
+    def transaction_versions(self) -> Dict[str, Transaction]:
+        return self._table.transaction_versions()
+
+    def __datafusion_table_provider__(self) -> Any:
+        """Return the DataFusion table provider PyCapsule interface.
+
+        To support DataFusion features such as push down filtering, this function will return a PyCapsule
+        interface that conforms to the FFI Table Provider required by DataFusion. From an end user perspective
+        you should not need to call this function directly. Instead you can use ``register_table_provider`` in
+        the DataFusion SessionContext.
+
+        Returns:
+            A PyCapsule DataFusion TableProvider interface.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            from datafusion import SessionContext
+            import pyarrow as pa
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            ctx = SessionContext()
+            ctx.register_table_provider("test", table)
+            ctx.table("test").show()
+            ```
+            Results in
+            ```
+            DataFrame()
+            +----+----+----+
+            | c3 | c1 | c2 |
+            +----+----+----+
+            | 4  | 6  | a  |
+            | 6  | 5  | b  |
+            | 5  | 4  | c  |
+            +----+----+----+
+            ```
+        """
+        return self._table.__datafusion_table_provider__()
 
 
 class TableMerger:

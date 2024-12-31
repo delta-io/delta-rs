@@ -2,17 +2,21 @@ mod error;
 mod features;
 mod filesystem;
 mod merge;
+mod query;
 mod schema;
 mod utils;
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
 use std::future::IntoFuture;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::StructField;
 use deltalake::arrow::compute::concat_batches;
@@ -25,7 +29,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType,
+    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
 };
 use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::add_feature::AddTableFeatureBuilder;
@@ -58,7 +62,7 @@ use futures::future::join_all;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyDict, PyFrozenSet};
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use serde_json::{Map, Value};
 
 use crate::error::DeltaProtocolError;
@@ -66,6 +70,7 @@ use crate::error::PythonError;
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
+use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
@@ -284,6 +289,7 @@ impl RawDeltaTable {
         })
     }
 
+    #[pyo3(signature = (partition_filters=None))]
     pub fn files(
         &self,
         py: Python,
@@ -313,6 +319,7 @@ impl RawDeltaTable {
         })
     }
 
+    #[pyo3(signature = (partition_filters=None))]
     pub fn file_uris(
         &self,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
@@ -662,7 +669,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None))]
+    #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, allow_out_of_range = false))]
     pub fn load_cdf(
         &mut self,
         py: Python,
@@ -671,6 +678,7 @@ impl RawDeltaTable {
         starting_timestamp: Option<String>,
         ending_timestamp: Option<String>,
         columns: Option<Vec<String>>,
+        allow_out_of_range: bool,
     ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
         let mut cdf_read = CdfLoadBuilder::new(
@@ -692,7 +700,11 @@ impl RawDeltaTable {
             let ending_ts = DateTime::<Utc>::from_str(&et)
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
-            cdf_read = cdf_read.with_starting_timestamp(ending_ts);
+            cdf_read = cdf_read.with_ending_timestamp(ending_ts);
+        }
+
+        if allow_out_of_range {
+            cdf_read = cdf_read.with_allow_out_of_range();
         }
 
         if let Some(columns) = columns {
@@ -825,6 +837,7 @@ impl RawDeltaTable {
     }
 
     /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
+    #[pyo3(signature = (limit=None))]
     pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
         let history = rt()
             .block_on(self._table.history(limit))
@@ -842,6 +855,7 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?)
     }
 
+    #[pyo3(signature = (schema, partition_filters=None))]
     pub fn dataset_partitions<'py>(
         &mut self,
         py: Python<'py>,
@@ -873,6 +887,7 @@ impl RawDeltaTable {
             .collect()
     }
 
+    #[pyo3(signature = (partitions_filters=None))]
     fn get_active_partitions<'py>(
         &self,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
@@ -966,6 +981,7 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (add_actions, mode, partition_by, schema, partitions_filters=None, commit_properties=None, post_commithook_properties=None))]
     fn create_write_transaction(
         &mut self,
         py: Python,
@@ -1232,6 +1248,25 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
+
+    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
+        self._table
+            .get_app_transaction_version()
+            .into_iter()
+            .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
+            .collect()
+    }
+
+    fn __datafusion_table_provider__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyCapsule>> {
+        let name = CString::new("datafusion_table_provider").unwrap();
+
+        let provider = FFI_TableProvider::new(Arc::new(self._table.clone()), false);
+
+        PyCapsule::new_bound(py, provider, Some(name.clone()))
+    }
 }
 
 fn set_post_commithook_properties(
@@ -1378,6 +1413,11 @@ fn maybe_create_commit_properties(
         if let Some(max_retries) = commit_props.max_commit_retries {
             commit_properties = commit_properties.with_max_retries(max_retries);
         };
+
+        if let Some(app_transactions) = commit_props.app_transactions {
+            let app_transactions = app_transactions.iter().map(Transaction::from).collect();
+            commit_properties = commit_properties.with_application_transactions(app_transactions);
+        }
     }
 
     if let Some(post_commit_hook_props) = post_commithook_properties {
@@ -1404,7 +1444,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Double(val) => val.to_object(py),
         Timestamp(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
-            // the scalar value to pa.timestamp("us","UTC")
+            // scalar value to pa.timestamp("us","UTC")
             let value = value.serialize();
             format!("{}Z", value).to_object(py)
         }
@@ -1426,6 +1466,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             }
             py_struct.to_object(py)
         }
+        Array(_val) => todo!("how should this be converted!"),
     };
 
     Ok(val.into_bound(py))
@@ -1656,14 +1697,70 @@ pub struct PyPostCommitHookProperties {
     cleanup_expired_logs: Option<bool>,
 }
 
+#[derive(Clone)]
+#[pyclass(name = "Transaction", module = "deltalake._internal")]
+pub struct PyTransaction {
+    #[pyo3(get)]
+    pub app_id: String,
+    #[pyo3(get)]
+    pub version: i64,
+    #[pyo3(get)]
+    pub last_updated: Option<i64>,
+}
+
+#[pymethods]
+impl PyTransaction {
+    #[new]
+    #[pyo3(signature = (app_id, version, last_updated = None))]
+    fn new(app_id: String, version: i64, last_updated: Option<i64>) -> Self {
+        Self {
+            app_id,
+            version,
+            last_updated,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Transaction(app_id={}, version={}, last_updated={})",
+            self.app_id,
+            self.version,
+            self.last_updated
+                .map_or("None".to_owned(), |n| n.to_string())
+        )
+    }
+}
+
+impl From<Transaction> for PyTransaction {
+    fn from(value: Transaction) -> Self {
+        PyTransaction {
+            app_id: value.app_id,
+            version: value.version,
+            last_updated: value.last_updated,
+        }
+    }
+}
+
+impl From<&PyTransaction> for Transaction {
+    fn from(value: &PyTransaction) -> Self {
+        Transaction {
+            app_id: value.app_id.clone(),
+            version: value.version,
+            last_updated: value.last_updated,
+        }
+    }
+}
+
 #[derive(FromPyObject)]
 pub struct PyCommitProperties {
     custom_metadata: Option<HashMap<String, String>>,
     max_commit_retries: Option<usize>,
+    app_transactions: Option<Vec<PyTransaction>>,
 }
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (table_uri, data, mode, table=None, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
@@ -1745,6 +1842,7 @@ fn write_to_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
 fn create_deltalake(
     py: Python,
     table_uri: String,
@@ -1801,6 +1899,7 @@ fn create_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (table_uri, schema, add_actions, _mode, partition_by, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
 fn write_new_deltalake(
     py: Python,
     table_uri: String,
@@ -1855,6 +1954,7 @@ fn write_new_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
 fn convert_to_deltalake(
     py: Python,
     uri: String,
@@ -1909,6 +2009,7 @@ fn convert_to_deltalake(
 }
 
 #[pyfunction]
+#[pyo3(signature = (table=None, configuration=None))]
 fn get_num_idx_cols_and_stats_columns(
     table: Option<&RawDeltaTable>,
     configuration: Option<HashMap<String, Option<String>>>,
@@ -2001,8 +2102,10 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<PyMergeBuilder>()?;
+    m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
+    m.add_class::<PyTransaction>()?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;

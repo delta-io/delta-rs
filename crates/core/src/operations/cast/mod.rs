@@ -144,7 +144,19 @@ fn cast_field(
             add_missing,
         )?) as ArrayRef),
         _ if is_cast_required(col_type, field_type) => {
-            cast_with_options(col, field_type, cast_options)
+            cast_with_options(col, field_type, cast_options).map_err(|err| {
+                if let ArrowError::CastError(err) = err {
+                    ArrowError::CastError(format!(
+                        "Failed to cast {} from {} to {}: {}",
+                        field.name(),
+                        field_type,
+                        col_type,
+                        err
+                    ))
+                } else {
+                    err
+                }
+            })
         }
         _ => Ok(col.clone()),
     }
@@ -263,12 +275,12 @@ mod tests {
     fn test_merge_arrow_schema_with_nested() {
         let left_schema = Arc::new(Schema::new(vec![Field::new(
             "f",
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Utf8, false))),
             false,
         )]));
         let right_schema = Arc::new(Schema::new(vec![Field::new(
             "f",
-            DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, false))),
+            DataType::List(Arc::new(Field::new("element", DataType::LargeUtf8, false))),
             true,
         )]));
 
@@ -294,7 +306,7 @@ mod tests {
 
         let fields = Fields::from(vec![Field::new_list(
             "list_column",
-            Field::new("item", DataType::Int8, false),
+            Field::new("element", DataType::Int8, false),
             false,
         )]);
         let target_schema = Arc::new(Schema::new(fields)) as SchemaRef;
@@ -304,7 +316,7 @@ mod tests {
         let schema = result.unwrap().schema();
         let field = schema.column_with_name("list_column").unwrap().1;
         if let DataType::List(list_item) = field.data_type() {
-            assert_eq!(list_item.name(), "item");
+            assert_eq!(list_item.name(), "element");
         } else {
             panic!("Not a list");
         }
@@ -331,10 +343,37 @@ mod tests {
 
     #[test]
     fn test_is_cast_required_with_list() {
-        let field1 = DataType::List(FieldRef::from(Field::new("item", DataType::Int32, false)));
-        let field2 = DataType::List(FieldRef::from(Field::new("item", DataType::Int32, false)));
+        let field1 = DataType::List(FieldRef::from(Field::new(
+            "element",
+            DataType::Int32,
+            false,
+        )));
+        let field2 = DataType::List(FieldRef::from(Field::new(
+            "element",
+            DataType::Int32,
+            false,
+        )));
 
         assert!(!is_cast_required(&field1, &field2));
+    }
+
+    /// Delta has adopted "element" as the default list field name rather than the previously used
+    /// "item". This lines up more with Apache Parquet but should be handled in casting
+    #[test]
+    fn test_is_cast_required_with_old_and_new_list() {
+        let field1 = DataType::List(FieldRef::from(Field::new(
+            "element",
+            DataType::Int32,
+            false,
+        )));
+        let field2 = DataType::List(FieldRef::from(Field::new("item", DataType::Int32, false)));
+
+        assert!(is_cast_required(&field1, &field2));
+    }
+
+    #[test]
+    fn test_is_cast_required_with_smol_int() {
+        assert!(is_cast_required(&DataType::Int8, &DataType::Int32));
     }
 
     #[test]

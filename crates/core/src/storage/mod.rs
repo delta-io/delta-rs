@@ -50,6 +50,7 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
                     RuntimeBuilder::new_current_thread()
                 };
                 let builder = builder.worker_threads(config.worker_threads);
+                #[allow(unused_mut)]
                 let mut builder = if config.enable_io && config.enable_time {
                     builder.enable_all()
                 } else if !config.enable_io && config.enable_time {
@@ -395,10 +396,10 @@ pub fn factories() -> FactoryRegistry {
 }
 
 /// Simpler access pattern for the [FactoryRegistry] to get a single store
-pub fn store_for(url: &Url) -> DeltaResult<ObjectStoreRef> {
+pub fn store_for(url: &Url, storage_options: &StorageOptions) -> DeltaResult<ObjectStoreRef> {
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     if let Some(factory) = factories().get(&scheme) {
-        let (store, _prefix) = factory.parse_url_opts(url, &StorageOptions::default())?;
+        let (store, _prefix) = factory.parse_url_opts(url, storage_options)?;
         Ok(store)
     } else {
         Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
@@ -480,6 +481,7 @@ pub fn limit_store_handler<T: ObjectStore>(store: T, options: &StorageOptions) -
 }
 
 /// Storage option keys to use when creating [ObjectStore].
+///
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
 /// Must be implemented for a given storage provider
 pub mod storage_constants {

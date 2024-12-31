@@ -220,7 +220,10 @@ class RawDeltaTable:
         ending_version: Optional[int] = None,
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
+        allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader: ...
+    def transaction_versions(self) -> Dict[str, Transaction]: ...
+    def __datafusion_table_provider__(self) -> Any: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -872,6 +875,11 @@ class DeltaFileSystemHandler:
     ) -> ObjectOutputStream:
         """Open an output stream for sequential writing."""
 
+class PyQueryBuilder:
+    def __init__(self) -> None: ...
+    def register(self, table_name: str, delta_table: RawDeltaTable) -> None: ...
+    def execute(self, sql: str) -> List[pyarrow.RecordBatch]: ...
+
 class DeltaDataChecker:
     def __init__(self, invariants: List[Tuple[str, str]]) -> None: ...
     def check_batch(self, batch: pyarrow.RecordBatch) -> None: ...
@@ -906,3 +914,12 @@ FilterConjunctionType = List[FilterLiteralType]
 FilterDNFType = List[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = List[Tuple[str, str, Union[str, List[str]]]]
+
+class Transaction:
+    app_id: str
+    version: int
+    last_updated: Optional[int]
+
+    def __init__(
+        self, app_id: str, version: int, last_updated: Optional[int] = None
+    ) -> None: ...

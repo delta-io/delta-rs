@@ -1,15 +1,18 @@
 //! Generic utilities reqwest based Catalog implementations
 
 pub mod backoff;
-#[cfg(test)]
-pub mod mock_server;
 #[allow(unused)]
 pub mod pagination;
 pub mod retry;
 pub mod token;
 
+use crate::client::retry::RetryConfig;
+use crate::UnityCatalogError;
+use deltalake_core::data_catalog::DataCatalogResult;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, Proxy};
+use reqwest::{ClientBuilder, Proxy};
+use reqwest_middleware::ClientWithMiddleware;
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::time::Duration;
 
 fn map_client_error(e: reqwest::Error) -> super::DataCatalogError {
@@ -38,6 +41,7 @@ pub struct ClientOptions {
     http2_keep_alive_while_idle: bool,
     http1_only: bool,
     http2_only: bool,
+    retry_config: Option<RetryConfig>,
 }
 
 impl ClientOptions {
@@ -164,7 +168,12 @@ impl ClientOptions {
         self
     }
 
-    pub(crate) fn client(&self) -> super::DataCatalogResult<Client> {
+    pub fn with_retry_config(mut self, cfg: RetryConfig) -> Self {
+        self.retry_config = Some(cfg);
+        self
+    }
+
+    pub(crate) fn client(&self) -> DataCatalogResult<ClientWithMiddleware> {
         let mut builder = ClientBuilder::new();
 
         match &self.user_agent {
@@ -221,9 +230,19 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(self.allow_insecure)
         }
 
-        builder
+        let inner_client = builder
             .https_only(!self.allow_http)
             .build()
-            .map_err(map_client_error)
+            .map_err(UnityCatalogError::from)?;
+        let retry_policy = self
+            .retry_config
+            .as_ref()
+            .map(|retry| retry.into())
+            .unwrap_or(ExponentialBackoff::builder().build_with_max_retries(3));
+
+        let middleware = RetryTransientMiddleware::new_with_policy(retry_policy);
+        Ok(reqwest_middleware::ClientBuilder::new(inner_client)
+            .with(middleware)
+            .build())
     }
 }
