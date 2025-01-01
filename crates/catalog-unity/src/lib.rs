@@ -644,8 +644,7 @@ impl DataCatalog for UnityCatalog {
             GetTableResponse::Error(err) => Err(UnityCatalogError::InvalidTable {
                 error_code: err.error_code,
                 message: err.message,
-            }
-            .into()),
+            }),
         }
     }
 }
