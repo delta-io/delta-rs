@@ -502,6 +502,10 @@ impl fmt::Display for ScalarValueFormat<'_> {
             ScalarValue::UInt16(e) => format_option!(f, e)?,
             ScalarValue::UInt32(e) => format_option!(f, e)?,
             ScalarValue::UInt64(e) => format_option!(f, e)?,
+            ScalarValue::Decimal128(e, precision, scale) => match e {
+                Some(e) => write!(f, "'{e}'::decimal({precision}, {scale})",)?,
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::Date32(e) => match e {
                 Some(e) => write!(
                     f,
@@ -655,6 +659,11 @@ mod test {
             StructField::new(
                 "_binary".to_string(),
                 DataType::Primitive(PrimitiveType::Binary),
+                true,
+            ),
+            StructField::new(
+                "_decimal".to_string(),
+                DataType::Primitive(PrimitiveType::Decimal(2, 2)),
                 true,
             ),
             StructField::new(
@@ -887,6 +896,18 @@ mod test {
                     )
                 )),
             },
+            ParseTest {
+                expr: col("_decimal").eq(lit(ScalarValue::Decimal128(Some(1),2,2))),
+                expected: "_decimal = '1'::decimal(2, 2)".to_string(),
+                override_expected_expr: Some(col("_decimal").eq(
+                    Expr::Cast(
+                        Cast {
+                            expr: Box::from(lit("1")),
+                            data_type: arrow_schema::DataType::Decimal128(2, 2)
+                        }
+                    )
+                )),
+            },
         ];
 
         let session: SessionContext = DeltaSessionContext::default().into();
@@ -908,11 +929,6 @@ mod test {
         }
 
         let unsupported_types = vec![
-            /* TODO: Determine proper way to display decimal values in an sql expression*/
-            simple!(
-                col("money").gt(lit(ScalarValue::Decimal128(Some(100), 12, 2))),
-                "money > 0.1".to_string()
-            ),
             simple!(
                 col("_timestamp").gt(lit(ScalarValue::TimestampMillisecond(Some(100), None))),
                 "".to_string()

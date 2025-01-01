@@ -4,7 +4,6 @@ build-backend = "maturin"
 
 [project]
 name = "deltalake"
-version = "0.22.4"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
 license = { file = "licenses/deltalake_license.txt" }
@@ -18,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = ["pyarrow>=16"]
+dynamic = ["version"]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
