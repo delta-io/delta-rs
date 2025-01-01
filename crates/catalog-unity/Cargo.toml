@@ -18,23 +18,34 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 deltalake-core = { version = "0.23", path = "../core" }
+deltalake-aws = { version = "0.6.0", path = "../aws", optional = true }
+deltalake-azure = { version = "0.6.0", path = "../azure", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 reqwest-retry = "0.7"
-reqwest-middleware = "0.4.0"
+reqwest-middleware = { version = "0.4.0", features = ["json"] }
 rand = "0.8"
 futures = "0.3"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde", "now"] }
 dashmap = "6"
 tracing = "0.1"
-datafusion = { version = "43", optional = true }
-datafusion-common = { version = "43", optional = true }
+moka = { version = "0.12", features = ["future", "logging"], optional = true }
+datafusion = { workspace = true, optional = true }
+datafusion-common = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 httpmock = { version = "0.8.0-alpha.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
-default = []
-datafusion = ["dep:datafusion", "datafusion-common"]
+default = ["datafusion", "aws"]
+aws = ["deltalake-aws"]
+azure = ["deltalake-azure"]
+datafusion = ["dep:datafusion", "datafusion-common", "deltalake-core/datafusion", "moka"]
+
+[[example]]
+name = "uc_example"
+path = "examples/uc_example.rs"
+required-features = ["datafusion", "aws"]
 
