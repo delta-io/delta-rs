@@ -56,18 +56,19 @@ You can easily write a DataFrame to a Delta table.
         .write(
             RecordBatch::try_new(
                 Arc::new(Schema::new(vec![
-                    arrow::datatypes::Field::new("num", arrow::datatypes::DataType::Int32, false),
-                    arrow::datatypes::Field::new("letter", arrow::datatypes::DataType::Utf8, false),
+                    Field::new("num", DataType::Int32, true),
+                    Field::new("letter", Utf8, true),
                 ])),
                 vec![
-                    Arc::new(datafusion::arrow::array::Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(datafusion::arrow::array::StringArray::from(vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(StringArray::from(vec![
                         "a", "b", "c",
                     ])),
                 ],
             )?,
         )
         .await?;
+    record_batch_writer.flush_and_commit(&mut table).await?;
     ```
 
 Here are the contents of the Delta table in storage:

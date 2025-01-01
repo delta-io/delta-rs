@@ -90,24 +90,24 @@ the `DeltaTable.is_deltatable()` method.
 === "Rust"
 
     ```rust
-        let table_path = "<path/to/valid/table>";
-        let builder = deltalake::DeltaTableBuilder::from_uri(table_path);
-        builder.build()?.verify_deltatable_existence().await?;
-        // true
+    let table_path = "<path/to/valid/table>";
+    let builder = deltalake::DeltaTableBuilder::from_uri(table_path);
+    builder.build()?.verify_deltatable_existence().await?;
+    // true
 
-        let invalid_table_path = "<path/to/nonexistent/table>";
-        let builder = deltalake::DeltaTableBuilder::from_uri(invalid_table_path);
-        builder.build()?.verify_deltatable_existence().await?;
-        // false
+    let invalid_table_path = "<path/to/nonexistent/table>";
+    let builder = deltalake::DeltaTableBuilder::from_uri(invalid_table_path);
+    builder.build()?.verify_deltatable_existence().await?;
+    // false
 
-        let bucket_table_path = "<path/to/valid/table/in/bucket>";
-        let storage_options = HashMap::from_iter(vec![
-            ("AWS_ACCESS_KEY_ID".to_string(), "THE_AWS_ACCESS_KEY_ID".to_string()),
-            ("AWS_SECRET_ACCESS_KEY".to_string(), "THE_AWS_SECRET_ACCESS_KEY".to_string()),
-        ]);
-        let builder = deltalake::DeltaTableBuilder::from_uri(bucket_table_path).with_storage_options(storage_options);
-        builder.build()?.verify_deltatable_existence().await?;
-        // true
+    let bucket_table_path = "<path/to/valid/table/in/bucket>";
+    let storage_options = HashMap::from_iter(vec![
+        ("AWS_ACCESS_KEY_ID".to_string(), "THE_AWS_ACCESS_KEY_ID".to_string()),
+        ("AWS_SECRET_ACCESS_KEY".to_string(), "THE_AWS_SECRET_ACCESS_KEY".to_string()),
+    ]);
+    let builder = deltalake::DeltaTableBuilder::from_uri(bucket_table_path).with_storage_options(storage_options);
+    builder.build()?.verify_deltatable_existence().await?;
+    // true
     ```
 
 
@@ -158,8 +158,8 @@ wish to load:
     ```
 === "Rust"
     ```rust
-        let mut table = open_table("./data/simple_table").await?;
-        table.load_version(1).await?;
+    let mut table = open_table("./data/simple_table").await?;
+    table.load_version(1).await?;
     ```
 
 

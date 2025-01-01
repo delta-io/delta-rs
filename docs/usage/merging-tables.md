@@ -105,16 +105,16 @@ For example, let’s update the value of a column in the target table based on a
         .await?;
 
     let schema = Arc::new(Schema::new(vec![
-        arrow::datatypes::Field::new("x", arrow::datatypes::DataType::Int32, true),
-        arrow::datatypes::Field::new("y", arrow::datatypes::DataType::Int32, true),
+        Field::new("x", DataType::Int32, true),
+        Field::new("y", DataType::Int32, true),
     ]));
     let mut record_batch_writer = deltalake::writer::RecordBatchWriter::for_table(&mut table)?;
     record_batch_writer
         .write(RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(datafusion::arrow::array::Int32Array::from(vec![1, 2, 3])),
-                Arc::new(datafusion::arrow::array::Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
             ],
         )?)
         .await?;
@@ -125,8 +125,8 @@ For example, let’s update the value of a column in the target table based on a
     let source_data = ctx.read_batch(RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(datafusion::arrow::array::Int32Array::from(vec![2, 3])),
-            Arc::new(datafusion::arrow::array::Int32Array::from(vec![5, 6])),
+            Arc::new(Int32Array::from(vec![2, 3])),
+            Arc::new(Int32Array::from(vec![5, 6])),
         ],
     )?)?;
 
@@ -200,16 +200,16 @@ For example, let’s say we start with the same target table:
         .await?;
 
     let schema = Arc::new(Schema::new(vec![
-        arrow::datatypes::Field::new("x", arrow::datatypes::DataType::Int32, true),
-        arrow::datatypes::Field::new("y", arrow::datatypes::DataType::Int32, true),
+        Field::new("x", DataType::Int32, true),
+        Field::new("y", DataType::Int32, true),
     ]));
     let mut record_batch_writer = deltalake::writer::RecordBatchWriter::for_table(&mut table)?;
     record_batch_writer
         .write(RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(datafusion::arrow::array::Int32Array::from(vec![1, 2, 3])),
-                Arc::new(datafusion::arrow::array::Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
             ],
         )?)
         .await?;
@@ -234,8 +234,8 @@ And we want to merge only new records from our source data, without duplication:
     let source_data = ctx.read_batch(RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(datafusion::arrow::array::Int32Array::from(vec![2, 3])),
-            Arc::new(datafusion::arrow::array::Int32Array::from(vec![5, 6])),
+            Arc::new(Int32Array::from(vec![2, 3])),
+            Arc::new(Int32Array::from(vec![5, 6])),
         ],
     )?)?;
     ```

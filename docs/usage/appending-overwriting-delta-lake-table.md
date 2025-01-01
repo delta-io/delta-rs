@@ -29,15 +29,15 @@ Append two additional rows of data to the table:
 
 === "Rust"
     ```rust
-    let table = open_table("./data/simple_table").await?;
+    let table = open_table("tmp/some-table").await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            arrow::datatypes::Field::new("num", arrow::datatypes::DataType::Int32, false),
-            arrow::datatypes::Field::new("letter", arrow::datatypes::DataType::Utf8, false),
+            Field::new("num", DataType::Int32, false),
+            Field::new("letter", DataType::Utf8, false),
         ])),
         vec![
-            Arc::new(datafusion::arrow::array::Int32Array::from(vec![8, 9])),
-            Arc::new(datafusion::arrow::array::StringArray::from(vec![
+            Arc::new(Int32Array::from(vec![8, 9])),
+            Arc::new(StringArray::from(vec![
                 "dd", "ee"
             ])),
         ])).with_save_mode(SaveMode::Append).await?;
@@ -70,15 +70,15 @@ Now let's see how to overwrite the exisitng Delta table.
 
 === "Rust"
     ```rust
-        let table = open_table("./data/simple_table").await?;
-    DeltaOps(table).write(            RecordBatch::try_new(
+    let table = open_table("tmp/some-table").await?;
+    DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            arrow::datatypes::Field::new("num", arrow::datatypes::DataType::Int32, false),
-            arrow::datatypes::Field::new("letter", arrow::datatypes::DataType::Utf8, false),
+            Field::new("num", DataType::Int32, false),
+            Field::new("letter", DataType::Utf8, false),
         ])),
         vec![
-            Arc::new(datafusion::arrow::array::Int32Array::from(vec![1, 2, 3])),
-            Arc::new(datafusion::arrow::array::StringArray::from(vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
                 "a", "b", "c",
             ])),
         ])).with_save_mode(SaveMode::Overwrite).await?;
@@ -104,7 +104,7 @@ Overwriting just performs a logical delete.  It doesn't physically remove the pr
 
 === "Rust"
     ```rust
-    let mut table = open_table("./data/simple_table").await?;
+    let mut table = open_table("tmp/some-table").await?;
     table.load_version(1).await?;
     ```
 
