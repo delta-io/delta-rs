@@ -78,7 +78,7 @@ impl LogStoreFactory for S3LogStoreFactory {
                 store,
             )?));
         }
-        Ok(default_logstore(store, location, &options))
+        Ok(default_logstore(store, location, options))
     }
 }
 
@@ -141,6 +141,7 @@ impl std::fmt::Debug for DynamoDbLockClient {
 
 impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         sdk_config: &SdkConfig,
         lock_table_name: Option<String>,

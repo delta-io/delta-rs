@@ -670,6 +670,7 @@ impl RawDeltaTable {
     }
 
     #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, allow_out_of_range = false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn load_cdf(
         &mut self,
         py: Python,
