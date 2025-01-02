@@ -106,6 +106,10 @@ impl ScalarExt for Scalar {
                 .as_any()
                 .downcast_ref::<LargeStringArray>()
                 .map(|v| Self::String(v.value(index).to_string())),
+            Utf8View => arr
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .map(|v| Self::String(v.value(index).to_string())),
             Boolean => arr
                 .as_any()
                 .downcast_ref::<BooleanArray>()
@@ -121,6 +125,10 @@ impl ScalarExt for Scalar {
             FixedSizeBinary(_) => arr
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
+                .map(|v| Self::Binary(v.value(index).to_vec())),
+            BinaryView => arr
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
                 .map(|v| Self::Binary(v.value(index).to_vec())),
             Int8 => arr
                 .as_any()
@@ -217,8 +225,6 @@ impl ScalarExt for Scalar {
             | Dictionary(_, _)
             | RunEndEncoded(_, _)
             | Union(_, _)
-            | Utf8View
-            | BinaryView
             | ListView(_)
             | LargeListView(_)
             | Null => None,
