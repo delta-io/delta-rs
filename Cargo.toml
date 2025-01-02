@@ -26,7 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.5.0", features = ["default-engine"] }
+delta_kernel = { version = "0.6.0", features = ["default-engine"] }
 #delta_kernel = { path = "../delta-kernel-rs/kernel", features = ["sync-engine"]  }
 
 # arrow
@@ -41,20 +41,20 @@ arrow-ord = { version = "53" }
 arrow-row = { version = "53" }
 arrow-schema = { version = "53" }
 arrow-select = { version = "53" }
-object_store = { version = "0.11" }
+object_store = { version = "0.11.2" }
 parquet = { version = "53" }
 
 # datafusion
-datafusion = { version = "43" }
-datafusion-expr = { version = "43" }
-datafusion-common = { version = "43" }
-datafusion-ffi = { version = "43" }
-datafusion-functions = { version = "43" }
-datafusion-functions-aggregate = { version = "43" }
-datafusion-physical-expr = { version = "43" }
-datafusion-physical-plan = { version = "43" }
-datafusion-proto = { version = "43" }
-datafusion-sql = { version = "43" }
+datafusion = { version = "44" }
+datafusion-expr = { version = "44" }
+datafusion-common = { version = "44" }
+datafusion-ffi = { version = "44" }
+datafusion-functions = { version = "44" }
+datafusion-functions-aggregate = { version = "44" }
+datafusion-physical-expr = { version = "44" }
+datafusion-physical-plan = { version = "44" }
+datafusion-proto = { version = "44" }
+datafusion-sql = { version = "44" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -75,3 +75,4 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+

@@ -205,8 +205,7 @@ impl TokenCredential for AzureCliCredential {
                             "got unexpected token type from azure cli: {0}",
                             token_response.token_type
                         ),
-                    }
-                    .into());
+                    });
                 }
                 let duration =
                     token_response.expires_on.naive_local() - chrono::Local::now().naive_local();
@@ -224,18 +223,15 @@ impl TokenCredential for AzureCliCredential {
                 let message = String::from_utf8_lossy(&az_output.stderr);
                 Err(UnityCatalogError::AzureCli {
                     message: message.into(),
-                }
-                .into())
+                })
             }
             Err(e) => match e.kind() {
                 std::io::ErrorKind::NotFound => Err(UnityCatalogError::AzureCli {
                     message: "Azure Cli not installed".into(),
-                }
-                .into()),
+                }),
                 error_kind => Err(UnityCatalogError::AzureCli {
                     message: format!("io error: {error_kind:?}"),
-                }
-                .into()),
+                }),
             },
         }
     }

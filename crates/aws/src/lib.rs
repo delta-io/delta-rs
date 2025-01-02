@@ -26,11 +26,11 @@ use aws_sdk_dynamodb::{
     Client,
 };
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
+use deltalake_core::storage::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
 use lazy_static::lazy_static;
-use object_store::aws::AmazonS3ConfigKey;
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -40,6 +40,7 @@ use std::{
 };
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
 use tracing::debug;
+use tracing::warn;
 use url::Url;
 
 #[derive(Clone, Debug, Default)]
@@ -54,19 +55,6 @@ impl LogStoreFactory for S3LogStoreFactory {
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let store = url_prefix_handler(store, Path::parse(location.path())?);
 
-        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
-        if options.0.keys().any(|key| {
-            let key = key.to_ascii_lowercase();
-            [
-                AmazonS3ConfigKey::ConditionalPut.as_ref(),
-                "conditional_put",
-            ]
-            .contains(&key.as_str())
-        }) {
-            debug!("S3LogStoreFactory has been asked to create a default LogStore where the underlying store has Conditonal Put enabled - no locking provider required");
-            return Ok(default_logstore(store, location, options));
-        }
-
         if options.0.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
@@ -76,22 +64,21 @@ impl LogStoreFactory for S3LogStoreFactory {
             .contains(&key.as_str())
         }) {
             debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
+            warn!("Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put.");
             return Ok(logstore::default_s3_logstore(store, location, options));
         }
 
         let s3_options = S3StorageOptions::from_map(&options.0)?;
-
-        if s3_options.locking_provider.as_deref() != Some("dynamodb") {
-            debug!("S3LogStoreFactory has been asked to create a LogStore without the dynamodb locking provider");
-            return Ok(logstore::default_s3_logstore(store, location, options));
+        if s3_options.locking_provider.as_deref() == Some("dynamodb") {
+            debug!("S3LogStoreFactory has been asked to create a LogStore with the dynamodb locking provider");
+            return Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
+                location.clone(),
+                options.clone(),
+                &s3_options,
+                store,
+            )?));
         }
-
-        Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
-            location.clone(),
-            options.clone(),
-            &s3_options,
-            store,
-        )?))
+        Ok(default_logstore(store, location, options))
     }
 }
 
@@ -154,6 +141,7 @@ impl std::fmt::Debug for DynamoDbLockClient {
 
 impl DynamoDbLockClient {
     /// Creates a new DynamoDbLockClient from the supplied storage options.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         sdk_config: &SdkConfig,
         lock_table_name: Option<String>,
@@ -777,7 +765,22 @@ mod tests {
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();
-        assert_eq!(logstore.name(), "S3LogStore");
+        assert_eq!(logstore.name(), "DefaultLogStore");
+    }
+
+    #[test]
+    #[serial]
+    fn test_logstore_factory_with_locking_provider() {
+        let factory = S3LogStoreFactory::default();
+        let store = InMemory::new();
+        let url = Url::parse("s3://test-bucket").unwrap();
+        unsafe {
+            std::env::set_var(crate::constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+        }
+        let logstore = factory
+            .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
+            .unwrap();
+        assert_eq!(logstore.name(), "S3DynamoDbLogStore");
     }
 
     #[test]
