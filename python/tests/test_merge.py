@@ -190,7 +190,7 @@ def test_merge_when_matched_update_all_with_exclude(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-    ).when_matched_update_all(exclude=["sold"]).execute()
+    ).when_matched_update_all(except_cols=["sold"]).execute()
 
     expected = pa.table(
         {
@@ -400,7 +400,7 @@ def test_merge_when_not_matched_insert_all_with_exclude(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-    ).when_not_matched_insert_all(exclude=["sold"]).execute()
+    ).when_not_matched_insert_all(except_cols=["sold"]).execute()
 
     expected = pa.table(
         {

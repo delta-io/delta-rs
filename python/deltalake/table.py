@@ -1523,11 +1523,11 @@ class TableMerger:
         return self
 
     def when_matched_update_all(
-        self, predicate: Optional[str] = None, exclude: Optional[List[str]] = None
+        self, predicate: Optional[str] = None, except_cols: Optional[List[str]] = None
     ) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
-        If ``exclude`` is specified, then the columns in the exclude list will not be updated.
+        If ``except_cols`` is specified, then the columns in the exclude list will not be updated.
 
         Note:
             Column names with special characters, such as numbers or spaces should be encapsulated
@@ -1535,7 +1535,7 @@ class TableMerger:
 
         Args:
             predicate: SQL like predicate on when to update all columns.
-            exclude: List of columns to exclude from update.
+            except_cols: List of columns to exclude from update.
         Returns:
             TableMerger: TableMerger Object
 
@@ -1586,7 +1586,7 @@ class TableMerger:
                     predicate="target.foo = source.foo",
                     source_alias="source",
                     target_alias="target")
-                .when_matched_update_all(exclude=["bar"])
+                .when_matched_update_all(except_cols=["bar"])
                 .execute()
             )
             {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
@@ -1606,12 +1606,12 @@ class TableMerger:
             (maybe_target_alias + ".") if maybe_target_alias is not None else ""
         )
 
-        exclude_columns = exclude or []
+        except_columns = except_cols or []
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema
-            if col.name not in exclude_columns
+            if col.name not in except_columns
         }
 
         self._builder.when_matched_update(updates, predicate)
@@ -1737,11 +1737,11 @@ class TableMerger:
         return self
 
     def when_not_matched_insert_all(
-        self, predicate: Optional[str] = None, exclude: Optional[List[str]] = None
+        self, predicate: Optional[str] = None, except_cols: Optional[List[str]] = None
     ) -> "TableMerger":
         """Insert a new row to the target table, updating all source fields to target fields. Source and target are
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
-        the new row to be inserted. If ``exclude`` is specified, then the columns in the exclude list will not be inserted.
+        the new row to be inserted. If ``except_cols`` is specified, then the columns in the exclude list will not be inserted.
 
         Note:
             Column names with special characters, such as numbers or spaces should be encapsulated
@@ -1749,7 +1749,7 @@ class TableMerger:
 
         Args:
             predicate: SQL like predicate on when to insert.
-            exclude: List of columns to exclude from insert.
+            except_cols: List of columns to exclude from insert.
 
         Returns:
             TableMerger: TableMerger Object
@@ -1802,7 +1802,7 @@ class TableMerger:
                    predicate='target.foo = source.foo',
                    source_alias='source',
                    target_alias='target')
-               .when_not_matched_insert_all(exclude=["bar"])
+               .when_not_matched_insert_all(except_cols=["bar"])
                .execute()
             )
             {'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
@@ -1823,12 +1823,12 @@ class TableMerger:
             (maybe_target_alias + ".") if maybe_target_alias is not None else ""
         )
 
-        exclude_columns = exclude or []
+        except_columns = except_cols or []
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema
-            if col.name not in exclude_columns
+            if col.name not in except_columns
         }
 
         self._builder.when_not_matched_insert(updates, predicate)
