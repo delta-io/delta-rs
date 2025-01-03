@@ -1522,7 +1522,9 @@ class TableMerger:
         self._builder.when_matched_update(updates, predicate)
         return self
 
-    def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
+    def when_matched_update_all(
+        self, predicate: Optional[str] = None, exclude: Optional[List[str]] = None
+    ) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
 
@@ -1572,9 +1574,12 @@ class TableMerger:
             (maybe_target_alias + ".") if maybe_target_alias is not None else ""
         )
 
+        exclude_columns = exclude or []
+
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema
+            if col.name not in exclude_columns
         }
 
         self._builder.when_matched_update(updates, predicate)
@@ -1700,7 +1705,7 @@ class TableMerger:
         return self
 
     def when_not_matched_insert_all(
-        self, predicate: Optional[str] = None
+        self, predicate: Optional[str] = None, exclude: Optional[List[str]] = None
     ) -> "TableMerger":
         """Insert a new row to the target table, updating all source fields to target fields. Source and target are
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
@@ -1752,9 +1757,13 @@ class TableMerger:
         trgt_alias = (
             (maybe_target_alias + ".") if maybe_target_alias is not None else ""
         )
+
+        exclude_columns = exclude or []
+
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema
+            if col.name not in exclude_columns
         }
 
         self._builder.when_not_matched_insert(updates, predicate)
