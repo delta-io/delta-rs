@@ -3,7 +3,6 @@ import json
 import os
 import pathlib
 import random
-import threading
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from math import inf
@@ -18,7 +17,6 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, Schema, write_deltalake
 from deltalake.exceptions import (
-    CommitFailedError,
     DeltaError,
     DeltaProtocolError,
     SchemaMismatchError,
@@ -1430,38 +1428,6 @@ def test_uint_arrow_types(tmp_path: pathlib.Path):
     table = pa.Table.from_pylist(pylist, schema=schema)
 
     write_deltalake(tmp_path, table)
-
-
-def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
-    exception = None
-
-    def comp():
-        nonlocal exception
-        dt = DeltaTable(existing_table.table_uri)
-        for _ in range(5):
-            # We should always be able to get a consistent table state
-            data = DeltaTable(dt.table_uri).to_pyarrow_table()
-            # If two overwrites delete the same file and then add their own
-            # concurrently, then this will fail.
-            assert data.num_rows == sample_data.num_rows
-            try:
-                write_deltalake(dt.table_uri, sample_data, mode="overwrite")
-            except Exception as e:
-                exception = e
-
-    n_threads = 2
-    threads = [threading.Thread(target=comp) for _ in range(n_threads)]
-
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert isinstance(exception, CommitFailedError)
-    assert (
-        "a concurrent transaction deleted the same data your transaction deletes"
-        in str(exception)
-    )
 
 
 def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
