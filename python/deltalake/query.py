@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from typing import List
 
@@ -8,6 +9,8 @@ import pyarrow
 from deltalake._internal import PyQueryBuilder
 from deltalake.table import DeltaTable
 from deltalake.warnings import ExperimentalWarning
+
+logger = logging.getLogger(__name__)
 
 
 class QueryBuilder:
@@ -25,6 +28,7 @@ class QueryBuilder:
             category=ExperimentalWarning,
         )
         self._query_builder = PyQueryBuilder()
+        self._print_output = False
 
     def register(self, table_name: str, delta_table: DeltaTable) -> QueryBuilder:
         """
@@ -61,4 +65,45 @@ class QueryBuilder:
         >>> results = qb.execute('SELECT * FROM test')
         >>> assert results is not None
         """
-        return self._query_builder.execute(sql)
+        records = self._query_builder.execute(sql)
+        if self._print_output:
+            if len(records) > 0:
+                print(pyarrow.Table.from_batches(records))
+            else:
+                logger.info("The executed query contains no records.")
+
+        return records
+
+    def show(self, print_output: bool = True) -> QueryBuilder:
+        """
+        Controls whether succeeding query outputs would be printed in the console.
+
+        For example:
+
+        >>> tmp = getfixture('tmp_path')
+        >>> import pyarrow as pa
+        >>> from deltalake import DeltaTable, QueryBuilder
+        >>> dt = DeltaTable.create(table_uri=tmp, schema=pa.schema([pa.field('name', pa.string())]))
+        >>> qb = QueryBuilder().register('test', dt)
+        >>> results = qb.show().execute('SELECT * FROM test')
+
+        """
+        self._print_output = print_output
+        return self
+
+    def sql(self, sql: str) -> List[pyarrow.RecordBatch]:
+        """
+        Convenience method for `execute()` method
+
+        For example:
+
+        >>> tmp = getfixture('tmp_path')
+        >>> import pyarrow as pa
+        >>> from deltalake import DeltaTable, QueryBuilder
+        >>> dt = DeltaTable.create(table_uri=tmp, schema=pa.schema([pa.field('name', pa.string())]))
+        >>> qb = QueryBuilder().register('test', dt)
+        >>> query = 'SELECT * FROM test'
+        >>> assert qb.execute(query) == qb.sql(query)
+
+        """
+        return self.execute(sql)
