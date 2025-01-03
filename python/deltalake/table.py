@@ -1540,6 +1540,8 @@ class TableMerger:
             TableMerger: TableMerger Object
 
         Example:
+            ** Update all columns **
+
             ```python
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
@@ -1565,6 +1567,35 @@ class TableMerger:
             0  1  7
             1  2  5
             2  3  6
+            ```
+
+            ** Update all columns except `bar` **
+
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
+
+            data = pa.table({"foo": [1, 2, 3], "bar": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"foo": [1], "bar": [7]})
+
+            (
+                dt.merge(
+                    source=new_data,
+                    predicate="target.foo = source.foo",
+                    source_alias="source",
+                    target_alias="target")
+                .when_matched_update_all(exclude=["bar"])
+                .execute()
+            )
+            {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+
+            dt.to_pandas()
+               foo  bar
+            0  1    4
+            1  2    5
+            2  3    6
             ```
         """
         maybe_source_alias = self._builder.source_alias
@@ -1724,6 +1755,8 @@ class TableMerger:
             TableMerger: TableMerger Object
 
         Example:
+            ** Insert all columns **
+
             ```python
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
@@ -1750,6 +1783,36 @@ class TableMerger:
             1  2  5
             2  3  6
             3  4  7
+            ```
+
+            ** Insert all columns except `bar` **
+
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
+
+            data = pa.table({"foo": [1, 2, 3], "bar": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"foo": [4], "bar": [7]})
+
+            (
+               dt.merge(
+                   source=new_data,
+                   predicate='target.foo = source.foo',
+                   source_alias='source',
+                   target_alias='target')
+               .when_not_matched_insert_all(exclude=["bar"])
+               .execute()
+            )
+            {'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+
+            dt.to_pandas().sort_values("foo", ignore_index=True)
+               foo  bar
+            0  1    4
+            1  2    5
+            2  3    6
+            3  4    NaN
             ```
         """
         maybe_source_alias = self._builder.source_alias
