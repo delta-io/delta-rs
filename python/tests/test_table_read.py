@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from datetime import date, datetime, timezone
@@ -958,11 +959,14 @@ def test_read_query_builder():
         "month": ["4", "12", "12", "12"],
         "day": ["5", "4", "20", "20"],
     }
-    actual = pa.Table.from_batches(
-        QueryBuilder()
-        .register("tbl", dt)
-        .execute("SELECT * FROM tbl WHERE year >= 2021 ORDER BY value")
-    ).to_pydict()
+
+    qb = QueryBuilder().register("tbl", dt)
+    query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
+
+    actual = pa.Table.from_batches(qb.execute(query).fetchall()).to_pydict()
+    assert expected == actual
+
+    actual = pa.Table.from_batches(qb.sql(query).fetchall()).to_pydict()
     assert expected == actual
 
 
@@ -998,5 +1002,22 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             ORDER BY tbl1.date
             """
         )
+        .fetchall()
     ).to_pydict()
     assert expected == actual
+
+
+def test_read_query_builder_show_output(capsys, caplog):
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    logging.getLogger("deltalake").setLevel(logging.INFO)
+
+    qb = QueryBuilder().register("tbl", dt)
+    query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
+    qb.execute(query).show()
+    assert capsys.readouterr().out.strip() != ""
+
+    query = "SELECT * FROM tbl WHERE year >= 9999"
+    qb.execute(query).show()
+    assert "query contains no records" in caplog.text
+    assert capsys.readouterr().out.strip() == ""
