@@ -2,6 +2,7 @@ use arrow_schema::ArrowError;
 use deltalake::datafusion::error::DataFusionError;
 use deltalake::protocol::ProtocolError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
 };
@@ -96,6 +97,14 @@ pub enum PythonError {
     Protocol(#[from] ProtocolError),
     #[error("Error in data fusion")]
     DataFusion(#[from] DataFusionError),
+    #[error("Lock acquisition error")]
+    ThreadingError(String),
+}
+
+impl<T> Into<PythonError> for std::sync::PoisonError<T> {
+    fn into(self) -> PythonError {
+        PythonError::ThreadingError(self.to_string())
+    }
 }
 
 impl From<PythonError> for pyo3::PyErr {
@@ -106,6 +115,7 @@ impl From<PythonError> for pyo3::PyErr {
             PythonError::Arrow(err) => arrow_to_py(err),
             PythonError::Protocol(err) => checkpoint_to_py(err),
             PythonError::DataFusion(err) => datafusion_to_py(err),
+            PythonError::ThreadingError(err) => PyRuntimeError::new_err(err),
         }
     }
 }
