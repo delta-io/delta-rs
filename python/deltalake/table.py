@@ -1527,6 +1527,7 @@ class TableMerger:
     ) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+        If ``exclude`` is specified, then the columns in the exclude list will not be updated.
 
         Note:
             Column names with special characters, such as numbers or spaces should be encapsulated
@@ -1534,7 +1535,7 @@ class TableMerger:
 
         Args:
             predicate: SQL like predicate on when to update all columns.
-
+            exclude: List of columns to exclude from update.
         Returns:
             TableMerger: TableMerger Object
 
@@ -1709,7 +1710,7 @@ class TableMerger:
     ) -> "TableMerger":
         """Insert a new row to the target table, updating all source fields to target fields. Source and target are
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
-        the new row to be inserted.
+        the new row to be inserted. If ``exclude`` is specified, then the columns in the exclude list will not be inserted.
 
         Note:
             Column names with special characters, such as numbers or spaces should be encapsulated
@@ -1717,6 +1718,7 @@ class TableMerger:
 
         Args:
             predicate: SQL like predicate on when to insert.
+            exclude: List of columns to exclude from insert.
 
         Returns:
             TableMerger: TableMerger Object
