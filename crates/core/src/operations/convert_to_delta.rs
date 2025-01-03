@@ -570,13 +570,16 @@ mod tests {
             .unwrap()
             .log_data()
             .into_iter()
-            .flat_map(|add| {
-                add.partition_values()
-                    .unwrap()
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.clone()))
-                    .collect::<Vec<_>>()
+            .filter_map(|add| {
+                add.partition_values_scalar().map(|pv| {
+                    pv.fields()
+                        .iter()
+                        .zip(pv.values().iter())
+                        .map(|(k, v)| (k.name().to_owned(), v.clone()))
+                        .collect::<Vec<_>>()
+                })
             })
+            .flatten()
             .collect::<Vec<_>>();
         partition_values.sort_by_key(|(k, v)| (k.clone(), v.serialize()));
         assert_eq!(partition_values, expected_partition_values);
@@ -587,12 +590,10 @@ mod tests {
     async fn test_convert_to_delta() {
         let path = "../test/tests/data/delta-0.8.0-date";
         let table = create_delta_table(path, Vec::new(), false).await;
-        let action = table
+        let log_data = table
             .get_active_add_actions_by_partitions(&[])
-            .expect("Failed to get Add actions")
-            .next()
-            .expect("Iterator index overflows")
-            .unwrap();
+            .expect("Failed to get Add actions");
+        let action = log_data.iter().next().expect("Iterator index overflows");
         assert_eq!(
             action.path(),
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"

@@ -1,16 +1,20 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::array::AsArray;
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_select::filter::filter_record_batch;
 use chrono::{DateTime, Utc};
-use delta_kernel::expressions::Scalar;
+use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
 
 use super::super::scalars::ScalarExt;
+use super::super::ARROW_HANDLER;
 use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
     DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
@@ -22,36 +26,41 @@ const COL_MIN_VALUES: &str = "minValues";
 const COL_MAX_VALUES: &str = "maxValues";
 const COL_NULL_COUNT: &str = "nullCount";
 
-pub(crate) type PartitionFields<'a> = Arc<IndexMap<&'a str, &'a StructField>>;
-pub(crate) type PartitionValues<'a> = IndexMap<&'a str, Scalar>;
-
 pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
 }
 
-impl PartitionsExt for IndexMap<&str, Scalar> {
+impl PartitionsExt for IndexMap<String, Scalar> {
     fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
+        self.iter()
+            .map(|(k, v)| format!("{k}={}", v.serialize_encoded()))
+            .collect::<Vec<_>>()
+            .join("/")
     }
 }
 
-impl PartitionsExt for IndexMap<String, Scalar> {
+impl PartitionsExt for StructData {
     fn hive_partition_path(&self) -> String {
-        let fields = self
+        self.fields()
             .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
+            .zip(self.values().iter())
+            .map(|(k, v)| format!("{}={}", k.name(), v.serialize_encoded()))
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+}
+
+pub trait StructDataExt {
+    fn get(&self, key: &str) -> Option<&Scalar>;
+}
+
+impl StructDataExt for StructData {
+    fn get(&self, key: &str) -> Option<&Scalar> {
+        self.fields()
+            .iter()
+            .zip(self.values().iter())
+            .find(|(k, _)| k.name() == key)
+            .map(|(_, v)| v)
     }
 }
 
@@ -131,13 +140,10 @@ impl DeletionVectorView<'_> {
 /// functionality, e.g. parsing partition values.
 #[derive(Debug, PartialEq)]
 pub struct LogicalFile<'a> {
-    path: &'a StringArray,
-    /// The on-disk size of this data file in bytes
-    size: &'a Int64Array,
-    /// Last modification time of the file in milliseconds since the epoch.
-    modification_time: &'a Int64Array,
+    data: Arc<RecordBatch>,
     /// The partition values for this logical file.
     partition_values: &'a MapArray,
+    partition_values_parsed: Option<&'a StructArray>,
     /// Struct containing all available statistics for the columns in this file.
     stats: &'a StructArray,
     /// Array containing the deletion vector data.
@@ -145,14 +151,12 @@ pub struct LogicalFile<'a> {
 
     /// Pointer to a specific row in the log data.
     index: usize,
-    /// Schema fields the table is partitioned by.
-    partition_fields: PartitionFields<'a>,
 }
 
 impl LogicalFile<'_> {
     /// Path to the files storage location.
     pub fn path(&self) -> Cow<'_, str> {
-        percent_decode_str(self.path.value(self.index)).decode_utf8_lossy()
+        percent_decode_str(pick::<StringArray>(&self.data, 0).value(self.index)).decode_utf8_lossy()
     }
 
     /// An object store [`Path`] to the file.
@@ -170,12 +174,12 @@ impl LogicalFile<'_> {
 
     /// File size stored on disk.
     pub fn size(&self) -> i64 {
-        self.size.value(self.index)
+        pick::<Int64Array>(&self.data, 1).value(self.index)
     }
 
     /// Last modification time of the file.
     pub fn modification_time(&self) -> i64 {
-        self.modification_time.value(self.index)
+        pick::<Int64Array>(&self.data, 2).value(self.index)
     }
 
     /// Datetime of the last modification time of the file.
@@ -188,59 +192,12 @@ impl LogicalFile<'_> {
         ))
     }
 
-    /// The partition values for this logical file.
-    pub fn partition_values(&self) -> DeltaResult<PartitionValues<'_>> {
-        if self.partition_fields.is_empty() {
-            return Ok(IndexMap::new());
-        }
-        let map_value = self.partition_values.value(self.index);
-        let keys = map_value
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::generic(
-                "expected partition values key field to be of type string",
-            ))?;
-        let values = map_value
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::generic(
-                "expected partition values value field to be of type string",
-            ))?;
-
-        let values = keys
-            .iter()
-            .zip(values.iter())
-            .map(|(k, v)| {
-                let (key, field) = self.partition_fields.get_key_value(k.unwrap()).unwrap();
-                let field_type = match field.data_type() {
-                    DataType::Primitive(p) => Ok(p),
-                    _ => Err(DeltaTableError::generic(
-                        "nested partitioning values are not supported",
-                    )),
-                }?;
-                Ok((
-                    *key,
-                    v.map(|vv| field_type.parse_scalar(vv))
-                        .transpose()?
-                        .unwrap_or(Scalar::Null(field.data_type().clone())),
-                ))
+    pub fn partition_values_scalar(&self) -> Option<StructData> {
+        self.partition_values_parsed
+            .and_then(|arr| match Scalar::from_array(arr, self.index) {
+                Some(Scalar::Struct(s)) => Some(s),
+                _ => None,
             })
-            .collect::<DeltaResult<HashMap<_, _>>>()?;
-
-        // NOTE: we recreate the map as a IndexMap to ensure the order of the keys is consistently
-        // the same as the order of partition fields.
-        self.partition_fields
-            .iter()
-            .map(|(k, f)| {
-                let val = values
-                    .get(*k)
-                    .cloned()
-                    .unwrap_or(Scalar::Null(f.data_type.clone()));
-                Ok((*k, val))
-            })
-            .collect::<DeltaResult<IndexMap<_, _>>>()
     }
 
     /// Defines a deletion vector
@@ -293,11 +250,13 @@ impl LogicalFile<'_> {
             deletion_timestamp: Some(Utc::now().timestamp_millis()),
             extended_file_metadata: Some(true),
             size: Some(self.size()),
-            partition_values: self.partition_values().ok().map(|pv| {
-                pv.iter()
+            partition_values: self.partition_values_scalar().map(|pv| {
+                pv.fields()
+                    .iter()
+                    .zip(pv.values().iter())
                     .map(|(k, v)| {
                         (
-                            k.to_string(),
+                            k.name().to_owned(),
                             if v.is_null() {
                                 None
                             } else {
@@ -318,11 +277,11 @@ impl LogicalFile<'_> {
 impl<'a> TryFrom<&LogicalFile<'a>> for ObjectMeta {
     type Error = DeltaTableError;
 
-    fn try_from(file_stats: &LogicalFile<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: &LogicalFile<'a>) -> Result<Self, Self::Error> {
         Ok(ObjectMeta {
-            location: file_stats.object_store_path(),
-            size: file_stats.size() as usize,
-            last_modified: file_stats.modification_datetime()?,
+            location: value.object_store_path(),
+            size: value.size() as usize,
+            last_modified: value.modification_datetime()?,
             version: None,
             e_tag: None,
         })
@@ -331,15 +290,48 @@ impl<'a> TryFrom<&LogicalFile<'a>> for ObjectMeta {
 
 /// Helper for processing data from the materialized Delta log.
 pub struct FileStatsAccessor<'a> {
-    partition_fields: PartitionFields<'a>,
-    paths: &'a StringArray,
+    data: Arc<RecordBatch>,
     sizes: &'a Int64Array,
-    modification_times: &'a Int64Array,
     stats: &'a StructArray,
     deletion_vector: Option<DeletionVector<'a>>,
     partition_values: &'a MapArray,
+    partition_values_parsed: Option<&'a StructArray>,
     length: usize,
     pointer: usize,
+}
+
+lazy_static::lazy_static! {
+    static ref FILE_SCHEMA: StructType = StructType::new([
+        StructField::new("path", DataType::STRING, false),
+        StructField::new("size", DataType::LONG, false),
+    ]);
+    static ref FILE_PICKER: Arc<dyn ExpressionEvaluator> = ARROW_HANDLER.get_evaluator(
+        Arc::new(FILE_SCHEMA.clone()),
+        Expression::struct_from([
+            Expression::column(["add", "path"]),
+            Expression::column(["add", "size"]),
+            Expression::column(["add", "modificationTime"])
+        ]),
+        DataType::struct_type([
+            StructField::new("path", DataType::STRING, false),
+            StructField::new("size", DataType::LONG, false),
+            StructField::new("modification_time", DataType::LONG, false),
+        ]),
+    );
+}
+
+fn pick<'a, T: Array + 'static>(data: &'a RecordBatch, idx: usize) -> &'a T {
+    data.column(idx)
+        .as_any()
+        .downcast_ref::<T>()
+        .ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "expected column '{}' to be of type '{}'",
+                idx,
+                std::any::type_name::<T>()
+            ))
+        })
+        .unwrap()
 }
 
 impl<'a> FileStatsAccessor<'a> {
@@ -348,27 +340,21 @@ impl<'a> FileStatsAccessor<'a> {
         metadata: &'a Metadata,
         schema: &'a StructType,
     ) -> DeltaResult<Self> {
-        let paths = extract_and_cast::<StringArray>(data, "add.path")?;
+        let file_data = FILE_PICKER.evaluate(&ArrowEngineData::new(data.clone()))?;
+        let result = file_data
+            .into_any()
+            .downcast::<ArrowEngineData>()
+            .map_err(|_| {
+                DeltaTableError::generic("failed to downcast evaluator result to ArrowEngineData.")
+            })?
+            .record_batch()
+            .clone();
+
         let sizes = extract_and_cast::<Int64Array>(data, "add.size")?;
-        let modification_times = extract_and_cast::<Int64Array>(data, "add.modificationTime")?;
         let stats = extract_and_cast::<StructArray>(data, "add.stats_parsed")?;
         let partition_values = extract_and_cast::<MapArray>(data, "add.partitionValues")?;
-        let partition_fields = Arc::new(
-            metadata
-                .partition_columns
-                .iter()
-                .map(|c| {
-                    Ok((
-                        c.as_str(),
-                        schema
-                            .field(c.as_str())
-                            .ok_or(DeltaTableError::PartitionError {
-                                partition: c.clone(),
-                            })?,
-                    ))
-                })
-                .collect::<DeltaResult<IndexMap<_, _>>>()?,
-        );
+        let partition_values_parsed =
+            extract_and_cast_opt::<StructArray>(data, "add.partitionValues_parsed");
         let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector");
         let deletion_vector = deletion_vector.and_then(|dv| {
             if dv.null_count() == dv.len() {
@@ -391,13 +377,12 @@ impl<'a> FileStatsAccessor<'a> {
         });
 
         Ok(Self {
-            partition_fields,
-            paths,
+            data: Arc::new(result),
             sizes,
-            modification_times,
             stats,
             deletion_vector,
             partition_values,
+            partition_values_parsed,
             length: data.num_rows(),
             pointer: 0,
         })
@@ -411,11 +396,9 @@ impl<'a> FileStatsAccessor<'a> {
             )));
         }
         Ok(LogicalFile {
-            path: self.paths,
-            size: self.sizes,
-            modification_time: self.modification_times,
+            data: self.data.clone(),
             partition_values: self.partition_values,
-            partition_fields: self.partition_fields.clone(),
+            partition_values_parsed: self.partition_values_parsed.clone(),
             stats: self.stats,
             deletion_vector: self.deletion_vector.clone(),
             index,
@@ -434,6 +417,198 @@ impl<'a> Iterator for FileStatsAccessor<'a> {
         let file_stats = self.get(self.pointer).unwrap();
         self.pointer += 1;
         Some(file_stats)
+    }
+}
+
+pub struct LogFileView<'a> {
+    data: &'a RecordBatch,
+    curr: Option<usize>,
+}
+
+impl LogFileView<'_> {
+    fn index(&self) -> usize {
+        self.curr.expect("index initialized")
+    }
+
+    /// Path to the files storage location.
+    pub fn path(&self) -> Cow<'_, str> {
+        percent_decode_str(pick::<StringArray>(&self.data, 0).value(self.index()))
+            .decode_utf8_lossy()
+    }
+
+    /// An object store [`Path`] to the file.
+    ///
+    /// this tries to parse the file string and if that fails, it will return the string as is.
+    // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
+    pub fn object_store_path(&self) -> Path {
+        let path = self.path();
+        // Try to preserve percent encoding if possible
+        match Path::parse(path.as_ref()) {
+            Ok(path) => path,
+            Err(_) => Path::from(path.as_ref()),
+        }
+    }
+
+    /// File size stored on disk.
+    pub fn size(&self) -> i64 {
+        pick::<Int64Array>(&self.data, 1).value(self.index())
+    }
+
+    /// Last modified time of the file.
+    pub fn modification_time(&self) -> i64 {
+        pick::<Int64Array>(&self.data, 2).value(self.index())
+    }
+
+    /// Datetime of the last modification time of the file.
+    pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or(DeltaTableError::from(
+            crate::protocol::ProtocolError::InvalidField(format!(
+                "invalid modification_time: {:?}",
+                self.modification_time()
+            )),
+        ))
+    }
+
+    pub fn partition_values(&self) -> Option<StructData> {
+        self.data
+            .column_by_name("partition_values")
+            .and_then(|c| c.as_struct_opt())
+            .and_then(|arr| match Scalar::from_array(arr, self.index()) {
+                Some(Scalar::Struct(s)) => Some(s),
+                _ => None,
+            })
+    }
+
+    fn stats(&self) -> Option<&StructArray> {
+        self.data
+            .column_by_name("stats")
+            .and_then(|c| c.as_struct_opt())
+    }
+
+    /// The number of records stored in the data file.
+    pub fn num_records(&self) -> Option<usize> {
+        self.stats().and_then(|c| {
+            c.column_by_name(COL_NUM_RECORDS)
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                .map(|a| a.value(self.index()) as usize)
+        })
+    }
+
+    /// Struct containing all available null counts for the columns in this file.
+    pub fn null_counts(&self) -> Option<Scalar> {
+        self.stats().and_then(|c| {
+            c.column_by_name(COL_NULL_COUNT)
+                .and_then(|c| Scalar::from_array(c.as_ref(), self.index()))
+        })
+    }
+
+    /// Struct containing all available min values for the columns in this file.
+    pub fn min_values(&self) -> Option<Scalar> {
+        self.stats().and_then(|c| {
+            c.column_by_name(COL_MIN_VALUES)
+                .and_then(|c| Scalar::from_array(c.as_ref(), self.index()))
+        })
+    }
+
+    /// Struct containing all available max values for the columns in this file.
+    pub fn max_values(&self) -> Option<Scalar> {
+        self.stats().and_then(|c| {
+            c.column_by_name(COL_MAX_VALUES)
+                .and_then(|c| Scalar::from_array(c.as_ref(), self.index()))
+        })
+    }
+}
+
+impl<'a> Iterator for LogFileView<'a> {
+    type Item = LogFileView<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.data.num_rows() < 1 {
+            return None;
+        }
+        if self.curr.is_some() && self.index() >= self.data.num_rows() - 1 {
+            return None;
+        }
+        self.curr = self.curr.map(|c| c + 1).or(Some(0));
+        Some(Self {
+            data: self.data,
+            curr: self.curr,
+        })
+    }
+}
+
+impl<'a> TryFrom<&LogFileView<'a>> for ObjectMeta {
+    type Error = DeltaTableError;
+
+    fn try_from(value: &LogFileView<'a>) -> Result<Self, Self::Error> {
+        Ok(ObjectMeta {
+            location: value.object_store_path(),
+            size: value.size() as usize,
+            last_modified: value.modification_datetime()?,
+            version: None,
+            e_tag: None,
+        })
+    }
+}
+
+pub struct LogDataView {
+    data: RecordBatch,
+    metadata: Metadata,
+    schema: StructType,
+}
+
+impl LogDataView {
+    pub(crate) fn new(data: RecordBatch, metadata: Metadata, schema: StructType) -> Self {
+        Self {
+            data,
+            metadata,
+            schema,
+        }
+    }
+
+    fn partition_data(&self) -> Option<RecordBatch> {
+        self.data
+            .column_by_name("partition_values")
+            .and_then(|c| c.as_any().downcast_ref::<StructArray>())
+            .map(|c| c.into())
+    }
+
+    pub fn with_partition_filter(self, predicate: Option<&Expression>) -> DeltaResult<Self> {
+        if let (Some(pred), Some(data)) = (predicate, self.partition_data()) {
+            let data = ArrowEngineData::new(data);
+            let evaluator = ARROW_HANDLER.get_evaluator(
+                Arc::new(data.record_batch().schema_ref().as_ref().try_into()?),
+                pred.clone(),
+                DataType::BOOLEAN,
+            );
+            let result = ArrowEngineData::try_from_engine_data(evaluator.evaluate(&data)?)?;
+            let filter = result.record_batch().column(0).as_boolean();
+            return Ok(Self {
+                data: filter_record_batch(&self.data, filter)?,
+                metadata: self.metadata,
+                schema: self.schema,
+            });
+        }
+        Ok(self)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LogFileView<'_>> {
+        LogFileView {
+            data: &self.data,
+            curr: None,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a LogDataView {
+    type Item = LogFileView<'a>;
+    type IntoIter = LogFileView<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LogFileView {
+            data: &self.data,
+            curr: None,
+        }
     }
 }
 
@@ -865,8 +1040,8 @@ mod tests {
 
         assert_eq!(json_action.path(), struct_action.path());
         assert_eq!(
-            json_action.partition_values().unwrap(),
-            struct_action.partition_values().unwrap()
+            json_action.partition_values_scalar(),
+            struct_action.partition_values_scalar()
         );
         // assert_eq!(
         //     json_action.max_values().unwrap(),
