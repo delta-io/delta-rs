@@ -18,12 +18,30 @@ Suppose you have a Delta table with the following contents:
 
 Append two additional rows of data to the table:
 
-```python
-from deltalake import write_deltalake, DeltaTable
+=== "Python"
 
-df = pd.DataFrame({"num": [8, 9], "letter": ["dd", "ee"]})
-write_deltalake("tmp/some-table", df, mode="append")
-```
+    ```python
+    from deltalake import write_deltalake, DeltaTable
+
+    df = pd.DataFrame({"num": [8, 9], "letter": ["dd", "ee"]})
+    write_deltalake("tmp/some-table", df, mode="append")
+    ```
+
+=== "Rust"
+    ```rust
+    let table = open_table("tmp/some-table").await?;
+    DeltaOps(table).write(RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("num", DataType::Int32, false),
+            Field::new("letter", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![8, 9])),
+            Arc::new(StringArray::from(vec![
+                "dd", "ee"
+            ])),
+        ])).with_save_mode(SaveMode::Append).await?;
+    ```
 
 Here are the updated contents of the Delta table:
 
@@ -44,12 +62,27 @@ Now let's see how to perform an overwrite transaction.
 ## Delta Lake overwrite transactions
 
 Now let's see how to overwrite the exisitng Delta table.
+=== "Python"
+    ```python
+    df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
+    write_deltalake("tmp/some-table", df, mode="overwrite")
+    ```
 
-```python
-df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
-write_deltalake("tmp/some-table", df, mode="overwrite")
-```
-
+=== "Rust"
+    ```rust
+    let table = open_table("tmp/some-table").await?;
+    DeltaOps(table).write(RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("num", DataType::Int32, false),
+            Field::new("letter", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
+                "a", "b", "c",
+            ])),
+        ])).with_save_mode(SaveMode::Overwrite).await?;
+    ```
 Here are the contents of the Delta table after the overwrite operation:
 
 ```
@@ -63,9 +96,20 @@ Here are the contents of the Delta table after the overwrite operation:
 
 Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessable.
 
-```python
-dt = DeltaTable("tmp/some-table", version=1)
+=== "Python"
 
+    ```python
+    dt = DeltaTable("tmp/some-table", version=1)
+    ```
+
+=== "Rust"
+    ```rust
+    let mut table = open_table("tmp/some-table").await?;
+    table.load_version(1).await?;
+    ```
+
+
+```
 +-------+----------+
 |   num | letter   |
 |-------+----------|
