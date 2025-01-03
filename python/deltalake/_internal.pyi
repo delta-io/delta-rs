@@ -222,6 +222,21 @@ class RawDeltaTable:
         ending_timestamp: Optional[str] = None,
         allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader: ...
+    def write(
+        self,
+        data: pyarrow.RecordBatchReader,
+        partition_by: Optional[List[str]],
+        mode: str,
+        schema_mode: Optional[str],
+        predicate: Optional[str],
+        target_file_size: Optional[int],
+        name: Optional[str],
+        description: Optional[str],
+        configuration: Optional[Mapping[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
+        commit_properties: Optional[CommitProperties],
+        post_commithook_properties: Optional[PostCommitHookProperties],
+    ) -> None: ...
     def transaction_versions(self) -> Dict[str, Transaction]: ...
     def __datafusion_table_provider__(self) -> Any: ...
 
@@ -243,7 +258,6 @@ def write_to_deltalake(
     data: pyarrow.RecordBatchReader,
     partition_by: Optional[List[str]],
     mode: str,
-    table: Optional[RawDeltaTable],
     schema_mode: Optional[str],
     predicate: Optional[str],
     target_file_size: Optional[int],
