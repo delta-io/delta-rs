@@ -942,8 +942,10 @@ fn build_compaction_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (StructData, Vec<ObjectMeta>)> = HashMap::new();
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let add = add?;
+    for add in snapshot
+        .get_active_add_actions_by_partitions(filters)?
+        .iter()
+    {
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;
         if (object_meta.size as i64) > target_size {
@@ -951,7 +953,7 @@ fn build_compaction_plan(
             continue;
         }
         let partition_values = add
-            .partition_values_scalar()
+            .partition_values()
             .unwrap_or_else(|| StructData::try_new(vec![], vec![]).unwrap());
 
         partition_files
@@ -1044,10 +1046,12 @@ fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (StructData, MergeBin)> = HashMap::new();
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let add = add?;
+    for add in snapshot
+        .get_active_add_actions_by_partitions(filters)?
+        .into_iter()
+    {
         let partition_values = add
-            .partition_values_scalar()
+            .partition_values()
             .unwrap_or_else(|| StructData::try_new(vec![], vec![]).unwrap());
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;

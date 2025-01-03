@@ -590,12 +590,10 @@ mod tests {
     async fn test_convert_to_delta() {
         let path = "../test/tests/data/delta-0.8.0-date";
         let table = create_delta_table(path, Vec::new(), false).await;
-        let action = table
+        let log_data = table
             .get_active_add_actions_by_partitions(&[])
-            .expect("Failed to get Add actions")
-            .next()
-            .expect("Iterator index overflows")
-            .unwrap();
+            .expect("Failed to get Add actions");
+        let action = log_data.iter().next().expect("Iterator index overflows");
         assert_eq!(
             action.path(),
             "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet"

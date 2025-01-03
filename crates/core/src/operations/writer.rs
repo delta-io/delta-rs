@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
-use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::expressions::Scalar;
 use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};

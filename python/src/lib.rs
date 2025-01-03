@@ -947,14 +947,13 @@ impl RawDeltaTable {
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
 
-        let adds = self
+        let log_data = self
             ._table
             .snapshot()
             .map_err(PythonError::from)?
             .get_active_add_actions_by_partitions(&converted_filters)
-            .map_err(PythonError::from)?
-            .collect::<Result<Vec<_>, _>>()
             .map_err(PythonError::from)?;
+        let adds = log_data.iter().collect::<Vec<_>>();
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
@@ -964,7 +963,7 @@ impl RawDeltaTable {
                         .flat_map(|col| {
                             Ok::<_, PythonError>((
                                 *col,
-                                add.partition_values_scalar()
+                                add.partition_values()
                                     .ok_or_else(|| {
                                         PythonError::DeltaTable(DeltaTableError::generic(format!(
                                             "Partition value missing for column: {}",
@@ -1025,14 +1024,13 @@ impl RawDeltaTable {
                         .get_active_add_actions_by_partitions(&converted_filters)
                         .map_err(PythonError::from)?;
 
-                    for old_add in add_actions {
-                        let old_add = old_add.map_err(PythonError::from)?;
+                    for old_add in add_actions.iter() {
                         let remove_action = Action::Remove(Remove {
                             path: old_add.path().to_string(),
                             deletion_timestamp: Some(current_timestamp()),
                             data_change: true,
                             extended_file_metadata: Some(true),
-                            partition_values: old_add.partition_values_scalar().map(|pv| {
+                            partition_values: old_add.partition_values().map(|pv| {
                                 pv.fields()
                                     .iter()
                                     .zip(pv.values().iter())

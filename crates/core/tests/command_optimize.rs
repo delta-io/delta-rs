@@ -242,11 +242,10 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 2);
     assert_eq!(dt.get_files_count(), 3);
 
-    let partition_adds = dt
-        .get_active_add_actions_by_partitions(&filter)?
-        .collect::<Result<Vec<_>, _>>()?;
+    let log_data = dt.get_active_add_actions_by_partitions(&filter)?;
+    let partition_adds = log_data.iter().collect::<Vec<_>>();
     assert_eq!(partition_adds.len(), 1);
-    let partition_values = partition_adds[0].partition_values_scalar().unwrap();
+    let partition_values = partition_adds[0].partition_values().unwrap();
     assert_eq!(
         partition_values.get("date"),
         Some(&delta_kernel::expressions::Scalar::String(

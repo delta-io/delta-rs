@@ -11,6 +11,7 @@ use lazy_static::lazy_static;
 pub(crate) mod extract;
 pub(crate) mod json;
 
+pub(crate) const LIST_ARRAY_ROOT: &str = "element";
 const MAP_ROOT_DEFAULT: &str = "key_value";
 const MAP_KEY_DEFAULT: &str = "key";
 const MAP_VALUE_DEFAULT: &str = "value";

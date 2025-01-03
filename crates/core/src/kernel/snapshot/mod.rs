@@ -20,8 +20,11 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 
 use ::serde::{Deserialize, Serialize};
-use arrow_array::RecordBatch;
-use delta_kernel::Expression;
+use arrow::compute::concat_batches;
+use arrow_array::{Array, RecordBatch, StructArray};
+use arrow_schema::{Field as ArrowField, Fields, SchemaRef};
+use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::{Expression, ExpressionHandler};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -36,7 +39,7 @@ use super::{
     Transaction,
 };
 use crate::kernel::parse::read_cdf_adds;
-use crate::kernel::{ActionType, StructType};
+use crate::kernel::{ActionType, StructType, ARROW_HANDLER};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
@@ -537,6 +540,69 @@ impl EagerSnapshot {
         LogDataHandler::new(&self.files, self.metadata(), self.schema())
     }
 
+    fn log_data_batch(&self, _predicate: Option<&Expression>) -> DeltaResult<RecordBatch> {
+        let stats_schema = self.snapshot.stats_schema(None)?;
+
+        let mut columns = vec![
+            Expression::column(["add", "path"]),
+            Expression::column(["add", "size"]),
+            Expression::column(["add", "modificationTime"]),
+            Expression::struct_from(
+                stats_schema
+                    .fields()
+                    .map(|f| Expression::column(["add", "stats_parsed", f.name().as_str()])),
+            ),
+        ];
+
+        let mut out_fields = vec![
+            StructField::new("path", DataType::STRING, false),
+            StructField::new("size", DataType::LONG, false),
+            StructField::new("modification_time", DataType::LONG, false),
+            StructField::new("stats", stats_schema.clone(), false),
+        ];
+
+        if let Some(partition_schema) = self.snapshot.partitions_schema(None)? {
+            columns.push(Expression::column(["add", "partitionValues_parsed"]));
+            out_fields.push(StructField::new(
+                "partition_values",
+                partition_schema,
+                false,
+            ));
+        }
+
+        let expression = Expression::struct_from(columns);
+        let output_type = DataType::struct_type(out_fields.clone());
+        let batch_schema: SchemaRef = Arc::new((&StructType::new(out_fields.clone())).try_into()?);
+
+        let mut results = vec![];
+        for batch in &self.files {
+            let data_schema = Arc::new(batch.schema().as_ref().try_into()?);
+            let evaluator =
+                ARROW_HANDLER.get_evaluator(data_schema, expression.clone(), output_type.clone());
+            let engine_data = ArrowEngineData::new(batch.clone());
+            let result = ArrowEngineData::try_from_engine_data(evaluator.evaluate(&engine_data)?)?;
+            let mut columns = result.record_batch().columns().to_vec();
+            if let Some(stats_col) = result.record_batch().column_by_name("stats") {
+                let stats = stats_col
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| DeltaTableError::generic("expected struct array"))?;
+                columns[3] = fill_with_null(&stats_schema, stats)?;
+            };
+            results.push(RecordBatch::try_new(batch_schema.clone(), columns)?);
+        }
+
+        Ok(concat_batches(results[0].schema_ref(), &results)?)
+    }
+
+    pub fn log_data_new(&self) -> DeltaResult<LogDataView> {
+        Ok(LogDataView::new(
+            self.log_data_batch(None)?,
+            self.metadata().clone(),
+            self.schema().clone(),
+        ))
+    }
+
     /// Get the number of files in the snapshot
     pub fn files_count(&self) -> usize {
         self.files.iter().map(|f| f.num_rows()).sum()
@@ -649,6 +715,52 @@ impl EagerSnapshot {
     }
 }
 
+fn fill_with_null(
+    stats_schema: &StructType,
+    stats: &StructArray,
+) -> Result<Arc<dyn Array>, DeltaTableError> {
+    let arrays = stats_schema
+        .fields()
+        .map(|field| {
+            if let Some(col_arr) = stats.column_by_name(field.name()) {
+                if matches!(field.data_type(), DataType::Struct(_)) {
+                    let struct_arr =
+                        col_arr
+                            .as_any()
+                            .downcast_ref::<StructArray>()
+                            .ok_or_else(|| {
+                                DeltaTableError::Generic("expected struct array".to_string())
+                            })?;
+                    let struct_field = stats_schema.field(field.name()).unwrap().data_type();
+                    if let DataType::Struct(struct_schema) = struct_field {
+                        fill_with_null(struct_schema, struct_arr)
+                    } else {
+                        return Err(DeltaTableError::Generic(
+                            "expected struct data type".to_string(),
+                        ));
+                    }
+                } else {
+                    Ok(col_arr.clone())
+                }
+            } else {
+                null_array(field.data_type(), stats.len())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fields = Fields::from(
+        stats_schema
+            .fields()
+            .map(ArrowField::try_from)
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    let new_arr = Arc::new(StructArray::try_new(
+        fields,
+        arrays,
+        stats.nulls().cloned(),
+    )?);
+    Ok(new_arr)
+}
+
 fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<StructType> {
     let stats_fields = if let Some(stats_cols) = config.stats_columns() {
         stats_cols
@@ -752,6 +864,49 @@ fn to_count_field(field: &StructField) -> Option<StructField> {
     }
 }
 
+fn null_array(data_type: &DataType, num_rows: usize) -> DeltaResult<Arc<dyn arrow::array::Array>> {
+    use crate::kernel::arrow::LIST_ARRAY_ROOT;
+    use arrow_array::*;
+    use delta_kernel::schema::PrimitiveType;
+
+    let arr: Arc<dyn arrow::array::Array> = match data_type {
+        DataType::Primitive(primitive) => match primitive {
+            PrimitiveType::Byte => Arc::new(Int8Array::new_null(num_rows)),
+            PrimitiveType::Short => Arc::new(Int16Array::new_null(num_rows)),
+            PrimitiveType::Integer => Arc::new(Int32Array::new_null(num_rows)),
+            PrimitiveType::Long => Arc::new(Int64Array::new_null(num_rows)),
+            PrimitiveType::Float => Arc::new(Float32Array::new_null(num_rows)),
+            PrimitiveType::Double => Arc::new(Float64Array::new_null(num_rows)),
+            PrimitiveType::String => Arc::new(StringArray::new_null(num_rows)),
+            PrimitiveType::Boolean => Arc::new(BooleanArray::new_null(num_rows)),
+            PrimitiveType::Timestamp => {
+                Arc::new(TimestampMicrosecondArray::new_null(num_rows).with_timezone("UTC"))
+            }
+            PrimitiveType::TimestampNtz => Arc::new(TimestampMicrosecondArray::new_null(num_rows)),
+            PrimitiveType::Date => Arc::new(Date32Array::new_null(num_rows)),
+            PrimitiveType::Binary => Arc::new(BinaryArray::new_null(num_rows)),
+            PrimitiveType::Decimal(precision, scale) => Arc::new(
+                Decimal128Array::new_null(num_rows)
+                    .with_precision_and_scale(*precision, *scale as i8)?,
+            ),
+        },
+        DataType::Struct(t) => {
+            let fields = Fields::from(
+                t.fields()
+                    .map(ArrowField::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            Arc::new(StructArray::new_null(fields, num_rows))
+        }
+        DataType::Array(t) => {
+            let field = ArrowField::new(LIST_ARRAY_ROOT, t.element_type().try_into()?, true);
+            Arc::new(ListArray::new_null(Arc::new(field), num_rows))
+        }
+        DataType::Map { .. } => unimplemented!(),
+    };
+    Ok(arr)
+}
+
 #[cfg(feature = "datafusion")]
 mod datafusion {
     use datafusion_common::stats::Statistics;
@@ -809,6 +964,7 @@ fn find_nested_field<'a>(
 mod tests {
     use std::collections::HashMap;
 
+    use arrow_cast::pretty::pretty_format_batches;
     use chrono::Utc;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
@@ -1021,6 +1177,28 @@ mod tests {
         assert!(second
             .iter()
             .all(|(_, add)| { new_files.contains(&add.path) }));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_log_view() -> TestResult {
+        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
+        context.load_table(TestTables::Checkpoints).await?;
+
+        let store = context
+            .table_builder(TestTables::Checkpoints)
+            .build_storage()?
+            .object_store();
+
+        let mut snapshot =
+            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
+                .await?;
+
+        let files = snapshot.log_data_batch(None)?;
+
+        let disp = pretty_format_batches(&[files])?;
+        println!("{}", disp);
 
         Ok(())
     }

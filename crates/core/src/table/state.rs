@@ -1,24 +1,26 @@
 //! The module for delta table state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
 use chrono::Utc;
+use delta_kernel::schema::Schema;
+use delta_kernel::Expression;
 use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
-use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
-#[cfg(test)]
-use crate::kernel::Action;
+use super::{config::TableConfig, DeltaTableConfig};
 use crate::kernel::{
-    ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
-    Protocol, Remove, StructType, Transaction,
+    ActionType, Add, AddCDCFile, EagerSnapshot, LogDataHandler, LogDataView, Metadata, Protocol,
+    Remove, StructType, Transaction,
 };
 use crate::logstore::LogStore;
-use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
+
+#[cfg(test)]
+use crate::kernel::Action;
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ impl DeltaTableState {
     pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
         use crate::operations::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
+        use std::collections::HashMap;
 
         let metadata = actions
             .iter()
@@ -208,50 +211,61 @@ impl DeltaTableState {
     }
 
     /// Obtain Add actions for files that match the filter
-    pub fn get_active_add_actions_by_partitions<'a>(
-        &'a self,
-        filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
+    pub fn get_active_add_actions_by_partitions(
+        &self,
+        filters: &[PartitionFilter],
+    ) -> Result<LogDataView, DeltaTableError> {
+        // validate all referenced columns are part of the partition columns.
         let current_metadata = self.metadata();
-
         let nonpartitioned_columns: Vec<String> = filters
             .iter()
             .filter(|f| !current_metadata.partition_columns.contains(&f.key))
             .map(|f| f.key.to_string())
             .collect();
-
         if !nonpartitioned_columns.is_empty() {
             return Err(DeltaTableError::ColumnsNotPartitioned {
                 nonpartitioned_columns: { nonpartitioned_columns },
             });
         }
 
-        let partition_col_data_types: HashMap<&String, &DataType> =
-            get_partition_col_data_types(self.schema(), current_metadata)
-                .into_iter()
-                .collect();
+        let predicate = to_predicate(filters, self.schema())?;
+        self.snapshot
+            .log_data_new()?
+            .with_partition_filter(Some(&predicate))
+    }
+}
 
-        Ok(self.log_data().into_iter().filter_map(move |add| {
-            let partitions = add.partition_values();
-            if partitions.is_err() {
-                return Some(Err(DeltaTableError::Generic(
-                    "Failed to parse partition values".to_string(),
-                )));
-            }
-            let partitions = partitions
-                .unwrap()
-                .iter()
-                .map(|(k, v)| DeltaTablePartition::from_partition_value((*k, v)))
-                .collect::<Vec<_>>();
-            let is_valid = filters
-                .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
+fn to_predicate(filters: &[PartitionFilter], schema: &Schema) -> DeltaResult<Expression> {
+    if filters.len() == 0 {
+        return Ok(Expression::literal(true));
+    }
+    if filters.len() == 1 {
+        return filters[0].to_expression(schema);
+    }
+    Ok(Expression::and_from(
+        filters
+            .iter()
+            .map(|f| f.to_expression(schema))
+            .collect::<Result<Vec<_>, _>>()?,
+    ))
+}
 
-            if is_valid {
-                Some(Ok(add))
-            } else {
-                None
-            }
-        }))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use delta_kernel::schema::{DataType, StructField, StructType};
+
+    #[test]
+    fn test_to_predicate() {
+        let filters = vec![crate::PartitionFilter {
+            key: "k".to_string(),
+            value: crate::PartitionValue::Equal("".to_string()),
+        }];
+        let schema = StructType::new(vec![StructField::new("k", DataType::STRING, true)]);
+
+        let expr = to_predicate(&filters, &schema).unwrap();
+        let expected = Expression::column(["k"]).is_null();
+
+        assert_eq!(expr, expected)
     }
 }
