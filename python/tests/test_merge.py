@@ -168,6 +168,45 @@ def test_merge_when_matched_update_all_wo_predicate(
     assert result == expected
 
 
+def test_merge_when_matched_update_all_with_exclude(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["4", "5"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([15, 25], pa.int32()),
+            "deleted": pa.array([True, True]),
+            "weight": pa.array([10, 15], pa.int64()),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_matched_update_all(except_cols=["sold"]).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4], pa.int32()),
+            "deleted": pa.array([False, False, False, True, True]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
+
+
 def test_merge_when_matched_update_with_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
@@ -331,6 +370,44 @@ def test_merge_when_not_matched_insert_all_with_predicate(
             "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
             "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
             "deleted": pa.array([False, False, False, False, False, None]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
+
+
+def test_merge_when_not_matched_insert_all_with_exclude(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["6", "9"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "deleted": pa.array([None, None], pa.bool_()),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        source_alias="source",
+        target_alias="target",
+        predicate="target.id = source.id",
+    ).when_not_matched_insert_all(except_cols=["sold"]).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5", "6", "9"]),
+            "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, None, None], pa.int32()),
+            "deleted": pa.array([False, False, False, False, False, None, None]),
         }
     )
     result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
