@@ -36,6 +36,7 @@ use datafusion_expr::expr::InList;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource};
 // Needed for MakeParquetArray
+use datafusion_expr::planner::{PlannerResult, RawBinaryExpr};
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
@@ -156,7 +157,6 @@ impl Default for CustomNestedFunctionPlanner {
     }
 }
 
-use datafusion_expr::planner::{PlannerResult, RawBinaryExpr};
 impl ExprPlanner for CustomNestedFunctionPlanner {
     fn plan_array_literal(
         &self,

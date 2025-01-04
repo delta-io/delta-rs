@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{
-    CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
+    CommitInfo, DataCheck, DataType, LogDataView, Metadata, Protocol, StructType, Transaction,
 };
 use crate::logstore::{extract_version_from_filename, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
@@ -402,10 +402,10 @@ impl DeltaTable {
     }
 
     /// Obtain Add actions for files that match the filter
-    pub fn get_active_add_actions_by_partitions<'a>(
-        &'a self,
-        filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
+    pub fn get_active_add_actions_by_partitions(
+        &self,
+        filters: &[PartitionFilter],
+    ) -> Result<LogDataView, DeltaTableError> {
         self.state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
@@ -420,7 +420,6 @@ impl DeltaTable {
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
-            .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .map(|add| add.object_store_path())
             .collect())
