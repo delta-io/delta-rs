@@ -173,7 +173,7 @@ impl DeltaOps {
         FileSystemCheckBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
-    /// Audit active files with files present on the filesystem
+    /// Optimize data distribution across files.
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())

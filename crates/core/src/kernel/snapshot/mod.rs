@@ -451,7 +451,7 @@ impl EagerSnapshot {
 
         schema_actions.insert(ActionType::Add);
         let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
-            // NOTE: we don't need to add the visitor relevant data here, as it is repüresented in teh state already
+            // NOTE: we don't need to add the visitor relevant data here, as it is represented in the state already
             futures::stream::iter(files.into_iter().map(Ok)).boxed()
         } else {
             let read_schema =
@@ -563,11 +563,7 @@ impl EagerSnapshot {
 
         if let Some(partition_schema) = self.snapshot.partitions_schema(None)? {
             columns.push(Expression::column(["add", "partitionValues_parsed"]));
-            out_fields.push(StructField::new(
-                "partition_values",
-                partition_schema,
-                false,
-            ));
+            out_fields.push(StructField::new("partition_values", partition_schema, true));
         }
 
         let expression = Expression::struct_from(columns);
@@ -591,7 +587,6 @@ impl EagerSnapshot {
             };
             results.push(RecordBatch::try_new(batch_schema.clone(), columns)?);
         }
-
         Ok(concat_batches(results[0].schema_ref(), &results)?)
     }
 
@@ -807,6 +802,7 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
     ]))
 }
 
+/// Schema for parsed partition values from file actions
 pub(crate) fn partitions_schema(
     schema: &StructType,
     partition_columns: &[String],
@@ -818,12 +814,15 @@ pub(crate) fn partitions_schema(
         partition_columns
             .iter()
             .map(|col| {
-                schema.field(col).cloned().ok_or_else(|| {
-                    DeltaTableError::Generic(format!(
-                        "Partition column {} not found in schema",
-                        col
-                    ))
-                })
+                schema
+                    .field(col)
+                    .map(|f| StructField::new(f.name(), f.data_type().clone(), true))
+                    .ok_or_else(|| {
+                        DeltaTableError::Generic(format!(
+                            "Partition column {} not found in schema",
+                            col
+                        ))
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?,
     )))

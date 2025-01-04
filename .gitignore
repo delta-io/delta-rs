@@ -10,6 +10,7 @@ tlaplus/*.toolbox/*/MC.cfg
 tlaplus/*.toolbox/*/[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*/
 /.idea
 .vscode
+.zed/
 .env
 .venv
 venv

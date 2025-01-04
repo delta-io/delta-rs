@@ -403,31 +403,31 @@ mod tests {
         );
 
         // TODO(roeap): enable tests once we can do the right IN expressions in kernel.
-        // let filters = vec![crate::PartitionFilter {
-        //     key: "month".to_string(),
-        //     value: crate::PartitionValue::In(vec!["2".to_string(), "12".to_string()]),
-        // }];
-        // assert_eq!(
-        //     table.get_files_by_partitions(&filters).unwrap(),
-        //     vec![
-        //         Path::from("year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"),
-        //         Path::from("year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet"),
-        //         Path::from("year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet"),
-        //         Path::from("year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet")
-        //     ]
-        // );
+        let filters = vec![crate::PartitionFilter {
+            key: "month".to_string(),
+            value: crate::PartitionValue::In(vec!["2".to_string(), "12".to_string()]),
+        }];
+        assert_eq!(
+            table.get_files_by_partitions(&filters).unwrap(),
+            vec![
+                Path::from("year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"),
+                Path::from("year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet"),
+                Path::from("year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet"),
+                Path::from("year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet")
+            ]
+        );
 
-        // let filters = vec![crate::PartitionFilter {
-        //     key: "month".to_string(),
-        //     value: crate::PartitionValue::NotIn(vec!["2".to_string(), "12".to_string()]),
-        // }];
-        // assert_eq!(
-        //     table.get_files_by_partitions(&filters).unwrap(),
-        //     vec![
-        //         Path::from("year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet"),
-        //         Path::from("year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet")
-        //     ]
-        // );
+        let filters = vec![crate::PartitionFilter {
+            key: "month".to_string(),
+            value: crate::PartitionValue::NotIn(vec!["2".to_string(), "12".to_string()]),
+        }];
+        assert_eq!(
+            table.get_files_by_partitions(&filters).unwrap(),
+            vec![
+                Path::from("year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet"),
+                Path::from("year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet")
+            ]
+        );
     }
 
     #[tokio::test]
@@ -440,13 +440,6 @@ mod tests {
             key: "k".to_string(),
             value: crate::PartitionValue::Equal("A".to_string()),
         }];
-
-        let data = table.get_active_add_actions_by_partitions(&[]).unwrap();
-        println!("scan files");
-        for file in data.into_iter() {
-            println!("file: {:?}", file.partition_values());
-        }
-
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
             vec![Path::from(
@@ -458,14 +451,6 @@ mod tests {
             key: "k".to_string(),
             value: crate::PartitionValue::Equal("".to_string()),
         }];
-
-        let data = table
-            .get_active_add_actions_by_partitions(&filters)
-            .unwrap();
-        for file in data.into_iter() {
-            println!("file: {:?}", file.partition_values());
-        }
-
         assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
         vec![
