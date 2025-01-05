@@ -402,7 +402,6 @@ mod tests {
             ]
         );
 
-        // TODO(roeap): enable tests once we can do the right IN expressions in kernel.
         let filters = vec![crate::PartitionFilter {
             key: "month".to_string(),
             value: crate::PartitionValue::In(vec!["2".to_string(), "12".to_string()]),

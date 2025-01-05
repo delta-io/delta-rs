@@ -513,7 +513,7 @@ impl LogReplayScanner {
                         self.seen.insert(seen_key(&r));
                         keep.push(false);
                     }
-                    // NOTE: there sould always be only one action per row.
+                    // NOTE: there should always be only one action per row.
                     (None, None) => debug!("WARNING: no action found for row"),
                     (Some(a), Some(r)) => {
                         debug!(

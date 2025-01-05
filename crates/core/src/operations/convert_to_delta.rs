@@ -571,7 +571,7 @@ mod tests {
             .log_data()
             .into_iter()
             .filter_map(|add| {
-                add.partition_values_scalar().map(|pv| {
+                add.partition_values().map(|pv| {
                     pv.fields()
                         .iter()
                         .zip(pv.values().iter())

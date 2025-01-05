@@ -1161,7 +1161,9 @@ impl RawDeltaTable {
             .snapshot()
             .map_err(PythonError::from)?
             .eager_snapshot()
-            .files()
+            .log_data_new()
+            .map_err(PythonError::from)?
+            .iter()
             .map(|f| (f.path().to_string(), f.size()))
             .collect::<HashMap<String, i64>>())
     }
@@ -1512,7 +1514,7 @@ fn filestats_to_expression_next<'py>(
             .call_method1("cast", (column_type,))
     };
 
-    if let Some(pv) = file_info.partition_values_scalar() {
+    if let Some(pv) = file_info.partition_values() {
         for (field, value) in pv.fields().iter().zip(pv.values().iter()) {
             let column = field.name().to_owned();
             if !value.is_null() {

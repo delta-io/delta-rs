@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow::array::AsArray;
-use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Int32Type, Int64Type};
+use arrow_array::{Array, Int64Array, MapArray, RecordBatch, StructArray};
 use arrow_select::filter::filter_record_batch;
 use chrono::{DateTime, Utc};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -15,6 +16,7 @@ use percent_encoding::percent_decode_str;
 
 use super::super::scalars::ScalarExt;
 use super::super::ARROW_HANDLER;
+use super::handler::{AddOrdinals, DVOrdinals};
 use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
     DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
@@ -70,20 +72,13 @@ impl<T: PartitionsExt> PartitionsExt for Arc<T> {
     }
 }
 
-/// Defines a deletion vector
-#[derive(Debug, PartialEq, Clone)]
-pub struct DeletionVector<'a> {
-    storage_type: &'a StringArray,
-    path_or_inline_dv: &'a StringArray,
-    size_in_bytes: &'a Int32Array,
-    cardinality: &'a Int64Array,
-    offset: Option<&'a Int32Array>,
-}
-
 /// View into a deletion vector data.
+///
+// The data is assumed to be valid at the given index.
+// Validity checks should be performed before creating a view.
 #[derive(Debug)]
 pub struct DeletionVectorView<'a> {
-    data: &'a DeletionVector<'a>,
+    data: &'a StructArray,
     /// Pointer to a specific row in the log data.
     index: usize,
 }
@@ -113,41 +108,47 @@ impl DeletionVectorView<'_> {
     }
 
     fn storage_type(&self) -> &str {
-        self.data.storage_type.value(self.index)
+        self.data
+            .column(DVOrdinals::STORAGE_TYPE)
+            .as_string::<i32>()
+            .value(self.index)
     }
     fn path_or_inline_dv(&self) -> &str {
-        self.data.path_or_inline_dv.value(self.index)
+        self.data
+            .column(DVOrdinals::PATH_OR_INLINE_DV)
+            .as_string::<i32>()
+            .value(self.index)
     }
     fn size_in_bytes(&self) -> i32 {
-        self.data.size_in_bytes.value(self.index)
+        self.data
+            .column(DVOrdinals::SIZE_IN_BYTES)
+            .as_primitive::<Int32Type>()
+            .value(self.index)
     }
     fn cardinality(&self) -> i64 {
-        self.data.cardinality.value(self.index)
+        self.data
+            .column(DVOrdinals::CARDINALITY)
+            .as_primitive::<Int64Type>()
+            .value(self.index)
     }
     fn offset(&self) -> Option<i32> {
-        self.data
-            .offset
-            .and_then(|a| a.is_null(self.index).then(|| a.value(self.index)))
+        self.data.column_by_name("offset").and_then(|a| {
+            (!a.is_null(self.index)).then(|| a.as_primitive::<Int32Type>().value(self.index))
+        })
     }
 }
 
 /// A view into the log data representing a single logical file.
-///
-/// This struct holds a pointer to a specific row in the log data and provides access to the
-/// information stored in that row by tracking references to the underlying arrays.
-///
-/// Additionally, references to some table metadata is tracked to provide higher level
-/// functionality, e.g. parsing partition values.
 #[derive(Debug, PartialEq)]
 pub struct LogicalFile<'a> {
-    data: Arc<RecordBatch>,
+    data: RecordBatch,
     /// The partition values for this logical file.
     partition_values: &'a MapArray,
     partition_values_parsed: Option<&'a StructArray>,
     /// Struct containing all available statistics for the columns in this file.
     stats: &'a StructArray,
     /// Array containing the deletion vector data.
-    deletion_vector: Option<DeletionVector<'a>>,
+    deletion_vector: Option<&'a StructArray>,
 
     /// Pointer to a specific row in the log data.
     index: usize,
@@ -156,7 +157,13 @@ pub struct LogicalFile<'a> {
 impl LogicalFile<'_> {
     /// Path to the files storage location.
     pub fn path(&self) -> Cow<'_, str> {
-        percent_decode_str(pick::<StringArray>(&self.data, 0).value(self.index)).decode_utf8_lossy()
+        percent_decode_str(
+            self.data
+                .column(AddOrdinals::PATH)
+                .as_string::<i32>()
+                .value(self.index),
+        )
+        .decode_utf8_lossy()
     }
 
     /// An object store [`Path`] to the file.
@@ -174,12 +181,18 @@ impl LogicalFile<'_> {
 
     /// File size stored on disk.
     pub fn size(&self) -> i64 {
-        pick::<Int64Array>(&self.data, 1).value(self.index)
+        self.data
+            .column(AddOrdinals::SIZE)
+            .as_primitive::<Int64Type>()
+            .value(self.index)
     }
 
-    /// Last modification time of the file.
+    /// Last modified time of the file.
     pub fn modification_time(&self) -> i64 {
-        pick::<Int64Array>(&self.data, 2).value(self.index)
+        self.data
+            .column(AddOrdinals::MODIFICATION_TIME)
+            .as_primitive::<Int64Type>()
+            .value(self.index)
     }
 
     /// Datetime of the last modification time of the file.
@@ -192,7 +205,7 @@ impl LogicalFile<'_> {
         ))
     }
 
-    pub fn partition_values_scalar(&self) -> Option<StructData> {
+    pub fn partition_values(&self) -> Option<StructData> {
         self.partition_values_parsed
             .and_then(|arr| match Scalar::from_array(arr, self.index) {
                 Some(Scalar::Struct(s)) => Some(s),
@@ -202,13 +215,13 @@ impl LogicalFile<'_> {
 
     /// Defines a deletion vector
     pub fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
-        self.deletion_vector.as_ref().and_then(|arr| {
-            arr.storage_type
-                .is_valid(self.index)
-                .then_some(DeletionVectorView {
-                    data: arr,
+        self.deletion_vector.as_ref().and_then(|c| {
+            c.column_by_name("storage_type").and_then(|arr| {
+                arr.is_valid(self.index).then_some(DeletionVectorView {
+                    data: c,
                     index: self.index,
                 })
+            })
         })
     }
 
@@ -250,7 +263,7 @@ impl LogicalFile<'_> {
             deletion_timestamp: Some(Utc::now().timestamp_millis()),
             extended_file_metadata: Some(true),
             size: Some(self.size()),
-            partition_values: self.partition_values_scalar().map(|pv| {
+            partition_values: self.partition_values().map(|pv| {
                 pv.fields()
                     .iter()
                     .zip(pv.values().iter())
@@ -289,11 +302,11 @@ impl<'a> TryFrom<&LogicalFile<'a>> for ObjectMeta {
 }
 
 /// Helper for processing data from the materialized Delta log.
-pub struct FileStatsAccessor<'a> {
-    data: Arc<RecordBatch>,
+struct FileStatsAccessor<'a> {
+    data: RecordBatch,
     sizes: &'a Int64Array,
     stats: &'a StructArray,
-    deletion_vector: Option<DeletionVector<'a>>,
+    deletion_vector: Option<&'a StructArray>,
     partition_values: &'a MapArray,
     partition_values_parsed: Option<&'a StructArray>,
     length: usize,
@@ -320,20 +333,6 @@ lazy_static::lazy_static! {
     );
 }
 
-fn pick<'a, T: Array + 'static>(data: &'a RecordBatch, idx: usize) -> &'a T {
-    data.column(idx)
-        .as_any()
-        .downcast_ref::<T>()
-        .ok_or_else(|| {
-            DeltaTableError::generic(format!(
-                "expected column '{}' to be of type '{}'",
-                idx,
-                std::any::type_name::<T>()
-            ))
-        })
-        .unwrap()
-}
-
 impl<'a> FileStatsAccessor<'a> {
     pub(crate) fn try_new(
         data: &'a RecordBatch,
@@ -355,29 +354,17 @@ impl<'a> FileStatsAccessor<'a> {
         let partition_values = extract_and_cast::<MapArray>(data, "add.partitionValues")?;
         let partition_values_parsed =
             extract_and_cast_opt::<StructArray>(data, "add.partitionValues_parsed");
-        let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector");
-        let deletion_vector = deletion_vector.and_then(|dv| {
-            if dv.null_count() == dv.len() {
-                None
-            } else {
-                let storage_type = extract_and_cast::<StringArray>(dv, "storageType").ok()?;
-                let path_or_inline_dv =
-                    extract_and_cast::<StringArray>(dv, "pathOrInlineDv").ok()?;
-                let size_in_bytes = extract_and_cast::<Int32Array>(dv, "sizeInBytes").ok()?;
-                let cardinality = extract_and_cast::<Int64Array>(dv, "cardinality").ok()?;
-                let offset = extract_and_cast_opt::<Int32Array>(dv, "offset");
-                Some(DeletionVector {
-                    storage_type,
-                    path_or_inline_dv,
-                    size_in_bytes,
-                    cardinality,
-                    offset,
-                })
-            }
-        });
+        let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector")
+            .and_then(|dv| {
+                if dv.null_count() == dv.len() {
+                    None
+                } else {
+                    Some(dv)
+                }
+            });
 
         Ok(Self {
-            data: Arc::new(result),
+            data: result,
             sizes,
             stats,
             deletion_vector,
@@ -421,19 +408,21 @@ impl<'a> Iterator for FileStatsAccessor<'a> {
 }
 
 pub struct LogFileView<'a> {
-    data: &'a RecordBatch,
-    curr: Option<usize>,
+    data: &'a LogDataView,
+    current: usize,
 }
 
 impl LogFileView<'_> {
-    fn index(&self) -> usize {
-        self.curr.expect("index initialized")
-    }
-
     /// Path to the files storage location.
     pub fn path(&self) -> Cow<'_, str> {
-        percent_decode_str(pick::<StringArray>(&self.data, 0).value(self.index()))
-            .decode_utf8_lossy()
+        percent_decode_str(
+            self.data
+                .data
+                .column(AddOrdinals::PATH)
+                .as_string::<i32>()
+                .value(self.current),
+        )
+        .decode_utf8_lossy()
     }
 
     /// An object store [`Path`] to the file.
@@ -451,12 +440,20 @@ impl LogFileView<'_> {
 
     /// File size stored on disk.
     pub fn size(&self) -> i64 {
-        pick::<Int64Array>(&self.data, 1).value(self.index())
+        self.data
+            .data
+            .column(AddOrdinals::SIZE)
+            .as_primitive::<Int64Type>()
+            .value(self.current)
     }
 
     /// Last modified time of the file.
     pub fn modification_time(&self) -> i64 {
-        pick::<Int64Array>(&self.data, 2).value(self.index())
+        self.data
+            .data
+            .column(AddOrdinals::MODIFICATION_TIME)
+            .as_primitive::<Int64Type>()
+            .value(self.current)
     }
 
     /// Datetime of the last modification time of the file.
@@ -471,50 +468,59 @@ impl LogFileView<'_> {
 
     pub fn partition_values(&self) -> Option<StructData> {
         self.data
-            .column_by_name("partition_values")
-            .and_then(|c| c.as_struct_opt())
-            .and_then(|arr| match Scalar::from_array(arr, self.index()) {
+            .partition_data()
+            .and_then(|arr| match Scalar::from_array(arr, self.current) {
                 Some(Scalar::Struct(s)) => Some(s),
                 _ => None,
             })
     }
 
-    fn stats(&self) -> Option<&StructArray> {
+    /// Defines a deletion vector
+    pub fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
         self.data
-            .column_by_name("stats")
+            .data
+            .column_by_name("deletion_vector")
             .and_then(|c| c.as_struct_opt())
+            .and_then(|c| {
+                c.column_by_name("storage_type").and_then(|arr| {
+                    arr.is_valid(self.current).then_some(DeletionVectorView {
+                        data: c,
+                        index: self.current,
+                    })
+                })
+            })
     }
 
     /// The number of records stored in the data file.
     pub fn num_records(&self) -> Option<usize> {
-        self.stats().and_then(|c| {
+        self.data.stats_data().and_then(|c| {
             c.column_by_name(COL_NUM_RECORDS)
-                .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
-                .map(|a| a.value(self.index()) as usize)
+                .and_then(|c| c.as_primitive_opt::<Int64Type>())
+                .map(|a| a.value(self.current) as usize)
         })
     }
 
     /// Struct containing all available null counts for the columns in this file.
     pub fn null_counts(&self) -> Option<Scalar> {
-        self.stats().and_then(|c| {
+        self.data.stats_data().and_then(|c| {
             c.column_by_name(COL_NULL_COUNT)
-                .and_then(|c| Scalar::from_array(c.as_ref(), self.index()))
+                .and_then(|c| Scalar::from_array(c.as_ref(), self.current))
         })
     }
 
     /// Struct containing all available min values for the columns in this file.
     pub fn min_values(&self) -> Option<Scalar> {
-        self.stats().and_then(|c| {
+        self.data.stats_data().and_then(|c| {
             c.column_by_name(COL_MIN_VALUES)
-                .and_then(|c| Scalar::from_array(c.as_ref(), self.index()))
+                .and_then(|c| Scalar::from_array(c.as_ref(), self.current))
         })
     }
 
     /// Struct containing all available max values for the columns in this file.
     pub fn max_values(&self) -> Option<Scalar> {
-        self.stats().and_then(|c| {
+        self.data.stats_data().and_then(|c| {
             c.column_by_name(COL_MAX_VALUES)
-                .and_then(|c| Scalar::from_array(c.as_ref(), self.index()))
+                .and_then(|c| Scalar::from_array(c.as_ref(), self.current))
         })
     }
 }
@@ -523,17 +529,23 @@ impl<'a> Iterator for LogFileView<'a> {
     type Item = LogFileView<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.data.num_rows() < 1 {
-            return None;
+        if self.current == self.data.data.num_rows() {
+            None
+        } else {
+            let old = self.current;
+            self.current += 1;
+            Some(Self {
+                data: self.data,
+                current: old,
+            })
         }
-        if self.curr.is_some() && self.index() >= self.data.num_rows() - 1 {
-            return None;
-        }
-        self.curr = self.curr.map(|c| c + 1).or(Some(0));
-        Some(Self {
-            data: self.data,
-            curr: self.curr,
-        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (
+            self.data.data.num_rows() - self.current,
+            Some(self.data.data.num_rows() - self.current),
+        )
     }
 }
 
@@ -566,16 +578,21 @@ impl LogDataView {
         }
     }
 
-    fn partition_data(&self) -> Option<RecordBatch> {
+    fn partition_data(&self) -> Option<&StructArray> {
         self.data
             .column_by_name("partition_values")
-            .and_then(|c| c.as_any().downcast_ref::<StructArray>())
-            .map(|c| c.into())
+            .and_then(|c| c.as_struct_opt())
+    }
+
+    fn stats_data(&self) -> Option<&StructArray> {
+        self.data
+            .column_by_name("stats")
+            .and_then(|c| c.as_struct_opt())
     }
 
     pub fn with_partition_filter(self, predicate: Option<&Expression>) -> DeltaResult<Self> {
         if let (Some(pred), Some(data)) = (predicate, self.partition_data()) {
-            let data = ArrowEngineData::new(data);
+            let data = ArrowEngineData::new(data.into());
             let evaluator = ARROW_HANDLER.get_evaluator(
                 Arc::new(data.record_batch().schema_ref().as_ref().try_into()?),
                 pred.clone(),
@@ -594,8 +611,8 @@ impl LogDataView {
 
     pub fn iter(&self) -> impl Iterator<Item = LogFileView<'_>> {
         LogFileView {
-            data: &self.data,
-            curr: None,
+            data: self,
+            current: 0,
         }
     }
 }
@@ -606,8 +623,8 @@ impl<'a> IntoIterator for &'a LogDataView {
 
     fn into_iter(self) -> Self::IntoIter {
         LogFileView {
-            data: &self.data,
-            curr: None,
+            data: self,
+            current: 0,
         }
     }
 }
@@ -1018,7 +1035,10 @@ mod tests {
             .snapshot()
             .unwrap()
             .snapshot
-            .files()
+            .log_data_new()
+            .unwrap();
+        let json_action = json_action
+            .iter()
             .find(|f| {
                 f.path().ends_with(
                     "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
@@ -1030,7 +1050,10 @@ mod tests {
             .snapshot()
             .unwrap()
             .snapshot
-            .files()
+            .log_data_new()
+            .unwrap();
+        let struct_action = struct_action
+            .iter()
             .find(|f| {
                 f.path().ends_with(
                     "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
@@ -1040,8 +1063,8 @@ mod tests {
 
         assert_eq!(json_action.path(), struct_action.path());
         assert_eq!(
-            json_action.partition_values_scalar(),
-            struct_action.partition_values_scalar()
+            json_action.partition_values(),
+            struct_action.partition_values()
         );
         // assert_eq!(
         //     json_action.max_values().unwrap(),
