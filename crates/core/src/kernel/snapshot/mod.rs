@@ -22,6 +22,7 @@ use std::sync::Arc;
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
 use arrow_select::concat::concat_batches;
+use delta_kernel::schema::SchemaRef;
 use delta_kernel::Expression;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -60,8 +61,8 @@ pub struct Snapshot {
     log_segment: LogSegment,
     config: DeltaTableConfig,
     protocol: Protocol,
-    metadata: Metadata,
-    schema: StructType,
+    metadata: Arc<Metadata>,
+    schema: SchemaRef,
     // TODO make this an URL
     /// path of the table root within the object store
     table_url: String,
@@ -88,8 +89,8 @@ impl Snapshot {
             log_segment,
             config,
             protocol,
-            metadata,
-            schema,
+            metadata: Arc::new(metadata),
+            schema: Arc::new(schema),
             table_url: table_root.to_string(),
         })
     }
@@ -110,8 +111,8 @@ impl Snapshot {
                 log_segment,
                 config: Default::default(),
                 protocol,
-                metadata,
-                schema,
+                metadata: Arc::new(metadata),
+                schema: Arc::new(schema),
                 table_url: Path::default().to_string(),
             },
             batch,
@@ -159,8 +160,8 @@ impl Snapshot {
             self.protocol = protocol;
         }
         if let Some(metadata) = metadata {
-            self.metadata = metadata;
-            self.schema = serde_json::from_str(&self.metadata.schema_string)?;
+            self.metadata = Arc::new(metadata);
+            self.schema = Arc::new(serde_json::from_str(&self.metadata.schema_string)?);
         }
 
         if !log_segment.checkpoint_files.is_empty() {
@@ -184,12 +185,12 @@ impl Snapshot {
 
     /// Get the table schema of the snapshot
     pub fn schema(&self) -> &StructType {
-        &self.schema
+        self.schema.as_ref()
     }
 
     /// Get the table metadata of the snapshot
     pub fn metadata(&self) -> &Metadata {
-        &self.metadata
+        self.metadata.as_ref()
     }
 
     /// Get the table protocol of the snapshot
@@ -557,8 +558,8 @@ impl EagerSnapshot {
     pub fn log_data_new(&self) -> DeltaResult<LogDataView> {
         Ok(LogDataView::new(
             self.log_data_batch(None)?,
-            self.metadata().clone(),
-            self.schema().clone(),
+            self.snapshot.metadata.clone(),
+            self.snapshot.schema.clone(),
         ))
     }
 
@@ -662,8 +663,9 @@ impl EagerSnapshot {
             .collect::<DeltaResult<Vec<_>>>()?;
 
         if let Some(metadata) = metadata {
-            self.snapshot.metadata = metadata;
-            self.snapshot.schema = serde_json::from_str(&self.snapshot.metadata.schema_string)?;
+            self.snapshot.metadata = Arc::new(metadata);
+            self.snapshot.schema =
+                Arc::new(serde_json::from_str(&self.snapshot.metadata.schema_string)?);
         }
         if let Some(protocol) = protocol {
             self.snapshot.protocol = protocol;
@@ -1107,8 +1109,8 @@ mod tests {
         let snapshot = Snapshot {
             log_segment: log_segment.clone(),
             protocol: protocol.clone(),
-            metadata,
-            schema: schema.clone(),
+            metadata: Arc::new(metadata),
+            schema: Arc::new(schema.clone()),
             table_url: "table".to_string(),
             config: Default::default(),
         };
@@ -1136,8 +1138,8 @@ mod tests {
             log_segment,
             config: Default::default(),
             protocol: protocol.clone(),
-            metadata,
-            schema: schema.clone(),
+            metadata: Arc::new(metadata),
+            schema: Arc::new(schema.clone()),
             table_url: "table".to_string(),
         };
 

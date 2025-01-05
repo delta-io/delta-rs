@@ -72,7 +72,7 @@ impl From<Error> for DeltaTableError {
 }
 
 /// The partition strategy used by the Parquet table
-/// Currently only hive-partitioning is supproted for Parquet paths
+/// Currently only hive-partitioning is supported for Parquet paths
 #[non_exhaustive]
 #[derive(Default)]
 pub enum PartitionStrategy {
@@ -173,7 +173,7 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Specify the partition strategy of the Parquet table
-    /// Currently only hive-partitioning is supproted for Parquet paths
+    /// Currently only hive-partitioning is supported for Parquet paths
     pub fn with_partition_strategy(mut self, strategy: PartitionStrategy) -> Self {
         self.partition_strategy = strategy;
         self

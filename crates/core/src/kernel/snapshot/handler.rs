@@ -54,7 +54,7 @@ pub(super) fn extract_adds(
         Expression::column(["add", "path"]),
         Expression::column(["add", "size"]),
         Expression::column(["add", "modificationTime"]),
-        // Expression::column(["add", "dataChange"]),
+        Expression::column(["add", "dataChange"]),
         Expression::struct_from(
             stats_schema
                 .fields()
@@ -66,7 +66,7 @@ pub(super) fn extract_adds(
         StructField::new("path", DataType::STRING, false),
         StructField::new("size", DataType::LONG, false),
         StructField::new("modification_time", DataType::LONG, false),
-        // StructField::new("data_change", DataType::BOOLEAN, false),
+        StructField::new("data_change", DataType::BOOLEAN, false),
         StructField::new("stats", stats_schema.clone(), false),
     ];
 
@@ -121,7 +121,7 @@ pub(super) fn extract_adds(
         let stats = stats_col
             .as_struct_opt()
             .ok_or_else(|| DeltaTableError::generic("expected struct array"))?;
-        columns[3] = fill_with_null(&stats_schema, stats)?;
+        columns[4] = fill_with_null(&stats_schema, stats)?;
     };
 
     // ensure consistent schema by adding empty deletion vector data if it is missing in the input
@@ -135,7 +135,6 @@ pub(super) fn extract_adds(
     }
 
     let batch_schema = Arc::new((&StructType::new(out_fields.clone())).try_into()?);
-    dbg!("before batch");
     Ok(RecordBatch::try_new(batch_schema, columns)?)
 }
 
