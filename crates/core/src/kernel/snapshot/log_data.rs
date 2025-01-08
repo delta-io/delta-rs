@@ -1,17 +1,16 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow_arith::aggregate::sum;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type};
-use arrow_array::{Array, Int64Array, MapArray, RecordBatch, StructArray};
+use arrow_array::{Array, RecordBatch, StructArray};
 use arrow_cast::pretty::print_columns;
 use arrow_select::filter::filter_record_batch;
 use chrono::{DateTime, Utc};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::schema::SchemaRef;
-use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
+use delta_kernel::Expression;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -19,10 +18,7 @@ use percent_encoding::percent_decode_str;
 
 use super::super::scalars::ScalarExt;
 use super::handler::{eval_expr, get_evaluator, AddOrdinals, DVOrdinals};
-use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
-use crate::kernel::{
-    Add, DataType, DeletionVectorDescriptor, Metadata, Remove, StorageType, StructField, StructType,
-};
+use crate::kernel::{Add, DataType, DeletionVectorDescriptor, Metadata, Remove, StorageType};
 use crate::{DeltaResult, DeltaTableError};
 
 const COL_NUM_RECORDS: &str = "numRecords";

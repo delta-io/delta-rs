@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use chrono::Utc;
+use delta_kernel::schema::{Schema, StructType};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::parse;
-use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
+use crate::kernel::{arrow::json, ActionType, Metadata, Protocol};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};

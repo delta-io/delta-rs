@@ -6,6 +6,7 @@ use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
 use arrow_schema::{ArrowError, Schema as ArrowSchema};
+use delta_kernel::schema::{DataType, Schema, StructField};
 use futures::future::{self, BoxFuture};
 use futures::TryStreamExt;
 use indexmap::IndexMap;
@@ -18,7 +19,7 @@ use tracing::debug;
 
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
-    kernel::{scalars::ScalarExt, Add, DataType, Schema, StructField},
+    kernel::{scalars::ScalarExt, Add},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
@@ -379,7 +380,7 @@ impl ConvertToDeltaBuilder {
 
             let mut arrow_schema = batch_builder.schema().as_ref().clone();
 
-            // Arrow schema of Parquet files may have conflicting metatdata
+            // Arrow schema of Parquet files may have conflicting metadata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
             arrow_schema.metadata = HashMap::new();
             arrow_schemas.push(arrow_schema);

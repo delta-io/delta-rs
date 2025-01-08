@@ -32,7 +32,7 @@ use object_store::ObjectStore;
 
 use self::handler as lh;
 use self::log_segment::{LogSegment, PathExt};
-use self::parse::{read_adds, read_removes};
+use self::parse::read_removes;
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use self::visitors::*;
 use super::{

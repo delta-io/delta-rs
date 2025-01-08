@@ -1,7 +1,5 @@
 //! Delta table schema
 
-use std::sync::Arc;
-
 pub use delta_kernel::schema::{
     ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, PrimitiveType, StructField,
     StructType,
@@ -10,11 +8,6 @@ use serde_json::Value;
 
 use crate::kernel::error::Error;
 use crate::kernel::DataCheck;
-
-/// Type alias for a top level schema
-pub type Schema = StructType;
-/// Schema reference type
-pub type SchemaRef = Arc<StructType>;
 
 /// An invariant for a column that is enforced on all writes to a Delta table.
 #[derive(Eq, PartialEq, Debug, Default, Clone)]
@@ -45,7 +38,7 @@ impl DataCheck for Invariant {
     }
 }
 
-/// Trait to add convenince functions to struct type
+/// Trait to add convenience functions to struct type
 pub trait StructTypeExt {
     /// Get all invariants in the schemas
     fn get_invariants(&self) -> Result<Vec<Invariant>, Error>;

@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
+use delta_kernel::schema::{DataType, Schema, StructField};
 use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
 use tracing::log::*;
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{
-    Action, DataType, EagerSnapshot, ReaderFeatures, Schema, StructField, WriterFeatures,
-};
+use crate::kernel::{Action, EagerSnapshot, ReaderFeatures, WriterFeatures};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 

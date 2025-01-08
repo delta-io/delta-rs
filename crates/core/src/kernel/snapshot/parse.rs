@@ -6,7 +6,7 @@ use arrow_array::{
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
-use crate::kernel::{Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove};
+use crate::kernel::{AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
 pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Option<Metadata>> {
@@ -72,92 +72,6 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
         }
     }
     Ok(None)
-}
-
-pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add>> {
-    let mut result = Vec::new();
-
-    if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "add") {
-        // Stop early if all values are null
-        if arr.null_count() == arr.len() {
-            return Ok(vec![]);
-        }
-        let path = ex::extract_and_cast::<StringArray>(arr, "path")?;
-        let pvs = ex::extract_and_cast_opt::<MapArray>(arr, "partitionValues");
-        let size = ex::extract_and_cast::<Int64Array>(arr, "size")?;
-        let modification_time = ex::extract_and_cast::<Int64Array>(arr, "modificationTime")?;
-        let data_change = ex::extract_and_cast::<BooleanArray>(arr, "dataChange")?;
-        let stats = ex::extract_and_cast_opt::<StringArray>(arr, "stats");
-        let tags = ex::extract_and_cast_opt::<MapArray>(arr, "tags");
-        let dv = ex::extract_and_cast_opt::<StructArray>(arr, "deletionVector");
-
-        let get_dv: Box<dyn Fn(usize) -> Option<DeletionVectorDescriptor>> = if let Some(d) = dv {
-            let storage_type = ex::extract_and_cast::<StringArray>(d, "storageType")?;
-            let path_or_inline_dv = ex::extract_and_cast::<StringArray>(d, "pathOrInlineDv")?;
-            let offset = ex::extract_and_cast::<Int32Array>(d, "offset")?;
-            let size_in_bytes = ex::extract_and_cast::<Int32Array>(d, "sizeInBytes")?;
-            let cardinality = ex::extract_and_cast::<Int64Array>(d, "cardinality")?;
-
-            // Column might exist but have nullability set for the whole array, so we just return Nones
-            if d.null_count() == d.len() {
-                Box::new(|_| None)
-            } else {
-                Box::new(|idx: usize| {
-                    d.is_valid(idx)
-                        .then(|| {
-                            if ex::read_str(storage_type, idx).is_ok() {
-                                Some(DeletionVectorDescriptor {
-                                    storage_type: std::str::FromStr::from_str(
-                                        ex::read_str(storage_type, idx).ok()?,
-                                    )
-                                    .ok()?,
-                                    path_or_inline_dv: ex::read_str(path_or_inline_dv, idx)
-                                        .ok()?
-                                        .to_string(),
-                                    offset: ex::read_primitive_opt(offset, idx),
-                                    size_in_bytes: ex::read_primitive(size_in_bytes, idx).ok()?,
-                                    cardinality: ex::read_primitive(cardinality, idx).ok()?,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .flatten()
-                })
-            }
-        } else {
-            Box::new(|_| None)
-        };
-
-        for i in 0..arr.len() {
-            if arr.is_valid(i) {
-                let path_ = ex::read_str(path, i)?;
-                let path_ = percent_decode_str(path_)
-                    .decode_utf8()
-                    .map_err(|_| DeltaTableError::Generic("illegal path encoding".into()))?
-                    .to_string();
-                result.push(Add {
-                    path: path_,
-                    size: ex::read_primitive(size, i)?,
-                    modification_time: ex::read_primitive(modification_time, i)?,
-                    data_change: ex::read_bool(data_change, i)?,
-                    stats: stats
-                        .and_then(|stats| ex::read_str_opt(stats, i).map(|s| s.to_string())),
-                    partition_values: pvs
-                        .and_then(|pv| collect_map(&pv.value(i)).map(|m| m.collect()))
-                        .unwrap_or_default(),
-                    tags: tags.and_then(|t| collect_map(&t.value(i)).map(|m| m.collect())),
-                    deletion_vector: get_dv(i),
-                    base_row_id: None,
-                    default_row_commit_version: None,
-                    clustering_provider: None,
-                    stats_parsed: None,
-                });
-            }
-        }
-    }
-
-    Ok(result)
 }
 
 pub(super) fn read_cdf_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<AddCDCFile>> {
