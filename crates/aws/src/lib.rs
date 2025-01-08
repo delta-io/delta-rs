@@ -38,6 +38,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use storage::S3StorageOptionsConversion;
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
 use tracing::debug;
 use tracing::warn;
@@ -45,6 +46,8 @@ use url::Url;
 
 #[derive(Clone, Debug, Default)]
 pub struct S3LogStoreFactory {}
+
+impl S3StorageOptionsConversion for S3LogStoreFactory {}
 
 impl LogStoreFactory for S3LogStoreFactory {
     fn with_options(
@@ -54,7 +57,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         options: &StorageOptions,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let store = url_prefix_handler(store, Path::parse(location.path())?);
-
+        let options = self.with_env_s3(options);
         if options.0.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
@@ -65,7 +68,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         }) {
             debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
             warn!("Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put.");
-            return Ok(logstore::default_s3_logstore(store, location, options));
+            return Ok(logstore::default_s3_logstore(store, location, &options));
         }
 
         let s3_options = S3StorageOptions::from_map(&options.0)?;
@@ -78,7 +81,7 @@ impl LogStoreFactory for S3LogStoreFactory {
                 store,
             )?));
         }
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(store, location, &options))
     }
 }
 
@@ -777,6 +780,7 @@ mod tests {
         unsafe {
             std::env::set_var(crate::constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         }
+
         let logstore = factory
             .with_options(Arc::new(store), &url, &StorageOptions::from(HashMap::new()))
             .unwrap();
