@@ -184,19 +184,19 @@ impl PruningStatistics for EagerSnapshot {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.log_data().min_values(column)
+        self.log_data().ok().and_then(|d| d.min_values(column))
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.log_data().max_values(column)
+        self.log_data().ok().and_then(|d| d.max_values(column))
     }
 
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize {
-        self.log_data().num_containers()
+        self.log_data().ok().map(|d| d.num_containers()).unwrap()
     }
 
     /// return the number of null values for the named column as an
@@ -204,7 +204,7 @@ impl PruningStatistics for EagerSnapshot {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.log_data().null_counts(column)
+        self.log_data().ok().and_then(|d| d.null_counts(column))
     }
 
     /// return the number of rows for the named column in each container
@@ -212,39 +212,60 @@ impl PruningStatistics for EagerSnapshot {
     ///
     /// Note: the returned array must contain `num_containers()` rows
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.log_data().row_counts(column)
+        self.log_data().ok().and_then(|d| d.row_counts(column))
     }
 
     // This function is required since DataFusion 35.0, but is implemented as a no-op
     // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
     fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        self.log_data().contained(column, value)
+        self.log_data()
+            .ok()
+            .and_then(|d| d.contained(column, value))
     }
 }
 
 impl PruningStatistics for DeltaTableState {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().min_values(column)
+        self.snapshot
+            .log_data()
+            .ok()
+            .and_then(|d| d.min_values(column))
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().max_values(column)
+        self.snapshot
+            .log_data()
+            .ok()
+            .and_then(|d| d.max_values(column))
     }
 
     fn num_containers(&self) -> usize {
-        self.snapshot.log_data().num_containers()
+        self.snapshot
+            .log_data()
+            .ok()
+            .map(|d| d.num_containers())
+            .unwrap()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().null_counts(column)
+        self.snapshot
+            .log_data()
+            .ok()
+            .and_then(|d| d.null_counts(column))
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().row_counts(column)
+        self.snapshot
+            .log_data()
+            .ok()
+            .and_then(|d| d.row_counts(column))
     }
 
     fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        self.snapshot.log_data().contained(column, values)
+        self.snapshot
+            .log_data()
+            .ok()
+            .and_then(|d| d.contained(column, values))
     }
 }
 

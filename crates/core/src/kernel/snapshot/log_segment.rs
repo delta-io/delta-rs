@@ -266,13 +266,7 @@ impl LogSegment {
                         .fields
                         .iter()
                         .enumerate()
-                        .filter_map(|(i, f)| {
-                            if read_schema.fields.contains_key(f.name()) {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        })
+                        .filter_map(|(i, f)| read_schema.fields.contains_key(f.name()).then_some(i))
                         .collect::<Vec<_>>();
                     let projection =
                         ProjectionMask::roots(reader_meta.parquet_schema(), projection);

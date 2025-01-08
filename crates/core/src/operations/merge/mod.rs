@@ -1263,7 +1263,7 @@ async fn execute(
 
     {
         let lock = survivors.lock().unwrap();
-        for action in snapshot.log_data() {
+        for action in snapshot.snapshot().log_data()? {
             if lock.contains(action.path().as_ref()) {
                 metrics.num_target_files_removed += 1;
                 actions.push(action.remove_action(true).into());

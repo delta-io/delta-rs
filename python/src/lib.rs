@@ -29,7 +29,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructDataExt, StructType,
+    scalars::ScalarExt, Action, Add, Invariant, LogFileView, Remove, StructDataExt, StructType,
     Transaction,
 };
 use deltalake::operations::add_column::AddColumnBuilder;
@@ -873,7 +873,9 @@ impl RawDeltaTable {
         self._table
             .snapshot()
             .map_err(PythonError::from)?
+            .snapshot()
             .log_data()
+            .map_err(PythonError::from)?
             .into_iter()
             .filter_map(|f| {
                 let path = f.path().to_string();
@@ -1161,7 +1163,7 @@ impl RawDeltaTable {
             .snapshot()
             .map_err(PythonError::from)?
             .eager_snapshot()
-            .log_data_new()
+            .log_data()
             .map_err(PythonError::from)?
             .iter()
             .map(|f| (f.path().to_string(), f.size()))
@@ -1493,7 +1495,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
-    file_info: LogicalFile<'_>,
+    file_info: LogFileView,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let ds = PyModule::import_bound(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;

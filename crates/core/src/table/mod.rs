@@ -444,7 +444,7 @@ impl DeltaTable {
             .state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
-            .file_paths_iter())
+            .file_paths()?)
     }
 
     /// Returns a URIs for all active files present in the current table version.
@@ -453,7 +453,7 @@ impl DeltaTable {
             .state
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)?
-            .file_paths_iter()
+            .file_paths()?
             .map(|path| self.log_store.to_uri(&path)))
     }
 

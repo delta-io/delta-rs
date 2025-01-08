@@ -499,6 +499,7 @@ mod tests {
     use arrow::json::ReaderBuilder;
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use itertools::Itertools;
     use std::path::Path;
 
     #[tokio::test]
@@ -1046,7 +1047,7 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), 1);
-        let add_actions = table.state.unwrap().file_actions().unwrap();
+        let add_actions = table.state.unwrap().file_actions().unwrap().collect_vec();
         assert_eq!(add_actions.len(), 1);
         let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
         assert_eq!(
@@ -1094,7 +1095,7 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), 1);
-        let add_actions = table.state.unwrap().file_actions().unwrap();
+        let add_actions = table.state.unwrap().file_actions().unwrap().collect_vec();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":11,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"B\"},\"nullCount\":{\"id\":0}}";
         assert_eq!(

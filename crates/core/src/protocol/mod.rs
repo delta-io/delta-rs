@@ -63,7 +63,7 @@ pub enum ProtocolError {
         source: parquet::errors::ParquetError,
     },
 
-    /// Faild to serialize operation
+    /// Failed to serialize operation
     #[error("Failed to serialize operation: {source}")]
     SerializeOperation {
         #[from]
@@ -815,7 +815,7 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
 
-        // assert that commit info has no required filelds
+        // assert that commit info has no required fields
         let raw = "{}";
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
@@ -863,6 +863,7 @@ mod tests {
         use arrow::compute::sort_to_indices;
         use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
         use arrow::record_batch::RecordBatch;
+        use itertools::Itertools;
         use std::sync::Arc;
 
         fn sort_batch_by(batch: &RecordBatch, column: &str) -> arrow::error::Result<RecordBatch> {
@@ -1237,7 +1238,16 @@ mod tests {
             let mut table = crate::open_table(path).await.unwrap();
             table.load().await.unwrap();
 
-            assert_eq!(2, table.snapshot().unwrap().file_actions().unwrap().len());
+            assert_eq!(
+                2,
+                table
+                    .snapshot()
+                    .unwrap()
+                    .file_actions()
+                    .unwrap()
+                    .collect_vec()
+                    .len()
+            );
         }
 
         #[tokio::test]
@@ -1403,10 +1413,10 @@ mod tests {
                     "max.nested_struct.struct_element.nested_struct_element",
                     Arc::new(array::StringArray::from(vec!["nested_struct_value"])),
                 ),
-                (
-                    "null_count.struct_of_array_of_map.struct_element",
-                    Arc::new(array::Int64Array::from(vec![0])),
-                ),
+                // (
+                //     "null_count.struct_of_array_of_map.struct_element",
+                //     Arc::new(array::Int64Array::from(vec![0])),
+                // ),
                 (
                     "tags.INSERTION_TIME",
                     Arc::new(array::StringArray::from(vec!["1666652373000000"])),

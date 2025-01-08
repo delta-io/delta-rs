@@ -762,7 +762,12 @@ mod tests {
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), 1);
-        let add_actions = table.state.unwrap().file_actions().unwrap();
+        let add_actions = table
+            .state
+            .unwrap()
+            .file_actions()
+            .unwrap()
+            .collect::<Vec<_>>();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":1,\"minValues\":{\"id\":\"A\",\"value\":42},\"maxValues\":{\"id\":\"A\",\"value\":42},\"nullCount\":{\"id\":0,\"value\":0}}";
         assert_eq!(
@@ -810,7 +815,12 @@ mod tests {
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), 1);
-        let add_actions = table.state.unwrap().file_actions().unwrap();
+        let add_actions = table
+            .state
+            .unwrap()
+            .file_actions()
+            .unwrap()
+            .collect::<Vec<_>>();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":1,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"A\"},\"nullCount\":{\"id\":0}}";
         assert_eq!(

@@ -568,7 +568,9 @@ mod tests {
         let mut partition_values = table
             .snapshot()
             .unwrap()
+            .snapshot()
             .log_data()
+            .unwrap()
             .into_iter()
             .filter_map(|add| {
                 add.partition_values().map(|pv| {

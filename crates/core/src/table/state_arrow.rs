@@ -51,7 +51,7 @@ impl DeltaTableState {
     ///   (if available).
     /// * `tag.{tag_key}` (String): value of a metadata tag for the file.
     pub fn add_actions_table(&self, flatten: bool) -> Result<RecordBatch, DeltaTableError> {
-        let files = self.file_actions()?;
+        let files = self.file_actions()?.collect_vec();
         let mut paths = arrow::array::StringBuilder::with_capacity(
             files.len(),
             files.iter().map(|add| add.path.len()).sum(),
@@ -322,12 +322,13 @@ impl DeltaTableState {
         flatten: bool,
         files: &Vec<Add>,
     ) -> Result<RecordBatch, DeltaTableError> {
+        use arrow_array::builder::{Int32Builder, Int64Builder, StringBuilder};
         let capacity = files.len();
-        let mut storage_type = arrow::array::StringBuilder::with_capacity(capacity, 1);
-        let mut path_or_inline_div = arrow::array::StringBuilder::with_capacity(capacity, 64);
-        let mut offset = arrow::array::Int32Builder::with_capacity(capacity);
-        let mut size_in_bytes = arrow::array::Int32Builder::with_capacity(capacity);
-        let mut cardinality = arrow::array::Int64Builder::with_capacity(capacity);
+        let mut storage_type = StringBuilder::with_capacity(capacity, 1);
+        let mut path_or_inline_div = StringBuilder::with_capacity(capacity, 64);
+        let mut offset = Int32Builder::with_capacity(capacity);
+        let mut size_in_bytes = Int32Builder::with_capacity(capacity);
+        let mut cardinality = Int64Builder::with_capacity(capacity);
 
         for add in files {
             if let Some(value) = &add.deletion_vector {
@@ -397,7 +398,7 @@ impl DeltaTableState {
 
     fn stats_as_batch(&self, flatten: bool) -> Result<RecordBatch, DeltaTableError> {
         let stats: Vec<Option<Stats>> = self
-            .file_actions_iter()?
+            .file_actions()?
             .map(|f| {
                 f.get_stats()
                     .map_err(|err| DeltaTableError::InvalidStatsJson { json_err: err })

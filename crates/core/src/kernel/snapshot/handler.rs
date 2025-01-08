@@ -3,10 +3,12 @@ use std::sync::Arc;
 use arrow::compute::filter_record_batch;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
+use arrow_cast::pretty::print_columns;
 use arrow_schema::{Field as ArrowField, Fields};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::schema::{DataType, SchemaRef, StructField, StructType};
 use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
+use itertools::Itertools;
 
 use crate::DeltaResult;
 use crate::DeltaTableError;
@@ -19,6 +21,7 @@ impl AddOrdinals {
     pub const PATH: usize = 0;
     pub const SIZE: usize = 1;
     pub const MODIFICATION_TIME: usize = 2;
+    pub const DATA_CHANGE: usize = 3;
 }
 
 pub(super) struct DVOrdinals;
@@ -26,9 +29,9 @@ pub(super) struct DVOrdinals;
 impl DVOrdinals {
     pub const STORAGE_TYPE: usize = 0;
     pub const PATH_OR_INLINE_DV: usize = 1;
-    pub const SIZE_IN_BYTES: usize = 2;
-    pub const CARDINALITY: usize = 3;
-    // pub const OFFSET: usize = 4;
+    pub const OFFSET: usize = 2;
+    pub const SIZE_IN_BYTES: usize = 3;
+    pub const CARDINALITY: usize = 4;
 }
 
 impl DVOrdinals {}
@@ -38,9 +41,16 @@ lazy_static::lazy_static! {
     static ref DV_FIELDS: StructType = StructType::new([
         StructField::new("storageType", DataType::STRING, true),
         StructField::new("pathOrInlineDv", DataType::STRING, true),
+        StructField::new("offset", DataType::INTEGER, true),
         StructField::new("sizeInBytes", DataType::INTEGER, true),
         StructField::new("cardinality", DataType::LONG, true),
+    ]);
+    static ref DV_FIELDS_OUT: StructType = StructType::new([
+        StructField::new("storage_type", DataType::STRING, true),
+        StructField::new("path_or_inline_dv", DataType::STRING, true),
         StructField::new("offset", DataType::INTEGER, true),
+        StructField::new("size_in_bytes", DataType::INTEGER, true),
+        StructField::new("cardinality", DataType::LONG, true),
     ]);
 }
 
@@ -55,6 +65,7 @@ pub(super) fn extract_adds(
         Expression::column(["add", "size"]),
         Expression::column(["add", "modificationTime"]),
         Expression::column(["add", "dataChange"]),
+        // Expression::column(["add", "stats"]),
         Expression::struct_from(
             stats_schema
                 .fields()
@@ -62,13 +73,24 @@ pub(super) fn extract_adds(
         ),
     ];
     // fields for the output schema
+    const OUT_STATS_ORDINAL: usize = 5;
     let mut out_fields = vec![
-        StructField::new("path", DataType::STRING, false),
-        StructField::new("size", DataType::LONG, false),
-        StructField::new("modification_time", DataType::LONG, false),
-        StructField::new("data_change", DataType::BOOLEAN, false),
-        StructField::new("stats", stats_schema.clone(), false),
+        StructField::new("path", DataType::STRING, true),
+        StructField::new("size", DataType::LONG, true),
+        StructField::new("modification_time", DataType::LONG, true),
+        StructField::new("data_change", DataType::BOOLEAN, true),
+        // StructField::new("stats", DataType::STRING, true),
+        StructField::new("stats_parsed", stats_schema.clone(), true),
     ];
+
+    let has_stats = batch
+        .column_by_name("add")
+        .and_then(|c| c.as_struct_opt())
+        .is_some_and(|c| c.column_by_name("stats").is_some());
+    if has_stats {
+        columns.push(Expression::column(["add", "stats"]));
+        out_fields.push(StructField::new("stats", DataType::STRING, true));
+    };
 
     if let Some(partition_schema) = partition_schema {
         // TODO we assume there are parsed partition values - this maz change in the future
@@ -89,44 +111,58 @@ pub(super) fn extract_adds(
         columns.push(Expression::struct_from(DV_FIELDS.fields().map(|f| {
             Expression::column(["add", "deletionVector", f.name().as_str()])
         })));
-        out_fields.push(StructField::new("deletion_vector", DV_FIELDS.clone(), true));
+        out_fields.push(StructField::new(
+            "deletion_vector",
+            DV_FIELDS_OUT.clone(),
+            true,
+        ));
     }
 
     let data_schema: SchemaRef = Arc::new(batch.schema().as_ref().try_into()?);
 
     // remove non add action rows from record batch before processing
     let filter_expr = Expression::column(["add", "path"]).is_not_null();
-    let filter_evaluator =
-        ARROW_HANDLER.get_evaluator(data_schema.clone(), filter_expr, DataType::BOOLEAN);
+    let filter_evaluator = get_evaluator(data_schema.clone(), filter_expr, DataType::BOOLEAN);
     let result = eval_expr(&filter_evaluator, batch)?;
     let predicate = result
-        .column_by_name("output")
-        .ok_or_else(|| DeltaTableError::generic("expected 'output' column."))?
+        .column(0)
         .as_boolean_opt()
         .ok_or_else(|| DeltaTableError::generic("expected boolean array"))?;
     let filtered_batch = filter_record_batch(batch, predicate)?;
 
-    let evaluator = ARROW_HANDLER.get_evaluator(
+    let evaluator = get_evaluator(
         data_schema,
         Expression::struct_from(columns),
         DataType::struct_type(out_fields.clone()),
     );
     let result = eval_expr(&evaluator, &filtered_batch)?;
 
+    let result = fill_with_null(&StructType::new(out_fields.clone()), &result.into())?;
+    let mut columns = result.as_struct().columns().to_vec();
+
     // assert a conssitent stats scehma by imputing missing value with null
     // the stats schema may be different per file, as the table configuration
     // for collecting stats may change over time.
-    let mut columns = result.columns().to_vec();
-    if let Some(stats_col) = result.column_by_name("stats") {
-        let stats = stats_col
-            .as_struct_opt()
-            .ok_or_else(|| DeltaTableError::generic("expected struct array"))?;
-        columns[4] = fill_with_null(&stats_schema, stats)?;
-    };
+    // let mut columns = result.columns().to_vec();
+    // if let Some(stats_col) = result.column_by_name("stats_parsed") {
+    //     let stats = stats_col
+    //         .as_struct_opt()
+    //         .ok_or_else(|| DeltaTableError::generic("expected struct array"))?;
+    //     columns[OUT_STATS_ORDINAL] = fill_with_null(&stats_schema, stats)?;
+    // };
+
+    if !has_stats {
+        out_fields.push(StructField::new("stats", DataType::STRING, true));
+        columns.push(null_array(&DataType::STRING, filtered_batch.num_rows())?);
+    }
 
     // ensure consistent schema by adding empty deletion vector data if it is missing in the input
     if !has_dv {
-        out_fields.push(StructField::new("deletion_vector", DV_FIELDS.clone(), true));
+        out_fields.push(StructField::new(
+            "deletion_vector",
+            DV_FIELDS_OUT.clone(),
+            true,
+        ));
         columns.push(null_array(
             // safety: we just added a filed to the vec in additions to the ones above,
             out_fields.last().unwrap().data_type(),
@@ -138,7 +174,7 @@ pub(super) fn extract_adds(
     Ok(RecordBatch::try_new(batch_schema, columns)?)
 }
 
-fn eval_expr(
+pub(super) fn eval_expr(
     evaluator: &Arc<dyn ExpressionEvaluator>,
     data: &RecordBatch,
 ) -> DeltaResult<RecordBatch> {
@@ -183,6 +219,14 @@ fn fill_with_null(target_schema: &StructType, data: &StructArray) -> DeltaResult
         arrays,
         data.nulls().cloned(),
     )?))
+}
+
+pub(super) fn get_evaluator(
+    schema: SchemaRef,
+    expression: Expression,
+    output_type: DataType,
+) -> Arc<dyn ExpressionEvaluator> {
+    ARROW_HANDLER.get_evaluator(schema, expression, output_type)
 }
 
 fn null_array(data_type: &DataType, num_rows: usize) -> DeltaResult<ArrayRef> {

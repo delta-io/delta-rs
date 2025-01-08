@@ -27,6 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
+use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
@@ -171,8 +172,8 @@ async fn execute(
             snapshot.version(),
         )));
     }
-    let state_to_restore_files = table.snapshot()?.file_actions()?;
-    let latest_state_files = snapshot.file_actions()?;
+    let state_to_restore_files = table.snapshot()?.file_actions()?.collect_vec();
+    let latest_state_files = snapshot.file_actions()?.collect_vec();
     let state_to_restore_files_set =
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
     let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());

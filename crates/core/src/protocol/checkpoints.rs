@@ -291,7 +291,7 @@ fn parquet_bytes_from_state(
         }
     }
     let files = state
-        .file_actions_iter()
+        .file_actions()
         .map_err(|e| ProtocolError::Generic(e.to_string()))?;
     // protocol
     let jsons = std::iter::once(Action::Protocol(Protocol {
@@ -1147,7 +1147,7 @@ mod tests {
 
         table.load().await?;
         assert_eq!(table.version(), count, "Expected {count} transactions");
-        let pre_checkpoint_actions = table.snapshot()?.file_actions()?;
+        let pre_checkpoint_actions = table.snapshot()?.file_actions()?.collect::<Vec<_>>();
 
         let before = table.version();
         let res = create_checkpoint(&table).await;
@@ -1160,7 +1160,7 @@ mod tests {
             "Why on earth did a checkpoint creata version?"
         );
 
-        let post_checkpoint_actions = table.snapshot()?.file_actions()?;
+        let post_checkpoint_actions = table.snapshot()?.file_actions()?.collect::<Vec<_>>();
 
         assert_eq!(
             pre_checkpoint_actions.len(),

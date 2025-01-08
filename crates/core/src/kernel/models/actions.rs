@@ -166,14 +166,14 @@ impl Protocol {
         mut self,
         writer_features: impl IntoIterator<Item = impl Into<WriterFeatures>>,
     ) -> Self {
-        let all_writer_feautures = writer_features
+        let all_writer_features = writer_features
             .into_iter()
             .map(|c| c.into())
             .collect::<HashSet<_>>();
-        if !all_writer_feautures.is_empty() {
+        if !all_writer_features.is_empty() {
             self.min_writer_version = 7
         }
-        self.writer_features = Some(all_writer_feautures);
+        self.writer_features = Some(all_writer_features);
         self
     }
 

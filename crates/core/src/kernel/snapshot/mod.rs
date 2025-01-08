@@ -26,6 +26,7 @@ use delta_kernel::schema::SchemaRef;
 use delta_kernel::Expression;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
 
@@ -536,11 +537,6 @@ impl EagerSnapshot {
         self.snapshot.table_config()
     }
 
-    /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
-    pub fn log_data(&self) -> LogDataHandler<'_> {
-        LogDataHandler::new(&self.files, self.metadata(), self.schema())
-    }
-
     fn log_data_batch(&self, _predicate: Option<&Expression>) -> DeltaResult<RecordBatch> {
         let stats_schema = self.snapshot.stats_schema(None)?;
         let partitions_schema = self.snapshot.partitions_schema(None)?;
@@ -555,7 +551,7 @@ impl EagerSnapshot {
         Ok(concat_batches(results[0].schema_ref(), &results)?)
     }
 
-    pub fn log_data_new(&self) -> DeltaResult<LogDataView> {
+    pub fn log_data(&self) -> DeltaResult<LogDataView> {
         Ok(LogDataView::new(
             self.log_data_batch(None)?,
             self.snapshot.metadata.clone(),
@@ -570,12 +566,12 @@ impl EagerSnapshot {
 
     /// Get the files in the snapshot
     pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self.files.iter().flat_map(|b| read_adds(b)).flatten())
+        Ok(self.log_data()?.iter().map(|f| f.add_action()))
     }
 
     /// Get a file action iterator for the given version
-    pub fn files(&self) -> impl Iterator<Item = LogicalFile<'_>> {
-        self.log_data().into_iter()
+    pub fn files(&self) -> DeltaResult<impl Iterator<Item = LogFileView>> {
+        Ok(self.log_data()?.into_iter())
     }
 
     /// Get an iterator for the CDC files added in this version
@@ -754,15 +750,14 @@ fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option
     }
     match field.data_type() {
         DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-        DataType::Struct(dt_struct) => Some(StructField::new(
-            field.name(),
-            StructType::new(
-                dt_struct
-                    .fields()
-                    .flat_map(|f| stats_field(idx, num_indexed_cols, f)),
-            ),
-            true,
-        )),
+        DataType::Struct(dt_struct) => {
+            let fields = dt_struct
+                .fields()
+                .flat_map(|f| stats_field(idx, num_indexed_cols, f))
+                .collect_vec();
+            (!fields.is_empty())
+                .then(|| StructField::new(field.name(), StructType::new(fields), true))
+        }
         DataType::Primitive(_) => Some(StructField::new(
             field.name(),
             field.data_type.clone(),
@@ -792,7 +787,7 @@ mod datafusion {
     impl EagerSnapshot {
         /// Provide table level statistics to Datafusion
         pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-            self.log_data().statistics()
+            self.log_data().ok()?.statistics()
         }
     }
 }

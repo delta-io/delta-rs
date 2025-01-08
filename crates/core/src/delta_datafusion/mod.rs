@@ -557,7 +557,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     let mut files_pruned = 0usize;
                     let files = self
                         .snapshot
-                        .file_actions_iter()?
+                        .file_actions()?
                         .zip(files_to_prune.into_iter())
                         .filter_map(|(action, keep)| {
                             if keep {
@@ -572,7 +572,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     let files_scanned = files.len();
                     (files, files_scanned, files_pruned)
                 } else {
-                    let files = self.snapshot.file_actions()?;
+                    let files = self.snapshot.file_actions()?.collect_vec();
                     let files_scanned = files.len();
                     (files, files_scanned, 0)
                 }
@@ -1563,7 +1563,7 @@ pub(crate) async fn find_files_scan(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
+        .file_actions()?
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
 
@@ -1706,7 +1706,7 @@ pub async fn find_files(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions()?,
+            candidates: snapshot.file_actions()?.collect_vec(),
             partition_scan: true,
         }),
     }

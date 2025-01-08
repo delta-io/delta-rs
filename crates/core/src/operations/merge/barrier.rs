@@ -547,8 +547,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_barrier_changing_indicies() {
-        // Validate implementation can handle different dictionary indicies between batches
+    async fn test_barrier_changing_indices() {
+        // Validate implementation can handle different dictionary indices between batches
 
         let schema = get_schema();
         let mut batches = vec![];
@@ -669,8 +669,8 @@ mod tests {
             MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
 
         let survivors = merge.survivors();
-        let coalsece = CoalesceBatchesExec::new(Arc::new(merge), 100);
-        let mut stream = coalsece.execute(0, task_ctx).unwrap();
+        let coalesce = CoalesceBatchesExec::new(Arc::new(merge), 100);
+        let mut stream = coalesce.execute(0, task_ctx).unwrap();
         (vec![stream.next().await.unwrap().unwrap()], survivors)
     }
 

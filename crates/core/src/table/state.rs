@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{config::TableConfig, DeltaTableConfig};
 use crate::kernel::{
-    ActionType, Add, AddCDCFile, EagerSnapshot, LogDataHandler, LogDataView, Metadata, Protocol,
-    Remove, StructType, Transaction,
+    ActionType, Add, AddCDCFile, EagerSnapshot, LogDataView, Metadata, Protocol, Remove,
+    StructType, Transaction,
 };
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
@@ -99,7 +99,7 @@ impl DeltaTableState {
     }
 
     /// Returns a semantic accessor to the currently loaded log data.
-    pub fn log_data(&self) -> LogDataHandler<'_> {
+    pub fn log_data(&self) -> DeltaResult<LogDataView> {
         self.snapshot.log_data()
     }
 
@@ -137,13 +137,7 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions(&self) -> DeltaResult<Vec<Add>> {
-        Ok(self.snapshot.file_actions()?.collect())
-    }
-
-    /// Full list of add actions representing all parquet files that are part of the current
-    /// delta table state.
-    pub fn file_actions_iter(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+    pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
         self.snapshot.file_actions()
     }
 
@@ -159,10 +153,12 @@ impl DeltaTableState {
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
-    pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.log_data()
+    pub fn file_paths(&self) -> DeltaResult<impl Iterator<Item = Path>> {
+        Ok(self
+            .snapshot
+            .log_data()?
             .into_iter()
-            .map(|add| add.object_store_path())
+            .map(|add| add.object_store_path()))
     }
 
     /// HashMap containing the last transaction stored for every application.
@@ -205,7 +201,7 @@ impl DeltaTableState {
         &mut self,
         log_store: Arc<dyn LogStore>,
         version: Option<i64>,
-    ) -> Result<(), DeltaTableError> {
+    ) -> DeltaResult<()> {
         self.snapshot.update(log_store, version).await?;
         Ok(())
     }
@@ -214,7 +210,7 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions(
         &self,
         filters: &[PartitionFilter],
-    ) -> Result<LogDataView, DeltaTableError> {
+    ) -> DeltaResult<LogDataView> {
         // validate all referenced columns are part of the partition columns.
         let current_metadata = self.metadata();
         let nonpartitioned_columns: Vec<String> = filters
@@ -230,7 +226,7 @@ impl DeltaTableState {
 
         let predicate = to_predicate(filters, self.schema())?;
         self.snapshot
-            .log_data_new()?
+            .log_data()?
             .with_partition_filter(Some(&predicate))
     }
 }
