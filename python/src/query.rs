@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 
 use crate::{error::PythonError, utils::rt, RawDeltaTable};
 
-/// PyQueryBuilder supports the _experimental_ `QueryBuilder` Pythoh interface which allows users
+/// PyQueryBuilder supports the _experimental_ `QueryBuilder` Python interface which allows users
 /// to take advantage of the [Apache DataFusion](https://datafusion.apache.org) engine already
 /// present in the Python package.
 #[pyclass(module = "deltalake._internal")]
