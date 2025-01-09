@@ -779,12 +779,12 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version = 0, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, allow_out_of_range = false))]
+    #[pyo3(signature = (starting_version = None, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, allow_out_of_range = false))]
     #[allow(clippy::too_many_arguments)]
     pub fn load_cdf(
         &self,
         py: Python,
-        starting_version: i64,
+        starting_version: Option<i64>,
         ending_version: Option<i64>,
         starting_timestamp: Option<String>,
         ending_timestamp: Option<String>,
@@ -792,9 +792,11 @@ impl RawDeltaTable {
         allow_out_of_range: bool,
     ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
-        let mut cdf_read = CdfLoadBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_starting_version(starting_version);
+        let mut cdf_read = CdfLoadBuilder::new(self.log_store()?, self.cloned_state()?);
 
+        if let Some(sv) = starting_version {
+            cdf_read = cdf_read.with_starting_version(sv);
+        }
         if let Some(ev) = ending_version {
             cdf_read = cdf_read.with_ending_version(ev);
         }
