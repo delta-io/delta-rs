@@ -236,6 +236,9 @@ pub enum DeltaTableError {
 
     #[error("End timestamp {ending_timestamp} is greater than latest commit timestamp")]
     ChangeDataTimestampGreaterThanCommit { ending_timestamp: DateTime<Utc> },
+
+    #[error("No starting version or timestamp provided for CDC")]
+    NoStartingVersionOrTimestamp,
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
