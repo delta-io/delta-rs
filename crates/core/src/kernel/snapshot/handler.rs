@@ -1,13 +1,20 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use arrow::compute::filter_record_batch;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
 use arrow_schema::{Field as ArrowField, Fields};
+use convert_case::{Case, Casing};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::schema::{DataType, SchemaRef, StructField, StructType};
+use delta_kernel::expressions::column_expr;
+use delta_kernel::schema::{
+    ArrayType, DataType, MapType, PrimitiveType, SchemaRef, SchemaTransform, StructField,
+    StructType,
+};
 use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
 
+use crate::table::config::TableConfig;
 use crate::DeltaResult;
 use crate::DeltaTableError;
 
@@ -50,6 +57,17 @@ lazy_static::lazy_static! {
         StructField::new("size_in_bytes", DataType::INTEGER, true),
         StructField::new("cardinality", DataType::LONG, true),
     ]);
+}
+
+fn get_add_transform_expr() -> Expression {
+    Expression::Struct(vec![
+        column_expr!("add.path"),
+        column_expr!("add.size"),
+        column_expr!("add.modificationTime"),
+        column_expr!("add.stats"),
+        column_expr!("add.deletionVector"),
+        Expression::Struct(vec![column_expr!("add.partitionValues")]),
+    ])
 }
 
 pub(super) fn extract_adds(
@@ -173,6 +191,14 @@ pub(super) fn extract_adds(
 
     let batch_schema = Arc::new((&StructType::new(out_fields.clone())).try_into()?);
     Ok(RecordBatch::try_new(batch_schema, columns)?)
+}
+
+struct FieldCasingTransform;
+impl<'a> SchemaTransform<'a> for FieldCasingTransform {
+    fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
+        self.recurse_into_struct_field(field)
+            .map(|f| Cow::Owned(f.with_name(f.name().to_case(Case::Snake))))
+    }
 }
 
 pub(super) fn eval_expr(
