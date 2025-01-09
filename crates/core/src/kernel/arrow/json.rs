@@ -3,12 +3,13 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::task::Poll;
 
-use arrow_array::{new_null_array, Array, RecordBatch, StringArray};
+use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_json::{reader::Decoder, ReaderBuilder};
-use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use arrow_select::concat::concat_batches;
 use bytes::{Buf, Bytes};
 use futures::{ready, Stream, StreamExt};
+use itertools::Itertools;
 use object_store::Result as ObjectStoreResult;
 
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
@@ -28,18 +29,42 @@ pub(crate) fn get_decoder(
         .build_decoder()?)
 }
 
-fn insert_nulls(
-    batches: &mut Vec<RecordBatch>,
-    null_count: usize,
+// Raw arrow implementation of the json parsing. Separate from the public function for testing.
+//
+// NOTE: This code is really inefficient because arrow lacks the native capability to perform robust
+// StringArray -> StructArray JSON parsing. See https://github.com/apache/arrow-rs/issues/6522. If
+// that shortcoming gets fixed upstream, this method can simplify or hopefully even disappear.
+//
+// NOTE: this function is hoisted from delta-kernel-rs to support transitioning to kernel.
+fn parse_json_impl(
+    json_strings: &StringArray,
     schema: ArrowSchemaRef,
-) -> Result<(), ArrowError> {
-    let columns = schema
-        .fields
-        .iter()
-        .map(|field| new_null_array(field.data_type(), null_count))
-        .collect();
-    batches.push(RecordBatch::try_new(schema, columns)?);
-    Ok(())
+) -> Result<RecordBatch, delta_kernel::Error> {
+    if json_strings.is_empty() {
+        return Ok(RecordBatch::new_empty(schema));
+    }
+
+    // Use batch size of 1 to force one record per string input
+    let mut decoder = ReaderBuilder::new(schema.clone())
+        .with_batch_size(1)
+        .build_decoder()?;
+    let parse_one = |json_string: Option<&str>| -> Result<RecordBatch, delta_kernel::Error> {
+        let mut reader = BufReader::new(json_string.unwrap_or("{}").as_bytes());
+        let buf = reader.fill_buf()?;
+        let read = buf.len();
+        if !(decoder.decode(buf)? == read) {
+            return Err(delta_kernel::Error::missing_data("Incomplete JSON string"));
+        }
+        let Some(batch) = decoder.flush()? else {
+            return Err(delta_kernel::Error::missing_data("Expected data"));
+        };
+        if !(batch.num_rows() == 1) {
+            return Err(delta_kernel::Error::generic("Expected one row"));
+        }
+        Ok(batch)
+    };
+    let output: Vec<_> = json_strings.iter().map(parse_one).try_collect()?;
+    Ok(concat_batches(&schema, output.iter())?)
 }
 
 /// Parse an array of JSON strings into a record batch.
@@ -48,65 +73,8 @@ fn insert_nulls(
 pub(crate) fn parse_json(
     json_strings: &StringArray,
     output_schema: ArrowSchemaRef,
-    config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
-    let mut decoder = ReaderBuilder::new(output_schema.clone())
-        .with_batch_size(config.log_batch_size)
-        .build_decoder()?;
-    let mut batches = Vec::new();
-
-    let mut null_count = 0;
-    let mut value_count = 0;
-    let mut value_start = 0;
-
-    for it in 0..json_strings.len() {
-        if json_strings.is_null(it) {
-            if value_count > 0 {
-                let slice_data = get_nonnull_slice_data(json_strings, value_start, value_count);
-                let batch =
-                    decode_reader(&mut decoder, get_reader(&slice_data))
-                        .collect::<Result<Vec<_>, _>>()?;
-                batches.extend(batch);
-                value_count = 0;
-            }
-            null_count += 1;
-            continue;
-        }
-        if value_count == 0 {
-            value_start = it;
-        }
-        if null_count > 0 {
-            insert_nulls(&mut batches, null_count, output_schema.clone())?;
-            null_count = 0;
-        }
-        value_count += 1;
-    }
-
-    if null_count > 0 {
-        insert_nulls(&mut batches, null_count, output_schema.clone())?;
-    }
-
-    if value_count > 0 {
-        let slice_data = get_nonnull_slice_data(json_strings, value_start, value_count);
-        let batch =
-            decode_reader(&mut decoder, get_reader(&slice_data)).collect::<Result<Vec<_>, _>>()?;
-        batches.extend(batch);
-    }
-
-    Ok(concat_batches(&output_schema, &batches)?)
-}
-
-/// Get the data of a slice of non-null JSON strings.
-fn get_nonnull_slice_data(
-    json_strings: &StringArray,
-    value_start: usize,
-    value_count: usize,
-) -> Vec<u8> {
-    let slice = json_strings.slice(value_start, value_count);
-    slice.iter().fold(Vec::new(), |mut acc, s| {
-        acc.extend_from_slice(s.unwrap().as_bytes());
-        acc
-    })
+    Ok(parse_json_impl(json_strings, output_schema)?)
 }
 
 /// Decode a stream of bytes into a stream of record batches.
@@ -184,7 +152,7 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
         ]));
         let config = DeltaTableConfig::default();
-        let result = parse_json(&json_strings, struct_schema.clone(), &config).unwrap();
+        let result = parse_json(&json_strings, struct_schema.clone()).unwrap();
         let expected = RecordBatch::try_new(
             struct_schema,
             vec![

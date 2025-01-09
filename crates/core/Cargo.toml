@@ -73,6 +73,7 @@ tokio = { workspace = true, features = [
 ] }
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
+convert_case = "0.6"
 cfg-if = "1"
 dashmap = "6"
 errno = "0.3"
@@ -111,7 +112,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 cdf = []
-default = ["cdf", "datafusion"]
+default = ["cdf"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",

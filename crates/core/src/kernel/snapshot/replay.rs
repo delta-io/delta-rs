@@ -133,7 +133,7 @@ fn parse_stats(
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").ok_or(
         DeltaTableError::generic("No stats column found in files batch. This is unexpected."),
     )?;
-    let stats: StructArray = json::parse_json(stats, stats_schema.clone(), config)?.into();
+    let stats: StructArray = json::parse_json(stats, stats_schema.clone())?.into();
     insert_field(batch, stats, "stats_parsed")
 }
 

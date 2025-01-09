@@ -50,13 +50,13 @@ fn filter_to_expression(filter: &PartitionFilter, schema: &Schema) -> DeltaResul
         ))
     })?;
     let col = Expression::column([field.name().as_str()]);
-    let partion_type = field.data_type().as_primitive_opt().ok_or_else(|| {
+    let partition_type = field.data_type().as_primitive_opt().ok_or_else(|| {
         DeltaTableError::InvalidPartitionFilter {
             partition_filter: filter.key.to_string(),
         }
     })?;
     let to_literal = |value: &str| -> KernelResult<_> {
-        Ok(Expression::literal(partion_type.parse_scalar(value)?))
+        Ok(Expression::literal(partition_type.parse_scalar(value)?))
     };
 
     match &filter.value {
@@ -84,7 +84,7 @@ fn filter_to_expression(filter: &PartitionFilter, schema: &Schema) -> DeltaResul
         PartitionValue::In(values) | PartitionValue::NotIn(values) => {
             let values = values
                 .iter()
-                .map(|v| partion_type.parse_scalar(v))
+                .map(|v| partition_type.parse_scalar(v))
                 .collect::<KernelResult<Vec<_>>>()?;
             let array = Expression::literal(Scalar::Array(ArrayData::new(
                 ArrayType::new(field.data_type().clone(), false),
@@ -222,7 +222,6 @@ impl DeltaTablePartition {
     }
 }
 
-///
 /// A HivePartition string is represented by a "key=value" format.
 ///
 /// ```rust

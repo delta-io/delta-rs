@@ -3,12 +3,10 @@ use std::sync::Arc;
 use arrow::compute::filter_record_batch;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
-use arrow_cast::pretty::print_columns;
 use arrow_schema::{Field as ArrowField, Fields};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::schema::{DataType, SchemaRef, StructField, StructType};
 use delta_kernel::{Expression, ExpressionEvaluator, ExpressionHandler};
-use itertools::Itertools;
 
 use crate::DeltaResult;
 use crate::DeltaTableError;
@@ -29,7 +27,7 @@ pub(super) struct DVOrdinals;
 impl DVOrdinals {
     pub const STORAGE_TYPE: usize = 0;
     pub const PATH_OR_INLINE_DV: usize = 1;
-    pub const OFFSET: usize = 2;
+    // pub const OFFSET: usize = 2;
     pub const SIZE_IN_BYTES: usize = 3;
     pub const CARDINALITY: usize = 4;
 }
@@ -73,7 +71,6 @@ pub(super) fn extract_adds(
         ),
     ];
     // fields for the output schema
-    const OUT_STATS_ORDINAL: usize = 5;
     let mut out_fields = vec![
         StructField::new("path", DataType::STRING, true),
         StructField::new("size", DataType::LONG, true),
@@ -130,12 +127,16 @@ pub(super) fn extract_adds(
         .ok_or_else(|| DeltaTableError::generic("expected boolean array"))?;
     let filtered_batch = filter_record_batch(batch, predicate)?;
 
+    dbg!(&out_fields);
+
     let evaluator = get_evaluator(
         data_schema,
         Expression::struct_from(columns),
         DataType::struct_type(out_fields.clone()),
     );
     let result = eval_expr(&evaluator, &filtered_batch)?;
+
+    dbg!("done evaluating");
 
     let result = fill_with_null(&StructType::new(out_fields.clone()), &result.into())?;
     let mut columns = result.as_struct().columns().to_vec();
