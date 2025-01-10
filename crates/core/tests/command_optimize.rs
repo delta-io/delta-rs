@@ -23,6 +23,7 @@ use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 struct Context {
     pub tmp_dir: TempDir,
@@ -309,6 +310,8 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
             20,
             None,
             CommitProperties::default(),
+            Uuid::new_v4(),
+            None,
         )
         .await;
 
@@ -368,6 +371,8 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
             20,
             None,
             CommitProperties::default(),
+            Uuid::new_v4(),
+            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 1);
@@ -415,6 +420,8 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
             CommitProperties::default(),
+            Uuid::new_v4(),
+            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);
