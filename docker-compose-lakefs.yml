@@ -1,0 +1,33 @@
+services:
+  lakefs:
+    image: docker.io/treeverse/lakefs:1.48
+    ports:
+      - "8000:8000"
+    environment:
+      - LAKEFS_DATABASE_TYPE=local
+      - LAKEFS_BLOCKSTORE_TYPE=local
+      - LAKEFS_AUTH_ENCRYPT_SECRET_KEY=some random secret string
+      - LAKEFS_LOGGING_LEVEL=INFO
+      - LAKEFS_STATS_ENABLED=${LAKEFS_STATS_ENABLED:-1}
+      - LAKEFS_INSTALLATION_USER_NAME=delta
+      - LAKEFS_INSTALLATION_ACCESS_KEY_ID=LAKEFSID
+      - LAKECTL_CREDENTIALS_ACCESS_KEY_ID=LAKEFSID
+      - LAKEFS_INSTALLATION_SECRET_ACCESS_KEY=LAKEFSKEY
+      - LAKECTL_CREDENTIALS_SECRET_ACCESS_KEY=LAKEFSKEY
+      - LAKECTL_SERVER_ENDPOINT_URL=http://localhost:8000
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+        - |
+          lakefs run --local-settings &
+          echo "---- Creating repository ----"
+          wait-for -t 60 lakefs:8000 -- lakectl repo create lakefs://bronze local://bronze || true
+          echo ""
+          echo "lakeFS Web UI: http://127.0.0.1:8000/      >(.＿.)<"
+          echo "                                             (  )_ "
+          echo ""
+          echo "                Access Key ID    : $$LAKEFS_INSTALLATION_ACCESS_KEY_ID"
+          echo "                Secret Access Key: $$LAKEFS_INSTALLATION_SECRET_ACCESS_KEY"
+          echo ""
+          echo "-------- Let's go and have axolotl fun! --------"
+          echo ""
+          wait

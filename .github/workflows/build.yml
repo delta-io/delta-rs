@@ -139,3 +139,40 @@ jobs:
       - name: Run tests with native-tls
         run: |
           cargo test --no-default-features --features integration_test,s3-native-tls,datafusion
+
+  integration_test_lakefs:
+    name: Integration Tests (LakeFS v1.48)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # <https://doc.rust-lang.org/cargo/reference/profiles.html>
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      RUST_BACKTRACE: "1"
+      RUST_LOG: debug
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: '1.81'
+          override: true
+
+      - name: Download Lakectl
+        run: |
+          wget -q https://github.com/treeverse/lakeFS/releases/download/1.48.1/lakeFS_1.48.1_Linux_x86_64.tar.gz
+          tar -xf lakeFS_1.48.1_Linux_x86_64.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE" >> $GITHUB_PATH
+
+      - name: Start emulated services
+        run: docker compose -f docker-compose-lakefs.yml up -d
+
+      - name: Run tests with rustls (default)
+        run: |
+          cargo test --features integration_test_lakefs,lakefs,datafusion
+
