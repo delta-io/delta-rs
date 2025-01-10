@@ -61,7 +61,8 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     assert!(retention_timestamp > v1time.timestamp_millis());
     assert!(retention_timestamp < v2time.timestamp_millis());
 
-    let removed = cleanup_expired_logs_for(3, log_store.as_ref(), retention_timestamp).await?;
+    let removed =
+        cleanup_expired_logs_for(3, log_store.as_ref(), retention_timestamp, None).await?;
 
     assert_eq!(removed, 2);
     assert!(object_store.head(&log_path(0)).await.is_err());
@@ -101,13 +102,14 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     writer.flush_and_commit(&mut table).await?; // v2
     assert_eq!(table.version(), 2);
 
-    create_checkpoint(&table).await.unwrap(); // v2.checkpoint.parquet
+    create_checkpoint(&table, None).await.unwrap(); // v2.checkpoint.parquet
 
     // Should delete v1 but not v2 or v2.checkpoint.parquet
     cleanup_expired_logs_for(
         table.version(),
         table.log_store().as_ref(),
         ts.timestamp_millis(),
+        None,
     )
     .await?;
 
@@ -150,6 +152,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         table.version(),
         table.log_store().as_ref(),
         ts.timestamp_millis(),
+        None,
     )
     .await?;
 

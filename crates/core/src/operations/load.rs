@@ -7,6 +7,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::transaction::PROTOCOL;
+use super::CustomExecuteHandler;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
@@ -23,7 +24,14 @@ pub struct LoadBuilder {
     columns: Option<Vec<String>>,
 }
 
-impl super::Operation<()> for LoadBuilder {}
+impl super::Operation<()> for LoadBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        unimplemented!("Not required in loadBuilder for now.")
+    }
+}
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]

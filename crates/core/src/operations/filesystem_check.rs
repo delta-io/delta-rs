@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -23,8 +24,11 @@ pub use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
 use url::{ParseError, Url};
+use uuid::Uuid;
 
 use super::transaction::{CommitBuilder, CommitProperties};
+use super::CustomExecuteHandler;
+use super::Operation;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
@@ -34,7 +38,6 @@ use crate::DeltaTable;
 
 /// Audit the Delta Table's active files with the underlying file system.
 /// See this module's documentation for more information
-#[derive(Debug)]
 pub struct FileSystemCheckBuilder {
     /// A snapshot of the to-be-checked table's state
     snapshot: DeltaTableState,
@@ -44,6 +47,7 @@ pub struct FileSystemCheckBuilder {
     dry_run: bool,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 /// Details of the FSCK operation including which files were removed from the log
@@ -73,7 +77,14 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     }
 }
 
-impl super::Operation<()> for FileSystemCheckBuilder {}
+impl super::Operation<()> for FileSystemCheckBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
@@ -83,6 +94,7 @@ impl FileSystemCheckBuilder {
             log_store,
             dry_run: false,
             commit_properties: CommitProperties::default(),
+            custom_execute_handler: None,
         }
     }
 
@@ -95,6 +107,12 @@ impl FileSystemCheckBuilder {
     /// Additonal information to write to the commit
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
+        self
+    }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
         self
     }
 
@@ -141,14 +159,9 @@ impl FileSystemCheckPlan {
         self,
         snapshot: &DeltaTableState,
         mut commit_properties: CommitProperties,
+        operation_id: Uuid,
+        handle: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<FileSystemCheckMetrics> {
-        if self.files_to_remove.is_empty() {
-            return Ok(FileSystemCheckMetrics {
-                dry_run: false,
-                files_removed: Vec::new(),
-            });
-        }
-
         let mut actions = Vec::with_capacity(self.files_to_remove.len());
         let mut removed_file_paths = Vec::with_capacity(self.files_to_remove.len());
 
@@ -183,6 +196,8 @@ impl FileSystemCheckPlan {
         );
 
         CommitBuilder::from(commit_properties)
+            .with_operation_id(operation_id)
+            .with_post_commit_hook_handler(handle)
             .with_actions(actions)
             .build(
                 Some(snapshot),
@@ -213,8 +228,29 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                     },
                 ));
             }
+            if plan.files_to_remove.is_empty() {
+                return Ok((
+                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    FileSystemCheckMetrics {
+                        dry_run: false,
+                        files_removed: Vec::new(),
+                    },
+                ));
+            };
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
-            let metrics = plan.execute(&this.snapshot, this.commit_properties).await?;
+            let metrics = plan
+                .execute(
+                    &this.snapshot,
+                    this.commit_properties.clone(),
+                    operation_id,
+                    this.get_custom_execute_handler(),
+                )
+                .await?;
+
+            this.post_execute(operation_id).await?;
+
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))

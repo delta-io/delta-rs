@@ -70,7 +70,7 @@ mod tests {
         assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(3));
 
         // Create a checkpoint and then load
-        checkpoints::create_checkpoint(&table).await.unwrap();
+        checkpoints::create_checkpoint(&table, None).await.unwrap();
         let table3 = DeltaTableBuilder::from_uri(tmp_path.to_str().unwrap())
             .load()
             .await
