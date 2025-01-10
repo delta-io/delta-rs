@@ -33,8 +33,8 @@ pub async fn sync_stores(
     from_store: Arc<dyn LogStore>,
     to_store: Arc<dyn LogStore>,
 ) -> Result<(), DeltaTableError> {
-    let from_store = from_store.object_store().clone();
-    let to_store = to_store.object_store().clone();
+    let from_store = from_store.object_store(None).clone();
+    let to_store = to_store.object_store(None).clone();
     // TODO if a table is copied within the same root store (i.e bucket), using copy would be MUCH more efficient
     let mut meta_stream = from_store.list(None);
     while let Some(file) = meta_stream.next().await {

@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
+use uuid::Uuid;
 
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
 use crate::{
@@ -24,7 +25,7 @@ fn put_options() -> &'static PutOptions {
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
 pub struct DefaultLogStore {
-    pub(crate) storage: Arc<dyn ObjectStore>,
+    pub(crate) storage: ObjectStoreRef,
     config: LogStoreConfig,
 }
 
@@ -47,7 +48,7 @@ impl LogStore for DefaultLogStore {
     }
 
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
-        super::read_commit_entry(self.storage.as_ref(), version).await
+        super::read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
     /// Tries to commit a prepared commit file. Returns [`TransactionError`]
@@ -59,10 +60,11 @@ impl LogStore for DefaultLogStore {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        _: Uuid,
     ) -> Result<(), TransactionError> {
         match commit_or_bytes {
             CommitOrBytes::LogBytes(log_bytes) => self
-                .object_store()
+                .object_store(None)
                 .put_opts(
                     &commit_uri_from_version(version),
                     log_bytes.into(),
@@ -86,6 +88,7 @@ impl LogStore for DefaultLogStore {
         &self,
         _version: i64,
         commit_or_bytes: CommitOrBytes,
+        _: Uuid,
     ) -> Result<(), TransactionError> {
         match &commit_or_bytes {
             CommitOrBytes::LogBytes(_) => Ok(()),
@@ -101,7 +104,7 @@ impl LogStore for DefaultLogStore {
         super::get_earliest_version(self, current_version).await
     }
 
-    fn object_store(&self) -> Arc<dyn ObjectStore> {
+    fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
         self.storage.clone()
     }
 

@@ -15,6 +15,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use url::Url;
+use uuid::Uuid;
 
 use crate::kernel::log_segment::PathExt;
 use crate::kernel::Action;
@@ -212,6 +213,7 @@ pub trait LogStore: Sync + Send {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        operation_id: Uuid,
     ) -> Result<(), TransactionError>;
 
     /// Abort the commit entry for the given version.
@@ -219,6 +221,7 @@ pub trait LogStore: Sync + Send {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        operation_id: Uuid,
     ) -> Result<(), TransactionError>;
 
     /// Find latest version currently stored in the delta log.
@@ -240,8 +243,8 @@ pub trait LogStore: Sync + Send {
         Ok(PeekCommit::New(next_version, actions.unwrap()))
     }
 
-    /// Get underlying object store.
-    fn object_store(&self) -> Arc<dyn ObjectStore>;
+    /// Get object store, can pass operation_id for object stores linked to an operation
+    fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
     /// [Path] to Delta log
     fn to_uri(&self, location: &Path) -> String {
@@ -262,7 +265,7 @@ pub trait LogStore: Sync + Send {
     /// Check if the location is a delta table location
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
         // TODO We should really be using HEAD here, but this fails in windows tests
-        let object_store = self.object_store();
+        let object_store = self.object_store(None);
         let mut stream = object_store.list(Some(self.log_path()));
         if let Some(res) = stream.next().await {
             match res {
@@ -446,7 +449,7 @@ pub async fn get_latest_version(
         let mut max_version: i64 = version_start;
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
         let mut files = object_store.list_with_offset(prefix, &offset_path);
 
         while let Some(obj_meta) = files.next().await {
@@ -491,7 +494,7 @@ pub async fn get_earliest_version(
         let mut min_version: i64 = version_start;
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(version_start);
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
 
         // Manually filter until we can provide direction in https://github.com/apache/arrow-rs/issues/6274
         let mut files = object_store
@@ -602,7 +605,7 @@ mod tests {
         // delta table (it shouldn't be).
         let payload = PutPayload::from_static(b"test-drivin");
         let _put = store
-            .object_store()
+            .object_store(None)
             .put_opts(
                 &Path::from("_delta_log/_commit_failed.tmp"),
                 payload,
@@ -631,7 +634,7 @@ mod tests {
         // Save a commit to the transaction log
         let payload = PutPayload::from_static(b"test");
         let _put = store
-            .object_store()
+            .object_store(None)
             .put_opts(
                 &Path::from("_delta_log/0.json"),
                 payload,
@@ -661,7 +664,7 @@ mod tests {
         // Save a "checkpoint" file to the transaction log directory
         let payload = PutPayload::from_static(b"test");
         let _put = store
-            .object_store()
+            .object_store(None)
             .put_opts(
                 &Path::from("_delta_log/0.checkpoint.parquet"),
                 payload,
