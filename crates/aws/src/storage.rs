@@ -830,7 +830,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_is_aws() {
+        clear_env_of_aws_keys();
         let options = StorageOptions::default();
         assert!(is_aws(&options));
 
