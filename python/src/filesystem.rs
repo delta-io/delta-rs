@@ -51,7 +51,7 @@ impl DeltaFileSystemHandler {
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PythonError::from)?
-            .object_store();
+            .object_store(None);
 
         Ok(Self {
             inner: storage,
