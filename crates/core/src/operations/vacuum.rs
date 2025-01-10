@@ -33,6 +33,7 @@ use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
 
 use super::transaction::{CommitBuilder, CommitProperties};
+use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -75,7 +76,6 @@ pub trait Clock: Debug + Send + Sync {
     fn current_timestamp_millis(&self) -> i64;
 }
 
-#[derive(Debug)]
 /// Vacuum a Delta table with the given options
 /// See this module's documentation for more information
 pub struct VacuumBuilder {
@@ -93,9 +93,17 @@ pub struct VacuumBuilder {
     clock: Option<Arc<dyn Clock>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for VacuumBuilder {}
+impl super::Operation<()> for VacuumBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 /// Details for the Vacuum operation including which files were
 #[derive(Debug)]
@@ -138,6 +146,7 @@ impl VacuumBuilder {
             dry_run: false,
             clock: None,
             commit_properties: CommitProperties::default(),
+            custom_execute_handler: None,
         }
     }
 
@@ -172,6 +181,12 @@ impl VacuumBuilder {
         self
     }
 
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
+
     /// Determine which files can be deleted. Does not actually peform the deletion
     async fn create_vacuum_plan(&self) -> Result<VacuumPlan, VacuumError> {
         let min_retention = Duration::milliseconds(
@@ -199,7 +214,7 @@ impl VacuumBuilder {
             &self.snapshot,
             retention_period,
             now_millis,
-            self.log_store.object_store().clone(),
+            self.log_store.object_store(None).clone(),
         )
         .await?;
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
@@ -255,14 +270,20 @@ impl std::future::IntoFuture for VacuumBuilder {
                     },
                 ));
             }
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
             let metrics = plan
                 .execute(
                     this.log_store.clone(),
                     &this.snapshot,
-                    this.commit_properties,
+                    this.commit_properties.clone(),
+                    operation_id,
+                    this.get_custom_execute_handler(),
                 )
                 .await?;
+
+            this.post_execute(operation_id).await?;
             Ok((
                 DeltaTable::new_with_state(this.log_store, this.snapshot),
                 metrics,
@@ -292,6 +313,8 @@ impl VacuumPlan {
         store: LogStoreRef,
         snapshot: &DeltaTableState,
         mut commit_properties: CommitProperties,
+        operation_id: uuid::Uuid,
+        handle: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
@@ -324,6 +347,8 @@ impl VacuumPlan {
         );
 
         CommitBuilder::from(start_props)
+            .with_operation_id(operation_id)
+            .with_post_commit_hook_handler(handle.clone())
             .build(Some(snapshot), store.clone(), start_operation)
             .await?;
         // Finish VACUUM START COMMIT
@@ -333,7 +358,7 @@ impl VacuumPlan {
             .boxed();
 
         let files_deleted = store
-            .object_store()
+            .object_store(Some(operation_id))
             .delete_stream(locations)
             .map(|res| match res {
                 Ok(path) => Ok(path.to_string()),
@@ -355,6 +380,8 @@ impl VacuumPlan {
             serde_json::to_value(end_metrics)?,
         );
         CommitBuilder::from(commit_properties)
+            .with_operation_id(operation_id)
+            .with_post_commit_hook_handler(handle)
             .build(Some(snapshot), store.clone(), end_operation)
             .await?;
         // Finish VACUUM END COMMIT

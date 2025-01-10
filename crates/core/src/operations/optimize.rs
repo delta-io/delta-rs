@@ -40,9 +40,11 @@ use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use tracing::*;
+use uuid::Uuid;
 
 use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
+use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
@@ -188,7 +190,6 @@ pub enum OptimizeType {
 ///
 /// If a target file size is not provided then `delta.targetFileSize` from the
 /// table's configuration is read. Otherwise a default value is used.
-#[derive(Debug)]
 pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
     snapshot: DeltaTableState,
@@ -211,9 +212,17 @@ pub struct OptimizeBuilder<'a> {
     /// Optimize type
     optimize_type: OptimizeType,
     min_commit_interval: Option<Duration>,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for OptimizeBuilder<'_> {}
+impl super::Operation<()> for OptimizeBuilder<'_> {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
@@ -230,6 +239,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
+            custom_execute_handler: None,
         }
     }
 
@@ -286,6 +296,12 @@ impl<'a> OptimizeBuilder<'a> {
         self.min_commit_interval = Some(min_commit_interval);
         self
     }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
 }
 
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
@@ -300,6 +316,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             if !&this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
             }
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 WriterProperties::builder()
@@ -321,9 +339,15 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
-                    this.commit_properties,
+                    this.commit_properties.clone(),
+                    operation_id,
+                    this.custom_execute_handler.as_ref(),
                 )
                 .await?;
+
+            if let Some(handler) = this.custom_execute_handler {
+                handler.post_execute(&this.log_store, operation_id).await?;
+            }
             let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))
@@ -666,6 +690,7 @@ impl MergePlan {
     }
 
     /// Perform the operations outlined in the plan.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         mut self,
         log_store: LogStoreRef,
@@ -675,6 +700,8 @@ impl MergePlan {
         max_spill_size: usize,
         min_commit_interval: Option<Duration>,
         commit_properties: CommitProperties,
+        operation_id: Uuid,
+        handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
 
@@ -692,7 +719,7 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.location);
                     }
-                    let object_store_ref = log_store.object_store();
+                    let object_store_ref = log_store.object_store(Some(operation_id));
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
@@ -710,7 +737,7 @@ impl MergePlan {
                         self.task_parameters.clone(),
                         partition,
                         files,
-                        log_store.object_store().clone(),
+                        log_store.object_store(Some(operation_id)).clone(),
                         futures::future::ready(Ok(batch_stream)),
                     ));
                     util::flatten_join_error(rewrite_result)
@@ -722,7 +749,7 @@ impl MergePlan {
                 #[cfg(not(feature = "datafusion"))]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    log_store.object_store(),
+                    log_store.object_store(Some(operation_id)),
                     // If there aren't enough bins to use all threads, then instead
                     // use threads within the bins. This is important for the case where
                     // the table is un-partitioned, in which case the entire table is just
@@ -733,7 +760,7 @@ impl MergePlan {
                 #[cfg(feature = "datafusion")]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    log_store.object_store(),
+                    log_store.object_store(Some(operation_id)),
                     max_spill_size,
                 )?);
                 let task_parameters = self.task_parameters.clone();
@@ -746,7 +773,7 @@ impl MergePlan {
                             task_parameters.clone(),
                             partition,
                             files,
-                            log_store.object_store(),
+                            log_store.object_store(Some(operation_id)),
                             batch_stream,
                         ));
                         util::flatten_join_error(rewrite_result)
@@ -811,6 +838,8 @@ impl MergePlan {
 
                 CommitBuilder::from(properties)
                     .with_actions(actions)
+                    .with_operation_id(operation_id)
+                    .with_post_commit_hook_handler(handle.cloned())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
                         Some(snapshot),
