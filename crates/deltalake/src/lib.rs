@@ -11,3 +11,5 @@ pub use deltalake_azure as azure;
 pub use deltalake_gcp as gcp;
 #[cfg(feature = "hdfs")]
 pub use deltalake_hdfs as hdfs;
+#[cfg(feature = "lakefs")]
+pub use deltalake_lakefs as lakefs;
