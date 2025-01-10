@@ -144,7 +144,7 @@ impl LogSegment {
         log_store.refresh().await?;
         let log_url = table_root.child("_delta_log");
         let (mut commit_files, checkpoint_files) = list_log_files(
-            log_store.object_store().as_ref(),
+            log_store.object_store(None).as_ref(),
             &log_url,
             end_version,
             Some(start_version),
@@ -558,7 +558,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let bytes = serde_json::to_vec(&segment).unwrap();
@@ -577,7 +577,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::SimpleWithCheckpoint)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let log_path = Path::from("_delta_log");
         let cp = read_last_checkpoint(store.as_ref(), &log_path)
@@ -610,7 +610,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
         assert_eq!(log.len(), 5);
@@ -627,7 +627,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::WithDvSmall)
             .build_storage()?
-            .object_store();
+            .object_store(None);
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let (protocol, _metadata) = segment
             .read_metadata(store.clone(), &Default::default())
@@ -656,7 +656,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::LatestNotCheckpointed)
             .build_storage()?
-            .object_store();
+            .object_store(None);
         let slow_list_store = Arc::new(slow_store::SlowListStore { store });
 
         let version = table_to_checkpoint.version();
@@ -671,6 +671,7 @@ pub(super) mod tests {
             &table_to_checkpoint.table_uri(),
             version,
             Some(false),
+            None,
         )
         .await?;
 
@@ -817,19 +818,19 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        create_checkpoint_for(commit.version, &commit.snapshot, log_store.as_ref())
+        create_checkpoint_for(commit.version, &commit.snapshot, log_store.as_ref(), None)
             .await
             .unwrap();
 
         let batches = LogSegment::try_new(
             &Path::default(),
             Some(commit.version),
-            log_store.object_store().as_ref(),
+            log_store.object_store(None).as_ref(),
         )
         .await
         .unwrap()
         .checkpoint_stream(
-            log_store.object_store(),
+            log_store.object_store(None),
             &StructType::new(vec![
                 ActionType::Metadata.schema_field().clone(),
                 ActionType::Protocol.schema_field().clone(),

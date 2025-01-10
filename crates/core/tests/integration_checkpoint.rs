@@ -28,7 +28,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     let log_store = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
         .build_storage()?;
-    let object_store = log_store.object_store();
+    let object_store = log_store.object_store(None);
 
     let log_path = |version| log_store.log_path().child(format!("{:020}.json", version));
 

@@ -75,7 +75,7 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
     let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
         .with_allow_http(true)
         .build_storage()?
-        .object_store();
+        .object_store(None);
 
     let expected = Bytes::from_static(b"test world from delta-rs on friday");
 

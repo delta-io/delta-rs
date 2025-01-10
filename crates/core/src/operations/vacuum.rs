@@ -206,7 +206,7 @@ impl VacuumBuilder {
 
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
-        let object_store = self.log_store.object_store();
+        let object_store = self.log_store.object_store(None);
         let mut all_files = object_store.list(None);
         let partition_columns = &self.snapshot.metadata().partition_columns;
 
