@@ -6,6 +6,7 @@ use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use delta_kernel::AsAny;
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
@@ -193,7 +194,7 @@ pub struct LogStoreConfig {
 ///   `get_latest_version` must return a version >= `v`, i.e. the underlying file system entry must
 ///   become visible immediately.
 #[async_trait::async_trait]
-pub trait LogStore: Sync + Send {
+pub trait LogStore: Send + Sync + AsAny {
     /// Return the name of this LogStore implementation
     fn name(&self) -> String;
 
