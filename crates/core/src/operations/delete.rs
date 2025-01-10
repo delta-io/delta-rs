@@ -33,6 +33,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -40,6 +41,7 @@ use serde::Serialize;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::Operation;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
@@ -52,6 +54,7 @@ use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
+use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
@@ -74,6 +77,7 @@ pub struct DeleteBuilder {
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -95,7 +99,14 @@ pub struct DeleteMetrics {
     pub rewrite_time_ms: u64,
 }
 
-impl super::Operation<()> for DeleteBuilder {}
+impl super::Operation<()> for DeleteBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
@@ -107,6 +118,7 @@ impl DeleteBuilder {
             state: None,
             commit_properties: CommitProperties::default(),
             writer_properties: None,
+            custom_execute_handler: None,
         }
     }
 
@@ -131,6 +143,12 @@ impl DeleteBuilder {
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -175,6 +193,7 @@ async fn excute_non_empty_expr(
     metrics: &mut DeleteMetrics,
     writer_properties: Option<WriterProperties>,
     partition_scan: bool,
+    operation_id: Uuid,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
@@ -234,7 +253,7 @@ async fn excute_non_empty_expr(
             state.clone(),
             filter.clone(),
             table_partition_cols.clone(),
-            log_store.object_store(),
+            log_store.object_store(Some(operation_id)),
             Some(snapshot.table_config().target_file_size() as usize),
             None,
             writer_properties.clone(),
@@ -271,7 +290,7 @@ async fn excute_non_empty_expr(
             state.clone(),
             cdc_filter,
             table_partition_cols.clone(),
-            log_store.object_store(),
+            log_store.object_store(Some(operation_id)),
             Some(snapshot.table_config().target_file_size() as usize),
             None,
             writer_properties,
@@ -285,6 +304,7 @@ async fn excute_non_empty_expr(
     Ok(actions)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
@@ -292,6 +312,8 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
+    operation_id: Uuid,
+    handle: Option<&Arc<dyn CustomExecuteHandler>>,
 ) -> DeltaResult<(DeltaTableState, DeleteMetrics)> {
     if !&snapshot.load_config().require_files {
         return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
@@ -317,6 +339,7 @@ async fn execute(
             &mut metrics,
             writer_properties,
             candidates.partition_scan,
+            operation_id,
         )
         .await?;
         metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis() as u64;
@@ -367,8 +390,14 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(Some(&snapshot), log_store, operation)
+        .with_operation_id(operation_id)
+        .with_post_commit_hook_handler(handle.cloned())
+        .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
+
+    if let Some(handler) = handle {
+        handler.post_execute(&log_store, operation_id).await?;
+    }
     Ok((commit.snapshot(), metrics))
 }
 
@@ -382,6 +411,9 @@ impl std::future::IntoFuture for DeleteBuilder {
         Box::pin(async move {
             PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
             let state = this.state.unwrap_or_else(|| {
                 let session: SessionContext = DeltaSessionContext::default().into();
@@ -409,6 +441,8 @@ impl std::future::IntoFuture for DeleteBuilder {
                 state,
                 this.writer_properties,
                 this.commit_properties,
+                operation_id,
+                this.custom_execute_handler.as_ref(),
             )
             .await?;
 
