@@ -627,7 +627,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::SimpleWithCheckpoint)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
         let mut scanner = LogReplayScanner::new();
@@ -649,7 +649,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let batches = segment
             .commit_stream(store.clone(), &log_schema, &Default::default())?

@@ -609,7 +609,11 @@ pub(crate) async fn get_last_checkpoint(
 ) -> Result<CheckPoint, ProtocolError> {
     let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
     debug!("loading checkpoint from {last_checkpoint_path}");
-    match log_store.object_store().get(&last_checkpoint_path).await {
+    match log_store
+        .object_store(None)
+        .get(&last_checkpoint_path)
+        .await
+    {
         Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
         Err(ObjectStoreError::NotFound { .. }) => {
             match find_latest_check_point_for_version(log_store, i64::MAX).await {
@@ -633,7 +637,7 @@ pub(crate) async fn find_latest_check_point_for_version(
     }
 
     let mut cp: Option<CheckPoint> = None;
-    let object_store = log_store.object_store();
+    let object_store = log_store.object_store(None);
     let mut stream = object_store.list(Some(log_store.log_path()));
 
     while let Some(obj_meta) = stream.next().await {

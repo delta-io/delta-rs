@@ -149,7 +149,7 @@ impl Snapshot {
         }
 
         let (protocol, metadata) = log_segment
-            .read_metadata(log_store.object_store().clone(), &self.config)
+            .read_metadata(log_store.object_store(None).clone(), &self.config)
             .await?;
         if let Some(protocol) = protocol {
             self.protocol = protocol;
@@ -454,7 +454,7 @@ impl EagerSnapshot {
                 StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
             new_slice
                 .checkpoint_stream(
-                    log_store.object_store(),
+                    log_store.object_store(None),
                     &read_schema,
                     &self.snapshot.config,
                 )
@@ -464,7 +464,7 @@ impl EagerSnapshot {
         schema_actions.insert(ActionType::Remove);
         let read_schema = StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
         let log_stream = new_slice.commit_stream(
-            log_store.object_store().clone(),
+            log_store.object_store(None).clone(),
             &read_schema,
             &self.snapshot.config,
         )?;
@@ -847,7 +847,7 @@ mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let snapshot =
             Snapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
@@ -895,7 +895,7 @@ mod tests {
         let store = context
             .table_builder(TestTables::Checkpoints)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         for version in 0..=12 {
             let snapshot = Snapshot::try_new(
@@ -920,7 +920,7 @@ mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let snapshot =
             EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
@@ -937,7 +937,7 @@ mod tests {
         let store = context
             .table_builder(TestTables::Checkpoints)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         for version in 0..=12 {
             let snapshot = EagerSnapshot::try_new(
@@ -962,7 +962,7 @@ mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let mut snapshot =
             EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
