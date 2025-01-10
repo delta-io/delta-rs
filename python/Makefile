@@ -8,7 +8,7 @@ DAT_VERSION := 0.0.2
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	uv sync --extra devel --extra pandas --extra polars
+	uv sync --extra devel --extra pandas --extra polars --extra lakefs --no-install-project
 
 .PHONY: setup-dat
 setup-dat: ## Download DAT test files
@@ -28,7 +28,7 @@ build: setup ## Build Python binding of delta-rs
 .PHONY: develop
 develop: setup ## Install Python binding of delta-rs
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars,lakefs $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
@@ -36,21 +36,21 @@ install: build ## Install Python binding of delta-rs
 	uv pip uninstall deltalake
 	$(info --- Install Python binding ---)
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
-	uv pip install $(TARGET_WHEEL)[devel,pandas,polars]
+	uv pip install $(TARGET_WHEEL)[devel,pandas,polars,lakefs]
 
 .PHONY: develop-pyspark
 develop-pyspark:
-	uv sync --all-extras
+	uv sync --all-extras --no-install-project
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars,pyspark $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars,pyspark,lakefs $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	uv run ruff check . --fix
-	uv run ruff format .
+	uv run --no-sync ruff check . --fix
+	uv run --no-sync ruff format .
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust
@@ -62,30 +62,30 @@ check-rust: ## Run check on Rust
 .PHONY: check-python
 check-python: ## Run check on Python
 	$(info Check Python format)
-	uv run ruff format --check --diff .
+	uv run --no-sync ruff format --check --diff .
 	$(info Check Python linting)
-	uv run ruff check .
+	uv run --no-sync ruff check .
 	$(info Check Python mypy)
-	uv run mypy
+	uv run --no-sync mypy
 
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	uv run pytest --doctest-modules 
+	uv run --no-sync pytest --doctest-modules 
 
 .PHONY: test-cov
 test-cov: ## Create coverage report
 	$(info --- Run Python unit-test ---)
-	uv run pytest --doctest-modules --cov --cov-config=pyproject.toml --cov-report=term --cov-report=html
+	uv run --no-sync pytest --doctest-modules --cov --cov-config=pyproject.toml --cov-report=term --cov-report=html
 
 .PHONY: test-pyspark
 test-pyspark:
-	uv run pytest -m 'pyspark and integration'
+	uv run --no-sync pytest -m 'pyspark and integration'
 
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx
 	$(info --- Run build of the Sphinx documentation ---)
-	uv run sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
+	uv run --no-sync sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
 
 .PHONY: build-docs
 build-docs: ## Build documentation with mkdocs
