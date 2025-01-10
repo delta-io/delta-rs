@@ -26,8 +26,12 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
+#delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
 #delta_kernel = { path = "../delta-kernel-rs/kernel", features = ["sync-engine"]  }
+delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "fcc43b50dafdc5e6b84c206492bbde8ed1115529", features = [
+    "default-engine",
+    "developer-visibility",
+] }
 
 # arrow
 arrow = { version = "53" }
@@ -59,7 +63,7 @@ datafusion-sql = { version = "44" }
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "*"}
+strum = { version = "*" }
 
 
 # "stdlib"
@@ -77,4 +81,3 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
-

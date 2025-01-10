@@ -15,7 +15,7 @@ rust-version.workspace = true
 features = ["datafusion", "json", "unity-experimental"]
 
 [dependencies]
-delta_kernel.workspace = true
+delta_kernel = { workspace = true }
 
 # arrow
 arrow = { workspace = true }
@@ -29,10 +29,7 @@ arrow-ord = { workspace = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
-parquet = { workspace = true, features = [
-    "async",
-    "object_store",
-] }
+parquet = { workspace = true, features = ["async", "object_store"] }
 pin-project-lite = "^0.2.7"
 
 # datafusion

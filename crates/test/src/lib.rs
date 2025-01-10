@@ -14,6 +14,7 @@ use deltalake_core::DeltaTableBuilder;
 use deltalake_core::{ObjectStore, Path};
 use tempfile::TempDir;
 
+pub mod acceptance;
 pub mod clock;
 pub mod concurrent;
 #[cfg(feature = "datafusion")]

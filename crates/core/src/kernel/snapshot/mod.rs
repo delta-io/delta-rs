@@ -45,6 +45,7 @@ pub use self::log_data::*;
 
 mod log_data;
 pub(crate) mod log_segment;
+mod next;
 pub(crate) mod parse;
 mod replay;
 mod serde;
