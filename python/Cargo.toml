@@ -34,6 +34,7 @@ lazy_static = "1"
 regex = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 # runtime
 futures = { workspace = true }
@@ -53,7 +54,7 @@ features = ["extension-module", "abi3", "abi3-py39", "gil-refs"]
 [dependencies.deltalake]
 path = "../crates/deltalake"
 version = "0"
-features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "hdfs"]
+features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "hdfs", "lakefs"]
 
 [features]
 default = ["rustls"]
