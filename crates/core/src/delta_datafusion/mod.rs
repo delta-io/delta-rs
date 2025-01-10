@@ -282,7 +282,7 @@ impl DeltaTableState {
 pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store());
+    env.register_object_store(url, store.object_store(None));
 }
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
@@ -2708,7 +2708,7 @@ mod tests {
             .unwrap();
 
         let (object_store, mut operations) =
-            RecordingObjectStore::new(table.log_store().object_store());
+            RecordingObjectStore::new(table.log_store().object_store(None));
         let log_store =
             DefaultLogStore::new(Arc::new(object_store), table.log_store().config().clone());
         let provider = DeltaTableProvider::try_new(

@@ -210,7 +210,7 @@ async fn execute(
         .collect();
 
     if !ignore_missing_files {
-        check_files_available(log_store.object_store().as_ref(), &files_to_add).await?;
+        check_files_available(log_store.object_store(None).as_ref(), &files_to_add).await?;
     }
 
     let metrics = RestoreMetrics {
