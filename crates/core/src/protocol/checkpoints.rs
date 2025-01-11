@@ -170,12 +170,7 @@ pub async fn create_checkpoint_for(
         return Err(CheckpointError::StaleTableVersion(version, state.version()).into());
     }
 
-    // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
-    // an appropriate split point yet though so only writing a single part currently.
-    // See https://github.com/delta-io/delta-rs/issues/288
     let last_checkpoint_path = log_store.log_path().child("_last_checkpoint");
-
-    debug!("Writing parquet bytes to checkpoint buffer.");
     let tombstones = state
         .unexpired_tombstones(log_store.object_store(None).clone())
         .await
@@ -291,9 +286,9 @@ fn parquet_bytes_from_state(
     // and omit metadata columns if at least one remove action has `extended_file_metadata=false`.
     // We've added the additional check on `size.is_some` because in delta-spark the primitive long type
     // is used, hence we want to omit possible errors when `extended_file_metadata=true`, but `size=null`
-    let use_extended_remove_schema = tombstones
+    let use_extended_remove_schema = !tombstones
         .iter()
-        .all(|r| r.extended_file_metadata == Some(true) && r.size.is_some());
+        .any(|r| r.extended_file_metadata == Some(false) || r.size.is_none());
 
     // If use_extended_remove_schema=false for some of the tombstones, then it should be for each.
     if !use_extended_remove_schema {
