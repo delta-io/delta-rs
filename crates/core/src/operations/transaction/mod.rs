@@ -89,16 +89,14 @@ use uuid::Uuid;
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
-use crate::kernel::{
-    Action, CommitInfo, EagerSnapshot, Metadata, Protocol, ReaderFeatures, Transaction,
-    WriterFeatures,
-};
+use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 pub use self::conflict_checker::CommitConflictError;
 pub use self::protocol::INSTANCE as PROTOCOL;

@@ -158,7 +158,7 @@ async fn test_read_table_features() -> DeltaResult<()> {
 
     assert!(rf.is_some());
     assert!(wf.is_some());
-    assert_eq!(rf.unwrap().len(), 5);
+    assert_eq!(rf.unwrap().len(), 4);
     assert_eq!(wf.unwrap().len(), 13);
     Ok(())
 }

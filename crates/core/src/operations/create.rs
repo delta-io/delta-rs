@@ -14,14 +14,13 @@ use uuid::Uuid;
 use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{
-    Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
-};
+use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
 use crate::{DeltaTable, DeltaTableBuilder};
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {

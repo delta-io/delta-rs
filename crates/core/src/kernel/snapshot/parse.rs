@@ -3,6 +3,7 @@
 use arrow_array::{
     Array, BooleanArray, Int32Array, Int64Array, ListArray, MapArray, StringArray, StructArray,
 };
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
@@ -63,10 +64,18 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
                 return Ok(Some(Protocol {
                     min_reader_version: ex::read_primitive(min_reader_version, idx)?,
                     min_writer_version: ex::read_primitive(min_writer_version, idx)?,
-                    reader_features: collect_string_list(&maybe_reader_features, idx)
-                        .map(|v| v.into_iter().map(Into::into).collect()),
-                    writer_features: collect_string_list(&maybe_writer_features, idx)
-                        .map(|v| v.into_iter().map(Into::into).collect()),
+                    reader_features: collect_string_list(&maybe_reader_features, idx).map(|v| {
+                        v.into_iter()
+                            .map(|v| TryInto::<ReaderFeatures>::try_into(v.as_str()))
+                            .filter_map(|v| v.ok())
+                            .collect()
+                    }),
+                    writer_features: collect_string_list(&maybe_writer_features, idx).map(|v| {
+                        v.into_iter()
+                            .map(|v| TryInto::<WriterFeatures>::try_into(v.as_str()))
+                            .filter_map(|v| v.ok())
+                            .collect()
+                    }),
                 }));
             }
         }

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
@@ -644,13 +645,33 @@ impl Protocol {
                 "readerFeatures" => {
                     re.reader_features = record
                         .get_list(i)
-                        .map(|l| l.elements().iter().map(From::from).collect())
+                        .map(|l| {
+                            l.elements()
+                                .iter()
+                                .filter_map(|v| match v {
+                                    Field::Str(feature) => {
+                                        ReaderFeatures::try_from(feature.as_str()).ok()
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
                         .ok()
                 }
                 "writerFeatures" => {
                     re.writer_features = record
                         .get_list(i)
-                        .map(|l| l.elements().iter().map(From::from).collect())
+                        .map(|l| {
+                            l.elements()
+                                .iter()
+                                .filter_map(|v| match v {
+                                    Field::Str(feature) => {
+                                        WriterFeatures::try_from(feature.as_str()).ok()
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
                         .ok()
                 }
                 _ => {

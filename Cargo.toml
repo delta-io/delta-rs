@@ -26,7 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.6.0", features = ["default-engine"] }
+delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
 #delta_kernel = { path = "../delta-kernel-rs/kernel", features = ["sync-engine"]  }
 
 # arrow
@@ -59,6 +59,8 @@ datafusion-sql = { version = "44" }
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
+strum = { version = "*"}
+
 
 # "stdlib"
 bytes = { version = "1" }
