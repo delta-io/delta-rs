@@ -143,6 +143,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Microsoft OneLake    | ![done] | ![done] |                                                                  |
 | Google Cloud Storage | ![done] | ![done] |                                                                  |
 | HDFS                 | ![done] | ![done] |                                                                  |
+| LakeFS               | ![done] | ![done] |   Python: Rust engine writer only supported                      |
 
 ### Supported Operations
 
@@ -151,12 +152,19 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Create                | ![done] | ![done] | Create a new table                          |
 | Read                  | ![done] | ![done] | Read data from a table                      |
 | Vacuum                | ![done] | ![done] | Remove unused files and log entries         |
-| Delete - partitions   |         | ![done] | Delete a table partition                    |
 | Delete - predicates   | ![done] | ![done] | Delete data based on a predicate            |
 | Optimize - compaction | ![done] | ![done] | Harmonize the size of data file             |
 | Optimize - Z-order    | ![done] | ![done] | Place similar data into the same file       |
 | Merge                 | ![done] | ![done] | Merge a target Delta table with source data |
+| Update                | ![done] | ![done] | Update values from a table                  |
+| Add Column            | ![done] | ![done] | Add new columns or nested fields            |
+| Add Feature           | ![done] | ![done] | Enable delta table features                 |
+| Add Constraints       | ![done] | ![done] | Set delta constraints, to verify data on write |
+| Drop Constraints      | ![done] | ![done] | Removes delta constraints                   |
+| Set Table Properties  | ![done] | ![done] | Set delta table properties                  |
+| Convert to Delta      | ![done] | ![done] | Convert parquet table to delta table        |
 | FS check              | ![done] | ![done] | Remove corrupted files from table           |
+| Restore               | ![done] | ![done] | Restores table to previous version state    |
 
 ### Protocol Support Level
 
@@ -166,17 +174,17 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Version 2      | Column Invariants                             |              ![done]              |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   |       [![open]][writer-rs]        |
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |       [![open]][writer-rs]        |
-| Version 3      | CHECK constraints                             | [![semi-done]][check-constraints] |
-| Version 4      | Change Data Feed                              |                                   |
+| Version 3      | CHECK constraints                             | [![done]][check-constraints]      |
+| Version 4      | Change Data Feed                              |              ![done]              |
 | Version 4      | Generated Columns                             |                                   |
 | Version 5      | Column Mapping                                |                                   |
 | Version 6      | Identity Columns                              |                                   |
-| Version 7      | Table Features                                |                                   |
+| Version 7      | Table Features                                |              ![done]              |
 
-| Reader Version | Requirement                         | Status |
-| -------------- | ----------------------------------- | ------ |
-| Version 2      | Column Mapping                      |        |
-| Version 3      | Table Features (requires reader V7) |        |
+| Reader Version | Requirement                         |   Status   |
+| -------------- | ----------------------------------- |   ------   |
+| Version 2      | Column Mapping                      |            |
+| Version 3      | Table Features (requires reader V7) |  ![done]   |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
