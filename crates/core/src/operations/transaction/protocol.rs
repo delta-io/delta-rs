@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use tracing::log::*;
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{contains_timestampntz, Action, DataType, EagerSnapshot, Schema, StructField};
+use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Schema};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
@@ -599,6 +599,6 @@ mod tests {
         let eager_5 = table
             .snapshot()
             .expect("Failed to get snapshot from test table");
-        assert!(checker_5.can_write_to(eager_5).is_err());
+        assert!(checker_5.can_write_to(eager_5).is_ok());
     }
 }
