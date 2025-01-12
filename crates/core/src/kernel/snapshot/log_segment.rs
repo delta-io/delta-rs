@@ -533,7 +533,9 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
+    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
     use deltalake_test::utils::*;
+    use maplit::hashset;
     use tokio::task::JoinHandle;
 
     use crate::{
@@ -637,8 +639,8 @@ pub(super) mod tests {
         let expected = Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
-            writer_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
+            reader_features: Some(hashset! {ReaderFeatures::DeletionVectors}),
+            writer_features: Some(hashset! {WriterFeatures::DeletionVectors}),
         };
         assert_eq!(protocol, expected);
 

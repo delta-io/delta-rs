@@ -14,13 +14,14 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
-use crate::kernel::{Protocol, WriterFeatures};
+use crate::kernel::Protocol;
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use delta_kernel::table_features::WriterFeatures;
 
 use super::datafusion_utils::into_expr;
 use super::transaction::{CommitBuilder, CommitProperties};
