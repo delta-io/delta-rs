@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::kernel::error::Error;
 use crate::kernel::DataCheck;
+use crate::table::GeneratedColumn;
 
 /// Type alias for a top level schema
 pub type Schema = StructType;
@@ -49,9 +50,80 @@ impl DataCheck for Invariant {
 pub trait StructTypeExt {
     /// Get all invariants in the schemas
     fn get_invariants(&self) -> Result<Vec<Invariant>, Error>;
+
+    /// Get all generated column expressions
+    fn get_generated_columns(&self) -> Result<Vec<GeneratedColumn>, Error>;
 }
 
 impl StructTypeExt for StructType {
+    /// Get all invariants in the schemas
+    fn get_generated_columns(&self) -> Result<Vec<GeneratedColumn>, Error> {
+        let mut remaining_fields: Vec<(String, StructField)> = self
+            .fields()
+            .map(|field| (field.name.clone(), field.clone()))
+            .collect();
+        let mut generated_cols: Vec<GeneratedColumn> = Vec::new();
+
+        let add_segment = |prefix: &str, segment: &str| -> String {
+            if prefix.is_empty() {
+                segment.to_owned()
+            } else {
+                format!("{prefix}.{segment}")
+            }
+        };
+
+        while let Some((field_path, field)) = remaining_fields.pop() {
+            match field.data_type() {
+                DataType::Struct(inner) => {
+                    remaining_fields.extend(
+                        inner
+                            .fields()
+                            .map(|field| {
+                                let new_prefix = add_segment(&field_path, &field.name);
+                                (new_prefix, field.clone())
+                            })
+                            .collect::<Vec<(String, StructField)>>(),
+                    );
+                }
+                DataType::Array(inner) => {
+                    let element_field_name = add_segment(&field_path, "element");
+                    remaining_fields.push((
+                        element_field_name,
+                        StructField::new("".to_string(), inner.element_type.clone(), false),
+                    ));
+                }
+                DataType::Map(inner) => {
+                    let key_field_name = add_segment(&field_path, "key");
+                    remaining_fields.push((
+                        key_field_name,
+                        StructField::new("".to_string(), inner.key_type.clone(), false),
+                    ));
+                    let value_field_name = add_segment(&field_path, "value");
+                    remaining_fields.push((
+                        value_field_name,
+                        StructField::new("".to_string(), inner.value_type.clone(), false),
+                    ));
+                }
+                _ => {}
+            }
+            if let Some(MetadataValue::String(generated_col_string)) = field
+                .metadata
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+            {
+                let json: Value = serde_json::from_str(generated_col_string).map_err(|e| {
+                    Error::InvalidGenerationExpressionJson {
+                        json_err: e,
+                        line: generated_col_string.to_string(),
+                    }
+                })?;
+                if let Value::String(sql) = json {
+                    generated_cols.push(GeneratedColumn::new(&field_path, &sql));
+                }
+            }
+        }
+        Ok(generated_cols)
+    }
+
     /// Get all invariants in the schemas
     fn get_invariants(&self) -> Result<Vec<Invariant>, Error> {
         let mut remaining_fields: Vec<(String, StructField)> = self
