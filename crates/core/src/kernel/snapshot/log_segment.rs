@@ -28,7 +28,7 @@ lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
     static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
-    static ref CRC_FILE_PATTERN: Regex = Regex::new(r"^(\.)?\d+(\.crc|\.json)?\.crc$").unwrap();
+    static ref CRC_FILE_PATTERN: Regex = Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap();
     pub(super) static ref TOMBSTONE_SCHEMA: StructType =
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }
