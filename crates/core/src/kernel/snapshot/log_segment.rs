@@ -28,6 +28,7 @@ lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
     static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
+    static ref CRC_FILE_PATTERN: Regex = Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap();
     pub(super) static ref TOMBSTONE_SCHEMA: StructType =
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }
@@ -60,6 +61,12 @@ pub(crate) trait PathExt {
         self.filename()
             .map(|name| DELTA_FILE_PATTERN.captures(name).is_some())
             .unwrap_or(false)
+    }
+
+    fn is_crc_file(&self) -> bool {
+        self.filename()
+            .map(|name| CRC_FILE_PATTERN.captures(name).is_some())
+            .unwrap()
     }
 }
 
@@ -533,7 +540,9 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
+    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
     use deltalake_test::utils::*;
+    use maplit::hashset;
     use tokio::task::JoinHandle;
 
     use crate::{
@@ -637,8 +646,8 @@ pub(super) mod tests {
         let expected = Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
-            writer_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
+            reader_features: Some(hashset! {ReaderFeatures::DeletionVectors}),
+            writer_features: Some(hashset! {WriterFeatures::DeletionVectors}),
         };
         assert_eq!(protocol, expected);
 

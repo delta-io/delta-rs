@@ -5,11 +5,10 @@ use once_cell::sync::Lazy;
 use tracing::log::*;
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{
-    Action, DataType, EagerSnapshot, ReaderFeatures, Schema, StructField, WriterFeatures,
-};
+use crate::kernel::{Action, DataType, EagerSnapshot, Schema, StructField};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 lazy_static! {
     static ref READER_V2: HashSet<ReaderFeatures> =
@@ -585,8 +584,7 @@ mod tests {
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
         let actions = vec![
             Action::Protocol(
-                Protocol::new(2, 4)
-                    .with_writer_features(vec![crate::kernel::WriterFeatures::ChangeDataFeed]),
+                Protocol::new(2, 4).with_writer_features(vec![WriterFeatures::ChangeDataFeed]),
             ),
             metadata_action(None).into(),
         ];
@@ -603,8 +601,7 @@ mod tests {
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
         let actions = vec![
             Action::Protocol(
-                Protocol::new(2, 4)
-                    .with_writer_features(vec![crate::kernel::WriterFeatures::GeneratedColumns]),
+                Protocol::new(2, 4).with_writer_features(vec![WriterFeatures::GeneratedColumns]),
             ),
             metadata_action(None).into(),
         ];

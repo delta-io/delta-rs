@@ -10,6 +10,7 @@ use url::Url;
 use super::schema::StructType;
 use crate::kernel::{error::Error, DeltaResult};
 use crate::TableProperty;
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 /// Defines a file format used in table
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -183,7 +184,14 @@ impl Protocol {
         mut self,
         configuration: &HashMap<String, Option<String>>,
     ) -> Protocol {
+        fn parse_bool(value: &Option<String>) -> bool {
+            value
+                .as_ref()
+                .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
+        }
+
         if self.min_writer_version >= 7 {
+            // TODO: move this is in future to use delta_kernel::table_properties
             let mut converted_writer_features = configuration
                 .iter()
                 .filter(|(_, value)| {
@@ -191,10 +199,22 @@ impl Protocol {
                         .as_ref()
                         .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 })
-                .collect::<HashMap<&String, &Option<String>>>()
-                .keys()
-                .map(|key| (*key).clone().into())
-                .filter(|v| !matches!(v, WriterFeatures::Other(_)))
+                .filter_map(|(key, value)| match key.as_str() {
+                    "delta.enableChangeDataFeed" if parse_bool(value) => {
+                        Some(WriterFeatures::ChangeDataFeed)
+                    }
+                    "delta.appendOnly" if parse_bool(value) => Some(WriterFeatures::AppendOnly),
+                    "delta.enableDeletionVectors" if parse_bool(value) => {
+                        Some(WriterFeatures::DeletionVectors)
+                    }
+                    "delta.enableRowTracking" if parse_bool(value) => {
+                        Some(WriterFeatures::RowTracking)
+                    }
+                    "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
+                        Some(WriterFeatures::V2Checkpoint)
+                    }
+                    _ => None,
+                })
                 .collect::<HashSet<WriterFeatures>>();
 
             if configuration
@@ -215,13 +235,15 @@ impl Protocol {
         if self.min_reader_version >= 3 {
             let converted_reader_features = configuration
                 .iter()
-                .filter(|(_, value)| {
-                    value
-                        .as_ref()
-                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
+                .filter_map(|(key, value)| match key.as_str() {
+                    "delta.enableDeletionVectors" if parse_bool(value) => {
+                        Some(ReaderFeatures::DeletionVectors)
+                    }
+                    "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
+                        Some(ReaderFeatures::V2Checkpoint)
+                    }
+                    _ => None,
                 })
-                .map(|(key, _)| (*key).clone().into())
-                .filter(|v| !matches!(v, ReaderFeatures::Other(_)))
                 .collect::<HashSet<ReaderFeatures>>();
             match self.reader_features {
                 Some(mut features) => {
@@ -459,225 +481,28 @@ impl fmt::Display for TableFeatures {
     }
 }
 
+impl TryFrom<&TableFeatures> for ReaderFeatures {
+    type Error = strum::ParseError;
+
+    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+        ReaderFeatures::try_from(value.as_ref())
+    }
+}
+
+impl TryFrom<&TableFeatures> for WriterFeatures {
+    type Error = strum::ParseError;
+
+    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+        WriterFeatures::try_from(value.as_ref())
+    }
+}
+
 impl TableFeatures {
     /// Convert table feature to respective reader or/and write feature
     pub fn to_reader_writer_features(&self) -> (Option<ReaderFeatures>, Option<WriterFeatures>) {
         let reader_feature = ReaderFeatures::try_from(self).ok();
         let writer_feature = WriterFeatures::try_from(self).ok();
         (reader_feature, writer_feature)
-    }
-}
-
-/// Features table readers can support as well as let users know
-/// what is supported
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub enum ReaderFeatures {
-    /// Mapping of one column to another
-    ColumnMapping,
-    /// Deletion vectors for merge, update, delete
-    DeletionVectors,
-    /// timestamps without timezone support
-    #[serde(rename = "timestampNtz")]
-    TimestampWithoutTimezone,
-    /// version 2 of checkpointing
-    V2Checkpoint,
-    /// If we do not match any other reader features
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl From<&parquet::record::Field> for ReaderFeatures {
-    fn from(value: &parquet::record::Field) -> Self {
-        match value {
-            parquet::record::Field::Str(feature) => match feature.as_str() {
-                "columnMapping" => ReaderFeatures::ColumnMapping,
-                "deletionVectors" | "delta.enableDeletionVectors" => {
-                    ReaderFeatures::DeletionVectors
-                }
-                "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
-                "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
-                f => ReaderFeatures::Other(f.to_string()),
-            },
-            f => ReaderFeatures::Other(f.to_string()),
-        }
-    }
-}
-
-impl From<String> for ReaderFeatures {
-    fn from(value: String) -> Self {
-        value.as_str().into()
-    }
-}
-
-impl From<&str> for ReaderFeatures {
-    fn from(value: &str) -> Self {
-        match value {
-            "columnMapping" => ReaderFeatures::ColumnMapping,
-            "deletionVectors" => ReaderFeatures::DeletionVectors,
-            "timestampNtz" => ReaderFeatures::TimestampWithoutTimezone,
-            "v2Checkpoint" => ReaderFeatures::V2Checkpoint,
-            f => ReaderFeatures::Other(f.to_string()),
-        }
-    }
-}
-
-impl AsRef<str> for ReaderFeatures {
-    fn as_ref(&self) -> &str {
-        match self {
-            ReaderFeatures::ColumnMapping => "columnMapping",
-            ReaderFeatures::DeletionVectors => "deletionVectors",
-            ReaderFeatures::TimestampWithoutTimezone => "timestampNtz",
-            ReaderFeatures::V2Checkpoint => "v2Checkpoint",
-            ReaderFeatures::Other(f) => f,
-        }
-    }
-}
-
-impl fmt::Display for ReaderFeatures {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_ref())
-    }
-}
-
-impl TryFrom<&TableFeatures> for ReaderFeatures {
-    type Error = String;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        match ReaderFeatures::from(value.as_ref()) {
-            ReaderFeatures::Other(_) => {
-                Err(format!("Table feature {} is not a reader feature", value))
-            }
-            value => Ok(value),
-        }
-    }
-}
-
-/// Features table writers can support as well as let users know
-/// what is supported
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub enum WriterFeatures {
-    /// Append Only Tables
-    AppendOnly,
-    /// Table invariants
-    Invariants,
-    /// Check constraints on columns
-    CheckConstraints,
-    /// CDF on a table
-    ChangeDataFeed,
-    /// Columns with generated values
-    GeneratedColumns,
-    /// Mapping of one column to another
-    ColumnMapping,
-    /// ID Columns
-    IdentityColumns,
-    /// Deletion vectors for merge, update, delete
-    DeletionVectors,
-    /// Row tracking on tables
-    RowTracking,
-    /// timestamps without timezone support
-    #[serde(rename = "timestampNtz")]
-    TimestampWithoutTimezone,
-    /// domain specific metadata
-    DomainMetadata,
-    /// version 2 of checkpointing
-    V2Checkpoint,
-    /// Iceberg compatibility support
-    IcebergCompatV1,
-    /// If we do not match any other reader features
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl From<String> for WriterFeatures {
-    fn from(value: String) -> Self {
-        value.as_str().into()
-    }
-}
-
-impl From<&str> for WriterFeatures {
-    fn from(value: &str) -> Self {
-        match value {
-            "appendOnly" | "delta.appendOnly" => WriterFeatures::AppendOnly,
-            "invariants" => WriterFeatures::Invariants,
-            "checkConstraints" => WriterFeatures::CheckConstraints,
-            "changeDataFeed" | "delta.enableChangeDataFeed" => WriterFeatures::ChangeDataFeed,
-            "generatedColumns" => WriterFeatures::GeneratedColumns,
-            "columnMapping" => WriterFeatures::ColumnMapping,
-            "identityColumns" => WriterFeatures::IdentityColumns,
-            "deletionVectors" | "delta.enableDeletionVectors" => WriterFeatures::DeletionVectors,
-            "rowTracking" | "delta.enableRowTracking" => WriterFeatures::RowTracking,
-            "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
-            "domainMetadata" => WriterFeatures::DomainMetadata,
-            "v2Checkpoint" => WriterFeatures::V2Checkpoint,
-            "icebergCompatV1" => WriterFeatures::IcebergCompatV1,
-            f => WriterFeatures::Other(f.to_string()),
-        }
-    }
-}
-
-impl AsRef<str> for WriterFeatures {
-    fn as_ref(&self) -> &str {
-        match self {
-            WriterFeatures::AppendOnly => "appendOnly",
-            WriterFeatures::Invariants => "invariants",
-            WriterFeatures::CheckConstraints => "checkConstraints",
-            WriterFeatures::ChangeDataFeed => "changeDataFeed",
-            WriterFeatures::GeneratedColumns => "generatedColumns",
-            WriterFeatures::ColumnMapping => "columnMapping",
-            WriterFeatures::IdentityColumns => "identityColumns",
-            WriterFeatures::DeletionVectors => "deletionVectors",
-            WriterFeatures::RowTracking => "rowTracking",
-            WriterFeatures::TimestampWithoutTimezone => "timestampNtz",
-            WriterFeatures::DomainMetadata => "domainMetadata",
-            WriterFeatures::V2Checkpoint => "v2Checkpoint",
-            WriterFeatures::IcebergCompatV1 => "icebergCompatV1",
-            WriterFeatures::Other(f) => f,
-        }
-    }
-}
-
-impl fmt::Display for WriterFeatures {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_ref())
-    }
-}
-
-impl TryFrom<&TableFeatures> for WriterFeatures {
-    type Error = String;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        match WriterFeatures::from(value.as_ref()) {
-            WriterFeatures::Other(_) => {
-                Err(format!("Table feature {} is not a writer feature", value))
-            }
-            value => Ok(value),
-        }
-    }
-}
-
-impl From<&parquet::record::Field> for WriterFeatures {
-    fn from(value: &parquet::record::Field) -> Self {
-        match value {
-            parquet::record::Field::Str(feature) => match feature.as_str() {
-                "appendOnly" => WriterFeatures::AppendOnly,
-                "invariants" => WriterFeatures::Invariants,
-                "checkConstraints" => WriterFeatures::CheckConstraints,
-                "changeDataFeed" => WriterFeatures::ChangeDataFeed,
-                "generatedColumns" => WriterFeatures::GeneratedColumns,
-                "columnMapping" => WriterFeatures::ColumnMapping,
-                "identityColumns" => WriterFeatures::IdentityColumns,
-                "deletionVectors" => WriterFeatures::DeletionVectors,
-                "rowTracking" => WriterFeatures::RowTracking,
-                "timestampNtz" => WriterFeatures::TimestampWithoutTimezone,
-                "domainMetadata" => WriterFeatures::DomainMetadata,
-                "v2Checkpoint" => WriterFeatures::V2Checkpoint,
-                "icebergCompatV1" => WriterFeatures::IcebergCompatV1,
-                f => WriterFeatures::Other(f.to_string()),
-            },
-            f => WriterFeatures::Other(f.to_string()),
-        }
     }
 }
 
