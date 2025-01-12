@@ -52,7 +52,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
+    ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    UNNAMED_TABLE,
 };
 
 use filter::try_construct_early_filter;
@@ -820,7 +821,12 @@ async fn execute(
 
             df = df.clone().with_column(
                 generated_col.get_name(),
-                when(col(col_name).is_null(), generation_expr).otherwise(col(col_name))?,
+                when(col(col_name).is_null(), generation_expr)
+                    .otherwise(col(col_name))?
+                    .cast_to(
+                        &arrow_schema::DataType::try_from(&generated_col.data_type)?,
+                        df.schema(),
+                    )?,
             )?
         }
         Ok(df)

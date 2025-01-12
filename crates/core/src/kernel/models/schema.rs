@@ -56,7 +56,7 @@ pub trait StructTypeExt {
 }
 
 impl StructTypeExt for StructType {
-    /// Get all invariants in the schemas
+    /// Get all get_generated_columns in the schemas
     fn get_generated_columns(&self) -> Result<Vec<GeneratedColumn>, Error> {
         let mut remaining_fields: Vec<(String, StructField)> = self
             .fields()
@@ -64,48 +64,7 @@ impl StructTypeExt for StructType {
             .collect();
         let mut generated_cols: Vec<GeneratedColumn> = Vec::new();
 
-        let add_segment = |prefix: &str, segment: &str| -> String {
-            if prefix.is_empty() {
-                segment.to_owned()
-            } else {
-                format!("{prefix}.{segment}")
-            }
-        };
-
         while let Some((field_path, field)) = remaining_fields.pop() {
-            match field.data_type() {
-                DataType::Struct(inner) => {
-                    remaining_fields.extend(
-                        inner
-                            .fields()
-                            .map(|field| {
-                                let new_prefix = add_segment(&field_path, &field.name);
-                                (new_prefix, field.clone())
-                            })
-                            .collect::<Vec<(String, StructField)>>(),
-                    );
-                }
-                DataType::Array(inner) => {
-                    let element_field_name = add_segment(&field_path, "element");
-                    remaining_fields.push((
-                        element_field_name,
-                        StructField::new("".to_string(), inner.element_type.clone(), false),
-                    ));
-                }
-                DataType::Map(inner) => {
-                    let key_field_name = add_segment(&field_path, "key");
-                    remaining_fields.push((
-                        key_field_name,
-                        StructField::new("".to_string(), inner.key_type.clone(), false),
-                    ));
-                    let value_field_name = add_segment(&field_path, "value");
-                    remaining_fields.push((
-                        value_field_name,
-                        StructField::new("".to_string(), inner.value_type.clone(), false),
-                    ));
-                }
-                _ => {}
-            }
             if let Some(MetadataValue::String(generated_col_string)) = field
                 .metadata
                 .get(ColumnMetadataKey::GenerationExpression.as_ref())
@@ -117,7 +76,7 @@ impl StructTypeExt for StructType {
                     }
                 })?;
                 if let Value::String(sql) = json {
-                    generated_cols.push(GeneratedColumn::new(&field_path, &sql));
+                    generated_cols.push(GeneratedColumn::new(&field_path, &sql, field.data_type()));
                 }
             }
         }
