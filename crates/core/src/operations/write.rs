@@ -984,7 +984,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .reader_features
                             .clone()
                             .unwrap_or_default()
-                            .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                            .contains(&delta_kernel::table_features::ReaderFeatures::TimestampWithoutTimezone)
                     // We can check only reader features, as reader and writer timestampNtz
                     // should be always enabled together
                     {
@@ -1082,7 +1082,9 @@ impl std::future::IntoFuture for WriteBuilder {
                         .reader_features
                         .clone()
                         .unwrap_or_default()
-                        .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                        .contains(
+                            &delta_kernel::table_features::ReaderFeatures::TimestampWithoutTimezone,
+                        )
                     // We can check only reader features, as reader and writer timestampNtz
                     // should be always enabled together
                     {

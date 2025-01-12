@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::{ReaderFeatures, TableFeatures, WriterFeatures};
+use crate::kernel::TableFeatures;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -151,13 +152,13 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
-    use delta_kernel::DeltaResult;
-
     use crate::{
         kernel::TableFeatures,
         writer::test_utils::{create_bare_table, get_record_batch},
         DeltaOps,
     };
+    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+    use delta_kernel::DeltaResult;
 
     #[tokio::test]
     async fn add_feature() -> DeltaResult<()> {
@@ -180,7 +181,7 @@ mod tests {
             .unwrap()
             .writer_features
             .unwrap_or_default()
-            .contains(&crate::kernel::WriterFeatures::ChangeDataFeed));
+            .contains(&WriterFeatures::ChangeDataFeed));
 
         let result = DeltaOps(result)
             .add_feature()
@@ -194,12 +195,12 @@ mod tests {
             .writer_features
             .clone()
             .unwrap_or_default()
-            .contains(&crate::kernel::WriterFeatures::DeletionVectors));
+            .contains(&WriterFeatures::DeletionVectors));
         assert!(&current_protocol
             .reader_features
             .clone()
             .unwrap_or_default()
-            .contains(&crate::kernel::ReaderFeatures::DeletionVectors));
+            .contains(&ReaderFeatures::DeletionVectors));
         assert_eq!(result.version(), 2);
         Ok(())
     }
