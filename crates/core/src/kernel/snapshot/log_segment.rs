@@ -28,6 +28,7 @@ lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
     static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
+    static ref CRC_FILE_PATTERN: Regex = Regex::new(r"^(\.)?\d+(\.crc|\.json)?\.crc$").unwrap();
     pub(super) static ref TOMBSTONE_SCHEMA: StructType =
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }
@@ -60,6 +61,12 @@ pub(crate) trait PathExt {
         self.filename()
             .map(|name| DELTA_FILE_PATTERN.captures(name).is_some())
             .unwrap_or(false)
+    }
+
+    fn is_crc_file(&self) -> bool {
+        self.filename()
+            .map(|name| CRC_FILE_PATTERN.captures(name).is_some())
+            .unwrap()
     }
 }
 
