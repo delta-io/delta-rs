@@ -243,7 +243,7 @@ And we want to merge only new records from our source data, without duplication:
 
 The `MERGE` syntax would be as follows:
 
-== "Python"
+=== "Python"
     ```python
     (
         dt.merge(
