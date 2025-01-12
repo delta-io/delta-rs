@@ -36,7 +36,7 @@ use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion_common::DFSchema;
-use datafusion_expr::{col, lit, when, Expr};
+use datafusion_expr::{col, lit, when, Expr, ExprSchemable};
 use datafusion_physical_expr::expressions::{self};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter::FilterExec;
@@ -1050,7 +1050,11 @@ impl std::future::IntoFuture for WriteBuilder {
                                         dfschema,
                                     )?,
                                 )
-                                .otherwise(col(generated_col.get_name()))?,
+                                .otherwise(col(generated_col.get_name()))?
+                                .cast_to(
+                                    &arrow_schema::DataType::try_from(&generated_col.data_type)?,
+                                    dfschema,
+                                )?,
                                 dfschema,
                             )?;
                             Ok((generation_expr, field.name().to_owned()))
