@@ -265,20 +265,23 @@ pub trait LogStore: Send + Sync + AsAny {
 
     /// Check if the location is a delta table location
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
-        // TODO We should really be using HEAD here, but this fails in windows tests
         let object_store = self.object_store(None);
         let mut stream = object_store.list(Some(self.log_path()));
-        if let Some(res) = stream.next().await {
+        while let Some(res) = stream.next().await {
             match res {
                 Ok(meta) => {
-                    Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file())
+                    // crc files are valid files according to the protocol
+                    if meta.location.is_crc_file() {
+                        continue;
+                    }
+                    return Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file());
                 }
-                Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-                Err(err) => Err(err)?,
+                Err(ObjectStoreError::NotFound { .. }) => return Ok(false),
+                Err(err) => return Err(err.into()),
             }
-        } else {
-            Ok(false)
         }
+
+        Ok(false)
     }
 
     #[cfg(feature = "datafusion")]
@@ -673,6 +676,69 @@ mod tests {
             )
             .await
             .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_crc() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save .crc files to the transaction log directory (all 3 formats)
+        let payload = PutPayload::from_static(b"test");
+
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/.0.crc.crc"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/.0.json.crc"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/0.crc"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        // Now add a commit
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/0.json"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
         // The table should be considered a delta table
         assert!(store
             .is_delta_table_location()
