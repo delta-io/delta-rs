@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
@@ -46,13 +46,14 @@ impl Entry {
 /// the object store are immutable and no attempt is made to invalidate the cache
 /// when files are updated in the remote object store.
 #[derive(Clone)]
-pub(crate) struct ConditionallyCachedObjectStore {
+pub(crate) struct CommitCacheObjectStore {
     inner: Arc<dyn ObjectStore>,
     check: Arc<dyn Fn(&Path) -> bool + Send + Sync>,
     cache: Arc<Cache<Path, Entry>>,
+    has_ordered_listing: bool,
 }
 
-impl std::fmt::Debug for ConditionallyCachedObjectStore {
+impl std::fmt::Debug for CommitCacheObjectStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConditionallyCachedObjectStore")
             .field("object_store", &self.inner)
@@ -60,7 +61,7 @@ impl std::fmt::Debug for ConditionallyCachedObjectStore {
     }
 }
 
-impl std::fmt::Display for ConditionallyCachedObjectStore {
+impl std::fmt::Display for CommitCacheObjectStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConditionallyCachedObjectStore({})", self.inner)
     }
@@ -71,13 +72,16 @@ fn cache_json(path: &Path) -> bool {
         .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
 }
 
-impl ConditionallyCachedObjectStore {
+impl CommitCacheObjectStore {
     /// Create a new conditionally cached object store.
     pub fn new(inner: Arc<dyn ObjectStore>) -> Self {
+        let store_str = format!("{}", inner);
+        let is_local = store_str.starts_with("LocalFileSystem");
         Self {
             inner,
             check: Arc::new(cache_json),
             cache: Arc::new(Cache::new(100)),
+            has_ordered_listing: !is_local,
         }
     }
 
@@ -121,7 +125,7 @@ impl ConditionallyCachedObjectStore {
 }
 
 #[async_trait::async_trait]
-impl ObjectStore for ConditionallyCachedObjectStore {
+impl ObjectStore for CommitCacheObjectStore {
     async fn put_opts(
         &self,
         location: &Path,

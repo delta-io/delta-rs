@@ -74,7 +74,7 @@ tokio = { workspace = true, features = [
 ] }
 
 # cahce
-quick_cache = { version = "0.6.9", optional = true }
+quick_cache = { version = "0.6.9" }
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
@@ -130,4 +130,3 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-log-cache = ["quick_cache"]
