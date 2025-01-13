@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from datetime import date, datetime, timezone
@@ -9,6 +10,7 @@ from unittest.mock import Mock
 
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
+from deltalake.query import QueryBuilder
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
 
@@ -946,3 +948,76 @@ def test_is_deltatable_with_storage_opts():
         "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
     }
     assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
+
+
+def test_read_query_builder():
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["4", "5", "6", "7"],
+        "year": ["2021", "2021", "2021", "2021"],
+        "month": ["4", "12", "12", "12"],
+        "day": ["5", "4", "20", "20"],
+    }
+
+    qb = QueryBuilder().register("tbl", dt)
+    query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
+
+    actual = pa.Table.from_batches(qb.execute(query).fetchall()).to_pydict()
+    assert expected == actual
+
+    actual = pa.Table.from_batches(qb.sql(query).fetchall()).to_pydict()
+    assert expected == actual
+
+
+def test_read_query_builder_join_multiple_tables(tmp_path):
+    table_path = "../crates/test/tests/data/delta-0.8.0-date"
+    dt1 = DeltaTable(table_path)
+
+    write_deltalake(
+        tmp_path,
+        pa.table(
+            {
+                "date": ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
+                "value": ["a", "b", "c", "d"],
+            }
+        ),
+    )
+    dt2 = DeltaTable(tmp_path)
+
+    expected = {
+        "date": ["2021-01-01", "2021-01-02", "2021-01-03"],
+        "dayOfYear": [1, 2, 3],
+        "value": ["a", "b", "c"],
+    }
+    actual = pa.Table.from_batches(
+        QueryBuilder()
+        .register("tbl1", dt1)
+        .register("tbl2", dt2)
+        .execute(
+            """
+            SELECT tbl2.date, tbl1.dayOfYear, tbl2.value
+            FROM tbl1
+            INNER JOIN tbl2 ON tbl1.date = tbl2.date
+            ORDER BY tbl1.date
+            """
+        )
+        .fetchall()
+    ).to_pydict()
+    assert expected == actual
+
+
+def test_read_query_builder_show_output(capsys, caplog):
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    logging.getLogger("deltalake").setLevel(logging.INFO)
+
+    qb = QueryBuilder().register("tbl", dt)
+    query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
+    qb.execute(query).show()
+    assert capsys.readouterr().out.strip() != ""
+
+    query = "SELECT * FROM tbl WHERE year >= 9999"
+    qb.execute(query).show()
+    assert "query contains no records" in caplog.text
+    assert capsys.readouterr().out.strip() == ""

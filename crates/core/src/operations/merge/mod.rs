@@ -44,7 +44,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
     physical_plan::ExecutionPlan,
-    prelude::{DataFrame, SessionContext},
+    prelude::{cast, DataFrame, SessionContext},
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
@@ -59,11 +59,13 @@ use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
+use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::transaction::{CommitProperties, PROTOCOL};
+use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
@@ -135,9 +137,17 @@ pub struct MergeBuilder {
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for MergeBuilder {}
+impl super::Operation<()> for MergeBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
@@ -162,6 +172,7 @@ impl MergeBuilder {
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
             safe_cast: false,
+            custom_execute_handler: None,
         }
     }
 
@@ -381,6 +392,12 @@ impl MergeBuilder {
         self.safe_cast = safe_cast;
         self
     }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
 }
 
 #[derive(Default)]
@@ -581,7 +598,7 @@ pub struct MergeMetrics {
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct MergeMetricExtensionPlanner {}
 
 #[async_trait]
@@ -689,11 +706,9 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
+    operation_id: Uuid,
+    handle: Option<&Arc<dyn CustomExecuteHandler>>,
 ) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
-    if !snapshot.load_config().require_files {
-        return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
-    }
-
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can
@@ -990,8 +1005,10 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
-        write_projection
-            .push(Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()));
+        write_projection.push(cast(
+            Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
+            delta_field.data_type().try_into()?,
+        ));
         new_columns.push((name, case));
     }
 
@@ -1213,7 +1230,7 @@ async fn execute(
         state.clone(),
         write,
         table_partition_cols.clone(),
-        log_store.object_store(),
+        log_store.object_store(Some(operation_id)),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties.clone(),
@@ -1237,7 +1254,7 @@ async fn execute(
                 state.clone(),
                 df.create_physical_plan().await?,
                 table_partition_cols.clone(),
-                log_store.object_store(),
+                log_store.object_store(Some(operation_id)),
                 Some(snapshot.table_config().target_file_size() as usize),
                 None,
                 writer_properties,
@@ -1318,6 +1335,8 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
+        .with_operation_id(operation_id)
+        .with_post_commit_hook_handler(handle.cloned())
         .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
     Ok((commit.snapshot(), metrics))
@@ -1349,6 +1368,13 @@ impl std::future::IntoFuture for MergeBuilder {
         Box::pin(async move {
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
 
+            if !this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
+            }
+
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
+
             let state = this.state.unwrap_or_else(|| {
                 let config: SessionConfig = DeltaSessionConfig::default().into();
                 let session = SessionContext::new_with_config(config);
@@ -1373,8 +1399,14 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.match_operations,
                 this.not_match_operations,
                 this.not_match_source_operations,
+                operation_id,
+                this.custom_execute_handler.as_ref(),
             )
             .await?;
+
+            if let Some(handler) = this.custom_execute_handler {
+                handler.post_execute(&this.log_store, operation_id).await?;
+            }
 
             Ok((
                 DeltaTable::new_with_state(this.log_store, snapshot),

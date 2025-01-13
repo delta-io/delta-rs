@@ -28,6 +28,7 @@ lazy_static! {
     static ref CHECKPOINT_FILE_PATTERN: Regex =
         Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
     static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
+    static ref CRC_FILE_PATTERN: Regex = Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap();
     pub(super) static ref TOMBSTONE_SCHEMA: StructType =
         StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
 }
@@ -60,6 +61,12 @@ pub(crate) trait PathExt {
         self.filename()
             .map(|name| DELTA_FILE_PATTERN.captures(name).is_some())
             .unwrap_or(false)
+    }
+
+    fn is_crc_file(&self) -> bool {
+        self.filename()
+            .map(|name| CRC_FILE_PATTERN.captures(name).is_some())
+            .unwrap()
     }
 }
 
@@ -144,7 +151,7 @@ impl LogSegment {
         log_store.refresh().await?;
         let log_url = table_root.child("_delta_log");
         let (mut commit_files, checkpoint_files) = list_log_files(
-            log_store.object_store().as_ref(),
+            log_store.object_store(None).as_ref(),
             &log_url,
             end_version,
             Some(start_version),
@@ -533,7 +540,9 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
+    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
     use deltalake_test::utils::*;
+    use maplit::hashset;
     use tokio::task::JoinHandle;
 
     use crate::{
@@ -558,7 +567,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let bytes = serde_json::to_vec(&segment).unwrap();
@@ -577,7 +586,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::SimpleWithCheckpoint)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let log_path = Path::from("_delta_log");
         let cp = read_last_checkpoint(store.as_ref(), &log_path)
@@ -610,7 +619,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::Simple)
             .build_storage()?
-            .object_store();
+            .object_store(None);
 
         let (log, check) = list_log_files(store.as_ref(), &log_path, None, None).await?;
         assert_eq!(log.len(), 5);
@@ -627,7 +636,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::WithDvSmall)
             .build_storage()?
-            .object_store();
+            .object_store(None);
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let (protocol, _metadata) = segment
             .read_metadata(store.clone(), &Default::default())
@@ -637,8 +646,8 @@ pub(super) mod tests {
         let expected = Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
-            writer_features: Some(vec!["deletionVectors".into()].into_iter().collect()),
+            reader_features: Some(hashset! {ReaderFeatures::DeletionVectors}),
+            writer_features: Some(hashset! {WriterFeatures::DeletionVectors}),
         };
         assert_eq!(protocol, expected);
 
@@ -656,7 +665,7 @@ pub(super) mod tests {
         let store = context
             .table_builder(TestTables::LatestNotCheckpointed)
             .build_storage()?
-            .object_store();
+            .object_store(None);
         let slow_list_store = Arc::new(slow_store::SlowListStore { store });
 
         let version = table_to_checkpoint.version();
@@ -671,6 +680,7 @@ pub(super) mod tests {
             &table_to_checkpoint.table_uri(),
             version,
             Some(false),
+            None,
         )
         .await?;
 
@@ -817,19 +827,19 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        create_checkpoint_for(commit.version, &commit.snapshot, log_store.as_ref())
+        create_checkpoint_for(commit.version, &commit.snapshot, log_store.as_ref(), None)
             .await
             .unwrap();
 
         let batches = LogSegment::try_new(
             &Path::default(),
             Some(commit.version),
-            log_store.object_store().as_ref(),
+            log_store.object_store(None).as_ref(),
         )
         .await
         .unwrap()
         .checkpoint_stream(
-            log_store.object_store(),
+            log_store.object_store(None),
             &StructType::new(vec![
                 ActionType::Metadata.schema_field().clone(),
                 ActionType::Protocol.schema_field().clone(),

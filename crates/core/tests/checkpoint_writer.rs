@@ -25,7 +25,7 @@ mod simple_checkpoint {
             .unwrap();
 
         // Write a checkpoint
-        checkpoints::create_checkpoint(&table).await.unwrap();
+        checkpoints::create_checkpoint(&table, None).await.unwrap();
 
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
@@ -36,7 +36,7 @@ mod simple_checkpoint {
         assert_eq!(5, version);
 
         table.load_version(10).await.unwrap();
-        checkpoints::create_checkpoint(&table).await.unwrap();
+        checkpoints::create_checkpoint(&table, None).await.unwrap();
 
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
@@ -134,6 +134,7 @@ mod delete_expired_delta_log_in_checkpoint {
             &table.table_uri(),
             table.version(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -182,6 +183,7 @@ mod delete_expired_delta_log_in_checkpoint {
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
             &table.table_uri(),
             table.version(),
+            None,
             None,
         )
         .await
@@ -248,7 +250,7 @@ mod checkpoints_with_tombstones {
 
         assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
-        checkpoints::create_checkpoint(&table).await.unwrap();
+        checkpoints::create_checkpoint(&table, None).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
             table.get_files_iter().unwrap().collect::<Vec<_>>(),
@@ -275,7 +277,7 @@ mod checkpoints_with_tombstones {
             removes1
         );
 
-        checkpoints::create_checkpoint(&table).await.unwrap();
+        checkpoints::create_checkpoint(&table, None).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
             table.get_files_iter().unwrap().collect::<Vec<_>>(),
@@ -397,7 +399,7 @@ mod checkpoints_with_tombstones {
         path: &str,
         version: i64,
     ) -> (HashSet<String>, Vec<Remove>) {
-        checkpoints::create_checkpoint(table).await.unwrap();
+        checkpoints::create_checkpoint(table, None).await.unwrap();
         let cp_path = format!("{path}/_delta_log/0000000000000000000{version}.checkpoint.parquet");
         let (schema, actions) = read_checkpoint(&cp_path).await;
 

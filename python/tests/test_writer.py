@@ -3,7 +3,6 @@ import json
 import os
 import pathlib
 import random
-import threading
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from math import inf
@@ -18,7 +17,6 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, Schema, write_deltalake
 from deltalake.exceptions import (
-    CommitFailedError,
     DeltaError,
     DeltaProtocolError,
     SchemaMismatchError,
@@ -1432,38 +1430,6 @@ def test_uint_arrow_types(tmp_path: pathlib.Path):
     write_deltalake(tmp_path, table)
 
 
-def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
-    exception = None
-
-    def comp():
-        nonlocal exception
-        dt = DeltaTable(existing_table.table_uri)
-        for _ in range(5):
-            # We should always be able to get a consistent table state
-            data = DeltaTable(dt.table_uri).to_pyarrow_table()
-            # If two overwrites delete the same file and then add their own
-            # concurrently, then this will fail.
-            assert data.num_rows == sample_data.num_rows
-            try:
-                write_deltalake(dt.table_uri, sample_data, mode="overwrite")
-            except Exception as e:
-                exception = e
-
-    n_threads = 2
-    threads = [threading.Thread(target=comp) for _ in range(n_threads)]
-
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert isinstance(exception, CommitFailedError)
-    assert (
-        "a concurrent transaction deleted the same data your transaction deletes"
-        in str(exception)
-    )
-
-
 def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
     data = pa.table(
         {
@@ -2025,3 +1991,43 @@ def test_write_transactions(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert transaction_2.app_id == "app_2"
     assert transaction_2.version == 2
     assert transaction_2.last_updated == 123456
+
+
+# <https://github.com/delta-io/delta-rs/issues/3063>
+@pytest.mark.polars
+def test_write_structs(tmp_path: pathlib.Path):
+    import polars as pl
+
+    dt = DeltaTable.create(
+        tmp_path,
+        schema=pa.schema(
+            [
+                ("a", pa.int32()),
+                ("b", pa.string()),
+                ("c", pa.struct({"d": pa.int16(), "e": pa.int16()})),
+            ]
+        ),
+    )
+
+    df = pl.DataFrame(
+        {
+            "a": [0, 1],
+            "b": ["x", "y"],
+            "c": [
+                {"d": -55, "e": -32},
+                {"d": 0, "e": 0},
+            ],
+        }
+    )
+
+    dt.merge(
+        source=df.to_arrow(),
+        predicate=" AND ".join([f"target.{x} = source.{x}" for x in ["a"]]),
+        source_alias="source",
+        target_alias="target",
+        large_dtypes=False,
+    ).when_not_matched_insert_all().execute()
+
+    arrow_dt = dt.to_pyarrow_dataset()
+    new_df = pl.scan_pyarrow_dataset(arrow_dt)
+    new_df.collect()

@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
 use aws_config::meta::credentials::CredentialsProviderChain;
@@ -19,6 +20,7 @@ use deltalake_core::storage::object_store::{
 };
 use deltalake_core::storage::StorageOptions;
 use deltalake_core::DeltaResult;
+use tokio::sync::Mutex;
 use tracing::log::*;
 
 use crate::constants;
@@ -27,12 +29,21 @@ use crate::constants;
 /// into a necessary [AwsCredential] type for configuring [object_store::aws::AmazonS3]
 #[derive(Clone, Debug)]
 pub(crate) struct AWSForObjectStore {
+    /// TODO: replace this with something with a credential cache instead of the sdkConfig
     sdk_config: SdkConfig,
+    cache: Arc<Mutex<Option<Credentials>>>,
 }
 
 impl AWSForObjectStore {
     pub(crate) fn new(sdk_config: SdkConfig) -> Self {
-        Self { sdk_config }
+        let cache = Arc::new(Mutex::new(None));
+        Self { sdk_config, cache }
+    }
+
+    /// Return true if a credential has been cached
+    async fn has_cached_credentials(&self) -> bool {
+        let guard = self.cache.lock().await;
+        (*guard).is_some()
     }
 }
 
@@ -43,10 +54,34 @@ impl CredentialProvider for AWSForObjectStore {
     /// Provide the necessary configured credentials from the AWS SDK for use by
     /// [object_store::aws::AmazonS3]
     async fn get_credential(&self) -> ObjectStoreResult<Arc<Self::Credential>> {
+        debug!("AWSForObjectStore is unlocking..");
+        let mut guard = self.cache.lock().await;
+
+        if let Some(cached) = guard.as_ref() {
+            debug!("Located cached credentials");
+            let now = SystemTime::now();
+
+            // Credentials such as assume role credentials will have an expiry on them, whereas
+            // environmental provided credentials will *not*.  In the latter case, it's still
+            // useful avoid running through the provider chain again, so in both cases we should
+            // still treat credentials as useful
+            if cached.expiry().unwrap_or(now) >= now {
+                debug!("Cached credentials are still valid, returning");
+                return Ok(Arc::new(Self::Credential {
+                    key_id: cached.access_key_id().into(),
+                    secret_key: cached.secret_access_key().into(),
+                    token: cached.session_token().map(|o| o.to_string()),
+                }));
+            } else {
+                debug!("Cached credentials appear to no longer be valid, re-resolving");
+            }
+        }
+
         let provider = self
             .sdk_config
             .credentials_provider()
             .ok_or(ObjectStoreError::NotImplemented)?;
+
         let credentials =
             provider
                 .provide_credentials()
@@ -60,11 +95,15 @@ impl CredentialProvider for AWSForObjectStore {
             credentials.access_key_id()
         );
 
-        Ok(Arc::new(Self::Credential {
+        let result = Ok(Arc::new(Self::Credential {
             key_id: credentials.access_key_id().into(),
             secret_key: credentials.secret_access_key().into(),
             token: credentials.session_token().map(|o| o.to_string()),
-        }))
+        }));
+
+        // Update the mutex before exiting with the new Credentials from the AWS provider
+        *guard = Some(credentials);
+        return result;
     }
 }
 
@@ -323,5 +362,61 @@ mod tests {
         } else {
             panic!("Could not retrieve credentials from the SdkConfig: {config:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_object_store_credential_provider() -> DeltaResult<()> {
+        let options = StorageOptions(hashmap! {
+            constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
+            constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
+        });
+        let sdk_config = resolve_credentials(options)
+            .await
+            .expect("Failed to resolve credentials for the test");
+        let provider = AWSForObjectStore::new(sdk_config);
+        let _credential = provider
+            .get_credential()
+            .await
+            .expect("Failed to produce a credential");
+        Ok(())
+    }
+
+    /// The [CredentialProvider] is called _repeatedly_ by the [object_store] create, in essence on
+    /// every get/put/list/etc operation, the `get_credential` function will be invoked.
+    ///
+    /// In some cases, such as when assuming roles, this can result in an excessive amount of STS
+    /// API calls in the scenarios where the delta-rs process is performing a large number of S3
+    /// operations.
+    #[tokio::test]
+    async fn test_object_store_credential_provider_consistency() -> DeltaResult<()> {
+        let options = StorageOptions(hashmap! {
+            constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
+            constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
+        });
+        let sdk_config = resolve_credentials(options)
+            .await
+            .expect("Failed to resolve credentijals for the test");
+        let provider = AWSForObjectStore::new(sdk_config);
+        let credential_a = provider
+            .get_credential()
+            .await
+            .expect("Failed to produce a credential");
+
+        assert!(
+            provider.has_cached_credentials().await,
+            "The provider should have cached the credential on the first call!"
+        );
+
+        let credential_b = provider
+            .get_credential()
+            .await
+            .expect("Failed to produce a credential");
+
+        assert_ne!(
+            Arc::as_ptr(&credential_a),
+            Arc::as_ptr(&credential_b),
+            "Repeated calls to get_credential() produced different results!"
+        );
+        Ok(())
     }
 }

@@ -689,6 +689,7 @@ class DeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
         columns: Optional[List[str]] = None,
+        allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader:
         return self._table.load_cdf(
             columns=columns,
@@ -696,6 +697,7 @@ class DeltaTable:
             ending_version=ending_version,
             starting_timestamp=starting_timestamp,
             ending_timestamp=ending_timestamp,
+            allow_out_of_range=allow_out_of_range,
         )
 
     @property
@@ -1423,6 +1425,43 @@ class DeltaTable:
     def transaction_versions(self) -> Dict[str, Transaction]:
         return self._table.transaction_versions()
 
+    def __datafusion_table_provider__(self) -> Any:
+        """Return the DataFusion table provider PyCapsule interface.
+
+        To support DataFusion features such as push down filtering, this function will return a PyCapsule
+        interface that conforms to the FFI Table Provider required by DataFusion. From an end user perspective
+        you should not need to call this function directly. Instead you can use ``register_table_provider`` in
+        the DataFusion SessionContext.
+
+        Returns:
+            A PyCapsule DataFusion TableProvider interface.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            from datafusion import SessionContext
+            import pyarrow as pa
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            ctx = SessionContext()
+            ctx.register_table_provider("test", table)
+            ctx.table("test").show()
+            ```
+            Results in
+            ```
+            DataFrame()
+            +----+----+----+
+            | c3 | c1 | c2 |
+            +----+----+----+
+            | 4  | 6  | a  |
+            | 6  | 5  | b  |
+            | 5  | 4  | c  |
+            +----+----+----+
+            ```
+        """
+        return self._table.__datafusion_table_provider__()
+
 
 class TableMerger:
     """API for various table `MERGE` commands."""
@@ -1483,9 +1522,12 @@ class TableMerger:
         self._builder.when_matched_update(updates, predicate)
         return self
 
-    def when_matched_update_all(self, predicate: Optional[str] = None) -> "TableMerger":
+    def when_matched_update_all(
+        self, predicate: Optional[str] = None, except_cols: Optional[List[str]] = None
+    ) -> "TableMerger":
         """Updating all source fields to target fields, source and target are required to have the same field names.
         If a ``predicate`` is specified, then it must evaluate to true for the row to be updated.
+        If ``except_cols`` is specified, then the columns in the exclude list will not be updated.
 
         Note:
             Column names with special characters, such as numbers or spaces should be encapsulated
@@ -1493,11 +1535,13 @@ class TableMerger:
 
         Args:
             predicate: SQL like predicate on when to update all columns.
-
+            except_cols: List of columns to exclude from update.
         Returns:
             TableMerger: TableMerger Object
 
         Example:
+            ** Update all columns **
+
             ```python
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
@@ -1524,6 +1568,35 @@ class TableMerger:
             1  2  5
             2  3  6
             ```
+
+            ** Update all columns except `bar` **
+
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
+
+            data = pa.table({"foo": [1, 2, 3], "bar": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"foo": [1], "bar": [7]})
+
+            (
+                dt.merge(
+                    source=new_data,
+                    predicate="target.foo = source.foo",
+                    source_alias="source",
+                    target_alias="target")
+                .when_matched_update_all(except_cols=["bar"])
+                .execute()
+            )
+            {'num_source_rows': 1, 'num_target_rows_inserted': 0, 'num_target_rows_updated': 1, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 2, 'num_output_rows': 3, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+
+            dt.to_pandas()
+               foo  bar
+            0  1    4
+            1  2    5
+            2  3    6
+            ```
         """
         maybe_source_alias = self._builder.source_alias
         maybe_target_alias = self._builder.target_alias
@@ -1533,9 +1606,12 @@ class TableMerger:
             (maybe_target_alias + ".") if maybe_target_alias is not None else ""
         )
 
+        except_columns = except_cols or []
+
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema
+            if col.name not in except_columns
         }
 
         self._builder.when_matched_update(updates, predicate)
@@ -1661,11 +1737,11 @@ class TableMerger:
         return self
 
     def when_not_matched_insert_all(
-        self, predicate: Optional[str] = None
+        self, predicate: Optional[str] = None, except_cols: Optional[List[str]] = None
     ) -> "TableMerger":
         """Insert a new row to the target table, updating all source fields to target fields. Source and target are
         required to have the same field names. If a ``predicate`` is specified, then it must evaluate to true for
-        the new row to be inserted.
+        the new row to be inserted. If ``except_cols`` is specified, then the columns in the exclude list will not be inserted.
 
         Note:
             Column names with special characters, such as numbers or spaces should be encapsulated
@@ -1673,11 +1749,14 @@ class TableMerger:
 
         Args:
             predicate: SQL like predicate on when to insert.
+            except_cols: List of columns to exclude from insert.
 
         Returns:
             TableMerger: TableMerger Object
 
         Example:
+            ** Insert all columns **
+
             ```python
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
@@ -1705,6 +1784,36 @@ class TableMerger:
             2  3  6
             3  4  7
             ```
+
+            ** Insert all columns except `bar` **
+
+            ```python
+            from deltalake import DeltaTable, write_deltalake
+            import pyarrow as pa
+
+            data = pa.table({"foo": [1, 2, 3], "bar": [4, 5, 6]})
+            write_deltalake("tmp", data)
+            dt = DeltaTable("tmp")
+            new_data = pa.table({"foo": [4], "bar": [7]})
+
+            (
+               dt.merge(
+                   source=new_data,
+                   predicate='target.foo = source.foo',
+                   source_alias='source',
+                   target_alias='target')
+               .when_not_matched_insert_all(except_cols=["bar"])
+               .execute()
+            )
+            {'num_source_rows': 1, 'num_target_rows_inserted': 1, 'num_target_rows_updated': 0, 'num_target_rows_deleted': 0, 'num_target_rows_copied': 3, 'num_output_rows': 4, 'num_target_files_added': 1, 'num_target_files_removed': 1, 'execution_time_ms': ..., 'scan_time_ms': ..., 'rewrite_time_ms': ...}
+
+            dt.to_pandas().sort_values("foo", ignore_index=True)
+               foo  bar
+            0  1    4
+            1  2    5
+            2  3    6
+            3  4    NaN
+            ```
         """
         maybe_source_alias = self._builder.source_alias
         maybe_target_alias = self._builder.target_alias
@@ -1713,9 +1822,13 @@ class TableMerger:
         trgt_alias = (
             (maybe_target_alias + ".") if maybe_target_alias is not None else ""
         )
+
+        except_columns = except_cols or []
+
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema
+            if col.name not in except_columns
         }
 
         self._builder.when_not_matched_insert(updates, predicate)

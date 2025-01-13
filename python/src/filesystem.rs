@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 const DEFAULT_MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
     pub(crate) root_url: String,
     pub(crate) options: HashMap<String, String>,
@@ -51,7 +51,7 @@ impl DeltaFileSystemHandler {
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PythonError::from)?
-            .object_store();
+            .object_store(None);
 
         Ok(Self {
             inner: storage,
@@ -71,11 +71,11 @@ impl DeltaFileSystemHandler {
         options: Option<HashMap<String, String>>,
         known_sizes: Option<HashMap<String, i64>>,
     ) -> PyResult<Self> {
-        let storage = table._table.object_store();
+        let storage = table.object_store()?;
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table._table.table_uri(),
+                root_url: table.with_table(|t| Ok(t.table_uri()))?,
                 options: options.unwrap_or_default(),
             },
             known_sizes,
@@ -503,10 +503,12 @@ impl ObjectInputFile {
         Err(PyNotImplementedError::new_err("'truncate' not implemented"))
     }
 
+    #[pyo3(signature = (_size=None))]
     fn readline(&self, _size: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err("'readline' not implemented"))
     }
 
+    #[pyo3(signature = (_hint=None))]
     fn readlines(&self, _hint: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err(
             "'readlines' not implemented",
@@ -666,10 +668,12 @@ impl ObjectOutputStream {
         Err(PyNotImplementedError::new_err("'truncate' not implemented"))
     }
 
+    #[pyo3(signature = (_size=None))]
     fn readline(&self, _size: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err("'readline' not implemented"))
     }
 
+    #[pyo3(signature = (_hint=None))]
     fn readlines(&self, _hint: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err(
             "'readlines' not implemented",

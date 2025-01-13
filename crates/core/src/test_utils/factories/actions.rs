@@ -9,8 +9,9 @@ use object_store::ObjectMeta;
 use super::{get_parquet_bytes, DataFactory, FileStats};
 use crate::kernel::arrow::extract::{self as ex};
 use crate::kernel::partitions_schema;
-use crate::kernel::{Add, Metadata, Protocol, ReaderFeatures, Remove, StructType, WriterFeatures};
+use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
 use crate::operations::transaction::PROTOCOL;
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 pub struct ActionFactory;
 
@@ -43,7 +44,7 @@ impl ActionFactory {
         partition_columns: Vec<String>,
         data_change: bool,
     ) -> Add {
-        let partitions_schema = partitions_schema(&schema, &partition_columns).unwrap();
+        let partitions_schema = partitions_schema(schema, &partition_columns).unwrap();
         let partition_values = if let Some(p_schema) = partitions_schema {
             let batch = DataFactory::record_batch(&p_schema, 1, &bounds).unwrap();
             p_schema
@@ -76,8 +77,7 @@ impl ActionFactory {
             schema
                 .fields()
                 .filter(|f| !partition_columns.contains(f.name()))
-                .cloned()
-                .collect(),
+                .cloned(),
         );
 
         let batch = DataFactory::record_batch(&data_schema, 10, &bounds).unwrap();

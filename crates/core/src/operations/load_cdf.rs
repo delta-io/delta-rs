@@ -36,13 +36,15 @@ pub struct CdfLoadBuilder {
     /// Columns to project
     columns: Option<Vec<String>>,
     /// Version to read from
-    starting_version: i64,
+    starting_version: Option<i64>,
     /// Version to stop reading at
     ending_version: Option<i64>,
     /// Starting timestamp of commits to accept
     starting_timestamp: Option<DateTime<Utc>>,
     /// Ending timestamp of commits to accept
     ending_timestamp: Option<DateTime<Utc>>,
+    /// Enable ending version or timestamp exceeding the last commit
+    allow_out_of_range: bool,
     /// Provided Datafusion context
     ctx: SessionContext,
 }
@@ -54,17 +56,18 @@ impl CdfLoadBuilder {
             snapshot,
             log_store,
             columns: None,
-            starting_version: 0,
+            starting_version: None,
             ending_version: None,
             starting_timestamp: None,
             ending_timestamp: None,
+            allow_out_of_range: false,
             ctx: SessionContext::new(),
         }
     }
 
     /// Version to start at (version 0 if not provided)
     pub fn with_starting_version(mut self, starting_version: i64) -> Self {
-        self.starting_version = starting_version;
+        self.starting_version = Some(starting_version);
         self
     }
 
@@ -92,10 +95,35 @@ impl CdfLoadBuilder {
         self
     }
 
+    /// Enable ending version or timestamp exceeding the last commit
+    pub fn with_allow_out_of_range(mut self) -> Self {
+        self.allow_out_of_range = true;
+        self
+    }
+
     /// Columns to select
     pub fn with_columns(mut self, columns: Vec<String>) -> Self {
         self.columns = Some(columns);
         self
+    }
+
+    async fn calculate_earliest_version(&self) -> DeltaResult<i64> {
+        let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
+        for v in 0..self.snapshot.version() {
+            if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
+                if let Ok(actions) = get_actions(v, bytes).await {
+                    if actions.iter().any(|action| match action {
+                        Action::CommitInfo(CommitInfo {
+                            timestamp: Some(t), ..
+                        }) if ts.timestamp_millis() < *t => true,
+                        _ => false,
+                    }) {
+                        return Ok(v);
+                    }
+                }
+            }
+        }
+        Ok(0)
     }
 
     /// This is a rust version of https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/commands/cdc/CDCReader.scala#L418
@@ -109,19 +137,72 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<Add>>,
         Vec<CdcDataSpec<Remove>>,
     )> {
-        let start = self.starting_version;
-        let end = self
-            .ending_version
-            .unwrap_or(self.log_store.get_latest_version(start).await?);
+        if self.starting_version.is_none() && self.starting_timestamp.is_none() {
+            return Err(DeltaTableError::NoStartingVersionOrTimestamp);
+        }
+        let start = if let Some(s) = self.starting_version {
+            s
+        } else {
+            self.calculate_earliest_version().await?
+        };
+        let latest_version = self.log_store.get_latest_version(start).await?; // Start from 0 since if start > latest commit, the returned commit is not a valid commit
+
+        let mut end = self.ending_version.unwrap_or(latest_version);
+
+        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
+        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
+        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
+
+        if end > latest_version {
+            end = latest_version;
+        }
 
         if end < start {
-            return Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end });
+            return if self.allow_out_of_range {
+                Ok((change_files, add_files, remove_files))
+            } else {
+                Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
+            };
+        }
+        if start >= latest_version {
+            return if self.allow_out_of_range {
+                Ok((change_files, add_files, remove_files))
+            } else {
+                Err(DeltaTableError::InvalidVersion(start))
+            };
         }
 
         let starting_timestamp = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         let ending_timestamp = self
             .ending_timestamp
             .unwrap_or(DateTime::from(SystemTime::now()));
+
+        // Check that starting_timestamp is within boundaries of the latest version
+        let latest_snapshot_bytes = self
+            .log_store
+            .read_commit_entry(latest_version)
+            .await?
+            .ok_or(DeltaTableError::InvalidVersion(latest_version));
+
+        let latest_version_actions: Vec<Action> =
+            get_actions(latest_version, latest_snapshot_bytes?).await?;
+        let latest_version_commit = latest_version_actions
+            .iter()
+            .find(|a| matches!(a, Action::CommitInfo(_)));
+
+        if let Some(Action::CommitInfo(CommitInfo {
+            timestamp: Some(latest_timestamp),
+            ..
+        })) = latest_version_commit
+        {
+            if starting_timestamp.timestamp_millis() > *latest_timestamp {
+                return if self.allow_out_of_range {
+                    Ok((change_files, add_files, remove_files))
+                } else {
+                    Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
+                };
+            }
+        }
 
         log::debug!(
             "starting timestamp = {:?}, ending timestamp = {:?}",
@@ -130,17 +211,14 @@ impl CdfLoadBuilder {
         );
         log::debug!("starting version = {}, ending version = {:?}", start, end);
 
-        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
-        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
-        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
-
         for version in start..=end {
             let snapshot_bytes = self
                 .log_store
                 .read_commit_entry(version)
                 .await?
-                .ok_or(DeltaTableError::InvalidVersion(version))?;
-            let version_actions = get_actions(version, snapshot_bytes).await?;
+                .ok_or(DeltaTableError::InvalidVersion(version));
+
+            let version_actions: Vec<Action> = get_actions(version, snapshot_bytes?).await?;
 
             let mut ts = 0;
             let mut cdc_actions = vec![];
@@ -244,6 +322,7 @@ impl CdfLoadBuilder {
         Some(ScalarValue::Utf8(Some(String::from("insert"))))
     }
 
+    #[inline]
     fn get_remove_action_type() -> Option<ScalarValue> {
         Some(ScalarValue::Utf8(Some(String::from("delete"))))
     }
@@ -468,6 +547,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
             .build()
             .await?;
@@ -579,6 +659,90 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_load_version_out_of_range() -> TestResult {
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_version(5)
+            .build()
+            .await;
+
+        assert!(table.is_err());
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::InvalidVersion { .. }
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_version_out_of_range_with_flag() -> TestResult {
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_version(5)
+            .with_allow_out_of_range()
+            .build()
+            .await?;
+
+        let ctx = SessionContext::new();
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table.clone(),
+            ctx,
+        )
+        .await?;
+
+        assert!(batches.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_timestamp_out_of_range() -> TestResult {
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_timestamp(ending_timestamp.and_utc())
+            .build()
+            .await;
+
+        assert!(table.is_err());
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::ChangeDataTimestampGreaterThanCommit { .. }
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_timestamp_out_of_range_with_flag() -> TestResult {
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+            .await?
+            .load_cdf()
+            .with_starting_timestamp(ending_timestamp.and_utc())
+            .with_allow_out_of_range()
+            .build()
+            .await?;
+
+        let ctx = SessionContext::new();
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table.clone(),
+            ctx,
+        )
+        .await?;
+
+        assert!(batches.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_load_non_cdf() -> TestResult {
         let table = DeltaOps::try_from_uri("../test/tests/data/simple_table")
             .await?
@@ -592,6 +756,49 @@ pub(crate) mod tests {
             table.unwrap_err(),
             DeltaTableError::ChangeDataNotEnabled { .. }
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_vacuumed_table() -> TestResult {
+        let ending_timestamp = NaiveDateTime::from_str("2024-01-06T15:44:59.570")?;
+        let ctx = SessionContext::new();
+        let table = DeltaOps::try_from_uri("../test/tests/data/checkpoint-cdf-table")
+            .await?
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_timestamp(ending_timestamp.and_utc())
+            .build()
+            .await?;
+
+        let batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await?;
+
+        assert_batches_sorted_eq! {
+            ["+----+--------+------------------+-----------------+-------------------------+------------+",
+             "| id | name   | _change_type     | _commit_version | _commit_timestamp       | birthday   |",
+             "+----+--------+------------------+-----------------+-------------------------+------------+",
+             "| 11 | Ossama | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2024-12-30 |",
+             "| 12 | Ossama | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2024-12-30 |",
+             "| 7  | Dennis | delete           | 3               | 2024-01-06T16:44:59.570 | 2023-12-29 |",
+             "| 14 | Zach   | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2023-12-25 |",
+             "| 15 | Zach   | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2023-12-25 |",
+             "| 13 | Ryan   | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2023-12-22 |",
+             "| 14 | Ryan   | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2023-12-22 |",
+             "| 12 | Nick   | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2023-12-29 |",
+             "| 13 | Nick   | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2023-12-29 |",
+             "| 11 | Ossama | insert           | 4               | 2025-01-06T16:33:18.167 | 2024-12-30 |",
+             "| 12 | Nick   | insert           | 4               | 2025-01-06T16:33:18.167 | 2023-12-29 |",
+             "| 13 | Ryan   | insert           | 4               | 2025-01-06T16:33:18.167 | 2023-12-22 |",
+             "| 14 | Zach   | insert           | 4               | 2025-01-06T16:33:18.167 | 2023-12-25 |",
+             "+----+--------+------------------+-----------------+-------------------------+------------+"],
+            &batches
+        }
 
         Ok(())
     }

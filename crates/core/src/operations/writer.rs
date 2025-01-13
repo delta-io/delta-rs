@@ -6,6 +6,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
+use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -217,11 +218,18 @@ impl DeltaWriter {
     /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
-        let mut actions = Vec::new();
-        for (_, writer) in writers {
-            let writer_actions = writer.close().await?;
-            actions.extend(writer_actions);
-        }
+        let actions = futures::stream::iter(writers)
+            .map(|(_, writer)| async move {
+                let writer_actions = writer.close().await?;
+                Ok::<_, DeltaTableError>(writer_actions)
+            })
+            .buffered(num_cpus::get())
+            .try_fold(Vec::new(), |mut acc, actions| {
+                acc.extend(actions);
+                futures::future::ready(Ok(acc))
+            })
+            .await?;
+
         Ok(actions)
     }
 }
@@ -480,7 +488,7 @@ mod tests {
         let log_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap();
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
@@ -512,7 +520,7 @@ mod tests {
         let object_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap()
-            .object_store();
+            .object_store(None);
         let properties = WriterProperties::builder()
             .set_max_row_group_size(1024)
             .build();
@@ -543,7 +551,7 @@ mod tests {
         let object_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap()
-            .object_store();
+            .object_store(None);
         // configure small target file size so we can observe multiple files written
         let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
         writer.write(&batch).await.unwrap();
@@ -570,7 +578,7 @@ mod tests {
         let object_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap()
-            .object_store();
+            .object_store(None);
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
         let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
@@ -585,7 +593,7 @@ mod tests {
         let log_store = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap();
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch

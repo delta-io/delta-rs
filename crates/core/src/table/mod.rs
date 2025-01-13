@@ -15,13 +15,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{
-    Action, CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType,
-    Transaction,
+    CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
 };
-use crate::logstore::{self, extract_version_from_filename, LogStoreConfig, LogStoreRef};
+use crate::logstore::{extract_version_from_filename, LogStoreConfig, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{DeltaResult, DeltaTableError};
+
+// NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
+pub use crate::logstore::PeekCommit;
 
 pub mod builder;
 pub mod config;
@@ -178,17 +180,6 @@ pub(crate) fn get_partition_col_data_types<'a>(
         .collect()
 }
 
-/// The next commit that's available from underlying storage
-/// TODO: Maybe remove this and replace it with Some/None and create a `Commit` struct to contain the next commit
-///
-#[derive(Debug)]
-pub enum PeekCommit {
-    /// The next commit version and associated actions
-    New(i64, Vec<Action>),
-    /// Provided DeltaVersion is up to date
-    UpToDate,
-}
-
 /// In memory representation of a Delta Table
 #[derive(Clone)]
 pub struct DeltaTable {
@@ -288,7 +279,7 @@ impl DeltaTable {
 
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> ObjectStoreRef {
-        self.log_store.object_store()
+        self.log_store.object_store(None)
     }
 
     /// Check if the [`DeltaTable`] exists
@@ -332,20 +323,16 @@ impl DeltaTable {
         self.update_incremental(None).await
     }
 
+    #[deprecated(
+        since = "0.22.4",
+        note = "peek_next_commit has moved to the logstore, use table.log_store().peek_next_commit() instead please :)"
+    )]
     /// Get the list of actions for the next commit
     pub async fn peek_next_commit(
         &self,
         current_version: i64,
     ) -> Result<PeekCommit, DeltaTableError> {
-        let next_version = current_version + 1;
-        let commit_log_bytes = match self.log_store.read_commit_entry(next_version).await {
-            Ok(Some(bytes)) => Ok(bytes),
-            Ok(None) => return Ok(PeekCommit::UpToDate),
-            Err(err) => Err(err),
-        }?;
-
-        let actions = logstore::get_actions(next_version, commit_log_bytes).await;
-        Ok(PeekCommit::New(next_version, actions.unwrap()))
+        self.log_store().peek_next_commit(current_version).await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
@@ -359,7 +346,7 @@ impl DeltaTable {
             _ => {
                 let state = DeltaTableState::try_new(
                     &Path::default(),
-                    self.log_store.object_store(),
+                    self.log_store.object_store(None),
                     self.config.clone(),
                     max_version,
                 )
@@ -528,7 +515,7 @@ impl DeltaTable {
         let log_store = self.log_store();
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(min_version);
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
         let mut files = object_store.list_with_offset(prefix, &offset_path);
 
         while let Some(obj_meta) = files.next().await {

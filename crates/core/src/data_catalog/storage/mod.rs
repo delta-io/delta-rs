@@ -30,6 +30,7 @@ const DELTA_LOG_FOLDER: &str = "_delta_log";
 ///
 /// assuming it contains valid deltalake data, i.e a `_delta_log` folder:
 /// s3://host.example.com:3000/data/tpch/customer/_delta_log/
+#[derive(Debug)]
 pub struct ListingSchemaProvider {
     authority: String,
     /// Underlying object store
@@ -87,9 +88,9 @@ impl ListingSchemaProvider {
     }
 }
 
-// noramalizes a path fragment to be a valida table name in datafusion
+// normalizes a path fragment to be a valida table name in datafusion
 // - removes some reserved characters (-, +, ., " ")
-// - lowecase ascii
+// - lowercase ascii
 fn normalize_table_name(path: &Path) -> Result<String, DataFusionError> {
     Ok(path
         .file_name()

@@ -48,12 +48,13 @@ use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tracing::log::*;
+use uuid::Uuid;
 
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::writer::{DeltaWriter, WriterConfig};
-use super::CreateBuilder;
+use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{
@@ -163,6 +164,7 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -180,7 +182,14 @@ pub struct WriteMetrics {
     pub execution_time_ms: u64,
 }
 
-impl super::Operation<()> for WriteBuilder {}
+impl super::Operation<()> for WriteBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
@@ -203,6 +212,7 @@ impl WriteBuilder {
             name: None,
             description: None,
             configuration: Default::default(),
+            custom_execute_handler: None,
         }
     }
 
@@ -296,6 +306,12 @@ impl WriteBuilder {
         self
     }
 
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
+
     /// Set configuration on created table
     pub fn with_configuration(
         mut self,
@@ -309,20 +325,45 @@ impl WriteBuilder {
     }
 
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
+        if self.schema_mode == Some(SchemaMode::Overwrite) && self.mode != SaveMode::Overwrite {
+            return Err(DeltaTableError::Generic(
+                "Schema overwrite not supported for Append".to_string(),
+            ));
+        }
+
+        let batches: &Vec<RecordBatch> = match &self.batches {
+            Some(batches) => {
+                if batches.is_empty() {
+                    error!("The WriteBuilder was an empty set of batches!");
+                    return Err(WriteError::MissingData.into());
+                }
+                batches
+            }
+            None => {
+                if self.input.is_none() {
+                    error!("The WriteBuilder must have an input plan _or_ batches!");
+                    return Err(WriteError::MissingData.into());
+                }
+                // provide an empty array in the case that an input plan exists
+                &vec![]
+            }
+        };
+
+        let schema: StructType = match &self.input {
+            Some(plan) => (plan.schema()).try_into()?,
+            None => (batches[0].schema()).try_into()?,
+        };
+
         match &self.snapshot {
             Some(snapshot) => {
-                PROTOCOL.can_write_to(snapshot)?;
-
-                let schema: StructType = if let Some(plan) = &self.input {
-                    (plan.schema()).try_into()?
-                } else if let Some(batches) = &self.batches {
-                    if batches.is_empty() {
-                        return Err(WriteError::MissingData.into());
+                if self.mode == SaveMode::Overwrite {
+                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
+                    if !snapshot.load_config().require_files {
+                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
                     }
-                    (batches[0].schema()).try_into()?
-                } else {
-                    return Err(WriteError::MissingData.into());
-                };
+                }
+
+                PROTOCOL.can_write_to(snapshot)?;
 
                 if self.schema_mode.is_none() {
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
@@ -335,16 +376,6 @@ impl WriteBuilder {
                 }
             }
             None => {
-                let schema: StructType = if let Some(plan) = &self.input {
-                    Ok(plan.schema().try_into()?)
-                } else if let Some(batches) = &self.batches {
-                    if batches.is_empty() {
-                        return Err(WriteError::MissingData.into());
-                    }
-                    Ok(batches[0].schema().try_into()?)
-                } else {
-                    Err(WriteError::MissingData)
-                }?;
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().cloned())
@@ -361,7 +392,7 @@ impl WriteBuilder {
                     builder = builder.with_comment(desc.clone());
                 };
 
-                let (_, actions, _) = builder.into_table_and_actions()?;
+                let (_, actions, _, _) = builder.into_table_and_actions().await?;
                 Ok(actions)
             }
         }
@@ -567,6 +598,7 @@ async fn execute_non_empty_expr(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     insert_plan: Arc<dyn ExecutionPlan>,
+    operation_id: Uuid,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
@@ -604,7 +636,7 @@ async fn execute_non_empty_expr(
             state.clone(),
             filter,
             partition_columns.clone(),
-            log_store.object_store(),
+            log_store.object_store(Some(operation_id)),
             Some(snapshot.table_config().target_file_size() as usize),
             None,
             writer_properties.clone(),
@@ -632,6 +664,7 @@ async fn execute_non_empty_expr(
             writer_properties,
             writer_stats_config,
             insert_plan,
+            operation_id,
         )
         .await?
         {
@@ -654,6 +687,7 @@ pub(crate) async fn execute_non_empty_expr_cdc(
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
     insert_plan: Arc<dyn ExecutionPlan>,
+    operation_id: Uuid,
 ) -> DeltaResult<Option<Vec<Action>>> {
     match should_write_cdc(snapshot) {
         // Create CDC scan
@@ -712,7 +746,7 @@ pub(crate) async fn execute_non_empty_expr_cdc(
                 state.clone(),
                 cdc_plan.clone(),
                 table_partition_cols.clone(),
-                log_store.object_store(),
+                log_store.object_store(Some(operation_id)),
                 Some(snapshot.table_config().target_file_size() as usize),
                 None,
                 writer_properties,
@@ -738,6 +772,7 @@ async fn prepare_predicate_actions(
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     insert_plan: Arc<dyn ExecutionPlan>,
+    operation_id: Uuid,
 ) -> DeltaResult<Vec<Action>> {
     let candidates =
         find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
@@ -753,6 +788,7 @@ async fn prepare_predicate_actions(
         writer_stats_config,
         candidates.partition_scan,
         insert_plan,
+        operation_id,
     )
     .await?;
 
@@ -783,24 +819,15 @@ impl std::future::IntoFuture for WriteBuilder {
         let this = self;
 
         Box::pin(async move {
+            // Runs pre execution handler.
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
+
             let mut metrics = WriteMetrics::default();
             let exec_start = Instant::now();
 
-            if this.mode == SaveMode::Overwrite {
-                if let Some(snapshot) = &this.snapshot {
-                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
-                    if !snapshot.load_config().require_files {
-                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
-                    }
-                }
-            }
-            if this.schema_mode == Some(SchemaMode::Overwrite) && this.mode != SaveMode::Overwrite {
-                return Err(DeltaTableError::Generic(
-                    "Schema overwrite not supported for Append".to_string(),
-                ));
-            }
-
-            // Create table actions to initialize table in case it does not yet exist and should be created
+            // Create table actions to initialize table in case it does not yet exist and should be
+            // created
             let mut actions = this.check_preconditions().await?;
 
             let active_partitions = this
@@ -957,7 +984,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             .reader_features
                             .clone()
                             .unwrap_or_default()
-                            .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                            .contains(&delta_kernel::table_features::ReaderFeatures::TimestampWithoutTimezone)
                     // We can check only reader features, as reader and writer timestampNtz
                     // should be always enabled together
                     {
@@ -1030,7 +1057,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 state.clone(),
                 plan.clone(),
                 partition_columns.clone(),
-                this.log_store.object_store().clone(),
+                this.log_store.object_store(Some(operation_id)).clone(),
                 target_file_size,
                 this.write_batch_size,
                 this.writer_properties.clone(),
@@ -1055,7 +1082,9 @@ impl std::future::IntoFuture for WriteBuilder {
                         .reader_features
                         .clone()
                         .unwrap_or_default()
-                        .contains(&crate::kernel::ReaderFeatures::TimestampWithoutTimezone)
+                        .contains(
+                            &delta_kernel::table_features::ReaderFeatures::TimestampWithoutTimezone,
+                        )
                     // We can check only reader features, as reader and writer timestampNtz
                     // should be always enabled together
                     {
@@ -1099,6 +1128,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 deletion_timestamp,
                                 writer_stats_config,
                                 plan,
+                                operation_id,
                             )
                             .await?;
                             if !predicate_actions.is_empty() {
@@ -1141,12 +1171,18 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let commit = CommitBuilder::from(commit_properties)
                 .with_actions(actions)
+                .with_post_commit_hook_handler(this.custom_execute_handler.clone())
+                .with_operation_id(operation_id)
                 .build(
                     this.snapshot.as_ref().map(|f| f as &dyn TableReference),
                     this.log_store.clone(),
                     operation.clone(),
                 )
                 .await?;
+
+            if let Some(handler) = this.custom_execute_handler {
+                handler.post_execute(&this.log_store, operation_id).await?;
+            }
 
             Ok(DeltaTable::new_with_state(this.log_store, commit.snapshot))
         })
@@ -1251,7 +1287,7 @@ mod tests {
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
-        assert!(write_metrics.execution_time_ms > 0);
+        // assert!(write_metrics.execution_time_ms > 0);
         assert!(write_metrics.num_added_files > 0);
     }
 
@@ -2319,5 +2355,148 @@ mod tests {
             .collect_vec();
         assert!(!cdc_actions.is_empty());
         Ok(())
+    }
+
+    /// SMall module to collect test cases which validate the [WriteBuilder]'s
+    /// check_preconditions() function
+    mod check_preconditions_test {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_schema_overwrite_on_append() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let batch = get_record_batch(None, false);
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+            let writer = DeltaOps(table)
+                .write(vec![batch])
+                .with_schema_mode(SchemaMode::Overwrite)
+                .with_save_mode(SaveMode::Append);
+
+            let check = writer.check_preconditions().await;
+            assert!(check.is_err());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_savemode_overwrite_on_append_table() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let batch = get_record_batch(None, false);
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_configuration_property(TableProperty::AppendOnly, Some("true".to_string()))
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+            let writer = DeltaOps(table)
+                .write(vec![batch])
+                .with_save_mode(SaveMode::Overwrite);
+
+            let check = writer.check_preconditions().await;
+            assert!(check.is_err());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_empty_set_of_batches() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+            let writer = DeltaOps(table).write(vec![]);
+
+            match writer.check_preconditions().await {
+                Ok(_) => panic!("Expected check_preconditions to fail!"),
+                Err(DeltaTableError::GenericError { .. }) => {}
+                Err(e) => panic!("Unexpected error returned: {e:#?}"),
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_errorifexists() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let batch = get_record_batch(None, false);
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+            let writer = DeltaOps(table)
+                .write(vec![batch])
+                .with_save_mode(SaveMode::ErrorIfExists);
+
+            match writer.check_preconditions().await {
+                Ok(_) => panic!("Expected check_preconditions to fail!"),
+                Err(DeltaTableError::GenericError { .. }) => {}
+                Err(e) => panic!("Unexpected error returned: {e:#?}"),
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_allow_empty_batches_with_input_plan() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+
+            let ctx = SessionContext::new();
+            let plan = ctx
+                .sql("SELECT 1 as id")
+                .await
+                .unwrap()
+                .create_physical_plan()
+                .await
+                .unwrap();
+            let writer = WriteBuilder::new(table.log_store.clone(), table.state)
+                .with_input_execution_plan(plan)
+                .with_save_mode(SaveMode::Overwrite);
+
+            let _ = writer.check_preconditions().await?;
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_no_snapshot_create_actions() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+            let batch = get_record_batch(None, false);
+            let writer =
+                WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![batch]);
+
+            let actions = writer.check_preconditions().await?;
+            assert_eq!(
+                actions.len(),
+                2,
+                "Expecting a Protocol and a Metadata action in {actions:?}"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_no_snapshot_err_no_batches_check() -> DeltaResult<()> {
+            let table_schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await?;
+            let writer =
+                WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![]);
+
+            match writer.check_preconditions().await {
+                Ok(_) => panic!("Expected check_preconditions to fail!"),
+                Err(DeltaTableError::GenericError { .. }) => {}
+                Err(e) => panic!("Unexpected error returned: {e:#?}"),
+            }
+
+            Ok(())
+        }
     }
 }

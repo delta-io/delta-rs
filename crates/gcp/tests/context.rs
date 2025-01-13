@@ -33,8 +33,8 @@ pub async fn sync_stores(
     from_store: Arc<dyn LogStore>,
     to_store: Arc<dyn LogStore>,
 ) -> Result<(), DeltaTableError> {
-    let from_store = from_store.object_store().clone();
-    let to_store = to_store.object_store().clone();
+    let from_store = from_store.object_store(None).clone();
+    let to_store = to_store.object_store(None).clone();
     // TODO if a table is copied within the same root store (i.e bucket), using copy would be MUCH more efficient
     let mut meta_stream = from_store.list(None);
     while let Some(file) = meta_stream.next().await {
@@ -76,10 +76,12 @@ impl StorageIntegration for GcpIntegration {
         let account_path = self.temp_dir.path().join("gcs.json");
         info!("account_path: {account_path:?}");
         std::fs::write(&account_path, serde_json::to_vec(&token).unwrap()).unwrap();
-        std::env::set_var(
-            "GOOGLE_SERVICE_ACCOUNT",
-            account_path.as_path().to_str().unwrap(),
-        );
+        unsafe {
+            std::env::set_var(
+                "GOOGLE_SERVICE_ACCOUNT",
+                account_path.as_path().to_str().unwrap(),
+            );
+        }
     }
 
     fn bucket_name(&self) -> String {
