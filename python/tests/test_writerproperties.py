@@ -28,6 +28,7 @@ def test_writer_properties_all_filled():
         column_properties={
             "a": ColumnProperties(
                 dictionary_enabled=True,
+                statistics_enabled="CHUNK",
                 max_statistics_size=40,
                 bloom_filter_properties=BloomFilterProperties(
                     set_bloom_filter_enabled=True, fpp=0.2, ndv=30
@@ -35,6 +36,7 @@ def test_writer_properties_all_filled():
             ),
             "b": ColumnProperties(
                 dictionary_enabled=True,
+                statistics_enabled="PAGE",
                 max_statistics_size=400,
                 bloom_filter_properties=BloomFilterProperties(
                     set_bloom_filter_enabled=False, fpp=0.2, ndv=30
