@@ -776,11 +776,12 @@ async fn execute(
         for generated_col in generated_cols {
             let col_name = generated_col.get_name();
 
-            if !df
+            if df
                 .clone()
                 .schema()
-                .field_names()
-                .contains(&col_name.to_string())
+                .field_with_unqualified_name(&col_name.to_string())
+                .is_err()
+            // implies it doesn't exist
             {
                 debug!(
                     "Adding missing generated column {} in source as placeholder",

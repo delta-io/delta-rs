@@ -100,7 +100,6 @@ impl StructTypeExt for StructType {
                 };
             }
         }
-        dbg!(generated_cols.clone());
         Ok(generated_cols)
     }
 
@@ -182,6 +181,49 @@ mod tests {
     use super::*;
     use serde_json;
     use serde_json::json;
+
+    #[test]
+    fn test_get_generated_columns() {
+        let schema: StructType = serde_json::from_value(json!(
+            {
+                "type":"struct",
+                "fields":[
+                    {"name":"id","type":"integer","nullable":true,"metadata":{}},
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{}}]
+            }
+        ))
+        .unwrap();
+        let cols = schema.get_generated_columns().unwrap();
+        assert_eq!(cols.len(), 0);
+
+        let schema: StructType = serde_json::from_value(json!(
+            {
+                "type":"struct",
+                "fields":[
+                    {"name":"id","type":"integer","nullable":true,"metadata":{}},
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"5\""}}]
+            }
+        )).unwrap();
+        let cols = schema.get_generated_columns().unwrap();
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].data_type, DataType::INTEGER);
+        assert_eq!(
+            cols[0].validation_expr,
+            "gc = 5 OR (gc IS NULL AND 5 IS NULL)"
+        );
+
+        let schema: StructType = serde_json::from_value(json!(
+            {
+                "type":"struct",
+                "fields":[
+                    {"name":"id","type":"integer","nullable":true,"metadata":{}},
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"5\""}},
+                    {"name":"id2","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"id * 10\""}},]
+            }
+        )).unwrap();
+        let cols = schema.get_generated_columns().unwrap();
+        assert_eq!(cols.len(), 2);
+    }
 
     #[test]
     fn test_get_invariants() {
