@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
-use tracing::log::*;
 
 use super::{TableReference, TransactionError};
 use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Schema};
