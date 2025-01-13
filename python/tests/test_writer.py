@@ -1726,7 +1726,7 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array: pa.array):
     assert protocol.min_reader_version == 3
     assert protocol.min_writer_version == 7
     assert protocol.reader_features == ["timestampNtz"]
-    assert protocol.writer_features == ["timestampNtz"]
+    assert set(protocol.writer_features) == set(["invariants", "timestampNtz"])
 
 
 def test_write_timestamp_ntz_on_table_with_features_not_enabled(tmp_path: pathlib.Path):

@@ -297,7 +297,9 @@ impl CreateBuilder {
             Protocol {
                 min_reader_version: 3,
                 min_writer_version: 7,
-                writer_features: Some(hashset! {WriterFeatures::TimestampWithoutTimezone}),
+                writer_features: Some(
+                    hashset! {WriterFeatures::TimestampWithoutTimezone, WriterFeatures::Invariants},
+                ),
                 reader_features: Some(hashset! {ReaderFeatures::TimestampWithoutTimezone}),
             }
         } else {
@@ -660,5 +662,44 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(String::from("value"), value);
+    }
+
+    #[tokio::test]
+    async fn test_invariants_when_timestampntz_exists() {
+        use crate::kernel::*;
+
+        let columns: Vec<StructField> = vec![
+            StructField::new("id", DataType::Primitive(PrimitiveType::Integer), false),
+            StructField::new(
+                "sunrise",
+                DataType::Primitive(PrimitiveType::TimestampNtz),
+                false,
+            ),
+        ];
+
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(columns)
+            .await
+            .expect("Failed to create the table");
+
+        // Ensure that the table can be created properly with the timestmapntz
+        assert_eq!(table.version(), 0);
+        let protocol = table.protocol().expect("Failed to load the protocol");
+
+        assert_eq!(protocol.min_reader_version, 3);
+        assert_eq!(protocol.min_writer_version, 7);
+
+        let writer_features = protocol.writer_features.as_ref().unwrap();
+        assert!(
+            writer_features.contains(&WriterFeatures::TimestampWithoutTimezone),
+            "The writer features must have TimestampeWithoutTimezone at writer:v7: {:#?}",
+            writer_features
+        );
+        assert!(
+            writer_features.contains(&WriterFeatures::Invariants),
+            "The writer features must have Invariants at writer:v7: {:#?}",
+            writer_features
+        );
     }
 }

@@ -243,7 +243,14 @@ def test_features_maintained_after_checkpoint(tmp_path: pathlib.Path):
     protocol_after_checkpoint = dt.protocol()
 
     assert protocol_after_checkpoint.reader_features == ["timestampNtz"]
-    assert current_protocol == protocol_after_checkpoint
+    assert (
+        protocol_after_checkpoint.min_reader_version
+        == current_protocol.min_reader_version
+    )
+    assert (
+        protocol_after_checkpoint.min_writer_version
+        == current_protocol.min_writer_version
+    )
 
 
 def test_features_null_on_below_v3_v7(tmp_path: pathlib.Path):

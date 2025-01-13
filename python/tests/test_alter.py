@@ -374,7 +374,7 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: pa.Table
     assert new_protocol.min_reader_version == 3
     assert new_protocol.min_writer_version == 7
     assert new_protocol.reader_features == ["timestampNtz"]
-    assert new_protocol.writer_features == ["timestampNtz"]
+    assert set(new_protocol.writer_features) == set(["timestampNtz", "invariants"])
 
 
 features = [
