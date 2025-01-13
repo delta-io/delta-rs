@@ -30,6 +30,8 @@ pub use retry_ext::ObjectStoreRetryExt;
 use std::ops::Range;
 pub use utils::*;
 
+#[cfg(feature = "log-cache")]
+pub mod cache;
 pub mod file;
 pub mod retry_ext;
 pub mod utils;
