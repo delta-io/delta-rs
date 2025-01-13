@@ -1198,6 +1198,17 @@ impl DeltaDataChecker {
         }
     }
 
+    /// Create a new DeltaDataChecker with a specified set of generated columns
+    pub fn new_with_generated_columns(generated_columns: Vec<GeneratedColumn>) -> Self {
+        Self {
+            constraints: vec![],
+            invariants: vec![],
+            generated_columns,
+            non_nullable_columns: vec![],
+            ctx: DeltaSessionContext::default().into(),
+        }
+    }
+
     /// Specify the Datafusion context
     pub fn with_session_context(mut self, context: SessionContext) -> Self {
         self.ctx = context;
