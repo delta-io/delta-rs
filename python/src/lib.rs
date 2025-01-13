@@ -52,7 +52,7 @@ use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
-use deltalake::parquet::file::properties::WriterProperties;
+use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::storage::{IORuntime, ObjectStoreRef};
@@ -1569,6 +1569,13 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
         if let Some(dictionary_enabled) = default_column_properties.dictionary_enabled {
             properties = properties.set_dictionary_enabled(dictionary_enabled);
         }
+        if let Some(statistics_enabled) = default_column_properties.statistics_enabled {
+            let enabled_statistics: EnabledStatistics = statistics_enabled
+                .parse()
+                .map_err(|err: String| DeltaTableError::Generic(err))?;
+
+            properties = properties.set_statistics_enabled(enabled_statistics);
+        }
         if let Some(max_statistics_size) = default_column_properties.max_statistics_size {
             properties = properties.set_max_statistics_size(max_statistics_size);
         }
@@ -1592,6 +1599,16 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                     properties = properties.set_column_dictionary_enabled(
                         column_name.clone().into(),
                         dictionary_enabled,
+                    );
+                }
+                if let Some(statistics_enabled) = column_prop.statistics_enabled {
+                    let enabled_statistics: EnabledStatistics = statistics_enabled
+                        .parse()
+                        .map_err(|err: String| DeltaTableError::Generic(err))?;
+
+                    properties = properties.set_column_statistics_enabled(
+                        column_name.clone().into(),
+                        enabled_statistics,
                     );
                 }
                 if let Some(bloom_filter_properties) = column_prop.bloom_filter_properties {
@@ -1922,6 +1939,7 @@ pub struct BloomFilterProperties {
 #[derive(FromPyObject)]
 pub struct ColumnProperties {
     pub dictionary_enabled: Option<bool>,
+    pub statistics_enabled: Option<String>,
     pub max_statistics_size: Option<usize>,
     pub bloom_filter_properties: Option<BloomFilterProperties>,
 }
