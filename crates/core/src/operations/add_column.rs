@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::StructField;
+use crate::kernel::{StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::merge_delta_struct;
 use crate::protocol::DeltaOperation;
@@ -85,6 +85,17 @@ impl std::future::IntoFuture for AddColumnBuilder {
             this.pre_execute(operation_id).await?;
 
             let fields_right = &StructType::new(fields.clone());
+
+            if !fields_right
+                .get_generated_columns()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                return Err(DeltaTableError::Generic(
+                    "New columns cannot be a generated column".to_string(),
+                ));
+            }
+
             let table_schema = this.snapshot.schema();
             let new_table_schema = merge_delta_struct(table_schema, fields_right)?;
 

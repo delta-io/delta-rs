@@ -20,7 +20,6 @@ use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
 use crate::{DeltaTable, DeltaTableBuilder};
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
