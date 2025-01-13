@@ -25,7 +25,6 @@
 //! ````
 
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -439,7 +438,11 @@ async fn write_execution_plan_with_predicate(
     let checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
-        DeltaDataChecker::empty()
+        debug!("Using plan schema to derive generated columns, since no shapshot was provided. Implies first write.");
+        let delta_schema: StructType = schema.as_ref().try_into()?;
+        DeltaDataChecker::new_with_generated_columns(
+            delta_schema.get_generated_columns().unwrap_or_default(),
+        )
     };
     let checker = match predicate {
         Some(pred) => {
