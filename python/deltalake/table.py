@@ -217,6 +217,7 @@ class ColumnProperties:
     def __init__(
         self,
         dictionary_enabled: Optional[bool] = None,
+        statistics_enabled: Optional[Literal["NONE", "CHUNK", "PAGE"]] = None,
         max_statistics_size: Optional[int] = None,
         bloom_filter_properties: Optional[BloomFilterProperties] = None,
     ):
@@ -224,15 +225,20 @@ class ColumnProperties:
 
         Args:
             dictionary_enabled: Enable dictionary encoding for the column.
+            statistics_enabled: Statistics level for the column.
             max_statistics_size: Maximum size of statistics for the column.
             bloom_filter_properties: Bloom Filter Properties for the column.
         """
         self.dictionary_enabled = dictionary_enabled
+        self.statistics_enabled = statistics_enabled
         self.max_statistics_size = max_statistics_size
         self.bloom_filter_properties = bloom_filter_properties
 
     def __str__(self) -> str:
-        return f"dictionary_enabled: {self.dictionary_enabled}, max_statistics_size: {self.max_statistics_size}, bloom_filter_properties: {self.bloom_filter_properties}"
+        return (
+            f"dictionary_enabled: {self.dictionary_enabled}, statistics_enabled: {self.statistics_enabled}, "
+            f"max_statistics_size: {self.max_statistics_size}, bloom_filter_properties: {self.bloom_filter_properties}"
+        )
 
 
 @dataclass(init=True)
