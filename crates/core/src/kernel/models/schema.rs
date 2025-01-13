@@ -75,11 +75,32 @@ impl StructTypeExt for StructType {
                         line: generated_col_string.to_string(),
                     }
                 })?;
-                if let Value::String(sql) = json {
-                    generated_cols.push(GeneratedColumn::new(&field_path, &sql, field.data_type()));
-                }
+                match json {
+                    Value::String(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &sql,
+                        field.data_type(),
+                    )),
+                    Value::Number(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &format!("{}", sql),
+                        field.data_type(),
+                    )),
+                    Value::Bool(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &format!("{}", sql),
+                        field.data_type(),
+                    )),
+                    Value::Array(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &format!("{:?}", sql),
+                        field.data_type(),
+                    )),
+                    _ => (), // Other types not sure what to do then
+                };
             }
         }
+        dbg!(generated_cols.clone());
         Ok(generated_cols)
     }
 
