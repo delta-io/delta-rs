@@ -92,7 +92,7 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
             })
             .collect::<HashMap<AmazonS3ConfigKey, String>>();
 
-        let (_scheme, path) =
+        let (_, path) =
             ObjectStoreScheme::parse(&s3_url).map_err(|e| DeltaTableError::GenericError {
                 source: Box::new(e),
             })?;

@@ -46,13 +46,11 @@ impl ObjectStoreFactory for AzureFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
 
-        let (_scheme, path) =
+        let (_, path) =
             ObjectStoreScheme::parse(&url).map_err(|e| DeltaTableError::GenericError {
                 source: Box::new(e),
             })?;
         let prefix = Path::parse(path)?;
-
-        // let (inner, prefix) = parse_url_opts(url, config)?;
 
         let mut builder = MicrosoftAzureBuilder::new().with_url(url.to_string());
 

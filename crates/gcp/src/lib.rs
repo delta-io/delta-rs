@@ -47,7 +47,7 @@ impl ObjectStoreFactory for GcpFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
 
-        let (_scheme, path) =
+        let (_, path) =
             ObjectStoreScheme::parse(&url).map_err(|e| DeltaTableError::GenericError {
                 source: Box::new(e),
             })?;
