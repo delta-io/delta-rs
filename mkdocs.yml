@@ -89,6 +89,7 @@ nav:
           - integrations/object-storage/s3.md
           - integrations/object-storage/s3-like.md
           - integrations/object-storage/lakefs.md
+          - integrations/object-storage/special_configuration.md
       - Arrow: integrations/delta-lake-arrow.md
       - Daft: integrations/delta-lake-daft.md
       - Dagster: integrations/delta-lake-dagster.md
