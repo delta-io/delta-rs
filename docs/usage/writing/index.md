@@ -32,7 +32,7 @@ and fill missing columns with `null`. `schema_mode="merge"` is also supported on
 You can overwrite a specific partition by using `mode="overwrite"`
 together with `partition_filters`. This will remove all files within the
 matching partition and insert your data as new files. This can only be
-done on one partition at a time. All of the input data must belong to
+done on one partition at a time. All the input data must belong to
 that partition or else the method will raise an error.
 
 ``` python
@@ -60,20 +60,27 @@ already exist, making this operation idempotent.
 
     This predicate is often called a `replaceWhere` predicate
 
-When you don’t specify the `predicate`, the overwrite save mode will replace the entire table. 
-Instead of replacing the entire table (which is costly!), you may want to overwrite only the specific parts of the table that should be changed. 
-In this case, you can use a `predicate` to overwrite only the relevant records or partitions.
+When you don’t specify the `predicate`, the overwrite save mode will replace
+the entire table. Instead of replacing the entire table (which is costly!), you
+may want to overwrite only the specific parts of the table that should be
+changed. In this case, you can use a `predicate` to overwrite only the relevant
+records or partitions.
 
 !!! note
 
-    Data written must conform to the same predicate, i.e. not contain any records that don't match the `predicate` condition, 
-    otherwise the operation will fail 
+    Data written must conform to the same predicate, i.e. not contain any records that don't match the `predicate` condition,
+    otherwise the operation will fail
 
 {{ code_example('operations', 'replace_where', ['replaceWhere'])}}
 
-## Using Writer Properites
+## Using Writer Properties
 
-You can customize the Rust Parquet writer by using the [WriterProperties](../../api/delta_writer.md#deltalake.WriterProperties). Additionally, you can apply extra configurations through the [BloomFilterProperties](../../api/delta_writer.md#deltalake.BloomFilterProperties) and [ColumnProperties](../../api/delta_writer.md#deltalake.ColumnProperties) data classes.
+You can customize the Rust Parquet writer by using the
+[WriterProperties](../../api/delta_writer.md#deltalake.WriterProperties).
+Additionally, you can apply extra configurations through the
+[BloomFilterProperties](../../api/delta_writer.md#deltalake.BloomFilterProperties)
+and [ColumnProperties](../../api/delta_writer.md#deltalake.ColumnProperties)
+data classes.
 
 
 Here's how you can do it:
