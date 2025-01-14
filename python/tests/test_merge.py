@@ -1401,3 +1401,28 @@ def test_merge_on_decimal_3033(tmp_path):
         string_predicate
         == "timestamp BETWEEN arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude BETWEEN '1505'::decimal(4, 1) AND '1505'::decimal(4, 1)"
     )
+
+
+@pytest.mark.polars
+def test_merge(tmp_path: pathlib.Path):
+    import polars as pl
+    from polars.testing import assert_frame_equal
+
+    pl.DataFrame({"id": ["a", "b", "c"], "val": [4.0, 5.0, 6.0]}).write_delta(
+        tmp_path, mode="overwrite"
+    )
+
+    df = pl.DataFrame({"id": ["a", "b", "c", "d"], "val": [4.1, 5, 6.1, 7]})
+
+    df.write_delta(
+        tmp_path,
+        mode="merge",
+        delta_merge_options={
+            "predicate": "tgt.id = src.id",
+            "source_alias": "src",
+            "target_alias": "tgt",
+        },
+    ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+    new_df = pl.read_delta(str(tmp_path))
+    assert_frame_equal(df, new_df, check_row_order=False)
