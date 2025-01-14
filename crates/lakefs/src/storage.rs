@@ -2,10 +2,11 @@
 
 use deltalake_core::storage::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::storage::{
-    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse, StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
-use object_store::parse_url_opts;
+use object_store::aws::AmazonS3Builder;
+use object_store::ObjectStoreScheme;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -61,6 +62,8 @@ pub(crate) trait S3StorageOptionsConversion {
 
 impl S3StorageOptionsConversion for LakeFSObjectStoreFactory {}
 
+impl RetryConfigParse for LakeFSObjectStoreFactory {}
+
 impl ObjectStoreFactory for LakeFSObjectStoreFactory {
     fn parse_url_opts(
         &self,
@@ -88,7 +91,23 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
                 }
             })
             .collect::<HashMap<AmazonS3ConfigKey, String>>();
-        let (inner, prefix) = parse_url_opts(&s3_url, config)?;
+
+        let (_scheme, path) =
+            ObjectStoreScheme::parse(&s3_url).map_err(|e| DeltaTableError::GenericError {
+                source: Box::new(e),
+            })?;
+        let prefix = Path::parse(path)?;
+
+        let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
+
+        for (key, value) in config.iter() {
+            builder = builder.with_config(key.clone(), value.clone());
+        }
+
+        let inner = builder
+            .with_retry(self.parse_retry_config(&options)?)
+            .build()?;
+
         let store = limit_store_handler(inner, &options);
         debug!("Initialized the object store: {store:?}");
         Ok((store, prefix))

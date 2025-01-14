@@ -8,7 +8,8 @@ use deltalake_core::storage::object_store::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::storage::{
-    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse,
+    StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::stream::BoxStream;
@@ -33,6 +34,8 @@ const STORE_NAME: &str = "DeltaS3ObjectStore";
 pub struct S3ObjectStoreFactory {}
 
 impl S3StorageOptionsConversion for S3ObjectStoreFactory {}
+
+impl RetryConfigParse for S3ObjectStoreFactory {}
 
 impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
@@ -65,7 +68,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             ));
         }
 
-        let inner = builder.build()?;
+        let inner = builder
+            .with_retry(self.parse_retry_config(&options)?)
+            .build()?;
 
         let store = aws_storage_handler(limit_store_handler(inner, &options), &s3_options)?;
         debug!("Initialized the object store: {store:?}");

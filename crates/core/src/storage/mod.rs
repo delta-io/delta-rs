@@ -7,12 +7,13 @@ use dashmap::DashMap;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
+use humantime::parse_duration;
 use lazy_static::lazy_static;
 use object_store::limit::LimitStore;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::prefix::PrefixStore;
-use object_store::{GetOptions, PutOptions, PutPayload, PutResult};
+use object_store::{GetOptions, PutOptions, PutPayload, PutResult, RetryConfig};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
 use url::Url;
@@ -345,6 +346,47 @@ pub trait ObjectStoreFactory: Send + Sync {
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
+pub trait RetryConfigParse {
+    fn parse_retry_config(&self, options: &StorageOptions) -> DeltaResult<RetryConfig> {
+        let mut retry_config = RetryConfig::default();
+        if let Some(max_retries) = options.0.get("max_retries") {
+            retry_config.max_retries = max_retries
+                .parse::<usize>()
+                .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+        }
+
+        if let Some(retry_timeout) = options.0.get("retry_timeout") {
+            retry_config.retry_timeout = parse_duration(&retry_timeout).map_err(|_| {
+                DeltaTableError::generic(format!("failed to parse \"{retry_timeout}\" as Duration"))
+            })?;
+        }
+
+        if let Some(bc_init_backoff) = options.0.get("backoff_config.init_backoff") {
+            retry_config.backoff.init_backoff = parse_duration(&bc_init_backoff).map_err(|_| {
+                DeltaTableError::generic(format!(
+                    "failed to parse \"{bc_init_backoff}\" as Duration"
+                ))
+            })?;
+        }
+
+        if let Some(bc_max_backoff) = options.0.get("backoff_config.max_backoff") {
+            retry_config.backoff.max_backoff = parse_duration(&bc_max_backoff).map_err(|_| {
+                DeltaTableError::generic(format!(
+                    "failed to parse \"{bc_max_backoff}\" as Duration"
+                ))
+            })?;
+        }
+
+        if let Some(bc_base) = options.0.get("backoff_config.base") {
+            retry_config.backoff.base = bc_base
+                .parse::<f64>()
+                .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+        }
+
+        Ok(retry_config)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DefaultObjectStoreFactory {}
 
@@ -570,6 +612,10 @@ pub mod storage_constants {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use maplit::hashmap;
+
     use super::*;
 
     #[test]
@@ -600,5 +646,28 @@ mod tests {
             String::from("LimitStore(500, InMemory)"),
             format!("{limited}")
         );
+    }
+
+    #[test]
+    fn test_retry_config_from_options() {
+        struct TestFactory {}
+        impl RetryConfigParse for TestFactory {}
+
+        let options = hashmap! {
+            "max_retries".to_string() => "100".to_string() ,
+            "retry_timeout".to_string()  => "300s".to_string() ,
+            "backoff_config.init_backoff".to_string()  => "20s".to_string() ,
+            "backoff_config.max_backoff".to_string()  => "1h".to_string() ,
+            "backoff_config.base".to_string()  =>  "50.0".to_string() ,
+        };
+        let retry_config = TestFactory {}
+            .parse_retry_config(&StorageOptions(options))
+            .unwrap();
+
+        assert_eq!(retry_config.max_retries, 100);
+        assert_eq!(retry_config.retry_timeout, Duration::from_secs(300));
+        assert_eq!(retry_config.backoff.init_backoff, Duration::from_secs(20));
+        assert_eq!(retry_config.backoff.max_backoff, Duration::from_secs(3600));
+        assert_eq!(retry_config.backoff.base, 50 as f64);
     }
 }
