@@ -243,7 +243,7 @@ mod local {
         let source_store_url: &Url = object_store_url.as_ref();
         state
             .runtime_env()
-            .register_object_store(source_store_url, source_store.object_store());
+            .register_object_store(source_store_url, source_store.object_store(None));
 
         // Execute write to the target table with the proper state
         let target_table = WriteBuilder::new(

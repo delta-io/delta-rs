@@ -60,6 +60,8 @@ const PLACEHOLDER_SUFFIX: &str = "-__PLACEHOLDER__";
 
 #[async_trait::async_trait]
 impl DataCatalog for GlueDataCatalog {
+    type Error = DataCatalogError;
+
     /// Get the table storage location from the Glue Data Catalog
     async fn get_table_storage_location(
         &self,

@@ -18,6 +18,7 @@ use deltalake_core::{
     storage::{ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError,
 };
+use uuid::Uuid;
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
 const MAX_REPAIR_RETRIES: i64 = 3;
@@ -59,6 +60,10 @@ impl S3DynamoDbLogStore {
                 .get(constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME)
                 .cloned(),
             s3_options.dynamodb_endpoint.clone(),
+            s3_options.dynamodb_region.clone(),
+            s3_options.dynamodb_access_key_id.clone(),
+            s3_options.dynamodb_secret_access_key.clone(),
+            s3_options.dynamodb_session_token.clone(),
         )
         .map_err(|err| DeltaTableError::ObjectStore {
             source: ObjectStoreError::Generic {
@@ -89,7 +94,13 @@ impl S3DynamoDbLogStore {
             return Ok(RepairLogEntryResult::AlreadyCompleted);
         }
         for retry in 0..=MAX_REPAIR_RETRIES {
-            match write_commit_entry(&self.storage, entry.version, &entry.temp_path).await {
+            match write_commit_entry(
+                self.object_store(None).as_ref(),
+                entry.version,
+                &entry.temp_path,
+            )
+            .await
+            {
                 Ok(()) => {
                     debug!("Successfully committed entry for version {}", entry.version);
                     return self.try_complete_entry(entry, true).await;
@@ -188,7 +199,7 @@ impl LogStore for S3DynamoDbLogStore {
         if let Ok(Some(entry)) = entry {
             self.repair_entry(&entry).await?;
         }
-        read_commit_entry(&self.storage, version).await
+        read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
     /// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
@@ -200,6 +211,7 @@ impl LogStore for S3DynamoDbLogStore {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        _operation_id: Uuid,
     ) -> Result<(), TransactionError> {
         let tmp_commit = match commit_or_bytes {
             CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
@@ -249,6 +261,7 @@ impl LogStore for S3DynamoDbLogStore {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        _operation_id: Uuid,
     ) -> Result<(), TransactionError> {
         let tmp_commit = match commit_or_bytes {
             CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
@@ -274,7 +287,7 @@ impl LogStore for S3DynamoDbLogStore {
                 },
             })?;
 
-        abort_commit_entry(&self.storage, version, &tmp_commit).await?;
+        abort_commit_entry(self.object_store(None).as_ref(), version, &tmp_commit).await?;
         Ok(())
     }
 
@@ -300,7 +313,7 @@ impl LogStore for S3DynamoDbLogStore {
         get_earliest_version(self, current_version).await
     }
 
-    fn object_store(&self) -> ObjectStoreRef {
+    fn object_store(&self, _operation_id: Option<Uuid>) -> ObjectStoreRef {
         self.storage.clone()
     }
 

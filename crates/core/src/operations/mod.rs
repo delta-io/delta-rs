@@ -6,7 +6,10 @@
 //! the operations' behaviors and will return an updated table potentially in conjunction
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
+use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
+use uuid::Uuid;
 
 use add_feature::AddTableFeatureBuilder;
 #[cfg(feature = "datafusion")]
@@ -28,6 +31,7 @@ use self::{
     merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::logstore::LogStoreRef;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
@@ -62,10 +66,57 @@ pub mod update;
 pub mod write;
 pub mod writer;
 
+#[async_trait]
+pub trait CustomExecuteHandler: Send + Sync {
+    // Execute arbitrary code at the start of a delta operation
+    async fn pre_execute(&self, log_store: &LogStoreRef, operation_id: Uuid) -> DeltaResult<()>;
+
+    // Execute arbitrary code at the end of a delta operation
+    async fn post_execute(&self, log_store: &LogStoreRef, operation_id: Uuid) -> DeltaResult<()>;
+
+    // Execute arbitrary code at the start of the post commit hook
+    async fn before_post_commit_hook(
+        &self,
+        log_store: &LogStoreRef,
+        file_operation: bool,
+        operation_id: Uuid,
+    ) -> DeltaResult<()>;
+
+    // Execute arbitrary code at the end of the post commit hook
+    async fn after_post_commit_hook(
+        &self,
+        log_store: &LogStoreRef,
+        file_operation: bool,
+        operation_id: Uuid,
+    ) -> DeltaResult<()>;
+}
+
 #[allow(unused)]
 /// The [Operation] trait defines common behaviors that all operations builders
 /// should have consistent
-pub(crate) trait Operation<State>: std::future::IntoFuture {}
+pub(crate) trait Operation<State>: std::future::IntoFuture {
+    fn log_store(&self) -> &LogStoreRef;
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>>;
+    async fn pre_execute(&self, operation_id: Uuid) -> DeltaResult<()> {
+        if let Some(handler) = self.get_custom_execute_handler() {
+            handler.pre_execute(self.log_store(), operation_id).await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn post_execute(&self, operation_id: Uuid) -> DeltaResult<()> {
+        if let Some(handler) = self.get_custom_execute_handler() {
+            handler.post_execute(self.log_store(), operation_id).await
+        } else {
+            Ok(())
+        }
+    }
+
+    fn get_operation_id(&self) -> uuid::Uuid {
+        Uuid::new_v4()
+    }
+}
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
@@ -316,7 +367,7 @@ mod datafusion_utils {
     use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum Expression {
         /// Datafusion Expression
         DataFusion(Expr),

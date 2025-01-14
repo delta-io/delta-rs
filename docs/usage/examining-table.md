@@ -16,12 +16,20 @@ The delta log maintains basic metadata about a table, including:
 Get metadata from a table with the
 [DeltaTable.metadata()][deltalake.table.DeltaTable.metadata] method:
 
-``` python
->>> from deltalake import DeltaTable
->>> dt = DeltaTable("../rust/tests/data/simple_table")
->>> dt.metadata()
-Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})
-```
+=== "Python"
+    ``` python
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.metadata()
+    Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})
+    ```
+=== "Rust"
+    ```rust
+    let table = deltalake::open_table("../rust/tests/data/simple_table").await?;
+    let metadata = table.metadata()?;
+    println!("metadata: {:?}", metadata);
+    ```
+
 
 ## Schema
 
@@ -32,30 +40,50 @@ PyArrow schema. The first allows you to introspect any column-level
 metadata stored in the schema, while the latter represents the schema
 the table will be loaded into.
 
-Use [DeltaTable.schema][deltalake.table.DeltaTable.schema] to retrieve the delta lake schema:
 
-``` python
->>> from deltalake import DeltaTable
->>> dt = DeltaTable("../rust/tests/data/simple_table")
->>> dt.schema()
-Schema([Field(id, PrimitiveType("long"), nullable=True)])
-```
 
-These schemas have a JSON representation that can be retrieved. To
-reconstruct from json, use
-[DeltaTable.schema.to_json()][deltalake.schema.Schema.to_json].
+=== "Python"
+    Use [DeltaTable.schema][deltalake.table.DeltaTable.schema] to retrieve the delta lake schema:
+    ``` python
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.schema()
+    Schema([Field(id, PrimitiveType("long"), nullable=True)])
+    ```
+=== "Rust"
+    Use `DeltaTable::get_schema` to retrieve the delta lake schema
+    ```rust
+    let table = deltalake::open_table("./data/simple_table").await?;
+    let schema = table.get_schema()?;
+    println!("schema: {:?}", schema);
+    ```
+These schemas have a JSON representation that can be retrieved. 
 
-``` python
->>> dt.schema().to_json()
-'{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
-```
+=== "Python"
+    To reconstruct from json, use [DeltaTable.schema.to_json()][deltalake.schema.Schema.to_json].
+    ``` python
+    >>> dt.schema().to_json()
+    '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
+    ```
+=== "Rust"
+    Use `serde_json` to get the schema as a json.
+    ```rust
+    println!("{}", serde_json::to_string_pretty(&schema)?);
+    ```
+It is also possible to retrieve the Arrow schema:
+=== "Python"
 
-Use [DeltaTable.schema.to_pyarrow()][deltalake.schema.Schema.to_pyarrow] to retrieve the PyArrow schema:
+    Use [DeltaTable.schema.to_pyarrow()][deltalake.schema.Schema.to_pyarrow] to retrieve the PyArrow schema:
 
-``` python
->>> dt.schema().to_pyarrow()
-id: int64
-```
+    ``` python
+    >>> dt.schema().to_pyarrow()
+    id: int64
+    ```
+=== "Rust"
+    ```rust
+    let arrow_schema = table.snapshot()?.arrow_schema()?;
+    println!("arrow_schema: {:?}", schema);
+    ```
 
 ## History
 
@@ -73,22 +101,27 @@ default, unless otherwise specified by the table configuration
 
 
 To view the available history, use `DeltaTable.history`:
+=== "Python"
+    ``` python
+    from deltalake import DeltaTable
 
-``` python
-from deltalake import DeltaTable
+    dt = DeltaTable("../rust/tests/data/simple_table")
+    dt.history()
+    ```
 
-dt = DeltaTable("../rust/tests/data/simple_table")
-dt.history()
-```
-
-```
-[{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False},
- {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False},
- {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False},
- {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False},
- {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
-```
-
+    ```
+    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False},
+    {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False},
+    {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False},
+    {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False},
+    {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
+    ```
+=== "Rust"
+    ```rust
+    let table = deltalake::open_table("../rust/tests/data/simple_table").await?;
+    let history = table.history(None).await?;
+    println!("Table history: {:#?}", history);
+    ```
 ## Current Add Actions
 
 The active state for a delta table is determined by the Add actions,
@@ -96,21 +129,36 @@ which provide the list of files that are part of the table and metadata
 about them, such as creation time, size, and statistics. You can get a
 data frame of the add actions data using `DeltaTable.get_add_actions`:
 
-``` python
->>> from deltalake import DeltaTable
->>> dt = DeltaTable("../rust/tests/data/delta-0.8.0")
->>> dt.get_add_actions(flatten=True).to_pandas()
-                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
-0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
-1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
-```
+=== "Python"
+    ``` python
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0")
+    >>> dt.get_add_actions(flatten=True).to_pandas()
+                                                        path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
+    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
+    1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
+    ```
 
+=== "Rust"
+    ```rust
+    let table = deltalake::open_table("./data/simple_table").await?;
+    let actions = table.snapshot()?.add_actions_table(true)?;
+    println!("{}", pretty_format_batches(&vec![actions])?);
+    ```
 This works even with past versions of the table:
 
-``` python
->>> dt = DeltaTable("../rust/tests/data/delta-0.8.0", version=0)
->>> dt.get_add_actions(flatten=True).to_pandas()
-                                                path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
-0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
-1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4
-```
+=== "Python"
+    ``` python
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0", version=0)
+    >>> dt.get_add_actions(flatten=True).to_pandas()
+                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
+    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
+    1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4
+    ```
+=== "Rust"
+    ```rust
+    let mut table = deltalake::open_table("./data/simple_table").await?;
+    table.load_version(0).await?;
+    let actions = table.snapshot()?.add_actions_table(true)?;
+    println!("{}", pretty_format_batches(&vec![actions])?);
+    ```

@@ -1,6 +1,8 @@
 use arrow_schema::ArrowError;
+use deltalake::datafusion::error::DataFusionError;
 use deltalake::protocol::ProtocolError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
 };
@@ -79,6 +81,10 @@ fn checkpoint_to_py(err: ProtocolError) -> PyErr {
     }
 }
 
+fn datafusion_to_py(err: DataFusionError) -> PyErr {
+    DeltaError::new_err(err.to_string())
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum PythonError {
     #[error("Error in delta table")]
@@ -89,6 +95,16 @@ pub enum PythonError {
     Arrow(#[from] ArrowError),
     #[error("Error in checkpoint")]
     Protocol(#[from] ProtocolError),
+    #[error("Error in data fusion")]
+    DataFusion(#[from] DataFusionError),
+    #[error("Lock acquisition error")]
+    ThreadingError(String),
+}
+
+impl<T> Into<PythonError> for std::sync::PoisonError<T> {
+    fn into(self) -> PythonError {
+        PythonError::ThreadingError(self.to_string())
+    }
 }
 
 impl From<PythonError> for pyo3::PyErr {
@@ -98,6 +114,8 @@ impl From<PythonError> for pyo3::PyErr {
             PythonError::ObjectStore(err) => object_store_to_py(err),
             PythonError::Arrow(err) => arrow_to_py(err),
             PythonError::Protocol(err) => checkpoint_to_py(err),
+            PythonError::DataFusion(err) => datafusion_to_py(err),
+            PythonError::ThreadingError(err) => PyRuntimeError::new_err(err),
         }
     }
 }

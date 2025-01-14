@@ -5,7 +5,7 @@ use datafusion_sql::parser::{DFParser, Statement as DFStatement};
 use datafusion_sql::sqlparser::ast::{ObjectName, Value};
 use datafusion_sql::sqlparser::dialect::{keywords::Keyword, Dialect, GenericDialect};
 use datafusion_sql::sqlparser::parser::{Parser, ParserError};
-use datafusion_sql::sqlparser::tokenizer::{Token, TokenWithLocation, Tokenizer};
+use datafusion_sql::sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -129,7 +129,7 @@ impl<'a> DeltaParser<'a> {
     }
 
     /// Report an unexpected token
-    fn expected<T>(&self, expected: &str, found: TokenWithLocation) -> Result<T, ParserError> {
+    fn expected<T>(&self, expected: &str, found: TokenWithSpan) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
@@ -224,9 +224,9 @@ impl<'a> DeltaParser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_sql::sqlparser::ast::Ident;
-
     use super::*;
+    use datafusion_sql::sqlparser::ast::Ident;
+    use datafusion_sql::sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DeltaParser::parse_sql(sql)?;
@@ -245,6 +245,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: None,
             dry_run: false,
@@ -255,6 +256,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: Some(10),
             dry_run: false,
@@ -265,6 +267,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: Some(10),
             dry_run: true,
@@ -275,6 +278,7 @@ mod tests {
             table: ObjectName(vec![Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             retention_hours: None,
             dry_run: true,

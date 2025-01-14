@@ -14,7 +14,7 @@ use arrow_array::{
 use arrow_cast::cast;
 use arrow_cast::parse::Parser;
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
-use delta_kernel::features::ColumnMappingMode;
+use delta_kernel::table_features::{validate_schema_column_mapping, ColumnMappingMode};
 use itertools::Itertools;
 
 use super::state::DeltaTableState;
@@ -171,6 +171,8 @@ impl DeltaTableState {
             })
             .collect::<HashMap<&str, _>>();
 
+        validate_schema_column_mapping(self.schema(), column_mapping_mode)?;
+
         let physical_name_to_logical_name = match column_mapping_mode {
             ColumnMappingMode::None => HashMap::with_capacity(0), // No column mapping, no need for this HashMap
             ColumnMappingMode::Id | ColumnMappingMode::Name => metadata
@@ -184,12 +186,13 @@ impl DeltaTableState {
                             "Invalid partition column {0}",
                             name
                         )))?
-                        .physical_name(column_mapping_mode)?
+                        .physical_name()
                         .to_string();
                     Ok((physical_name, name.as_str()))
                 })
                 .collect::<Result<HashMap<String, &str>, DeltaTableError>>()?,
         };
+
         // Append values
         for action in files {
             for (name, maybe_value) in action.partition_values.iter() {

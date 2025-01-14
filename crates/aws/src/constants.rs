@@ -7,11 +7,25 @@ use std::time::Duration;
 
 /// Custom S3 endpoint.
 pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
-/// Custom DynamoDB endpoint.
+
+/// Custom DynamoDB
 ///
 /// If DynamoDB endpoint is not supplied, will use S3 endpoint (AWS_ENDPOINT_URL)
 /// If it is supplied, this endpoint takes precedence over the global endpoint set in AWS_ENDPOINT_URL for DynamoDB
 pub const AWS_ENDPOINT_URL_DYNAMODB: &str = "AWS_ENDPOINT_URL_DYNAMODB";
+/// If DynamoDB region is different from S3 region, set this to the DynamoDB region.
+/// If it is supplied, this region takes precedence over the global region set in AWS_REGION for DynamoDB
+pub const AWS_REGION_DYNAMODB: &str = "AWS_REGION_DYNAMODB";
+/// If DynamoDB access key is different from S3 access key, set this to the DynamoDB access key.
+/// If it is supplied, this access key takes precedence over the global access key set in AWS_ACCESS_KEY_ID for DynamoDB
+pub const AWS_ACCESS_KEY_ID_DYNAMODB: &str = "AWS_ACCESS_KEY_ID_DYNAMODB";
+/// If DynamoDB secret key is different from S3 secret key, set this to the DynamoDB secret key.
+/// If it is supplied, this secret key takes precedence over the global secret key set in AWS_SECRET_ACCESS_KEY for DynamoDB
+pub const AWS_SECRET_ACCESS_KEY_DYNAMODB: &str = "AWS_SECRET_ACCESS_KEY_DYNAMODB";
+/// If DynamoDB session token is different from S3 session token, set this to the DynamoDB session token.
+/// If it is supplied, this session token takes precedence over the global session token set in AWS_SESSION_TOKEN for DynamoDB
+pub const AWS_SESSION_TOKEN_DYNAMODB: &str = "AWS_SESSION_TOKEN_DYNAMODB";
+
 /// The AWS region.
 pub const AWS_REGION: &str = "AWS_REGION";
 /// The AWS profile.
@@ -96,6 +110,7 @@ pub const AWS_FORCE_CREDENTIAL_LOAD: &str = "AWS_FORCE_CREDENTIAL_LOAD";
 /// The list of option keys owned by the S3 module.
 /// Option keys not contained in this list will be added to the `extra_opts`
 /// field of [crate::storage::s3::S3StorageOptions].
+#[allow(deprecated)]
 pub const S3_OPTS: &[&str] = &[
     AWS_ENDPOINT_URL,
     AWS_ENDPOINT_URL_DYNAMODB,

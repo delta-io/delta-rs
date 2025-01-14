@@ -351,6 +351,11 @@ def write_deltalake(
                 "Predicate can only be used with Rust engine, use partition_filters instead. PyArrow engine will be removed in 1.0"
             )
 
+        if table_uri.startswith("lakefs://"):
+            raise NotImplementedError(
+                "LakeFS object_store is not supported for PyArrow engine. Set engine to 'rust'."
+            )
+
         if large_dtypes:
             arrow_schema_conversion_mode = "large"
         else:

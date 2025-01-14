@@ -6,6 +6,7 @@ use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use delta_kernel::AsAny;
 use futures::{StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
@@ -15,6 +16,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use url::Url;
+use uuid::Uuid;
 
 use crate::kernel::log_segment::PathExt;
 use crate::kernel::Action;
@@ -162,6 +164,16 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
+/// The next commit that's available from underlying storage
+///
+#[derive(Debug)]
+pub enum PeekCommit {
+    /// The next commit version and associated actions
+    New(i64, Vec<Action>),
+    /// Provided DeltaVersion is up to date
+    UpToDate,
+}
+
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -182,7 +194,7 @@ pub struct LogStoreConfig {
 ///   `get_latest_version` must return a version >= `v`, i.e. the underlying file system entry must
 ///   become visible immediately.
 #[async_trait::async_trait]
-pub trait LogStore: Sync + Send {
+pub trait LogStore: Send + Sync + AsAny {
     /// Return the name of this LogStore implementation
     fn name(&self) -> String;
 
@@ -202,6 +214,7 @@ pub trait LogStore: Sync + Send {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        operation_id: Uuid,
     ) -> Result<(), TransactionError>;
 
     /// Abort the commit entry for the given version.
@@ -209,6 +222,7 @@ pub trait LogStore: Sync + Send {
         &self,
         version: i64,
         commit_or_bytes: CommitOrBytes,
+        operation_id: Uuid,
     ) -> Result<(), TransactionError>;
 
     /// Find latest version currently stored in the delta log.
@@ -217,8 +231,21 @@ pub trait LogStore: Sync + Send {
     /// Find earliest version currently stored in the delta log.
     async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64>;
 
-    /// Get underlying object store.
-    fn object_store(&self) -> Arc<dyn ObjectStore>;
+    /// Get the list of actions for the next commit
+    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
+        let next_version = current_version + 1;
+        let commit_log_bytes = match self.read_commit_entry(next_version).await {
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => return Ok(PeekCommit::UpToDate),
+            Err(err) => Err(err),
+        }?;
+
+        let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
+        Ok(PeekCommit::New(next_version, actions.unwrap()))
+    }
+
+    /// Get object store, can pass operation_id for object stores linked to an operation
+    fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
     /// [Path] to Delta log
     fn to_uri(&self, location: &Path) -> String {
@@ -238,18 +265,23 @@ pub trait LogStore: Sync + Send {
 
     /// Check if the location is a delta table location
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
-        // TODO We should really be using HEAD here, but this fails in windows tests
-        let object_store = self.object_store();
+        let object_store = self.object_store(None);
         let mut stream = object_store.list(Some(self.log_path()));
-        if let Some(res) = stream.next().await {
+        while let Some(res) = stream.next().await {
             match res {
-                Ok(meta) => Ok(meta.location.is_commit_file()),
-                Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-                Err(err) => Err(err)?,
+                Ok(meta) => {
+                    // crc files are valid files according to the protocol
+                    if meta.location.is_crc_file() {
+                        continue;
+                    }
+                    return Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file());
+                }
+                Err(ObjectStoreError::NotFound { .. }) => return Ok(false),
+                Err(err) => return Err(err.into()),
             }
-        } else {
-            Ok(false)
         }
+
+        Ok(false)
     }
 
     #[cfg(feature = "datafusion")]
@@ -421,7 +453,7 @@ pub async fn get_latest_version(
         let mut max_version: i64 = version_start;
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(max_version);
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
         let mut files = object_store.list_with_offset(prefix, &offset_path);
 
         while let Some(obj_meta) = files.next().await {
@@ -466,7 +498,7 @@ pub async fn get_earliest_version(
         let mut min_version: i64 = version_start;
         let prefix = Some(log_store.log_path());
         let offset_path = commit_uri_from_version(version_start);
-        let object_store = log_store.object_store();
+        let object_store = log_store.object_store(None);
 
         // Manually filter until we can provide direction in https://github.com/apache/arrow-rs/issues/6274
         let mut files = object_store
@@ -577,7 +609,7 @@ mod tests {
         // delta table (it shouldn't be).
         let payload = PutPayload::from_static(b"test-drivin");
         let _put = store
-            .object_store()
+            .object_store(None)
             .put_opts(
                 &Path::from("_delta_log/_commit_failed.tmp"),
                 payload,
@@ -589,6 +621,129 @@ mod tests {
             .is_delta_table_location()
             .await
             .expect("Failed to look at table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_commit() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save a commit to the transaction log
+        let payload = PutPayload::from_static(b"test");
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/0.json"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_checkpoint() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save a "checkpoint" file to the transaction log directory
+        let payload = PutPayload::from_static(b"test");
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/0.checkpoint.parquet"),
+                payload,
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+    }
+
+    #[tokio::test]
+    async fn test_is_location_a_table_crc() {
+        use object_store::path::Path;
+        use object_store::{PutOptions, PutPayload};
+        let location = Url::parse("memory://table").unwrap();
+        let store =
+            logstore_for(location, HashMap::default(), None).expect("Failed to get logstore");
+        assert!(!store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
+
+        // Save .crc files to the transaction log directory (all 3 formats)
+        let payload = PutPayload::from_static(b"test");
+
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/.0.crc.crc"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/.0.json.crc"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/0.crc"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        // Now add a commit
+        let _put = store
+            .object_store(None)
+            .put_opts(
+                &Path::from("_delta_log/0.json"),
+                payload.clone(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("Failed to put");
+
+        // The table should be considered a delta table
+        assert!(store
+            .is_delta_table_location()
+            .await
+            .expect("Failed to identify table"));
     }
 }
 

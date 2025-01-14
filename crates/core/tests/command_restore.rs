@@ -74,8 +74,8 @@ fn get_record_batch() -> RecordBatch {
     let mut rng = rand::thread_rng();
 
     for _ in 0..10 {
-        id_vec.push(rng.gen());
-        value_vec.push(rng.gen());
+        id_vec.push(rng.r#gen());
+        value_vec.push(rng.r#gen());
     }
 
     let schema = ArrowSchema::new(vec![

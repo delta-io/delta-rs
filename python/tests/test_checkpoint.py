@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaError
 from deltalake.table import PostCommitHookProperties
 
 
@@ -30,6 +31,45 @@ def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     assert last_checkpoint_path.exists()
     assert checkpoint_path.exists()
+
+
+def test_checkpoint_without_files(tmp_path: pathlib.Path, sample_data: pa.Table):
+    tmp_table_path = tmp_path / "path" / "to" / "table"
+    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
+    last_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000000.checkpoint.parquet"
+    )
+
+    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
+    sample_data = sample_data.drop(["binary"])
+    write_deltalake(
+        str(tmp_table_path),
+        sample_data,
+        configuration={"delta.checkpointInterval": "2"},
+    )
+
+    assert not checkpoint_path.exists()
+
+    delta_table = DeltaTable(str(tmp_table_path), without_files=True)
+    with pytest.raises(
+        DeltaError,
+        match="Table has not yet been initialized with files, therefore creating a checkpoint is not possible.",
+    ):
+        delta_table.create_checkpoint()
+
+    for i in range(3):
+        write_deltalake(delta_table, sample_data, mode="append")
+
+    assert not checkpoint_path.exists()
+
+    delta_table = DeltaTable(str(tmp_table_path), without_files=False)
+    delta_table.create_checkpoint()
+
+    assert checkpoint_path.exists()
+    last_checkpoint_path = (
+        tmp_table_path / "_delta_log" / "00000000000000000003.checkpoint.parquet"
+    )
+    assert last_checkpoint_path.exists()
 
 
 def setup_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -468,3 +508,34 @@ def test_checkpoint_with_nullable_false(tmp_path: pathlib.Path):
     assert checkpoint_path.exists()
 
     assert DeltaTable(str(tmp_table_path)).to_pyarrow_table() == data
+
+
+@pytest.mark.pandas
+def test_checkpoint_with_multiple_writes(tmp_path: pathlib.Path):
+    import pandas as pd
+
+    write_deltalake(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "a": ["a"],
+                "b": [3],
+            }
+        ),
+    )
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+    assert dt.version() == 0
+    df = pd.DataFrame(
+        {
+            "a": ["a"],
+            "b": [100],
+        }
+    )
+    write_deltalake(tmp_path, df, mode="overwrite")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1
+    new_df = dt.to_pandas()
+    print(dt.to_pandas())
+    assert len(new_df) == 1, "We overwrote! there should only be one row"

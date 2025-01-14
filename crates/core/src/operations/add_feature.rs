@@ -1,10 +1,14 @@
 //! Enable table features
 
+use std::sync::Arc;
+
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{ReaderFeatures, TableFeatures, WriterFeatures};
+use super::{CustomExecuteHandler, Operation};
+use crate::kernel::TableFeatures;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -23,9 +27,17 @@ pub struct AddTableFeatureBuilder {
     log_store: LogStoreRef,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for AddTableFeatureBuilder {}
+impl super::Operation<()> for AddTableFeatureBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl AddTableFeatureBuilder {
     /// Create a new builder
@@ -36,6 +48,7 @@ impl AddTableFeatureBuilder {
             snapshot,
             log_store,
             commit_properties: CommitProperties::default(),
+            custom_execute_handler: None,
         }
     }
 
@@ -63,6 +76,12 @@ impl AddTableFeatureBuilder {
         self.commit_properties = commit_properties;
         self
     }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
 }
 
 impl std::future::IntoFuture for AddTableFeatureBuilder {
@@ -77,8 +96,11 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             let name = if this.name.is_empty() {
                 return Err(DeltaTableError::Generic("No features provided".to_string()));
             } else {
-                this.name
+                &this.name
             };
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
+
             let (reader_features, writer_features): (
                 Vec<Option<ReaderFeatures>>,
                 Vec<Option<WriterFeatures>>,
@@ -104,14 +126,20 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             protocol = protocol.with_reader_features(reader_features);
             protocol = protocol.with_writer_features(writer_features);
 
-            let operation = DeltaOperation::AddFeature { name };
+            let operation = DeltaOperation::AddFeature {
+                name: name.to_vec(),
+            };
 
             let actions = vec![protocol.into()];
 
-            let commit = CommitBuilder::from(this.commit_properties)
+            let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions)
+                .with_operation_id(operation_id)
+                .with_post_commit_hook_handler(this.get_custom_execute_handler())
                 .build(Some(&this.snapshot), this.log_store.clone(), operation)
                 .await?;
+
+            this.post_execute(operation_id).await?;
 
             Ok(DeltaTable::new_with_state(
                 this.log_store,
@@ -124,13 +152,13 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
-    use delta_kernel::DeltaResult;
-
     use crate::{
         kernel::TableFeatures,
         writer::test_utils::{create_bare_table, get_record_batch},
         DeltaOps,
     };
+    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+    use delta_kernel::DeltaResult;
 
     #[tokio::test]
     async fn add_feature() -> DeltaResult<()> {
@@ -153,7 +181,7 @@ mod tests {
             .unwrap()
             .writer_features
             .unwrap_or_default()
-            .contains(&crate::kernel::WriterFeatures::ChangeDataFeed));
+            .contains(&WriterFeatures::ChangeDataFeed));
 
         let result = DeltaOps(result)
             .add_feature()
@@ -167,12 +195,12 @@ mod tests {
             .writer_features
             .clone()
             .unwrap_or_default()
-            .contains(&crate::kernel::WriterFeatures::DeletionVectors));
+            .contains(&WriterFeatures::DeletionVectors));
         assert!(&current_protocol
             .reader_features
             .clone()
             .unwrap_or_default()
-            .contains(&crate::kernel::ReaderFeatures::DeletionVectors));
+            .contains(&ReaderFeatures::DeletionVectors));
         assert_eq!(result.version(), 2);
         Ok(())
     }

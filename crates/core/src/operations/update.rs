@@ -43,13 +43,17 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
+use uuid::Uuid;
 
-use super::write::{write_execution_plan, write_execution_plan_cdc};
 use super::{
     datafusion_utils::Expression,
     transaction::{CommitBuilder, CommitProperties},
 };
 use super::{transaction::PROTOCOL, write::WriterStatsConfig};
+use super::{
+    write::{write_execution_plan, write_execution_plan_cdc},
+    CustomExecuteHandler, Operation,
+};
 use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
@@ -95,6 +99,7 @@ pub struct UpdateBuilder {
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 #[derive(Default, Serialize, Debug)]
@@ -114,7 +119,14 @@ pub struct UpdateMetrics {
     pub scan_time_ms: u64,
 }
 
-impl super::Operation<()> for UpdateBuilder {}
+impl super::Operation<()> for UpdateBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
@@ -128,6 +140,7 @@ impl UpdateBuilder {
             writer_properties: None,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
+            custom_execute_handler: None,
         }
     }
 
@@ -178,9 +191,15 @@ impl UpdateBuilder {
         self.safe_cast = safe_cast;
         self
     }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct UpdateMetricExtensionPlanner {}
 
 #[async_trait]
@@ -228,6 +247,8 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
+    operation_id: Uuid,
+    handle: Option<&Arc<dyn CustomExecuteHandler>>,
 ) -> DeltaResult<(DeltaTableState, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -238,9 +259,21 @@ async fn execute(
     // For files that were identified, scan for records that match the predicate,
     // perform update operations, and then commit add and remove actions to
     // the log.
-    if !&snapshot.load_config().require_files {
-        return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
-    }
+
+    // NOTE: The optimize_projections rule is being temporarily disabled because it errors with
+    // our schemas for Lists due to issues discussed
+    // [here](https://github.com/delta-io/delta-rs/pull/2886#issuecomment-2481550560>
+    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = state
+        .optimizers()
+        .iter()
+        .filter(|rule| {
+            rule.name() != "optimize_projections" && rule.name() != "simplify_expressions"
+        })
+        .cloned()
+        .collect();
+    let state = SessionStateBuilder::from(state)
+        .with_optimizer_rules(rules)
+        .build();
 
     let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
         extension_planner: UpdateMetricExtensionPlanner {},
@@ -323,7 +356,6 @@ async fn execute(
             enable_pushdown: false,
         }),
     });
-
     let df_with_predicate_and_metrics = DataFrame::new(state.clone(), plan_with_metrics);
 
     let expressions: Vec<Expr> = df_with_predicate_and_metrics
@@ -343,6 +375,8 @@ async fn execute(
         })
         .collect::<DeltaResult<Vec<Expr>>>()?;
 
+    //let updated_df = df_with_predicate_and_metrics.clone();
+    // Disabling the select allows the coerce test to pass, still not sure why
     let updated_df = df_with_predicate_and_metrics.select(expressions.clone())?;
     let physical_plan = updated_df.clone().create_physical_plan().await?;
     let writer_stats_config = WriterStatsConfig::new(
@@ -360,7 +394,7 @@ async fn execute(
         state.clone(),
         physical_plan.clone(),
         table_partition_cols.clone(),
-        log_store.object_store().clone(),
+        log_store.object_store(Some(operation_id)).clone(),
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties.clone(),
@@ -423,7 +457,7 @@ async fn execute(
                     state,
                     df.create_physical_plan().await?,
                     table_partition_cols,
-                    log_store.object_store(),
+                    log_store.object_store(Some(operation_id)),
                     Some(snapshot.table_config().target_file_size() as usize),
                     None,
                     writer_properties,
@@ -441,6 +475,8 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
+        .with_operation_id(operation_id)
+        .with_post_commit_hook_handler(handle.cloned())
         .build(Some(&snapshot), log_store, operation)
         .await?;
 
@@ -453,10 +489,16 @@ impl std::future::IntoFuture for UpdateBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
         Box::pin(async move {
             PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
             PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+
+            if !&this.snapshot.load_config().require_files {
+                return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
+            }
+
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
             let state = this.state.unwrap_or_else(|| {
                 let session: SessionContext = DeltaSessionContext::default().into();
@@ -476,8 +518,14 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.writer_properties,
                 this.commit_properties,
                 this.safe_cast,
+                operation_id,
+                this.custom_execute_handler.as_ref(),
             )
             .await?;
+
+            if let Some(handler) = this.custom_execute_handler {
+                handler.post_execute(&this.log_store, operation_id).await?;
+            }
 
             Ok((
                 DeltaTable::new_with_state(this.log_store, snapshot),
@@ -501,7 +549,7 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
     use crate::{DeltaTable, TableProperty};
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Int32Array, ListArray, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -986,6 +1034,137 @@ mod tests {
             .with_update("value", lit("a string"))
             .await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_with_array() {
+        let schema = StructType::new(vec![
+            StructField::new(
+                "id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "temp".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "items".to_string(),
+                DeltaDataType::Array(Box::new(crate::kernel::ArrayType::new(
+                    DeltaDataType::INTEGER,
+                    false,
+                ))),
+                true,
+            ),
+        ]);
+        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+
+        // Create the first batch
+        let arrow_field = Field::new("element", DataType::Int32, false);
+        let list_array = ListArray::new_null(arrow_field.clone().into(), 2);
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(0), Some(1)])),
+                Arc::new(Int32Array::from(vec![Some(30), Some(31)])),
+                Arc::new(list_array),
+            ],
+        )
+        .expect("Failed to create record batch");
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+        // Completed the first creation/write
+
+        use arrow::array::{Int32Builder, ListBuilder};
+        let mut new_items_builder =
+            ListBuilder::new(Int32Builder::new()).with_field(arrow_field.clone());
+        new_items_builder.append_value([Some(100)]);
+        let new_items = ScalarValue::List(Arc::new(new_items_builder.finish()));
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("id").eq(lit(1)))
+            .with_update("items", lit(new_items))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+    }
+
+    /// Lists coming in from the Python bindings need to be parsed as SQL expressions by the update
+    /// and therefore this test emulates their behavior to ensure that the lists are being turned
+    /// into expressions for the update operation correctly
+    #[tokio::test]
+    async fn test_update_with_array_that_must_be_coerced() {
+        let _ = pretty_env_logger::try_init();
+        let schema = StructType::new(vec![
+            StructField::new(
+                "id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "temp".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "items".to_string(),
+                DeltaDataType::Array(Box::new(crate::kernel::ArrayType::new(
+                    DeltaDataType::LONG,
+                    true,
+                ))),
+                true,
+            ),
+        ]);
+        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+
+        // Create the first batch
+        let arrow_field = Field::new("element", DataType::Int64, true);
+        let list_array = ListArray::new_null(arrow_field.clone().into(), 2);
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(0), Some(1)])),
+                Arc::new(Int32Array::from(vec![Some(30), Some(31)])),
+                Arc::new(list_array),
+            ],
+        )
+        .expect("Failed to create record batch");
+        let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), 1);
+        // Completed the first creation/write
+
+        let (table, _metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("id").eq(lit(1)))
+            .with_update("items", "[100]".to_string())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
     }
 
     #[tokio::test]

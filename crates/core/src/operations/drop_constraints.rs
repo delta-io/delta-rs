@@ -1,8 +1,11 @@
 //! Drop a constraint from a table
 
+use std::sync::Arc;
+
 use futures::future::BoxFuture;
 
 use super::transaction::{CommitBuilder, CommitProperties};
+use super::{CustomExecuteHandler, Operation};
 use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -22,9 +25,17 @@ pub struct DropConstraintBuilder {
     log_store: LogStoreRef,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for DropConstraintBuilder {}
+impl super::Operation<()> for DropConstraintBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl DropConstraintBuilder {
     /// Create a new builder
@@ -35,6 +46,7 @@ impl DropConstraintBuilder {
             snapshot,
             log_store,
             commit_properties: CommitProperties::default(),
+            custom_execute_handler: None,
         }
     }
 
@@ -55,6 +67,12 @@ impl DropConstraintBuilder {
         self.commit_properties = commit_properties;
         self
     }
+
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
 }
 
 impl std::future::IntoFuture for DropConstraintBuilder {
@@ -68,7 +86,11 @@ impl std::future::IntoFuture for DropConstraintBuilder {
         Box::pin(async move {
             let name = this
                 .name
+                .clone()
                 .ok_or(DeltaTableError::Generic("No name provided".to_string()))?;
+
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);
@@ -86,10 +108,14 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 
             let actions = vec![Action::Metadata(metadata)];
 
-            let commit = CommitBuilder::from(this.commit_properties)
+            let commit = CommitBuilder::from(this.commit_properties.clone())
+                .with_operation_id(operation_id)
+                .with_post_commit_hook_handler(this.get_custom_execute_handler())
                 .with_actions(actions)
                 .build(Some(&this.snapshot), this.log_store.clone(), operation)
                 .await?;
+
+            this.post_execute(operation_id).await?;
 
             Ok(DeltaTable::new_with_state(
                 this.log_store,

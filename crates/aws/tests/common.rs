@@ -3,7 +3,7 @@ use deltalake_aws::constants;
 use deltalake_aws::register_handlers;
 use deltalake_aws::storage::*;
 use deltalake_test::utils::*;
-use rand::Rng;
+use rand::random;
 use std::process::{Command, ExitStatus, Stdio};
 
 #[derive(Clone, Debug)]
@@ -43,14 +43,16 @@ impl StorageIntegration for S3Integration {
     fn prepare_env(&self) {
         set_env_if_not_set(
             constants::LOCK_TABLE_KEY_NAME,
-            format!("delta_log_it_{}", rand::thread_rng().gen::<u16>()),
+            format!("delta_log_it_{}", random::<u16>()),
         );
         match std::env::var(s3_constants::AWS_ENDPOINT_URL).ok() {
-            Some(endpoint_url) if endpoint_url.to_lowercase() == "none" => {
+            Some(endpoint_url) if endpoint_url.to_lowercase() == "none" => unsafe {
                 std::env::remove_var(s3_constants::AWS_ENDPOINT_URL)
-            }
+            },
             Some(_) => (),
-            None => std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost:4566"),
+            None => unsafe {
+                std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost:4566")
+            },
         }
         set_env_if_not_set(s3_constants::AWS_ACCESS_KEY_ID, "deltalake");
         set_env_if_not_set(s3_constants::AWS_SECRET_ACCESS_KEY, "weloverust");

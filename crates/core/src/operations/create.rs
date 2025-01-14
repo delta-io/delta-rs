@@ -9,17 +9,18 @@ use futures::future::BoxFuture;
 use maplit::hashset;
 use serde_json::Value;
 use tracing::log::*;
+use uuid::Uuid;
 
 use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
+use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{
-    Action, DataType, Metadata, Protocol, ReaderFeatures, StructField, StructType, WriterFeatures,
-};
+use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
 use crate::{DeltaTable, DeltaTableBuilder};
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -48,7 +49,7 @@ impl From<CreateError> for DeltaTableError {
 }
 
 /// Build an operation to create a new [DeltaTable]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CreateBuilder {
     name: Option<String>,
     location: Option<String>,
@@ -62,9 +63,19 @@ pub struct CreateBuilder {
     configuration: HashMap<String, Option<String>>,
     metadata: Option<HashMap<String, Value>>,
     raise_if_key_not_exists: bool,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for CreateBuilder {}
+impl super::Operation<()> for CreateBuilder {
+    fn log_store(&self) -> &LogStoreRef {
+        self.log_store
+            .as_ref()
+            .expect("Logstore shouldn't be none at this stage.")
+    }
+    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
+        self.custom_execute_handler.clone()
+    }
+}
 
 impl Default for CreateBuilder {
     fn default() -> Self {
@@ -88,6 +99,7 @@ impl CreateBuilder {
             configuration: Default::default(),
             metadata: Default::default(),
             raise_if_key_not_exists: true,
+            custom_execute_handler: None,
         }
     }
 
@@ -235,10 +247,16 @@ impl CreateBuilder {
         self
     }
 
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
+
     /// Consume self into uninitialized table with corresponding create actions and operation meta
-    pub(crate) fn into_table_and_actions(
-        self,
-    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation)> {
+    pub(crate) async fn into_table_and_actions(
+        mut self,
+    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation, Uuid)> {
         if self
             .actions
             .iter()
@@ -256,14 +274,19 @@ impl CreateBuilder {
                 DeltaTable::new(log_store, Default::default()),
             )
         } else {
-            let storage_url = ensure_table_uri(self.location.ok_or(CreateError::MissingLocation)?)?;
+            let storage_url =
+                ensure_table_uri(self.location.clone().ok_or(CreateError::MissingLocation)?)?;
             (
                 storage_url.as_str().to_string(),
                 DeltaTableBuilder::from_uri(&storage_url)
-                    .with_storage_options(self.storage_options.unwrap_or_default())
+                    .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )
         };
+
+        self.log_store = Some(table.log_store());
+        let operation_id = self.get_operation_id();
+        self.pre_execute(operation_id).await?;
 
         let configuration = self.configuration;
         let contains_timestampntz = PROTOCOL.contains_timestampntz(self.columns.iter());
@@ -334,7 +357,7 @@ impl CreateBuilder {
                 .filter(|a| !matches!(a, Action::Protocol(_))),
         );
 
-        Ok((table, actions, operation))
+        Ok((table, actions, operation, operation_id))
     }
 }
 
@@ -345,12 +368,13 @@ impl std::future::IntoFuture for CreateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
+            let handler = this.custom_execute_handler.clone();
             let mode = this.mode;
             let app_metadata = this.metadata.clone().unwrap_or_default();
-            let (mut table, mut actions, operation) = this.into_table_and_actions()?;
-            let log_store = table.log_store();
+            let (mut table, mut actions, operation, operation_id) =
+                this.into_table_and_actions().await?;
 
-            let table_state = if log_store.is_delta_table_location().await? {
+            let table_state = if table.log_store.is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
                     SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
@@ -375,6 +399,8 @@ impl std::future::IntoFuture for CreateBuilder {
 
             let version = CommitBuilder::default()
                 .with_actions(actions)
+                .with_operation_id(operation_id)
+                .with_post_commit_hook_handler(handler.clone())
                 .with_app_metadata(app_metadata)
                 .build(
                     table_state.map(|f| f as &dyn TableReference),
@@ -385,6 +411,11 @@ impl std::future::IntoFuture for CreateBuilder {
                 .version();
             table.load_version(version).await?;
 
+            if let Some(handler) = handler {
+                handler
+                    .post_execute(&table.log_store(), operation_id)
+                    .await?;
+            }
             Ok(table)
         })
     }

@@ -10,7 +10,19 @@ If you Z Order the data by the `country` column, then individuals from the same 
 
 Here's how to Z Order a Delta table:
 
-```python
-dt = DeltaTable("tmp")
-dt.optimize.z_order(["country"])
-```
+=== "Python"
+    ```python
+    dt = DeltaTable("tmp")
+    dt.optimize.z_order(["country"])
+    ```
+
+=== "Rust"
+    ```rust
+    let table = open_table("tmp").await?;    
+    
+    let (table, metrics) = DeltaOps(table)
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["country".to_string()]))
+        .await?;
+    println!("{:?}", metrics);
+    ```

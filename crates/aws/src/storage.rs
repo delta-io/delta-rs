@@ -32,37 +32,7 @@ const STORE_NAME: &str = "DeltaS3ObjectStore";
 #[derive(Clone, Default, Debug)]
 pub struct S3ObjectStoreFactory {}
 
-impl S3ObjectStoreFactory {
-    fn with_env_s3(&self, options: &StorageOptions) -> StorageOptions {
-        let mut options = StorageOptions(
-            options
-                .0
-                .clone()
-                .into_iter()
-                .map(|(k, v)| {
-                    if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
-                        (config_key.as_ref().to_string(), v)
-                    } else {
-                        (k, v)
-                    }
-                })
-                .collect(),
-        );
-
-        for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    if !options.0.contains_key(config_key.as_ref()) {
-                        options
-                            .0
-                            .insert(config_key.as_ref().to_string(), value.to_string());
-                    }
-                }
-            }
-        }
-        options
-    }
-}
+impl S3StorageOptionsConversion for S3ObjectStoreFactory {}
 
 impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
@@ -87,19 +57,17 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             })?;
         let prefix = Path::parse(path)?;
 
-        if is_aws(storage_options) {
-            debug!("Detected AWS S3, resolving credentials");
-            let sdk_config = execute_sdk_future(crate::credentials::resolve_credentials(
-                storage_options.clone(),
-            ))??;
+        let s3_options: S3StorageOptions = S3StorageOptions::from_map(&options.0)?;
+
+        if let Some(ref sdk_config) = s3_options.sdk_config {
             builder = builder.with_credentials(Arc::new(
-                crate::credentials::AWSForObjectStore::new(sdk_config),
+                crate::credentials::AWSForObjectStore::new(sdk_config.clone()),
             ));
         }
 
         let inner = builder.build()?;
 
-        let store = aws_storage_handler(limit_store_handler(inner, &options), &options)?;
+        let store = aws_storage_handler(limit_store_handler(inner, &options), &s3_options)?;
         debug!("Initialized the object store: {store:?}");
 
         Ok((store, prefix))
@@ -108,26 +76,20 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
 
 fn aws_storage_handler(
     store: ObjectStoreRef,
-    options: &StorageOptions,
+    s3_options: &S3StorageOptions,
 ) -> DeltaResult<ObjectStoreRef> {
-    // If the copy-if-not-exists env var is set or ConditionalPut is set, we don't need to instantiate a locking client or check for allow-unsafe-rename.
-    if options
-        .0
-        .contains_key(AmazonS3ConfigKey::CopyIfNotExists.as_ref())
-        || options
-            .0
-            .contains_key(AmazonS3ConfigKey::ConditionalPut.as_ref())
+    // Nearly all S3 Object stores support conditional put, so we change the default to always returning an S3 Object store
+    // unless explicitly passing a locking provider key or allow_unsafe_rename. Then we will pass it to the old S3StorageBackend.
+    if s3_options.locking_provider.as_deref() == Some("dynamodb") || s3_options.allow_unsafe_rename
     {
-        Ok(store)
-    } else {
-        let s3_options = S3StorageOptions::from_map(&options.0)?;
-
         let store = S3StorageBackend::try_new(
             store,
             Some("dynamodb") == s3_options.locking_provider.as_deref()
                 || s3_options.allow_unsafe_rename,
         )?;
         Ok(Arc::new(store))
+    } else {
+        Ok(store)
     }
 }
 
@@ -136,13 +98,21 @@ fn aws_storage_handler(
 // This function will return true in the default case since it's most likely that the absence of
 // options will mean default/S3 configuration
 fn is_aws(options: &StorageOptions) -> bool {
-    if options.0.contains_key(constants::AWS_FORCE_CREDENTIAL_LOAD) {
+    // Checks storage option first then env var for existence of aws force credential load
+    // .from_s3_env never inserts these into the options because they are delta-rs specific
+    if str_option(&options.0, constants::AWS_FORCE_CREDENTIAL_LOAD).is_some() {
         return true;
     }
-    if options.0.contains_key(constants::AWS_S3_LOCKING_PROVIDER) {
+
+    // Checks storage option first then env var for existence of locking provider
+    // .from_s3_env never inserts these into the options because they are delta-rs specific
+    if str_option(&options.0, constants::AWS_S3_LOCKING_PROVIDER).is_some() {
         return true;
     }
-    !options.0.contains_key(constants::AWS_ENDPOINT_URL)
+
+    // Options at this stage should only contain 'aws_endpoint' in lowercase
+    // due to with_env_s3
+    !(options.0.contains_key("aws_endpoint") || options.0.contains_key(constants::AWS_ENDPOINT_URL))
 }
 
 /// Options used to configure the [S3StorageBackend].
@@ -154,6 +124,10 @@ pub struct S3StorageOptions {
     pub virtual_hosted_style_request: bool,
     pub locking_provider: Option<String>,
     pub dynamodb_endpoint: Option<String>,
+    pub dynamodb_region: Option<String>,
+    pub dynamodb_access_key_id: Option<String>,
+    pub dynamodb_secret_access_key: Option<String>,
+    pub dynamodb_session_token: Option<String>,
     pub s3_pool_idle_timeout: Duration,
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
@@ -168,6 +142,10 @@ impl PartialEq for S3StorageOptions {
         self.virtual_hosted_style_request == other.virtual_hosted_style_request
             && self.locking_provider == other.locking_provider
             && self.dynamodb_endpoint == other.dynamodb_endpoint
+            && self.dynamodb_region == other.dynamodb_region
+            && self.dynamodb_access_key_id == other.dynamodb_access_key_id
+            && self.dynamodb_secret_access_key == other.dynamodb_secret_access_key
+            && self.dynamodb_session_token == other.dynamodb_session_token
             && self.s3_pool_idle_timeout == other.s3_pool_idle_timeout
             && self.sts_pool_idle_timeout == other.sts_pool_idle_timeout
             && self.s3_get_internal_server_error_retries
@@ -220,7 +198,7 @@ impl S3StorageOptions {
         let sdk_config = match is_aws(&storage_options) {
             false => None,
             true => {
-                debug!("Detected AWS S3, resolving credentials");
+                debug!("Detected AWS S3 Storage options, resolving AWS credentials");
                 Some(execute_sdk_future(
                     crate::credentials::resolve_credentials(storage_options.clone()),
                 )??)
@@ -231,6 +209,13 @@ impl S3StorageOptions {
             virtual_hosted_style_request,
             locking_provider: str_option(options, constants::AWS_S3_LOCKING_PROVIDER),
             dynamodb_endpoint: str_option(options, constants::AWS_ENDPOINT_URL_DYNAMODB),
+            dynamodb_region: str_option(options, constants::AWS_REGION_DYNAMODB),
+            dynamodb_access_key_id: str_option(options, constants::AWS_ACCESS_KEY_ID_DYNAMODB),
+            dynamodb_secret_access_key: str_option(
+                options,
+                constants::AWS_SECRET_ACCESS_KEY_DYNAMODB,
+            ),
+            dynamodb_session_token: str_option(options, constants::AWS_SESSION_TOKEN_DYNAMODB),
             s3_pool_idle_timeout: Duration::from_secs(s3_pool_idle_timeout),
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
             s3_get_internal_server_error_retries,
@@ -450,6 +435,52 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
     std::env::var(key).ok()
 }
 
+pub(crate) trait S3StorageOptionsConversion {
+    fn with_env_s3(&self, options: &StorageOptions) -> StorageOptions {
+        let mut options = StorageOptions(
+            options
+                .0
+                .clone()
+                .into_iter()
+                .map(|(k, v)| {
+                    if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
+                        (config_key.as_ref().to_string(), v)
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect(),
+        );
+
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
+                    options
+                        .0
+                        .entry(config_key.as_ref().to_string())
+                        .or_insert(value.to_string());
+                }
+            }
+        }
+
+        // All S3-like Object Stores use conditional put, object-store crate however still requires you to explicitly
+        // set this behaviour. We will however assume, when a locking provider/copy-if-not-exists keys are not provided
+        // that PutIfAbsent is supported.
+        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
+        if !options.0.keys().any(|key| {
+            let key = key.to_ascii_lowercase();
+            [
+                AmazonS3ConfigKey::ConditionalPut.as_ref(),
+                "conditional_put",
+            ]
+            .contains(&key.as_str())
+        }) {
+            options.0.insert("conditional_put".into(), "etag".into());
+        }
+        options
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,10 +558,15 @@ mod tests {
             );
             std::env::set_var(constants::AWS_IAM_ROLE_SESSION_NAME, "session_name");
             std::env::set_var(
+                #[allow(deprecated)]
                 constants::AWS_S3_ASSUME_ROLE_ARN,
                 "arn:aws:iam::123456789012:role/some_role",
             );
-            std::env::set_var(constants::AWS_S3_ROLE_SESSION_NAME, "session_name");
+            std::env::set_var(
+                #[allow(deprecated)]
+                constants::AWS_S3_ROLE_SESSION_NAME,
+                "session_name",
+            );
             std::env::set_var(constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
 
             let options = S3StorageOptions::try_default().unwrap();
@@ -545,6 +581,10 @@ mod tests {
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
                     dynamodb_endpoint: None,
+                    dynamodb_region: None,
+                    dynamodb_access_key_id: None,
+                    dynamodb_secret_access_key: None,
+                    dynamodb_session_token: None,
                     s3_pool_idle_timeout: Duration::from_secs(15),
                     sts_pool_idle_timeout: Duration::from_secs(10),
                     s3_get_internal_server_error_retries: 10,
@@ -562,6 +602,7 @@ mod tests {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
             std::env::remove_var(constants::AWS_ENDPOINT_URL);
+
             let options = S3StorageOptions::from_map(&hashmap! {
                 constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
                 constants::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
@@ -691,6 +732,10 @@ mod tests {
                     virtual_hosted_style_request: false,
                     locking_provider: Some("dynamodb".to_string()),
                     dynamodb_endpoint: Some("http://localhost:dynamodb".to_string()),
+                    dynamodb_region: None,
+                    dynamodb_access_key_id: None,
+                    dynamodb_secret_access_key: None,
+                    dynamodb_session_token: None,
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
@@ -739,19 +784,20 @@ mod tests {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
             let raw_options = hashmap! {};
-
             std::env::set_var(constants::AWS_ACCESS_KEY_ID, "env_key");
             std::env::set_var(constants::AWS_ENDPOINT_URL, "env_key");
             std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "env_key");
             std::env::set_var(constants::AWS_REGION, "env_key");
-
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-            assert_eq!(combined_options.0.len(), 4);
+            // Four and then the conditional_put built-in
+            assert_eq!(combined_options.0.len(), 5);
 
-            for v in combined_options.0.values() {
-                assert_eq!(v, "env_key");
+            for (key, v) in combined_options.0 {
+                if key != "conditional_put" {
+                    assert_eq!(v, "env_key");
+                }
             }
         });
     }
@@ -767,7 +813,6 @@ mod tests {
                 "AWS_SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
                 "AWS_REGION".to_string() => "options_key".to_string()
             };
-
             std::env::set_var("aws_access_key_id", "env_key");
             std::env::set_var("aws_endpoint", "env_key");
             std::env::set_var("aws_secret_access_key", "env_key");
@@ -776,14 +821,18 @@ mod tests {
             let combined_options =
                 S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
 
-            for v in combined_options.0.values() {
-                assert_eq!(v, "options_key");
+            for (key, v) in combined_options.0 {
+                if key != "conditional_put" {
+                    assert_eq!(v, "options_key");
+                }
             }
         });
     }
 
     #[test]
+    #[serial]
     fn test_is_aws() {
+        clear_env_of_aws_keys();
         let options = StorageOptions::default();
         assert!(is_aws(&options));
 
@@ -793,9 +842,15 @@ mod tests {
         let options = StorageOptions::from(minio);
         assert!(!is_aws(&options));
 
+        let minio: HashMap<String, String> = hashmap! {
+            "aws_endpoint".to_string() => "http://minio:8080".to_string(),
+        };
+        let options = StorageOptions::from(minio);
+        assert!(!is_aws(&options));
+
         let localstack: HashMap<String, String> = hashmap! {
             constants::AWS_FORCE_CREDENTIAL_LOAD.to_string() => "true".to_string(),
-            constants::AWS_ENDPOINT_URL.to_string() => "http://minio:8080".to_string(),
+            "aws_endpoint".to_string() => "http://minio:8080".to_string(),
         };
         let options = StorageOptions::from(localstack);
         assert!(is_aws(&options));

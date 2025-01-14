@@ -21,6 +21,7 @@
 //! ```
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -281,7 +282,7 @@ impl DeltaTableState {
 pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store());
+    env.register_object_store(url, store.object_store(None));
 }
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
@@ -707,7 +708,7 @@ impl TableProvider for DeltaTable {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -747,6 +748,7 @@ impl TableProvider for DeltaTable {
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
+#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     log_store: LogStoreRef,
@@ -796,7 +798,7 @@ impl TableProvider for DeltaTableProvider {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -824,9 +826,12 @@ impl TableProvider for DeltaTableProvider {
 
     fn supports_filters_pushdown(
         &self,
-        _filter: &[&Expr],
+        filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact])
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -1049,6 +1054,7 @@ fn partitioned_file_from_action(
         range: None,
         extensions: None,
         statistics: None,
+        metadata_size_hint: None,
     }
 }
 
@@ -1148,11 +1154,12 @@ pub(crate) async fn execute_plan_to_batch(
     Ok(concat_batches(&plan.schema(), data.iter())?)
 }
 
-/// Responsible for checking batches of data conform to table's invariants.
-#[derive(Clone)]
+/// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
+#[derive(Clone, Default)]
 pub struct DeltaDataChecker {
     constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
+    non_nullable_columns: Vec<String>,
     ctx: SessionContext,
 }
 
@@ -1162,6 +1169,7 @@ impl DeltaDataChecker {
         Self {
             invariants: vec![],
             constraints: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1171,6 +1179,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1180,6 +1189,7 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
+            non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1200,9 +1210,21 @@ impl DeltaDataChecker {
     pub fn new(snapshot: &DeltaTableState) -> Self {
         let invariants = snapshot.schema().get_invariants().unwrap_or_default();
         let constraints = snapshot.table_config().get_constraints();
+        let non_nullable_columns = snapshot
+            .schema()
+            .fields()
+            .filter_map(|f| {
+                if !f.is_nullable() {
+                    Some(f.name().clone())
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
         Self {
             invariants,
             constraints,
+            non_nullable_columns,
             ctx: DeltaSessionContext::default().into(),
         }
     }
@@ -1212,8 +1234,33 @@ impl DeltaDataChecker {
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        self.check_nullability(record_batch)?;
         self.enforce_checks(record_batch, &self.invariants).await?;
         self.enforce_checks(record_batch, &self.constraints).await
+    }
+
+    /// Return true if all the nullability checks are valid
+    fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
+        let mut violations = Vec::new();
+        for col in self.non_nullable_columns.iter() {
+            if let Some(arr) = record_batch.column_by_name(col) {
+                if arr.null_count() > 0 {
+                    violations.push(format!(
+                        "Non-nullable column violation for {col}, found {} null values",
+                        arr.null_count()
+                    ));
+                }
+            } else {
+                violations.push(format!(
+                    "Non-nullable column violation for {col}, not found in batch!"
+                ));
+            }
+        }
+        if !violations.is_empty() {
+            Err(DeltaTableError::InvalidData { violations })
+        } else {
+            Ok(true)
+        }
     }
 
     async fn enforce_checks<C: DataCheck>(
@@ -1365,6 +1412,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 }
 
 /// Responsible for creating deltatables
+#[derive(Debug)]
 pub struct DeltaTableFactory {}
 
 #[async_trait]
@@ -1508,7 +1556,7 @@ fn join_batches_with_add_actions(
 }
 
 /// Determine which files contain a record that satisfies the predicate
-pub(crate) async fn find_files_scan<'a>(
+pub(crate) async fn find_files_scan(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -1621,7 +1669,7 @@ pub(crate) async fn scan_memory_table(
 }
 
 /// Finds files in a snapshot that match the provided predicate.
-pub async fn find_files<'a>(
+pub async fn find_files(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -1771,10 +1819,15 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
+    use crate::kernel::log_segment::PathExt;
+    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
+    use crate::storage::ObjectStoreRef;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
+    use arrow_array::cast::AsArray;
+    use bytes::Bytes;
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::ParquetExec;
@@ -1783,9 +1836,15 @@ mod tests {
     use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
-    use object_store::path::Path;
+    use futures::{stream::BoxStream, StreamExt};
+    use object_store::{
+        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
+        PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    };
     use serde_json::json;
-    use std::ops::Deref;
+    use std::fmt::{Debug, Display, Formatter};
+    use std::ops::{Deref, Range};
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     use super::*;
 
@@ -1901,6 +1960,7 @@ mod tests {
             range: None,
             extensions: None,
             statistics: None,
+            metadata_size_hint: None,
         };
         assert_eq!(file.partition_values, ref_file.partition_values)
     }
@@ -2594,5 +2654,277 @@ mod tests {
         let actual = df.collect().await.unwrap();
 
         assert_eq!(actual.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_nullability() -> DeltaResult<()> {
+        use arrow::array::StringArray;
+
+        let data_checker = DeltaDataChecker {
+            non_nullable_columns: vec!["zed".to_string(), "yap".to_string()],
+            ..Default::default()
+        };
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let nulls: Arc<dyn Array> = Arc::new(StringArray::new_null(1));
+        let batch = RecordBatch::try_from_iter(vec![("a", arr), ("zed", nulls)]).unwrap();
+
+        let result = data_checker.check_nullability(&batch);
+        assert!(
+            result.is_err(),
+            "The result should have errored! {result:?}"
+        );
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter(vec![("zed", arr)]).unwrap();
+        let result = data_checker.check_nullability(&batch);
+        assert!(
+            result.is_err(),
+            "The result should have errored! {result:?}"
+        );
+
+        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
+        let batch = RecordBatch::try_from_iter(vec![("zed", arr.clone()), ("yap", arr)]).unwrap();
+        let _ = data_checker.check_nullability(&batch)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_uses_parquet_column_pruning() {
+        let small: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["a"]));
+        let large: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["b"
+            .repeat(1024)
+            .as_str()]));
+        let batch = RecordBatch::try_from_iter(vec![("small", small), ("large", large)]).unwrap();
+        let table = crate::DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
+
+        let (object_store, mut operations) =
+            RecordingObjectStore::new(table.log_store().object_store(None));
+        let log_store =
+            DefaultLogStore::new(Arc::new(object_store), table.log_store().config().clone());
+        let provider = DeltaTableProvider::try_new(
+            table.snapshot().unwrap().clone(),
+            Arc::new(log_store),
+            config,
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+        let state = ctx.state();
+
+        let df = ctx.sql("select small from test").await.unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
+
+        let mut stream = plan.execute(0, state.task_ctx()).unwrap();
+        let Some(Ok(batch)) = stream.next().await else {
+            panic!()
+        };
+        assert!(stream.next().await.is_none());
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(1, batch.num_rows());
+        let small = batch.column_by_name("small").unwrap().as_string::<i32>();
+        assert_eq!("a", small.iter().next().unwrap().unwrap());
+
+        let expected = vec![
+            ObjectStoreOperation::GetRange(LocationType::Data, 4920..4928),
+            ObjectStoreOperation::GetRange(LocationType::Data, 2399..4920),
+            ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..58]),
+        ];
+        let mut actual = Vec::new();
+        operations.recv_many(&mut actual, 3).await;
+        assert_eq!(expected, actual);
+    }
+
+    /// Records operations made by the inner object store on a channel obtained at construction
+    struct RecordingObjectStore {
+        inner: ObjectStoreRef,
+        operations: UnboundedSender<ObjectStoreOperation>,
+    }
+
+    impl RecordingObjectStore {
+        /// Returns an object store and a channel recording all operations made by the inner object store
+        fn new(inner: ObjectStoreRef) -> (Self, UnboundedReceiver<ObjectStoreOperation>) {
+            let (operations, operations_receiver) = unbounded_channel();
+            (Self { inner, operations }, operations_receiver)
+        }
+    }
+
+    impl Display for RecordingObjectStore {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            Display::fmt(&self.inner, f)
+        }
+    }
+
+    impl Debug for RecordingObjectStore {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            Debug::fmt(&self.inner, f)
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum ObjectStoreOperation {
+        GetRanges(LocationType, Vec<Range<usize>>),
+        GetRange(LocationType, Range<usize>),
+        GetOpts(LocationType),
+        Get(LocationType),
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum LocationType {
+        Data,
+        Commit,
+    }
+
+    impl From<&Path> for LocationType {
+        fn from(value: &Path) -> Self {
+            if value.is_commit_file() {
+                LocationType::Commit
+            } else if value.to_string().starts_with("part-") {
+                LocationType::Data
+            } else {
+                panic!("Unknown location type: {:?}", value)
+            }
+        }
+    }
+
+    // Currently only read operations are recorded. Extend as necessary.
+    #[async_trait]
+    impl ObjectStore for RecordingObjectStore {
+        async fn put(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put(location, payload).await
+        }
+
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart(
+            &self,
+            location: &Path,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart(location).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+            self.operations
+                .send(ObjectStoreOperation::Get(location.into()))
+                .unwrap();
+            self.inner.get(location).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.operations
+                .send(ObjectStoreOperation::GetOpts(location.into()))
+                .unwrap();
+            self.inner.get_opts(location, options).await
+        }
+
+        async fn get_range(
+            &self,
+            location: &Path,
+            range: Range<usize>,
+        ) -> object_store::Result<Bytes> {
+            self.operations
+                .send(ObjectStoreOperation::GetRange(
+                    location.into(),
+                    range.clone(),
+                ))
+                .unwrap();
+            self.inner.get_range(location, range).await
+        }
+
+        async fn get_ranges(
+            &self,
+            location: &Path,
+            ranges: &[Range<usize>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            self.operations
+                .send(ObjectStoreOperation::GetRanges(
+                    location.into(),
+                    ranges.to_vec(),
+                ))
+                .unwrap();
+            self.inner.get_ranges(location, ranges).await
+        }
+
+        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+            self.inner.head(location).await
+        }
+
+        async fn delete(&self, location: &Path) -> object_store::Result<()> {
+            self.inner.delete(location).await
+        }
+
+        fn delete_stream<'a>(
+            &'a self,
+            locations: BoxStream<'a, object_store::Result<Path>>,
+        ) -> BoxStream<'a, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        fn list_with_offset(
+            &self,
+            prefix: Option<&Path>,
+            offset: &Path,
+        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+            self.inner.list_with_offset(prefix, offset)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.inner.copy(from, to).await
+        }
+
+        async fn rename(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.inner.rename(from, to).await
+        }
+
+        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.inner.copy_if_not_exists(from, to).await
+        }
+
+        async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.inner.rename_if_not_exists(from, to).await
+        }
     }
 }

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
 use aws_config::meta::credentials::CredentialsProviderChain;
@@ -372,7 +372,7 @@ mod tests {
         });
         let sdk_config = resolve_credentials(options)
             .await
-            .expect("Failed to resolve credentijals for the test");
+            .expect("Failed to resolve credentials for the test");
         let provider = AWSForObjectStore::new(sdk_config);
         let _credential = provider
             .get_credential()
