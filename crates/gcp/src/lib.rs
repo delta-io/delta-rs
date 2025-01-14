@@ -5,11 +5,11 @@ use std::sync::Arc;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::storage::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    StorageOptions,
+    RetryConfigParse, StorageOptions,
 };
-use deltalake_core::{DeltaResult, Path};
-use object_store::gcp::GoogleConfigKey;
-use object_store::parse_url_opts;
+use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
@@ -37,6 +37,8 @@ impl GcpOptions for StorageOptions {
 #[derive(Clone, Default, Debug)]
 pub struct GcpFactory {}
 
+impl RetryConfigParse for GcpFactory {}
+
 impl ObjectStoreFactory for GcpFactory {
     fn parse_url_opts(
         &self,
@@ -44,7 +46,23 @@ impl ObjectStoreFactory for GcpFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
-        let (inner, prefix) = parse_url_opts(url, config)?;
+
+        let (_scheme, path) =
+            ObjectStoreScheme::parse(&url).map_err(|e| DeltaTableError::GenericError {
+                source: Box::new(e),
+            })?;
+        let prefix = Path::parse(path)?;
+
+        let mut builder = GoogleCloudStorageBuilder::new().with_url(url.to_string());
+
+        for (key, value) in config.iter() {
+            builder = builder.with_config(key.clone(), value.clone());
+        }
+
+        let inner = builder
+            .with_retry(self.parse_retry_config(&options)?)
+            .build()?;
+
         let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
         let store = limit_store_handler(url_prefix_handler(gcs_backend, prefix.clone()), options);
         Ok((store, prefix))
