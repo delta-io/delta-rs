@@ -54,7 +54,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             }
         }
 
-        let (_scheme, path) =
+        let (_, path) =
             ObjectStoreScheme::parse(url).map_err(|e| DeltaTableError::GenericError {
                 source: Box::new(e),
             })?;
