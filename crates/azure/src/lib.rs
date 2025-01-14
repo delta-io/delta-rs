@@ -5,11 +5,11 @@ use std::sync::Arc;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::storage::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    StorageOptions,
+    RetryConfigParse, StorageOptions,
 };
-use deltalake_core::{DeltaResult, Path};
-use object_store::azure::AzureConfigKey;
-use object_store::parse_url_opts;
+use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
@@ -36,6 +36,8 @@ impl AzureOptions for StorageOptions {
 #[derive(Clone, Default, Debug)]
 pub struct AzureFactory {}
 
+impl RetryConfigParse for AzureFactory {}
+
 impl ObjectStoreFactory for AzureFactory {
     fn parse_url_opts(
         &self,
@@ -43,7 +45,25 @@ impl ObjectStoreFactory for AzureFactory {
         options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
-        let (inner, prefix) = parse_url_opts(url, config)?;
+
+        let (_scheme, path) =
+            ObjectStoreScheme::parse(&url).map_err(|e| DeltaTableError::GenericError {
+                source: Box::new(e),
+            })?;
+        let prefix = Path::parse(path)?;
+
+        // let (inner, prefix) = parse_url_opts(url, config)?;
+
+        let mut builder = MicrosoftAzureBuilder::new().with_url(url.to_string());
+
+        for (key, value) in config.iter() {
+            builder = builder.with_config(key.clone(), value.clone());
+        }
+
+        let inner = builder
+            .with_retry(self.parse_retry_config(&options)?)
+            .build()?;
+
         let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), options);
         Ok((store, prefix))
     }
