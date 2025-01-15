@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.23.1"
+version = "0.24.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -16,14 +16,14 @@ rust-version.workspace = true
 features = ["azure", "datafusion", "gcs", "hdfs", "json", "python", "s3", "unity-experimental"]
 
 [dependencies]
-deltalake-core = { version = "0.23.0", path = "../core" }
-deltalake-aws = { version = "0.6.0", path = "../aws", default-features = false, optional = true }
-deltalake-azure = { version = "0.6.0", path = "../azure", optional = true }
-deltalake-gcp = { version = "0.7.0", path = "../gcp", optional = true }
-deltalake-hdfs = { version = "0.7.0", path = "../hdfs", optional = true }
-deltalake-lakefs = { version = "0.6.0", path = "../lakefs", optional = true }
-deltalake-catalog-glue = { version = "0.7.0", path = "../catalog-glue", optional = true }
-deltalake-catalog-unity = { version = "0.7.0", path = "../catalog-unity", optional = true }
+deltalake-core = { version = "0.24.0", path = "../core" }
+deltalake-aws = { version = "0.7.0", path = "../aws", default-features = false, optional = true }
+deltalake-azure = { version = "0.7.0", path = "../azure", optional = true }
+deltalake-gcp = { version = "0.8.0", path = "../gcp", optional = true }
+deltalake-hdfs = { version = "0.8.0", path = "../hdfs", optional = true }
+deltalake-lakefs = { version = "0.7.0", path = "../lakefs", optional = true }
+deltalake-catalog-glue = { version = "0.8.0", path = "../catalog-glue", optional = true }
+deltalake-catalog-unity = { version = "0.8.0", path = "../catalog-unity", optional = true }
 
 
 [features]
