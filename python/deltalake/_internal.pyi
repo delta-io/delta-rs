@@ -192,6 +192,7 @@ class RawDeltaTable:
         predicate: str,
         source_alias: Optional[str],
         target_alias: Optional[str],
+        schema_mode:Optional[str],
         writer_properties: Optional[WriterProperties],
         commit_properties: Optional[CommitProperties],
         post_commithook_properties: Optional[PostCommitHookProperties],

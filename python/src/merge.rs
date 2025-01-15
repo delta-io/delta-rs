@@ -7,12 +7,14 @@ use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
+use deltalake::operations::write::SchemaMode;
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{DeltaResult, DeltaTable};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::future::IntoFuture;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::error::PythonError;
@@ -29,6 +31,8 @@ pub(crate) struct PyMergeBuilder {
     source_alias: Option<String>,
     #[pyo3(get)]
     target_alias: Option<String>,
+    #[pyo3(get)]
+    schema_mode: Option<String>,
     arrow_schema: Arc<ArrowSchema>,
 }
 
@@ -41,6 +45,7 @@ impl PyMergeBuilder {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        schema_mode: Option<String>,
         safe_cast: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
@@ -65,6 +70,10 @@ impl PyMergeBuilder {
             cmd = cmd.with_target_alias(trgt_alias);
         }
 
+        if let Some(sch_mode) = &schema_mode {
+            cmd = cmd.with_schema_mode(SchemaMode::from_str(sch_mode)?);
+        }
+
         if let Some(writer_props) = writer_properties {
             cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
         }
@@ -83,6 +92,7 @@ impl PyMergeBuilder {
             _builder: Some(cmd),
             source_alias,
             target_alias,
+            schema_mode,
             arrow_schema: schema,
         })
     }
