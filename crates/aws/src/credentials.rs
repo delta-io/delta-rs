@@ -365,6 +365,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_object_store_credential_provider() -> DeltaResult<()> {
         let options = StorageOptions(hashmap! {
             constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
@@ -388,6 +389,7 @@ mod tests {
     /// API calls in the scenarios where the delta-rs process is performing a large number of S3
     /// operations.
     #[tokio::test]
+    #[serial]
     async fn test_object_store_credential_provider_consistency() -> DeltaResult<()> {
         let options = StorageOptions(hashmap! {
             constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),

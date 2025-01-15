@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-catalog-unity"
-version = "0.7.0"
+version = "0.8.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -17,7 +17,7 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-deltalake-core = { version = "0.23", path = "../core", features = [
+deltalake-core = { version = "0.24.0", path = "../core", features = [
     "datafusion",
 ]}
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
