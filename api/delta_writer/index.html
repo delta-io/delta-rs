@@ -1494,6 +1494,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1617,6 +1621,46 @@
   
   <span class="md-ellipsis">
     CloudFlare R2 & Minio
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/lakefs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    LakeFS
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/special_configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Advanced object storage configuration
   </span>
   
 
@@ -2521,7 +2565,7 @@ If this value is set, then min_rows_per_group should also be set.</p>
   </span>
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">ColumnProperties</span><span class="p">(</span><span class="n">dictionary_enabled</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_statistics_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">bloom_filter_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BloomFilterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">ColumnProperties</span><span class="p">(</span><span class="n">dictionary_enabled</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">statistics_enabled</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;NONE&#39;</span><span class="p">,</span> <span class="s1">&#39;CHUNK&#39;</span><span class="p">,</span> <span class="s1">&#39;PAGE&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">bloom_filter_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BloomFilterProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2559,13 +2603,13 @@ If this value is set, then min_rows_per_group should also be set.</p>
           </td>
         </tr>
         <tr>
-          <td><code>max_statistics_size</code></td>
+          <td><code>statistics_enabled</code></td>
           <td>
-                <code><span title="typing.Optional">Optional</span>[int]</code>
+                <code><span title="typing.Optional">Optional</span>[<span title="typing.Literal">Literal</span>[&#39;NONE&#39;, &#39;CHUNK&#39;, &#39;PAGE&#39;]]</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>Maximum size of statistics for the column.</p>
+              <p>Statistics level for the column.</p>
             </div>
           </td>
           <td>

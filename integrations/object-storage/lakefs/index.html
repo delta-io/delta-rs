@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/object-storage/s3-like/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/object-storage/lakefs/">
       
       
-        <link rel="prev" href="../s3/">
+        <link rel="prev" href="../s3-like/">
       
       
-        <link rel="next" href="../lakefs/">
+        <link rel="next" href="../special_configuration/">
       
       
       <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
@@ -22,7 +22,7 @@
     
     
       
-        <title>CloudFlare R2 & Minio - Delta Lake Documentation</title>
+        <title>LakeFS - Delta Lake Documentation</title>
       
     
     
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#cloudflare-r2-minio" class="md-skip">
+        <a href="#lakefs" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              CloudFlare R2 & Minio
+              LakeFS
             
           </span>
         </div>
@@ -1515,6 +1515,26 @@
                 
   
   
+  
+    <li class="md-nav__item">
+      <a href="../s3-like/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CloudFlare R2 & Minio
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1530,7 +1550,7 @@
           
   
   <span class="md-ellipsis">
-    CloudFlare R2 & Minio
+    LakeFS
   </span>
   
 
@@ -1541,7 +1561,7 @@
         
   
   <span class="md-ellipsis">
-    CloudFlare R2 & Minio
+    LakeFS
   </span>
   
 
@@ -1563,8 +1583,8 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#passing-s3-credentials" class="md-nav__link">
-    Passing S3 Credentials
+  <a href="#passing-lakefs-credentials" class="md-nav__link">
+    Passing LakeFS Credentials
   </a>
   
 </li>
@@ -1577,8 +1597,8 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#minio-and-docker" class="md-nav__link">
-    Minio and Docker
+  <a href="#cleaning-up-failed-transaction-branches" class="md-nav__link">
+    Cleaning up failed transaction branches
   </a>
   
 </li>
@@ -1587,26 +1607,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../lakefs/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    LakeFS
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -1930,8 +1930,8 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#passing-s3-credentials" class="md-nav__link">
-    Passing S3 Credentials
+  <a href="#passing-lakefs-credentials" class="md-nav__link">
+    Passing LakeFS Credentials
   </a>
   
 </li>
@@ -1944,8 +1944,8 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#minio-and-docker" class="md-nav__link">
-    Minio and Docker
+  <a href="#cleaning-up-failed-transaction-branches" class="md-nav__link">
+    Cleaning up failed transaction branches
   </a>
   
 </li>
@@ -1968,18 +1968,19 @@
   
 
 
-<h1 id="cloudflare-r2-minio">CloudFlare R2 &amp; Minio</h1>
-<p><code>delta-rs</code> offers native support for using Cloudflare R2 or Minio as an S3-compatible storage backend. R2 and Minio support conditional puts, which removes the need for DynamoDB for safe concurrent writes.  However, we have to pass the <code>aws_conditional_put</code> flag into <code>storage_options</code>. See the example below.</p>
-<p>You don’t need to install any extra dependencies to read/write Delta tables to S3 with engines that use <code>delta-rs</code>. You do need to configure your AWS access credentials correctly.</p>
-<h2 id="passing-s3-credentials">Passing S3 Credentials</h2>
-<p>You can pass your AWS credentials explicitly by using:</p>
+<h1 id="lakefs">LakeFS</h1>
+<p><code>delta-rs</code> offers native support for using LakeFS as an object storage backend. Each 
+deltalake operation is executed in a transaction branch and safely merged into your source branch.</p>
+<p>You don’t need to install any extra dependencies to read/write Delta tables to LakeFS with engines that use <code>delta-rs</code>. You do need to configure your LakeFS access credentials correctly.</p>
+<h2 id="passing-lakefs-credentials">Passing LakeFS Credentials</h2>
+<p>You can pass your LakeFS credentials explicitly by using:</p>
 <ul>
 <li>the <code>storage_options</code>kwarg</li>
 <li>Environment variables</li>
 </ul>
 <h2 id="example">Example</h2>
 <p>Let's work through an example with Polars. The same logic applies to other Python engines like Pandas, Daft, Dask, etc.</p>
-<p>Follow the steps below to use Delta Lake on S3 (R2/Minio) with Polars:</p>
+<p>Follow the steps below to use Delta Lake on LakeFS with Polars:</p>
 <ol>
 <li>Install Polars and deltalake. For example, using:</li>
 </ol>
@@ -1992,42 +1993,23 @@
 <li>Set your <code>storage_options</code> correctly.</li>
 </ol>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">access_key</span><span class="o">&gt;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span><span class="p">,</span> <span class="c1"># Here we say to use conditional put, this provides safe concurrency.</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        <span class="s2">&quot;endpoint&quot;</span><span class="p">:</span> <span class="s2">&quot;https://mylakefs.intranet.com&quot;</span><span class="p">,</span> <span class="c1"># LakeFS endpoint</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        <span class="s2">&quot;access_key_id&quot;</span><span class="p">:</span> <span class="s2">&quot;LAKEFSID&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        <span class="s2">&quot;secret_access_key&quot;</span><span class="p">:</span> <span class="s2">&quot;LAKEFSKEY&quot;</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="p">}</span>
 </span></code></pre></div>
 <ol>
-<li>Write data to Delta table using the <code>storage_options</code> kwarg.</li>
+<li>Write data to Delta table using the <code>storage_options</code> kwarg. The subpath after the bucket is always the branch you want to write into.</li>
 </ol>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">df</span><span class="o">.</span><span class="n">write_delta</span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="s2">&quot;s3://bucket/delta_table&quot;</span><span class="p">,</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="s2">&quot;lakefs://bucket/branch/table&quot;</span><span class="p">,</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="minio-and-docker">Minio and Docker</h2>
-<p>Minio is straightforward to host locally with Docker and docker-compose, via the following <code>docker-compose.yml</code> file - just run <code>docker-compose up</code>:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;3.8&#39;</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">services</span><span class="p">:</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">minio</span><span class="p">:</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">minio/minio</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9000:9000&quot;</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9001:9001&quot;</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="nt">MINIO_ROOT_USER</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">      </span><span class="nt">MINIO_ROOT_PASSWORD</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">server /data --console-address &quot;:9001&quot;</span>
-</span></code></pre></div>
-<p>With this configuration, Minio will host its S3-compatible API over HTTP, not HTTPS, on port 9000.  This requires an additional flag in <code>storage_options</code>, <code>AWS_ALLOW_HTTP</code>, to be set to <code>true</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="o">...</span><span class="p">,</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="o">...</span><span class="p">,</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;http://localhost:9000&#39;</span><span class="p">,</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="s1">&#39;AWS_ALLOW_HTTP&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">}</span>
-</span></code></pre></div>
+<h2 id="cleaning-up-failed-transaction-branches">Cleaning up failed transaction branches</h2>
+<p>It might occur that a deltalake operation fails midway. At this point a lakefs transaction branch was created, but never destroyed. The branches are hidden in the UI, but each branch starts with <code>delta-tx</code>.</p>
+<p>With the lakefs python library you can list these branches and delete stale ones. </p>
+<p><TODO add example here></p>
 
 
 
@@ -2051,7 +2033,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../s3/" class="md-footer__link md-footer__link--prev" aria-label="Previous: AWS S3 Storage Backend">
+          <a href="../s3-like/" class="md-footer__link md-footer__link--prev" aria-label="Previous: CloudFlare R2 &amp; Minio">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -2061,20 +2043,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                AWS S3 Storage Backend
+                CloudFlare R2 & Minio
               </div>
             </div>
           </a>
         
         
           
-          <a href="../lakefs/" class="md-footer__link md-footer__link--next" aria-label="Next: LakeFS">
+          <a href="../special_configuration/" class="md-footer__link md-footer__link--next" aria-label="Next: Advanced object storage configuration">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                LakeFS
+                Advanced object storage configuration
               </div>
             </div>
             <div class="md-footer__button md-icon">
