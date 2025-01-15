@@ -289,6 +289,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
+        false,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -351,6 +352,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
+        false,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -410,6 +412,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
+        false,
     )?;
 
     let metrics = plan
@@ -863,6 +866,61 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
 
     // Allow going a little over the target size
     assert!(metrics.files_added.max < 11_000_000);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_preserve_insertion_order() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    // first file
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    // later file
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 5), (2, 6), (2, 7), (2, 8)], "2022-05-22")?,
+    )
+    .await?;
+
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_target_size(2_000_000)
+        .with_filters(&filter)
+        .with_preserve_insertion_order(true);
+    let (dt, metrics) = optimize.await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+    assert_eq!(metrics.total_files_skipped, 0);
+    assert_eq!(metrics.total_considered_files, 2);
+
+    // Check data
+    let files = dt.get_files_iter()?.collect::<Vec<_>>();
+    assert_eq!(files.len(), 1);
+
+    let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+    let expected = RecordBatch::try_new(
+        actual.schema(),
+        // file created later is merged first
+        vec![
+            Arc::new(Int32Array::from(vec![2, 2, 2, 2, 1, 1, 1, 1])),
+            Arc::new(Int32Array::from(vec![5, 6, 7, 8, 1, 2, 3, 4])),
+        ],
+    )?;
+
+    assert_eq!(actual, expected);
 
     Ok(())
 }
