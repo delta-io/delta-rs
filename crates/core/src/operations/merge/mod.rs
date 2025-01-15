@@ -34,7 +34,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_ipc::Schema;
 use arrow_schema::SchemaBuilder;
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
@@ -56,7 +55,6 @@ use datafusion_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 
-use delta_kernel::schema::{StructField, StructType};
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use itertools::Itertools;
@@ -80,12 +78,12 @@ use crate::delta_datafusion::{
 use crate::kernel::{Action, Metadata};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::merge_arrow_schema;
+use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
 use crate::operations::write::{
     write_execution_plan, write_execution_plan_cdc, SchemaMode, WriterStatsConfig,
 };
-use crate::operations::{self, cdc::*};
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -767,14 +765,6 @@ async fn execute(
         }),
     });
 
-    let source_schema = source.schema();
-
-    let merge_schema = merge_arrow_schema(
-        snapshot.input_schema()?,
-        Arc::new(source_schema.as_arrow().clone()),
-        false,
-    )?;
-
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
@@ -875,49 +865,49 @@ async fn execute(
         .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
-    //create a new schema based on the operations
-    // update operations if there is target column that matches the left side then remove the source columns
-    //
+    // merge_arrow_schema is used to tell whether the two schema can be merge but we use the operation statement to pick new columns
+    // this avoid the side effect of adding unnessary columns (eg. target.id = source.ID) "ID" will not be added since "id" exist in target and end user intended it to be "id"
+    let mut new_schema = None;
+    let mut actions: Vec<Action> = vec![];
+    if matches!(schema_mode, Some(SchemaMode::Merge)) {
+        let merge_schema = merge_arrow_schema(
+            snapshot.input_schema()?,
+            Arc::new(source_schema.as_arrow().clone()),
+            false,
+        )?;
 
-    dbg!(&join_schema_df);
-    let mut schema_bulider = SchemaBuilder::from(merge_schema.deref());
-    for columns in match_operations
-        .iter()
-        .map(|ops| ops.operations.keys())
-        .flatten()
-    {
-        dbg!(&columns);
-        if target_schema.field_from_column(columns).is_err() {
-            let new_fields = source_schema.field_with_unqualified_name(columns.name())?;
-            schema_bulider.push(new_fields.to_owned());
-        }
-    }
+        let mut schema_bulider = SchemaBuilder::from(merge_schema.deref());
 
-    for columns in not_match_source_operations
-        .iter()
-        .map(|ops| ops.operations.keys())
-        .flatten()
-    {
-        dbg!(&columns);
-        if target_schema.field_from_column(columns).is_err() {
-            let new_fields = source_schema.field_with_unqualified_name(columns.name())?;
-            schema_bulider.push(new_fields.to_owned());
-        }
-    }
+        modify_schema(
+            &mut schema_bulider,
+            &target_schema,
+            &source_schema,
+            &match_operations,
+        )?;
 
-    for columns in not_match_target_operations
-        .iter()
-        .map(|ops| ops.operations.keys())
-        .flatten()
-    {
-        dbg!(&columns);
-        if target_schema.field_from_column(columns).is_err() {
-            let new_fields = source_schema.field_with_unqualified_name(columns.name())?;
-            schema_bulider.push(new_fields.to_owned());
-        }
+        modify_schema(
+            &mut schema_bulider,
+            &target_schema,
+            &source_schema,
+            &not_match_source_operations,
+        )?;
+
+        modify_schema(
+            &mut schema_bulider,
+            &target_schema,
+            &source_schema,
+            &not_match_target_operations,
+        )?;
+        let schema = Arc::new(schema_bulider.finish());
+        new_schema = Some(schema.clone());
+        let schema_action = Action::Metadata(Metadata::try_new(
+            schema.try_into()?,
+            current_metadata.partition_columns.clone(),
+            snapshot.metadata().configuration.clone(),
+        )?);
+
+        actions.push(schema_action);
     }
-    let new_schema = Arc::new(schema_bulider.finish());
-    dbg!(&new_schema);
 
     let matched = col(SOURCE_COLUMN)
         .is_true()
@@ -1027,14 +1017,17 @@ async fn execute(
     let projection = join.with_column(OPERATION_COLUMN, case)?;
 
     let mut new_columns = vec![];
+
+    let mut null_target_columns = vec![];
     let mut write_projection = Vec::new();
 
-    let test: StructType = new_schema.try_into()?;
+    let schema = if let Some(schema) = new_schema {
+        &schema.try_into()?
+    } else {
+        snapshot.schema()
+    };
 
-    // let mut new_schema: Option<Arc<Schema>> = None;
-    let mut test_new_struct: Vec<&StructField> = snapshot.schema().fields().collect();
-
-    for delta_field in test.fields() {
+    for delta_field in schema.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1053,10 +1046,13 @@ async fn execute(
         };
         let name = delta_field.name();
 
-        //TODO only when the schema mode is MERGE
         // check if the name of column is in the target table
-
         let column = if snapshot.schema().index_of(name).is_none() {
+            let null_column = cast(
+                lit(ScalarValue::Null).alias(name),
+                delta_field.data_type().try_into()?,
+            );
+            null_target_columns.push(null_column);
             Column::new(source_qualifier.clone(), name)
         } else {
             Column::new(qualifier.clone(), name)
@@ -1087,7 +1083,6 @@ async fn execute(
         ));
         new_columns.push((name, case));
     }
-    dbg!(&test_new_struct);
 
     let mut insert_when = Vec::with_capacity(ops.len());
     let mut insert_then = Vec::with_capacity(ops.len());
@@ -1256,17 +1251,19 @@ async fn execute(
 
         // Extra select_columns is required so that before and after have same schema order
         // DataFusion doesn't have UnionByName yet, see https://github.com/apache/datafusion/issues/12650
+
+        let mut select_columns = target_schema
+            .columns()
+            .iter()
+            .filter(|c| c.name != crate::delta_datafusion::PATH_COLUMN)
+            .map(|c| Expr::Column(c.clone()))
+            .collect_vec();
+        select_columns.extend(null_target_columns);
+
         let before = cdc_projection
             .clone()
             .filter(col(crate::delta_datafusion::PATH_COLUMN).is_not_null())?
-            .select(
-                target_schema
-                    .columns()
-                    .iter()
-                    .filter(|c| c.name != crate::delta_datafusion::PATH_COLUMN)
-                    .map(|c| Expr::Column(c.clone()))
-                    .collect_vec(),
-            )?
+            .select(select_columns)?
             .select_columns(
                 &after
                     .schema()
@@ -1282,17 +1279,9 @@ async fn execute(
 
     let project = filtered.clone().select(write_projection)?;
 
-    project.clone().show().await?;
-
     let merge_final = &project.into_unoptimized_plan();
 
     let write = state.create_physical_plan(merge_final).await?;
-    // only used when it is under merge mode and there are added columns
-    let schema_action = Action::Metadata(Metadata::try_new(
-        test,
-        current_metadata.partition_columns.clone(),
-        snapshot.metadata().configuration.clone(),
-    )?);
 
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
     let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
@@ -1324,7 +1313,7 @@ async fn execute(
         None,
     )
     .await?;
-    add_actions.push(schema_action);
+    add_actions.extend(actions);
 
     if should_cdc && !change_data.is_empty() {
         let mut df = change_data
@@ -1427,6 +1416,21 @@ async fn execute(
     Ok((commit.snapshot(), metrics))
 }
 
+fn modify_schema(
+    ending_schema: &mut SchemaBuilder,
+    target_schema: &DFSchema,
+    source_schema: &DFSchema,
+    operations: &Vec<MergeOperation>,
+) -> DeltaResult<()> {
+    for columns in operations.iter().map(|ops| ops.operations.keys()).flatten() {
+        if target_schema.field_from_column(columns).is_err() {
+            let new_fields = source_schema.field_with_unqualified_name(columns.name())?;
+            ending_schema.push(new_fields.to_owned().with_nullable(true));
+        }
+    }
+    Ok(())
+}
+
 fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     expr.transform(&|expr| match expr {
         Expr::Column(c) => match c.relation {
@@ -1496,6 +1500,7 @@ mod tests {
     use crate::kernel::StructField;
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
+    use crate::operations::write::SchemaMode;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -1717,6 +1722,7 @@ mod tests {
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
+            .with_schema_mode(SchemaMode::Merge)
             .when_matched_update(|update| {
                 update
                     .update("value", col("source.value"))
@@ -1776,6 +1782,7 @@ mod tests {
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
+            .with_schema_mode(SchemaMode::Merge)
             .when_not_matched_insert(|insert| {
                 insert
                     .set("id", col("source.id"))
@@ -1863,7 +1870,6 @@ mod tests {
         assert_merge(table, metrics).await;
     }
 
-    //TODO Make this test pass
     #[tokio::test]
     async fn test_merge_no_alias() {
         // Validate merge can be used without specifying an alias
@@ -2182,7 +2188,7 @@ mod tests {
 
         assert_eq!(table.version(), 2);
         assert!(table.get_files_count() >= 3);
-        assert_eq!(metrics.num_target_files_added, 4);
+        assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 0);
         assert_eq!(metrics.num_target_rows_updated, 2);
@@ -3510,6 +3516,115 @@ mod tests {
         "| D  | 100   | 2021-02-02 | insert           | 1               |",
         "+----+-------+------------+------------------+-----------------+",
         ], &batches }
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdc_enabled_simple_with_schema_merge() {
+        // Manually creating the desired table with the right minimum CDC features
+        use crate::kernel::Protocol;
+        use crate::operations::merge::Action;
+
+        let schema = get_delta_schema();
+
+        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = get_arrow_schema(&None);
+        let table = write_data(table, &schema).await;
+
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+        let source = merge_source(schema);
+        let source = source.with_column("inserted_by", lit("new_value")).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_schema_mode(SchemaMode::Merge)
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 2     | 2021-02-01 |             |",
+            "| B  | 10    | 2021-02-02 | new_value   |",
+            "| C  | 20    | 2023-07-04 | new_value   |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "| X  | 30    | 2023-07-04 | new_value   |",
+            "+----+-------+------------+-------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        let _ = arrow::util::pretty::print_batches(&batches);
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(6)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+----+-------+------------+-------------+------------------+-----------------+",
+        "| id | value | modified   | inserted_by | _change_type     | _commit_version |",
+        "+----+-------+------------+-------------+------------------+-----------------+",
+        "| A  | 1     | 2021-02-01 |             | insert           | 1               |",
+        "| A  | 1     | 2021-02-01 |             | update_preimage  | 2               |",
+        "| A  | 2     | 2021-02-01 |             | update_postimage | 2               |",
+        "| B  | 10    | 2021-02-01 |             | insert           | 1               |",
+        "| B  | 10    | 2021-02-01 |             | update_preimage  | 2               |",
+        "| B  | 10    | 2021-02-02 | new_value   | update_postimage | 2               |",
+        "| C  | 10    | 2021-02-02 |             | insert           | 1               |",
+        "| C  | 10    | 2021-02-02 |             | update_preimage  | 2               |",
+        "| C  | 20    | 2023-07-04 | new_value   | update_postimage | 2               |",
+        "| D  | 100   | 2021-02-02 |             | insert           | 1               |",
+        "| X  | 30    | 2023-07-04 | new_value   | insert           | 2               |",
+        "+----+-------+------------+-------------+------------------+-----------------+",
+            ], &batches }
     }
 
     #[tokio::test]
