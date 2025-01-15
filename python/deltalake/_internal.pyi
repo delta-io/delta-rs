@@ -285,6 +285,7 @@ def get_num_idx_cols_and_stats_columns(
 class PyMergeBuilder:
     source_alias: str
     target_alias: str
+    schema_mode: Optional[str]
     arrow_schema: pyarrow.Schema
 
     def when_matched_update(
