@@ -46,7 +46,7 @@ impl DataCheck for Invariant {
     }
 }
 
-/// Trait to add convenince functions to struct type
+/// Trait to add convenience functions to struct type
 pub trait StructTypeExt {
     /// Get all invariants in the schemas
     fn get_invariants(&self) -> Result<Vec<Invariant>, Error>;

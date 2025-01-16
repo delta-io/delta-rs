@@ -121,7 +121,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let expr = this
                 .expr
-                .ok_or_else(|| DeltaTableError::Generic("No Expresion provided".to_string()))?;
+                .ok_or_else(|| DeltaTableError::Generic("No Expression provided".to_string()))?;
 
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{}", name);

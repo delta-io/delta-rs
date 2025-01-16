@@ -336,9 +336,9 @@ fn merge_arrow_vec_fields(
                         // field.try_merge
                         f.set_metadata(right_field.metadata().clone());
 
-                        let mut field_matadata = f.metadata().clone();
-                        try_merge_metadata(&mut field_matadata, right_field.metadata())?;
-                        f.set_metadata(field_matadata);
+                        let mut field_metadata = f.metadata().clone();
+                        try_merge_metadata(&mut field_metadata, right_field.metadata())?;
+                        f.set_metadata(field_metadata);
                         Ok(f)
                     }
                 }

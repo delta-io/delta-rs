@@ -967,7 +967,7 @@ mod tests {
             assert_eq!(table.version(), 0);
 
             // Hand-crafting the first RecordBatch to ensure that a write with non-nullable columns
-            // works properly before attepting the second write
+            // works properly before attempting the second write
             let arrow_schema = Arc::new(ArrowSchema::new(vec![
                 Field::new("id", DataType::Utf8, false),
                 Field::new("value", DataType::Int32, true),
