@@ -1,21 +1,24 @@
 //! Datafusion integration for UnityCatalog
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use chrono::prelude::*;
 use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;
+use futures::FutureExt;
+use moka::future::Cache;
+use moka::Expiry;
+use std::any::Any;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::error;
 
 use super::models::{
     GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse,
+    TableTempCredentialsResponse, TemporaryTableCredentials,
 };
-use super::{DataCatalogResult, UnityCatalog};
-
+use super::{DataCatalogResult, UnityCatalog, UnityCatalogError};
 use deltalake_core::DeltaTableBuilder;
 
 /// In-memory list of catalogs populated by unity catalog
@@ -27,20 +30,13 @@ pub struct UnityCatalogList {
 
 impl UnityCatalogList {
     /// Create a new instance of [`UnityCatalogList`]
-    pub async fn try_new(
-        client: Arc<UnityCatalog>,
-        storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)> + Clone,
-    ) -> DataCatalogResult<Self> {
+    pub async fn try_new(client: Arc<UnityCatalog>) -> DataCatalogResult<Self> {
         let catalogs = match client.list_catalogs().await? {
-            ListCatalogsResponse::Success { catalogs } => {
+            ListCatalogsResponse::Success { catalogs, .. } => {
                 let mut providers = Vec::new();
                 for catalog in catalogs {
-                    let provider = UnityCatalogProvider::try_new(
-                        client.clone(),
-                        &catalog.name,
-                        storage_options.clone(),
-                    )
-                    .await?;
+                    let provider =
+                        UnityCatalogProvider::try_new(client.clone(), &catalog.name).await?;
                     providers.push((catalog.name, Arc::new(provider) as Arc<dyn CatalogProvider>));
                 }
                 providers
@@ -87,20 +83,15 @@ impl UnityCatalogProvider {
     pub async fn try_new(
         client: Arc<UnityCatalog>,
         catalog_name: impl Into<String>,
-        storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)> + Clone,
     ) -> DataCatalogResult<Self> {
         let catalog_name = catalog_name.into();
         let schemas = match client.list_schemas(&catalog_name).await? {
             ListSchemasResponse::Success { schemas } => {
                 let mut providers = Vec::new();
                 for schema in schemas {
-                    let provider = UnitySchemaProvider::try_new(
-                        client.clone(),
-                        &catalog_name,
-                        &schema.name,
-                        storage_options.clone(),
-                    )
-                    .await?;
+                    let provider =
+                        UnitySchemaProvider::try_new(client.clone(), &catalog_name, &schema.name)
+                            .await?;
                     providers.push((schema.name, Arc::new(provider) as Arc<dyn SchemaProvider>));
                 }
                 providers
@@ -127,20 +118,33 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 }
 
+struct TokenExpiry;
+
+impl Expiry<String, TemporaryTableCredentials> for TokenExpiry {
+    fn expire_after_read(
+        &self,
+        _key: &String,
+        value: &TemporaryTableCredentials,
+        _read_at: Instant,
+        _duration_until_expiry: Option<Duration>,
+        _last_modified_at: Instant,
+    ) -> Option<Duration> {
+        let time_to_expire = value.expiration_time - Utc::now();
+        tracing::info!("Token {} expires in {}", _key, time_to_expire);
+        time_to_expire.to_std().ok()
+    }
+}
+
 /// A datafusion [`SchemaProvider`] backed by Databricks UnityCatalog
 #[derive(Debug)]
 pub struct UnitySchemaProvider {
-    /// UnityCatalog Api client
     client: Arc<UnityCatalog>,
-
     catalog_name: String,
-
     schema_name: String,
 
     /// Parent catalog for schemas of interest.
     table_names: Vec<String>,
-
-    storage_options: HashMap<String, String>,
+    token_cache: Cache<String, TemporaryTableCredentials>,
 }
 
 impl UnitySchemaProvider {
@@ -149,7 +153,6 @@ impl UnitySchemaProvider {
         client: Arc<UnityCatalog>,
         catalog_name: impl Into<String>,
         schema_name: impl Into<String>,
-        storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     ) -> DataCatalogResult<Self> {
         let catalog_name = catalog_name.into();
         let schema_name = schema_name.into();
@@ -163,16 +166,36 @@ impl UnitySchemaProvider {
                 .collect(),
             ListTableSummariesResponse::Error(_) => vec![],
         };
+        let token_cache = Cache::builder().expire_after(TokenExpiry).build();
         Ok(Self {
             client,
             table_names,
             catalog_name,
             schema_name,
-            storage_options: storage_options
-                .into_iter()
-                .map(|(key, value)| (key.into(), value.into()))
-                .collect(),
+            token_cache,
         })
+    }
+
+    async fn get_creds(
+        &self,
+        catalog: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<TemporaryTableCredentials, UnityCatalogError> {
+        tracing::debug!(
+            "Fetching new credential for: {}.{}.{}",
+            catalog,
+            schema,
+            name
+        );
+        self.client
+            .get_temp_table_credentials(catalog, schema, name)
+            .map(|resp| match resp {
+                Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
+                Ok(TableTempCredentialsResponse::Error(err)) => Err(err.into()),
+                Err(err) => Err(err.into()),
+            })
+            .await
     }
 }
 
@@ -195,8 +218,23 @@ impl SchemaProvider for UnitySchemaProvider {
 
         match maybe_table {
             GetTableResponse::Success(table) => {
+                let temp_creds = self
+                    .token_cache
+                    .try_get_with(
+                        table.table_id,
+                        self.get_creds(&self.catalog_name, &self.schema_name, name),
+                    )
+                    .await
+                    .map_err(|err| DataFusionError::External(err.into()))?;
+
+                let new_storage_opts = temp_creds
+                    .aws_temp_credentials
+                    .ok_or_else(|| {
+                        DataFusionError::External(UnityCatalogError::MissingCredential.into())
+                    })?
+                    .into();
                 let table = DeltaTableBuilder::from_uri(table.storage_location)
-                    .with_storage_options(self.storage_options.clone())
+                    .with_storage_options(new_storage_opts)
                     .load()
                     .await?;
                 Ok(Some(Arc::new(table)))
