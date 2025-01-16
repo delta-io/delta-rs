@@ -46,7 +46,7 @@ datafusion-functions-aggregate = { workspace = true, optional = true }
 # serde
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-strum = { workspace =  true}
+strum = { workspace = true }
 
 # "stdlib"
 bytes = { workspace = true }
@@ -130,3 +130,7 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+
+[[test]]
+name = "dat"
+harness = false

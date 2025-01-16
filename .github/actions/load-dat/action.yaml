@@ -19,8 +19,8 @@ runs:
     - name: load DAT
       shell: bash
       run: |
-        rm -rf {{ inputs.target-directory }}
+        rm -rf ${{ inputs.target-directory }}
         curl -OL https://github.com/delta-incubator/dat/releases/download/v${{ inputs.version }}/deltalake-dat-v${{ inputs.version }}.tar.gz
-        mkdir -p {{ inputs.target-directory }}
-        tar --no-same-permissions -xzf deltalake-dat-v${{ inputs.version }}.tar.gz --directory {{ inputs.target-directory }}
+        mkdir -p ${{ inputs.target-directory }}
+        tar --no-same-permissions -xzf deltalake-dat-v${{ inputs.version }}.tar.gz --directory ${{ inputs.target-directory }}
         rm deltalake-dat-v${{ inputs.version }}.tar.gz
