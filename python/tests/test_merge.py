@@ -141,7 +141,7 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
             "id": pa.array(["4", "5"]),
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
-            "customer":pa.array(["john","doe"])
+            "customer": pa.array(["john", "doe"]),
         }
     )
 
@@ -150,8 +150,10 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        schema_mode="merge"
-    ).when_matched_update({"price": "s.price", "sold": "s.sold","customer":"s.customer"}).execute()
+        schema_mode="merge",
+    ).when_matched_update(
+        {"price": "s.price", "sold": "s.sold", "customer": "s.customer"}
+    ).execute()
 
     expected = pa.table(
         {
@@ -159,8 +161,7 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
             "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
             "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
             "deleted": pa.array([False] * 5),
-            "customer":pa.array([None,None,None,"john","doe"])
-
+            "customer": pa.array([None, None, None, "john", "doe"]),
         }
     )
     result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
@@ -379,6 +380,7 @@ def test_merge_when_not_matched_insert_with_predicate(
     assert last_action["operation"] == "MERGE"
     assert result == expected
 
+
 def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
@@ -391,7 +393,7 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
             "id": pa.array(["6", "10"]),
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
-            "customer": pa.array(["john","doe"]),
+            "customer": pa.array(["john", "doe"]),
             "deleted": pa.array([False, False]),
         }
     )
@@ -407,7 +409,7 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
             "id": "source.id",
             "price": "source.price",
             "sold": "source.sold",
-            "customer":"source.customer",
+            "customer": "source.customer",
             "deleted": "False",
         },
         predicate="source.price < 50",
@@ -419,7 +421,7 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
             "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
             "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
             "deleted": pa.array([False] * 6),
-            'customer':pa.array([None,None,None,None,None,"john"])
+            "customer": pa.array([None, None, None, None, None, "john"]),
         }
     )
     result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
@@ -520,7 +522,7 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
             "price": pa.array([10, 100], pa.int64()),
             "sold": pa.array([10, 20], pa.int32()),
             "deleted": pa.array([None, None], pa.bool_()),
-            "customer": pa.array(["john","doe"]),
+            "customer": pa.array(["john", "doe"]),
         }
     )
 
@@ -538,7 +540,7 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
             "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
             "sold": pa.array([0, 1, 2, 3, 4, None, None], pa.int32()),
             "deleted": pa.array([False, False, False, False, False, None, None]),
-            "customer": pa.array([None, None, None, None, None,"john","doe"]),
+            "customer": pa.array([None, None, None, None, None, "john", "doe"]),
         }
     )
     result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
@@ -546,6 +548,7 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
+
 
 def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
     tmp_path: pathlib.Path, sample_table_with_spaces_numbers: pa.Table

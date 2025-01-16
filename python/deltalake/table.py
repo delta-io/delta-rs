@@ -969,7 +969,7 @@ class DeltaTable:
         predicate: str,
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
-        schema_mode:Optional[str] = None,
+        schema_mode: Optional[str] = None,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: Optional[bool] = None,

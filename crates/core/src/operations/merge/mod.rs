@@ -1274,6 +1274,7 @@ async fn execute(
             .filter(|c| c.name != crate::delta_datafusion::PATH_COLUMN)
             .map(|c| Expr::Column(c.clone()))
             .collect_vec();
+        // in case of added columns from a schema evelutions added them as null columns in the target qualifer
         select_columns.extend(null_target_columns);
 
         let before = cdc_projection
@@ -1442,10 +1443,7 @@ fn modify_schema(
 ) -> DeltaResult<()> {
     for columns in operations
         .iter()
-        .filter(|ops| {
-            matches!(ops.r#type, OperationType::Update)
-                | matches!(ops.r#type, OperationType::Insert)
-        })
+        .filter(|ops| matches!(ops.r#type, OperationType::Update | OperationType::Insert))
         .flat_map(|ops| ops.operations.keys())
     {
         if target_schema.field_from_column(columns).is_err() {
