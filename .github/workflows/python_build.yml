@@ -73,9 +73,6 @@ jobs:
       - name: Build and install deltalake
         run: make develop
 
-      - name: Download Data Acceptance Tests (DAT) files
-        run: make setup-dat
-
       - name: Run tests
         run: uv run --no-sync pytest -m '((s3 or azure) and integration) or not integration and not benchmark' --doctest-modules
 
@@ -104,9 +101,6 @@ jobs:
       - name: Build and install deltalake
         run: make develop
 
-      - name: Download Data Acceptance Tests (DAT) files
-        run: make setup-dat
-
       - name: Run tests
         run: uv run --no-sync pytest -m '(lakefs and integration)' --doctest-modules
 
@@ -133,9 +127,6 @@ jobs:
       - name: Build and install deltalake
         run: make develop
 
-      - name: Download Data Acceptance Tests (DAT) files
-        run: make setup-dat
-
       - name: Run tests
         run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_databricks 5 10
 
@@ -161,9 +152,6 @@ jobs:
 
       - name: Build and install deltalake
         run: make develop
-
-      - name: Download Data Acceptance Tests (DAT) files
-        run: make setup-dat
 
       - name: Run tests
         run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_oss 5 10
