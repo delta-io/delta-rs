@@ -30,7 +30,6 @@ pub use retry_ext::ObjectStoreRetryExt;
 use std::ops::Range;
 pub use utils::*;
 
-pub(crate) mod cache;
 pub mod file;
 pub mod retry_ext;
 pub mod utils;

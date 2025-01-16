@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use object_store::path::Path;
 use object_store::{
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
@@ -46,11 +46,10 @@ impl Entry {
 /// the object store are immutable and no attempt is made to invalidate the cache
 /// when files are updated in the remote object store.
 #[derive(Clone)]
-pub(crate) struct CommitCacheObjectStore {
+pub(super) struct CommitCacheObjectStore {
     inner: Arc<dyn ObjectStore>,
     check: Arc<dyn Fn(&Path) -> bool + Send + Sync>,
     cache: Arc<Cache<Path, Entry>>,
-    has_ordered_listing: bool,
 }
 
 impl std::fmt::Debug for CommitCacheObjectStore {
@@ -75,13 +74,10 @@ fn cache_json(path: &Path) -> bool {
 impl CommitCacheObjectStore {
     /// Create a new conditionally cached object store.
     pub fn new(inner: Arc<dyn ObjectStore>) -> Self {
-        let store_str = format!("{}", inner);
-        let is_local = store_str.starts_with("LocalFileSystem");
         Self {
             inner,
             check: Arc::new(cache_json),
             cache: Arc::new(Cache::new(100)),
-            has_ordered_listing: !is_local,
         }
     }
 
