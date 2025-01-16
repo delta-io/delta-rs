@@ -128,7 +128,7 @@ impl From<PutItemError> for LockClientError {
     fn from(err: PutItemError) -> Self {
         match err {
             PutItemError::ConditionalCheckFailedException(_) => {
-                unreachable!("error must be handled explicitely")
+                unreachable!("error must be handled explicitly")
             }
             PutItemError::ProvisionedThroughputExceededException(_) => {
                 LockClientError::ProvisionedThroughputExceeded

@@ -185,7 +185,7 @@ impl DescribeHistory {
 pub struct DescribeDetails {
     /// A reference to the table
     pub table: TableReference,
-    /// Schema for commit provenence information
+    /// Schema for commit provenance information
     pub schema: DFSchemaRef,
 }
 
