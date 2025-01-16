@@ -19,10 +19,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 deltalake-core = { version = "0.24.0", path = "../core", features = [
     "datafusion",
-]}
+] }
+deltalake-aws = { version = "0.7.0", path = "../aws", optional = true }
+deltalake-azure = { version = "0.7.0", path = "../azure", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 reqwest-retry = "0.7"
-reqwest-middleware = "0.4.0"
+reqwest-middleware = { version = "0.4.0", features = ["json"] }
 rand = "0.8"
 futures = { workspace = true }
 chrono = { workspace = true }
@@ -30,13 +32,22 @@ dashmap = "6"
 tracing = { workspace = true }
 datafusion = { workspace = true, optional = true }
 datafusion-common = { workspace = true, optional = true }
+moka = { version = "0.12", optional = true, features = ["future"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 httpmock = { version = "0.8.0-alpha.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
-default = []
-datafusion = ["dep:datafusion", "datafusion-common"]
+default = ["datafusion", "aws"]
+aws = ["deltalake-aws"]
+azure = ["deltalake-azure"]
+datafusion = ["dep:datafusion", "datafusion-common", "deltalake-core/datafusion", "moka"]
+
+[[example]]
+name = "uc_example"
+path = "examples/uc_example.rs"
+required-features = ["datafusion", "aws"]
 
