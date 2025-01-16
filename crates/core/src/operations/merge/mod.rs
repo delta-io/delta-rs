@@ -1761,7 +1761,7 @@ mod tests {
             .with_schema_mode(SchemaMode::Merge)
             .when_matched_update(|update| {
                 update
-                    .update("value", col("source.value"))
+                    .update("value", col("source.value").add(lit(1)))
                     .update("modified", col("source.modified"))
                     .update("inserted_by", col("source.inserted_by"))
             })
@@ -1778,8 +1778,8 @@ mod tests {
             "| id | value | modified   | inserted_by |",
             "+----+-------+------------+-------------+",
             "| A  | 1     | 2021-02-01 |             |",
-            "| B  | 50    | 2021-02-02 | B1          |",
-            "| C  | 200   | 2023-07-04 | C1          |",
+            "| B  | 51    | 2021-02-02 | B1          |",
+            "| C  | 201   | 2023-07-04 | C1          |",
             "| D  | 100   | 2021-02-02 |             |",
             "+----+-------+------------+-------------+",
         ];

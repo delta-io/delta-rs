@@ -152,14 +152,14 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
         target_alias="t",
         schema_mode="merge",
     ).when_matched_update(
-        {"price": "s.price", "sold": "s.sold", "customer": "s.customer"}
+        {"price": "s.price", "sold": "s.sold+int'10'", "customer": "s.customer"}
     ).execute()
 
     expected = pa.table(
         {
             "id": pa.array(["1", "2", "3", "4", "5"]),
             "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
+            "sold": pa.array([0, 1, 2, 20, 30], pa.int32()),
             "deleted": pa.array([False] * 5),
             "customer": pa.array([None, None, None, "john", "doe"]),
         }
