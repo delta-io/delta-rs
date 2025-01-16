@@ -1979,6 +1979,7 @@ class TableAlterer:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Example:
+            ```python
             from deltalake.schema import Field, PrimitiveType, StructType
             dt = DeltaTable("test_table")
             new_fields = [
