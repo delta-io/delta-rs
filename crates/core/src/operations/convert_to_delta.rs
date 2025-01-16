@@ -75,7 +75,7 @@ impl From<Error> for DeltaTableError {
 }
 
 /// The partition strategy used by the Parquet table
-/// Currently only hive-partitioning is supproted for Parquet paths
+/// Currently only hive-partitioning is supported for Parquet paths
 #[non_exhaustive]
 #[derive(Default)]
 pub enum PartitionStrategy {
@@ -187,7 +187,7 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Specify the partition strategy of the Parquet table
-    /// Currently only hive-partitioning is supproted for Parquet paths
+    /// Currently only hive-partitioning is supported for Parquet paths
     pub fn with_partition_strategy(mut self, strategy: PartitionStrategy) -> Self {
         self.partition_strategy = strategy;
         self
@@ -402,7 +402,7 @@ impl ConvertToDeltaBuilder {
 
             let mut arrow_schema = batch_builder.schema().as_ref().clone();
 
-            // Arrow schema of Parquet files may have conflicting metatdata
+            // Arrow schema of Parquet files may have conflicting metadata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
             arrow_schema.metadata = HashMap::new();
             arrow_schemas.push(arrow_schema);

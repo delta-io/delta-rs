@@ -96,7 +96,7 @@ impl GcpConfigHelper {
             .all(|key| self.config.contains_key(key) || self.env_config.contains_key(key))
     }
 
-    /// Generate a cofiguration augmented with options from the environment
+    /// Generate a configuration augmented with options from the environment
     pub fn build(mut self) -> Result<HashMap<GoogleConfigKey, String>> {
         let mut has_credential = false;
 
@@ -110,7 +110,7 @@ impl GcpConfigHelper {
             }
         }
 
-        // try partially avaialbe credentials augmented by environment
+        // try partially available credentials augmented by environment
         if !has_credential {
             for cred in &self.priority {
                 if self.has_any_config(cred) && self.has_full_config_with_env(cred) {

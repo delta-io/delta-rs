@@ -131,7 +131,7 @@ impl DeltaIOStorageBackend {
         }
     }
 
-    /// spawn taks on IO runtime
+    /// spawn tasks on IO runtime
     pub fn spawn_io_rt<F, O>(
         &self,
         f: F,
@@ -156,7 +156,7 @@ impl DeltaIOStorageBackend {
         .boxed()
     }
 
-    /// spawn taks on IO runtime
+    /// spawn tasks on IO runtime
     pub fn spawn_io_rt_from_to<F, O>(
         &self,
         f: F,

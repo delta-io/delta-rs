@@ -63,7 +63,7 @@ pub enum ProtocolError {
         source: parquet::errors::ParquetError,
     },
 
-    /// Faild to serialize operation
+    /// Failed to serialize operation
     #[error("Failed to serialize operation: {source}")]
     SerializeOperation {
         #[from]
@@ -819,7 +819,7 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
 
-        // assert that commit info has no required filelds
+        // assert that commit info has no required fields
         let raw = "{}";
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
