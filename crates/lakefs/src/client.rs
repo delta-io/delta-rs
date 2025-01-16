@@ -34,7 +34,7 @@ pub struct LakeFSClient {
     /// configuration of the lakefs client
     config: LakeFSConfig,
     http_client: Client,
-    /// Holds the running delta lake operations, each operation propogates the operation ID into execution handler.
+    /// Holds the running delta lake operations, each operation propagates the operation ID into execution handler.
     transactions: DashMap<Uuid, String>,
 }
 

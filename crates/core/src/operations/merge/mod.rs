@@ -1195,12 +1195,12 @@ async fn execute(
         LogicalPlanBuilder::from(plan).project(fields)?.build()?
     };
 
-    let distrbute_expr = col(file_column.as_str());
+    let distribute_expr = col(file_column.as_str());
 
     let merge_barrier = LogicalPlan::Extension(Extension {
         node: Arc::new(MergeBarrier {
             input: new_columns.clone(),
-            expr: distrbute_expr,
+            expr: distribute_expr,
             file_column,
         }),
     });

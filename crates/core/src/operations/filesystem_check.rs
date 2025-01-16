@@ -104,7 +104,7 @@ impl FileSystemCheckBuilder {
         self
     }
 
-    /// Additonal information to write to the commit
+    /// Additional information to write to the commit
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self

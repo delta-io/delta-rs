@@ -438,7 +438,7 @@ async fn write_execution_plan_with_predicate(
     let checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
-        debug!("Using plan schema to derive generated columns, since no shapshot was provided. Implies first write.");
+        debug!("Using plan schema to derive generated columns, since no snapshot was provided. Implies first write.");
         let delta_schema: StructType = schema.as_ref().try_into()?;
         DeltaDataChecker::new_with_generated_columns(
             delta_schema.get_generated_columns().unwrap_or_default(),
@@ -765,7 +765,7 @@ pub(crate) async fn execute_non_empty_expr_cdc(
     }
 }
 
-// This should only be called wth a valid predicate
+// This should only be called with a valid predicate
 #[allow(clippy::too_many_arguments)]
 async fn prepare_predicate_actions(
     predicate: Expr,
@@ -2075,7 +2075,7 @@ mod tests {
         let table_logstore = table.log_store.clone();
         let table_state = table.state.clone().unwrap();
 
-        // An attempt to write records non comforming to predicate should fail
+        // An attempt to write records non conforming to predicate should fail
         let batch_fail = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
