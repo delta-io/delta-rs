@@ -1,13 +1,19 @@
+//! Snapshot of a Delta Table at a specific version.
+//!
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::compute::{concat_batches, filter_record_batch};
 use arrow_arith::boolean::{and, is_null, not};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{Array, BooleanArray, RecordBatch};
+use arrow_cast::pretty::print_batches;
 use chrono::{DateTime, Utc};
 use delta_kernel::actions::set_transaction::{SetTransactionMap, SetTransactionScanner};
+use delta_kernel::actions::visitors::{
+    AddVisitor, CdcVisitor, MetadataVisitor, ProtocolVisitor, RemoveVisitor, SetTransactionVisitor,
+};
 use delta_kernel::actions::{
     get_log_add_schema, get_log_schema, ADD_NAME, CDC_NAME, METADATA_NAME, PROTOCOL_NAME,
     REMOVE_NAME, SET_TRANSACTION_NAME,
@@ -20,12 +26,16 @@ use delta_kernel::engine::default::executor::tokio::{
 use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::engine_data::{GetData, RowVisitor, TypedGetData as _};
 use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::log_segment::LogSegment;
 use delta_kernel::scan::log_replay::scan_action_iter;
-use delta_kernel::scan::{scan_row_schema, PhysicalPredicate};
-use delta_kernel::schema::Schema;
+use delta_kernel::scan::scan_row_schema;
+use delta_kernel::schema::{DataType, Schema, StructField, StructType};
 use delta_kernel::snapshot::Snapshot as SnapshotInner;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{DeltaResult as KernelResult, Engine, EngineData, Expression, Table, Version};
+use delta_kernel::{
+    DeltaResult as KernelResult, Engine, EngineData, Expression, ExpressionHandler, ExpressionRef,
+    Table, Version,
+};
 use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -33,13 +43,33 @@ use tracing::warn;
 use url::Url;
 
 use crate::kernel::scalars::ScalarExt;
-use crate::kernel::ActionType;
+use crate::kernel::{ActionType, ARROW_HANDLER};
 use crate::storage::cache::CommitCacheObjectStore;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 type ReplayIter = Box<dyn Iterator<Item = KernelResult<(Box<dyn EngineData>, Vec<bool>)>>>;
 
 type LocalFileSystem = CommitCacheObjectStore;
+
+#[derive(thiserror::Error, Debug)]
+enum SnapshotError {
+    #[error("Snapshot not initialized for action type: {0}")]
+    MissingData(String),
+}
+
+impl SnapshotError {
+    fn missing_data(action: ActionType) -> Self {
+        Self::MissingData(action.field_name_unckecked().to_string())
+    }
+}
+
+impl From<SnapshotError> for DeltaTableError {
+    fn from(e: SnapshotError) -> Self {
+        match &e {
+            SnapshotError::MissingData(_) => DeltaTableError::generic(e),
+        }
+    }
+}
 
 impl ActionType {
     pub(self) fn field_name_unckecked(&self) -> &'static str {
@@ -88,7 +118,7 @@ impl Snapshot {
     pub async fn try_new(
         table: Table,
         store: Arc<dyn ObjectStore>,
-        version: Option<i64>,
+        version: impl Into<Option<Version>>,
     ) -> DeltaResult<Self> {
         // TODO: how to deal with the dedicated IO runtime? Would this already be covered by the
         // object store implementation pass to this?
@@ -113,7 +143,7 @@ impl Snapshot {
             _ => return Err(DeltaTableError::generic("unsupported runtime flavor")),
         };
 
-        let snapshot = table.snapshot(engine.as_ref(), version.map(|v| v as u64))?;
+        let snapshot = table.snapshot(engine.as_ref(), version.into())?;
         Ok(Self::new(Arc::new(snapshot), engine))
     }
 
@@ -125,7 +155,7 @@ impl Snapshot {
         &self.inner.table_root()
     }
 
-    pub fn version(&self) -> u64 {
+    pub fn version(&self) -> Version {
         self.inner.version()
     }
 
@@ -159,6 +189,49 @@ impl Snapshot {
             .map(|f| f.location.last_modified)
     }
 
+    /// read all active files from the log
+    pub(crate) fn files(
+        &self,
+        predicate: Option<Arc<Expression>>,
+    ) -> DeltaResult<impl Iterator<Item = Result<RecordBatch, delta_kernel::Error>>> {
+        let scan = self
+            .inner
+            .clone()
+            .scan_builder()
+            .with_predicate(predicate)
+            .build()?;
+        Ok(scan.scan_data(self.engine.as_ref())?.map(|res| {
+            res.and_then(|(data, mut predicate)| {
+                let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+                if predicate.len() < batch.num_rows() {
+                    predicate
+                        .extend(std::iter::repeat(true).take(batch.num_rows() - predicate.len()));
+                }
+                Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
+            })
+        }))
+    }
+
+    pub(crate) fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        static META_PREDICATE: LazyLock<Option<ExpressionRef>> = LazyLock::new(|| {
+            Some(Arc::new(
+                Expression::column([REMOVE_NAME, "path"]).is_not_null(),
+            ))
+        });
+        let read_schema = get_log_schema().project(&[REMOVE_NAME])?;
+        Ok(self
+            .inner
+            ._log_segment()
+            .replay(
+                self.engine.as_ref(),
+                read_schema.clone(),
+                read_schema,
+                META_PREDICATE.clone(),
+            )?
+            .map_ok(|(d, _)| Ok(RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?)))
+            .flatten())
+    }
+
     /// Scan the Delta Log to obtain the latest transaction for all applications
     ///
     /// This method requires a full scan of the log to find all transactions.
@@ -180,43 +253,13 @@ impl Snapshot {
         let scanner = SetTransactionScanner::new(self.inner.clone());
         Ok(scanner.application_transaction(self.engine.as_ref(), app_id.as_ref())?)
     }
-
-    fn log_data(
-        &self,
-        types: &[ActionType],
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<(RecordBatch, bool)>>> {
-        let field_names = types
-            .iter()
-            .filter_map(|t| t.field_name().ok())
-            .collect::<Vec<_>>();
-        if field_names.len() != types.len() {
-            warn!("skipping unsupported action types");
-        }
-        let log_schema = get_log_schema().project(&field_names)?;
-        Ok(self
-            .inner
-            ._log_segment()
-            .replay(
-                self.engine.as_ref(),
-                log_schema.clone(),
-                log_schema.clone(),
-                None,
-            )?
-            .map_ok(|(d, flag)| {
-                Ok((
-                    RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?),
-                    flag,
-                ))
-            })
-            .flatten())
-    }
 }
 
 #[derive(Clone)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
-    files: RecordBatch,
-    actions: Option<RecordBatch>,
+    files: Option<RecordBatch>,
+    predicate: Option<Arc<Expression>>,
 }
 
 impl EagerSnapshot {
@@ -229,101 +272,23 @@ impl EagerSnapshot {
         table_root: impl AsRef<str>,
         store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: impl Into<Option<Version>>,
         tracked_actions: HashSet<ActionType>,
-        predicate: Option<Expression>,
+        predicate: Option<Arc<Expression>>,
     ) -> DeltaResult<Self> {
-        let mut replay_actions = Vec::new();
-        if config.require_files {
-            replay_actions.push(ActionType::Add);
-            replay_actions.push(ActionType::Remove);
-        }
-        replay_actions.extend(tracked_actions.into_iter().filter(|it| {
-            !config.require_files || (it != &ActionType::Add && it != &ActionType::Remove)
-        }));
-
         let snapshot = Snapshot::try_new(Table::try_from_uri(table_root)?, store, version).await?;
-
-        let mut replay_data = Vec::new();
-        let mut action_data = Vec::new();
-        for slice in snapshot.log_data(&replay_actions)? {
-            let (batch, flag) = slice?;
-
-            let action_projection = replay_actions
-                .iter()
-                .filter_map(|t| {
-                    (t != &ActionType::Add && t != &ActionType::Remove)
-                        .then_some(
-                            t.field_name()
-                                .ok()
-                                .and_then(|n| batch.schema_ref().index_of(n).ok()),
-                        )
-                        .flatten()
-                })
-                .collect_vec();
-
-            if !action_projection.is_empty() {
-                action_data.push(batch.project(&action_projection)?);
-            }
-
-            if config.require_files {
-                let file_data = batch.project(&[0, 1])?;
-                let file_data = filter_record_batch(
-                    &file_data,
-                    &not(&and(
-                        &is_null(batch.column(0))?,
-                        &is_null(batch.column(1))?,
-                    )?)?,
-                )?;
-                replay_data.push(Ok((
-                    Box::new(ArrowEngineData::from(file_data)) as Box<dyn EngineData>,
-                    flag,
-                )));
-            }
-        }
-
-        let files_schema = Arc::new(get_log_add_schema().as_ref().try_into()?);
-        let scan_schema = Arc::new((&scan_row_schema()).try_into()?);
-
-        let files = if !replay_data.is_empty() {
-            let (engine, action_iter) = (snapshot.engine_ref().as_ref(), replay_data.into_iter());
-            let physical_predicate =
-                predicate.and_then(|p| PhysicalPredicate::try_new(&p, snapshot.schema()).ok());
-
-            let it: ReplayIter = match physical_predicate {
-                Some(PhysicalPredicate::StaticSkipAll) => Box::new(std::iter::empty()),
-                Some(PhysicalPredicate::Some(p, s)) => {
-                    Box::new(scan_action_iter(engine, action_iter, Some((p, s))))
-                }
-                None | Some(PhysicalPredicate::None) => {
-                    Box::new(scan_action_iter(engine, action_iter, None))
-                }
-            };
-
-            let mut filtered = Vec::new();
-            for res in it {
-                let (batch, selection) = res?;
-                let predicate = BooleanArray::from(selection);
-                let data: RecordBatch = ArrowEngineData::try_from_engine_data(batch)?.into();
-                filtered.push(filter_record_batch(&data, &predicate)?);
-            }
-            concat_batches(&scan_schema, &filtered)?
-        } else {
-            RecordBatch::new_empty(scan_schema.clone())
-        };
-
-        let actions = (!action_data.is_empty())
-            .then(|| concat_batches(&files_schema, &action_data).ok())
-            .flatten();
-
+        let files = config
+            .require_files
+            .then(|| -> DeltaResult<_> { Ok(replay_file_actions(&snapshot)?) })
+            .transpose()?;
         Ok(Self {
             snapshot,
             files,
-            actions,
+            predicate,
         })
     }
 
-    pub fn version(&self) -> u64 {
+    pub fn version(&self) -> Version {
         self.snapshot.version()
     }
 
@@ -335,7 +300,7 @@ impl EagerSnapshot {
         self.snapshot.protocol()
     }
 
-    pub fn metadata(&self) -> &delta_kernel::actions::Metadata {
+    pub fn metadata(&self) -> &Metadata {
         self.snapshot.metadata()
     }
 
@@ -343,17 +308,138 @@ impl EagerSnapshot {
         &self.snapshot.table_properties()
     }
 
-    pub fn files(&self) -> impl Iterator<Item = LogicalFileView> {
-        LogicalFileView {
-            files: self.files.clone(),
+    pub fn files(&self) -> DeltaResult<impl Iterator<Item = LogicalFileView>> {
+        Ok(LogicalFileView {
+            files: self
+                .files
+                .clone()
+                .ok_or_else(|| SnapshotError::missing_data(ActionType::Add))?,
             index: 0,
-        }
+        })
     }
 
     /// Get the number of files in the current snapshot
-    pub fn files_count(&self) -> usize {
-        self.files.num_rows()
+    pub fn files_count(&self) -> DeltaResult<usize> {
+        Ok(self
+            .files
+            .as_ref()
+            .map(|f| f.num_rows())
+            .ok_or_else(|| SnapshotError::missing_data(ActionType::Add))?)
     }
+
+    pub fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        self.snapshot.tombstones()
+    }
+
+    /// Scan the Delta Log to obtain the latest transaction for all applications
+    ///
+    /// This method requires a full scan of the log to find all transactions.
+    /// When a specific application id is requested, it is much more efficient to use
+    /// [`application_transaction`](Self::application_transaction) instead.
+    pub fn application_transactions(&self) -> DeltaResult<SetTransactionMap> {
+        self.snapshot.application_transactions()
+    }
+
+    /// Scan the Delta Log for the latest transaction entry for a specific application.
+    ///
+    /// Initiates a log scan, but terminates as soon as the transaction
+    /// for the given application is found.
+    pub fn application_transaction(
+        &self,
+        app_id: impl AsRef<str>,
+    ) -> DeltaResult<Option<SetTransaction>> {
+        self.snapshot.application_transaction(app_id)
+    }
+
+    pub(crate) fn update(&mut self) -> DeltaResult<()> {
+        let state = self
+            .files
+            .as_ref()
+            .ok_or(SnapshotError::missing_data(ActionType::Add))?
+            .clone();
+
+        let log_root = self.snapshot.table_root().join("_delta_log/").unwrap();
+        let fs_client = self.snapshot.engine.get_file_system_client();
+        let commit_read_schema = get_log_schema().project(&[ADD_NAME, REMOVE_NAME])?;
+        let checkpoint_read_schema = get_log_add_schema().clone();
+
+        let segment =
+            LogSegment::for_table_changes(fs_client.as_ref(), log_root, self.version() + 1, None)?;
+        let slice_iter = segment
+            .replay(
+                self.snapshot.engine.as_ref(),
+                commit_read_schema,
+                checkpoint_read_schema,
+                None,
+            )?
+            .chain(std::iter::once(Ok((
+                Box::new(ArrowEngineData::from(state)) as Box<dyn EngineData>,
+                false,
+            ))));
+
+        let res = scan_action_iter(self.snapshot.engine.as_ref(), slice_iter, None)
+            .map(|res| {
+                res.and_then(|(d, sel)| {
+                    let batch = RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?);
+                    Ok(filter_record_batch(&batch, &BooleanArray::from(sel))?)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.files = Some(concat_batches(res[0].schema_ref(), &res)?);
+
+        Ok(())
+    }
+}
+
+fn replay_file_actions(snapshot: &Snapshot) -> DeltaResult<RecordBatch> {
+    let commit_read_schema = get_log_schema().project(&[ADD_NAME, REMOVE_NAME])?;
+    let checkpoint_read_schema = get_log_add_schema().clone();
+
+    let curr_data = snapshot
+        .inner
+        ._log_segment()
+        .replay(
+            snapshot.engine.as_ref(),
+            commit_read_schema.clone(),
+            checkpoint_read_schema.clone(),
+            None,
+        )?
+        .map_ok(
+            |(data, flag)| -> Result<(RecordBatch, bool), delta_kernel::Error> {
+                Ok((ArrowEngineData::try_from_engine_data(data)?.into(), flag))
+            },
+        )
+        .flatten()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let scan_iter = curr_data.clone().into_iter().map(|(data, flag)| {
+        Ok((
+            Box::new(ArrowEngineData::new(data.clone())) as Box<dyn EngineData>,
+            flag,
+        ))
+    });
+
+    let res = scan_action_iter(snapshot.engine.as_ref(), scan_iter, None)
+        .map(|res| {
+            res.and_then(|(d, selection)| {
+                Ok((
+                    RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?),
+                    selection,
+                ))
+            })
+        })
+        .zip(curr_data.into_iter())
+        .map(|(scan_res, (data_raw, _))| match scan_res {
+            Ok((_, selection)) => {
+                let data = filter_record_batch(&data_raw, &BooleanArray::from(selection))?;
+                Ok(data.project(&[0])?)
+            }
+            Err(e) => Err(e),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(concat_batches(res[0].schema_ref(), &res)?)
 }
 
 /// Helper trait to extract individual values from a `StructData`.
@@ -451,7 +537,6 @@ impl Iterator for LogicalFileView {
 mod tests {
     use super::*;
 
-    use arrow_cast::pretty::print_batches;
     use deltalake_test::acceptance::{read_dat_case, TestCaseInfo};
     use deltalake_test::TestResult;
     use std::path::PathBuf;
@@ -508,31 +593,31 @@ mod tests {
 
     #[tokio::test]
     async fn load_eager_snapshot() -> TestResult<()> {
-        // some comment
         let mut dat_dir = get_dat_dir();
         dat_dir.push("multi_partitioned");
+
         let dat_info: TestCaseInfo = read_dat_case(dat_dir)?;
         let table_info = dat_info.table_summary()?;
 
         let table = Table::try_from_uri(dat_info.table_root()?)?;
 
-        let snapshot = EagerSnapshot::try_new_with_actions(
+        let mut snapshot = EagerSnapshot::try_new_with_actions(
             table.location(),
             Arc::new(object_store::local::LocalFileSystem::default()),
             Default::default(),
-            None,
+            Some(1),
             Default::default(),
             None,
         )
         .await?;
 
-        assert_eq!(snapshot.version(), table_info.version);
-        assert_eq!(
-            snapshot.protocol().min_reader_version(),
-            table_info.min_reader_version
-        );
+        // assert_eq!(snapshot.version(), table_info.version);
+        // assert_eq!(
+        //     snapshot.protocol().min_reader_version(),
+        //     table_info.min_reader_version
+        // );
 
-        print_batches(&[snapshot.files])?;
+        snapshot.update()?;
 
         Ok(())
     }

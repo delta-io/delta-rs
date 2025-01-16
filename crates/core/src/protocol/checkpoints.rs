@@ -174,7 +174,7 @@ pub async fn create_checkpoint_for(
     let tombstones = state
         .unexpired_tombstones(log_store.object_store(None).clone())
         .await
-        .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
+        .map_err(|_| ProtocolError::Generic("failed to get tombstones".into()))?
         .collect::<Vec<_>>();
     let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state, tombstones)?;
 
