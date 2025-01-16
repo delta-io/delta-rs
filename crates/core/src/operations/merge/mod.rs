@@ -132,6 +132,7 @@ pub struct MergeBuilder {
     snapshot: DeltaTableState,
     /// The source data
     source: DataFrame,
+    /// schema evolution mode only MERGE is available
     schema_mode: Option<SchemaMode>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
@@ -887,7 +888,7 @@ async fn execute(
     if matches!(schema_mode, Some(SchemaMode::Merge)) {
         let merge_schema = merge_arrow_schema(
             snapshot.input_schema()?,
-            Arc::new(source_schema.as_arrow().clone()),
+            source_schema.inner().clone(),
             false,
         )?;
 
@@ -895,22 +896,22 @@ async fn execute(
 
         modify_schema(
             &mut schema_bulider,
-            &target_schema,
-            &source_schema,
+            target_schema,
+            source_schema,
             &match_operations,
         )?;
 
         modify_schema(
             &mut schema_bulider,
-            &target_schema,
-            &source_schema,
+            target_schema,
+            source_schema,
             &not_match_source_operations,
         )?;
 
         modify_schema(
             &mut schema_bulider,
-            &target_schema,
-            &source_schema,
+            target_schema,
+            source_schema,
             &not_match_target_operations,
         )?;
         let schema = Arc::new(schema_bulider.finish());
@@ -1437,9 +1438,16 @@ fn modify_schema(
     ending_schema: &mut SchemaBuilder,
     target_schema: &DFSchema,
     source_schema: &DFSchema,
-    operations: &Vec<MergeOperation>,
+    operations: &[MergeOperation],
 ) -> DeltaResult<()> {
-    for columns in operations.iter().map(|ops| ops.operations.keys()).flatten() {
+    for columns in operations
+        .iter()
+        .filter(|ops| {
+            matches!(ops.r#type, OperationType::Update)
+                | matches!(ops.r#type, OperationType::Insert)
+        })
+        .flat_map(|ops| ops.operations.keys())
+    {
         if target_schema.field_from_column(columns).is_err() {
             let new_fields = source_schema.field_with_unqualified_name(columns.name())?;
             ending_schema.push(new_fields.to_owned().with_nullable(true));
