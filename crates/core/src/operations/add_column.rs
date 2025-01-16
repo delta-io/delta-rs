@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::StructField;
+use crate::kernel::{StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::merge_delta_struct;
 use crate::protocol::DeltaOperation;
@@ -85,27 +85,26 @@ impl std::future::IntoFuture for AddColumnBuilder {
             this.pre_execute(operation_id).await?;
 
             let fields_right = &StructType::new(fields.clone());
+
+            if !fields_right
+                .get_generated_columns()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                return Err(DeltaTableError::Generic(
+                    "New columns cannot be a generated column".to_string(),
+                ));
+            }
+
             let table_schema = this.snapshot.schema();
             let new_table_schema = merge_delta_struct(table_schema, fields_right)?;
 
-            // TODO(ion): Think of a way how we can simply this checking through the API or centralize some checks.
-            let contains_timestampntz = PROTOCOL.contains_timestampntz(fields.iter());
-            let protocol = this.snapshot.protocol();
+            let current_protocol = this.snapshot.protocol();
 
-            let maybe_new_protocol = if contains_timestampntz {
-                let updated_protocol = protocol.clone().enable_timestamp_ntz();
-                if !(protocol.min_reader_version == 3 && protocol.min_writer_version == 7) {
-                    // Convert existing properties to features since we advanced the protocol to v3,7
-                    Some(
-                        updated_protocol
-                            .move_table_properties_into_features(&metadata.configuration),
-                    )
-                } else {
-                    Some(updated_protocol)
-                }
-            } else {
-                None
-            };
+            let new_protocol = current_protocol
+                .clone()
+                .apply_column_metadata_to_protocol(&new_table_schema)?
+                .move_table_properties_into_features(&metadata.configuration);
 
             let operation = DeltaOperation::AddColumn {
                 fields: fields.into_iter().collect_vec(),
@@ -115,7 +114,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
 
             let mut actions = vec![metadata.into()];
 
-            if let Some(new_protocol) = maybe_new_protocol {
+            if current_protocol != &new_protocol {
                 actions.push(new_protocol.into())
             }
 

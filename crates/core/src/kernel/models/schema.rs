@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::kernel::error::Error;
 use crate::kernel::DataCheck;
+use crate::table::GeneratedColumn;
 
 /// Type alias for a top level schema
 pub type Schema = StructType;
@@ -49,9 +50,59 @@ impl DataCheck for Invariant {
 pub trait StructTypeExt {
     /// Get all invariants in the schemas
     fn get_invariants(&self) -> Result<Vec<Invariant>, Error>;
+
+    /// Get all generated column expressions
+    fn get_generated_columns(&self) -> Result<Vec<GeneratedColumn>, Error>;
 }
 
 impl StructTypeExt for StructType {
+    /// Get all get_generated_columns in the schemas
+    fn get_generated_columns(&self) -> Result<Vec<GeneratedColumn>, Error> {
+        let mut remaining_fields: Vec<(String, StructField)> = self
+            .fields()
+            .map(|field| (field.name.clone(), field.clone()))
+            .collect();
+        let mut generated_cols: Vec<GeneratedColumn> = Vec::new();
+
+        while let Some((field_path, field)) = remaining_fields.pop() {
+            if let Some(MetadataValue::String(generated_col_string)) = field
+                .metadata
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+            {
+                let json: Value = serde_json::from_str(generated_col_string).map_err(|e| {
+                    Error::InvalidGenerationExpressionJson {
+                        json_err: e,
+                        line: generated_col_string.to_string(),
+                    }
+                })?;
+                match json {
+                    Value::String(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &sql,
+                        field.data_type(),
+                    )),
+                    Value::Number(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &format!("{}", sql),
+                        field.data_type(),
+                    )),
+                    Value::Bool(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &format!("{}", sql),
+                        field.data_type(),
+                    )),
+                    Value::Array(sql) => generated_cols.push(GeneratedColumn::new(
+                        &field_path,
+                        &format!("{:?}", sql),
+                        field.data_type(),
+                    )),
+                    _ => (), // Other types not sure what to do then
+                };
+            }
+        }
+        Ok(generated_cols)
+    }
+
     /// Get all invariants in the schemas
     fn get_invariants(&self) -> Result<Vec<Invariant>, Error> {
         let mut remaining_fields: Vec<(String, StructField)> = self
@@ -130,6 +181,49 @@ mod tests {
     use super::*;
     use serde_json;
     use serde_json::json;
+
+    #[test]
+    fn test_get_generated_columns() {
+        let schema: StructType = serde_json::from_value(json!(
+            {
+                "type":"struct",
+                "fields":[
+                    {"name":"id","type":"integer","nullable":true,"metadata":{}},
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{}}]
+            }
+        ))
+        .unwrap();
+        let cols = schema.get_generated_columns().unwrap();
+        assert_eq!(cols.len(), 0);
+
+        let schema: StructType = serde_json::from_value(json!(
+            {
+                "type":"struct",
+                "fields":[
+                    {"name":"id","type":"integer","nullable":true,"metadata":{}},
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"5\""}}]
+            }
+        )).unwrap();
+        let cols = schema.get_generated_columns().unwrap();
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].data_type, DataType::INTEGER);
+        assert_eq!(
+            cols[0].validation_expr,
+            "gc = 5 OR (gc IS NULL AND 5 IS NULL)"
+        );
+
+        let schema: StructType = serde_json::from_value(json!(
+            {
+                "type":"struct",
+                "fields":[
+                    {"name":"id","type":"integer","nullable":true,"metadata":{}},
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"5\""}},
+                    {"name":"id2","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"id * 10\""}},]
+            }
+        )).unwrap();
+        let cols = schema.get_generated_columns().unwrap();
+        assert_eq!(cols.len(), 2);
+    }
 
     #[test]
     fn test_get_invariants() {

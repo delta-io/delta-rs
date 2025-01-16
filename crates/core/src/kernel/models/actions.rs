@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+use delta_kernel::schema::{DataType, StructField};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
 
 use super::schema::StructType;
+use super::StructTypeExt;
 use crate::kernel::{error::Error, DeltaResult};
 use crate::TableProperty;
 use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
@@ -115,6 +117,19 @@ impl Metadata {
     }
 }
 
+/// checks if table contains timestamp_ntz in any field including nested fields.
+pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fn _check_type(dtype: &DataType) -> bool {
+        match dtype {
+            &DataType::TIMESTAMP_NTZ => true,
+            DataType::Array(inner) => _check_type(inner.element_type()),
+            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
+            _ => false,
+        }
+    }
+    fields.any(|f| _check_type(f.data_type()))
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 /// Defines a protocol action
@@ -146,8 +161,8 @@ impl Protocol {
         }
     }
 
-    /// set the reader features in the protocol action, automatically bumps min_reader_version
-    pub fn with_reader_features(
+    /// Append the reader features in the protocol action, automatically bumps min_reader_version
+    pub fn append_reader_features(
         mut self,
         reader_features: impl IntoIterator<Item = impl Into<ReaderFeatures>>,
     ) -> Self {
@@ -156,14 +171,20 @@ impl Protocol {
             .map(Into::into)
             .collect::<HashSet<_>>();
         if !all_reader_features.is_empty() {
-            self.min_reader_version = 3
+            self.min_reader_version = 3;
+            match self.reader_features {
+                Some(mut features) => {
+                    features.extend(all_reader_features);
+                    self.reader_features = Some(features);
+                }
+                None => self.reader_features = Some(all_reader_features),
+            };
         }
-        self.reader_features = Some(all_reader_features);
         self
     }
 
-    /// set the writer features in the protocol action, automatically bumps min_writer_version
-    pub fn with_writer_features(
+    /// Append the writer features in the protocol action, automatically bumps min_writer_version
+    pub fn append_writer_features(
         mut self,
         writer_features: impl IntoIterator<Item = impl Into<WriterFeatures>>,
     ) -> Self {
@@ -172,9 +193,16 @@ impl Protocol {
             .map(|c| c.into())
             .collect::<HashSet<_>>();
         if !all_writer_feautures.is_empty() {
-            self.min_writer_version = 7
+            self.min_writer_version = 7;
+
+            match self.writer_features {
+                Some(mut features) => {
+                    features.extend(all_writer_feautures);
+                    self.writer_features = Some(features);
+                }
+                None => self.writer_features = Some(all_writer_feautures),
+            };
         }
-        self.writer_features = Some(all_writer_feautures);
         self
     }
 
@@ -255,6 +283,32 @@ impl Protocol {
         }
         self
     }
+
+    /// Will apply the column metadata to the protocol by either bumping the version or setting
+    /// features
+    pub fn apply_column_metadata_to_protocol(
+        mut self,
+        schema: &StructType,
+    ) -> DeltaResult<Protocol> {
+        let generated_cols = schema.get_generated_columns()?;
+        let invariants = schema.get_invariants()?;
+        let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
+
+        if contains_timestamp_ntz {
+            self = self.enable_timestamp_ntz()
+        }
+
+        if !generated_cols.is_empty() {
+            self = self.enable_generated_columns()
+        }
+
+        if !invariants.is_empty() {
+            self = self.enable_invariants()
+        }
+
+        Ok(self)
+    }
+
     /// Will apply the properties to the protocol by either bumping the version or setting
     /// features
     pub fn apply_properties_to_protocol(
@@ -391,10 +445,35 @@ impl Protocol {
         }
         Ok(self)
     }
+
+    /// checks if table contains timestamp_ntz in any field including nested fields.
+    fn contains_timestampntz<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_timestampntz(fields)
+    }
+
     /// Enable timestamp_ntz in the protocol
-    pub fn enable_timestamp_ntz(mut self) -> Protocol {
-        self = self.with_reader_features(vec![ReaderFeatures::TimestampWithoutTimezone]);
-        self = self.with_writer_features(vec![WriterFeatures::TimestampWithoutTimezone]);
+    fn enable_timestamp_ntz(mut self) -> Self {
+        self = self.append_reader_features([ReaderFeatures::TimestampWithoutTimezone]);
+        self = self.append_writer_features([WriterFeatures::TimestampWithoutTimezone]);
+        self
+    }
+
+    /// Enabled generated columns
+    fn enable_generated_columns(mut self) -> Self {
+        if self.min_writer_version < 4 {
+            self.min_writer_version = 4;
+        }
+        if self.min_writer_version >= 7 {
+            self = self.append_writer_features([WriterFeatures::GeneratedColumns]);
+        }
+        self
+    }
+
+    /// Enabled generated columns
+    fn enable_invariants(mut self) -> Self {
+        if self.min_writer_version >= 7 {
+            self = self.append_writer_features([WriterFeatures::Invariants]);
+        }
         self
     }
 }

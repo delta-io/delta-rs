@@ -175,7 +175,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_with_writer_feature() {
         let protocol =
-            Protocol::new(1, 7).with_writer_features(vec![WriterFeatures::ChangeDataFeed]);
+            Protocol::new(1, 7).append_writer_features(vec![WriterFeatures::ChangeDataFeed]);
         let actions = vec![Action::Protocol(protocol)];
         let mut table: DeltaTable = DeltaOps::new_in_memory()
             .create()

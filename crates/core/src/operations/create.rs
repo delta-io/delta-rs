@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
-use maplit::hashset;
 use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
@@ -20,7 +19,6 @@ use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
 use crate::{DeltaTable, DeltaTableBuilder};
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -289,24 +287,12 @@ impl CreateBuilder {
         self.pre_execute(operation_id).await?;
 
         let configuration = self.configuration;
-        let contains_timestampntz = PROTOCOL.contains_timestampntz(self.columns.iter());
-        // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
-        // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
 
-        let current_protocol = if contains_timestampntz {
-            Protocol {
-                min_reader_version: 3,
-                min_writer_version: 7,
-                writer_features: Some(hashset! {WriterFeatures::TimestampWithoutTimezone}),
-                reader_features: Some(hashset! {ReaderFeatures::TimestampWithoutTimezone}),
-            }
-        } else {
-            Protocol {
-                min_reader_version: PROTOCOL.default_reader_version(),
-                min_writer_version: PROTOCOL.default_writer_version(),
-                reader_features: None,
-                writer_features: None,
-            }
+        let current_protocol = Protocol {
+            min_reader_version: PROTOCOL.default_reader_version(),
+            min_writer_version: PROTOCOL.default_writer_version(),
+            reader_features: None,
+            writer_features: None,
         };
 
         let protocol = self
@@ -319,18 +305,21 @@ impl CreateBuilder {
             })
             .unwrap_or_else(|| current_protocol);
 
-        let protocol = protocol.apply_properties_to_protocol(
-            &configuration
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone().unwrap()))
-                .collect::<HashMap<String, String>>(),
-            self.raise_if_key_not_exists,
-        )?;
+        let schema = StructType::new(self.columns);
 
-        let protocol = protocol.move_table_properties_into_features(&configuration);
+        let protocol = protocol
+            .apply_properties_to_protocol(
+                &configuration
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone().unwrap()))
+                    .collect::<HashMap<String, String>>(),
+                self.raise_if_key_not_exists,
+            )?
+            .apply_column_metadata_to_protocol(&schema)?
+            .move_table_properties_into_features(&configuration);
 
         let mut metadata = Metadata::try_new(
-            StructType::new(self.columns),
+            schema,
             self.partition_columns.unwrap_or_default(),
             configuration,
         )?

@@ -28,14 +28,14 @@ def test_writer_properties_all_filled():
         column_properties={
             "a": ColumnProperties(
                 dictionary_enabled=True,
-                max_statistics_size=40,
+                statistics_enabled="CHUNK",
                 bloom_filter_properties=BloomFilterProperties(
                     set_bloom_filter_enabled=True, fpp=0.2, ndv=30
                 ),
             ),
             "b": ColumnProperties(
                 dictionary_enabled=True,
-                max_statistics_size=400,
+                statistics_enabled="PAGE",
                 bloom_filter_properties=BloomFilterProperties(
                     set_bloom_filter_enabled=False, fpp=0.2, ndv=30
                 ),

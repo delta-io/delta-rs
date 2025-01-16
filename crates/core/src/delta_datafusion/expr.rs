@@ -539,13 +539,16 @@ impl fmt::Display for ScalarValueFormat<'_> {
                 },
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::Utf8(e) | ScalarValue::LargeUtf8(e) => match e {
-                Some(e) => write!(f, "'{}'", escape_quoted_string(e, '\''))?,
-                None => write!(f, "NULL")?,
-            },
+            ScalarValue::Utf8(e) | ScalarValue::LargeUtf8(e) | ScalarValue::Utf8View(e) => {
+                match e {
+                    Some(e) => write!(f, "'{}'", escape_quoted_string(e, '\''))?,
+                    None => write!(f, "NULL")?,
+                }
+            }
             ScalarValue::Binary(e)
             | ScalarValue::FixedSizeBinary(_, e)
-            | ScalarValue::LargeBinary(e) => match e {
+            | ScalarValue::LargeBinary(e)
+            | ScalarValue::BinaryView(e) => match e {
                 Some(l) => write!(
                     f,
                     "decode('{}', 'hex')",

@@ -81,7 +81,7 @@ use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot, StructTy
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
-use crate::table::Constraint;
+use crate::table::{Constraint, GeneratedColumn};
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -1159,6 +1159,7 @@ pub(crate) async fn execute_plan_to_batch(
 pub struct DeltaDataChecker {
     constraints: Vec<Constraint>,
     invariants: Vec<Invariant>,
+    generated_columns: Vec<GeneratedColumn>,
     non_nullable_columns: Vec<String>,
     ctx: SessionContext,
 }
@@ -1169,6 +1170,7 @@ impl DeltaDataChecker {
         Self {
             invariants: vec![],
             constraints: vec![],
+            generated_columns: vec![],
             non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
@@ -1179,6 +1181,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints: vec![],
+            generated_columns: vec![],
             non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
@@ -1189,6 +1192,18 @@ impl DeltaDataChecker {
         Self {
             constraints,
             invariants: vec![],
+            generated_columns: vec![],
+            non_nullable_columns: vec![],
+            ctx: DeltaSessionContext::default().into(),
+        }
+    }
+
+    /// Create a new DeltaDataChecker with a specified set of generated columns
+    pub fn new_with_generated_columns(generated_columns: Vec<GeneratedColumn>) -> Self {
+        Self {
+            constraints: vec![],
+            invariants: vec![],
+            generated_columns,
             non_nullable_columns: vec![],
             ctx: DeltaSessionContext::default().into(),
         }
@@ -1209,6 +1224,10 @@ impl DeltaDataChecker {
     /// Create a new DeltaDataChecker
     pub fn new(snapshot: &DeltaTableState) -> Self {
         let invariants = snapshot.schema().get_invariants().unwrap_or_default();
+        let generated_columns = snapshot
+            .schema()
+            .get_generated_columns()
+            .unwrap_or_default();
         let constraints = snapshot.table_config().get_constraints();
         let non_nullable_columns = snapshot
             .schema()
@@ -1224,6 +1243,7 @@ impl DeltaDataChecker {
         Self {
             invariants,
             constraints,
+            generated_columns,
             non_nullable_columns,
             ctx: DeltaSessionContext::default().into(),
         }
@@ -1236,7 +1256,9 @@ impl DeltaDataChecker {
     pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
         self.check_nullability(record_batch)?;
         self.enforce_checks(record_batch, &self.invariants).await?;
-        self.enforce_checks(record_batch, &self.constraints).await
+        self.enforce_checks(record_batch, &self.constraints).await?;
+        self.enforce_checks(record_batch, &self.generated_columns)
+            .await
     }
 
     /// Return true if all the nullability checks are valid

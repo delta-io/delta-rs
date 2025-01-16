@@ -65,6 +65,15 @@ pub enum Error {
         line: String,
     },
 
+    /// Error returned when the log contains invalid stats JSON.
+    #[error("Invalid JSON in generation expression, line=`{line}`, err=`{json_err}`")]
+    InvalidGenerationExpressionJson {
+        /// JSON error details returned when parsing the generation expression JSON.
+        json_err: serde_json::error::Error,
+        /// Generation expression.
+        line: String,
+    },
+
     #[error("Table metadata is invalid: {0}")]
     MetadataError(String),
 
