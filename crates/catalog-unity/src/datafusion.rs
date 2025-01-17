@@ -180,16 +180,16 @@ impl UnitySchemaProvider {
         &self,
         catalog: &str,
         schema: &str,
-        name: &str,
+        table: &str,
     ) -> Result<TemporaryTableCredentials, UnityCatalogError> {
         tracing::debug!(
             "Fetching new credential for: {}.{}.{}",
             catalog,
             schema,
-            name
+            table
         );
         self.client
-            .get_temp_table_credentials(catalog, schema, name)
+            .get_temp_table_credentials(catalog, schema, table)
             .map(|resp| match resp {
                 Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
                 Ok(TableTempCredentialsResponse::Error(err)) => Err(err.into()),
