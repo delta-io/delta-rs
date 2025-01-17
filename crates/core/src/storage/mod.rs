@@ -356,13 +356,13 @@ pub trait RetryConfigParse {
         }
 
         if let Some(retry_timeout) = options.0.get("retry_timeout") {
-            retry_config.retry_timeout = parse_duration(&retry_timeout).map_err(|_| {
+            retry_config.retry_timeout = parse_duration(retry_timeout).map_err(|_| {
                 DeltaTableError::generic(format!("failed to parse \"{retry_timeout}\" as Duration"))
             })?;
         }
 
         if let Some(bc_init_backoff) = options.0.get("backoff_config.init_backoff") {
-            retry_config.backoff.init_backoff = parse_duration(&bc_init_backoff).map_err(|_| {
+            retry_config.backoff.init_backoff = parse_duration(bc_init_backoff).map_err(|_| {
                 DeltaTableError::generic(format!(
                     "failed to parse \"{bc_init_backoff}\" as Duration"
                 ))
@@ -370,7 +370,7 @@ pub trait RetryConfigParse {
         }
 
         if let Some(bc_max_backoff) = options.0.get("backoff_config.max_backoff") {
-            retry_config.backoff.max_backoff = parse_duration(&bc_max_backoff).map_err(|_| {
+            retry_config.backoff.max_backoff = parse_duration(bc_max_backoff).map_err(|_| {
                 DeltaTableError::generic(format!(
                     "failed to parse \"{bc_max_backoff}\" as Duration"
                 ))
@@ -668,6 +668,6 @@ mod tests {
         assert_eq!(retry_config.retry_timeout, Duration::from_secs(300));
         assert_eq!(retry_config.backoff.init_backoff, Duration::from_secs(20));
         assert_eq!(retry_config.backoff.max_backoff, Duration::from_secs(3600));
-        assert_eq!(retry_config.backoff.base, 50 as f64);
+        assert_eq!(retry_config.backoff.base, 50_f64);
     }
 }
