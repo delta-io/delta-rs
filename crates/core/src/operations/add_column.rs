@@ -6,7 +6,7 @@ use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::{StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
