@@ -764,7 +764,7 @@ async fn execute(
             if df
                 .clone()
                 .schema()
-                .field_with_unqualified_name(&col_name.to_string())
+                .field_with_unqualified_name(col_name)
                 .is_err()
             // implies it doesn't exist
             {

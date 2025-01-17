@@ -87,11 +87,9 @@ impl From<ErrorResponse> for UnityCatalogError {
 
 impl From<UnityCatalogError> for DataCatalogError {
     fn from(value: UnityCatalogError) -> Self {
-        match value {
-            _ => DataCatalogError::Generic {
-                catalog: "Unity",
-                source: Box::new(value),
-            },
+        DataCatalogError::Generic {
+            catalog: "Unity",
+            source: Box::new(value),
         }
     }
 }
