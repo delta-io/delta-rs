@@ -1,4 +1,12 @@
+#![warn(clippy::all)]
+#![warn(rust_2018_idioms)]
 //! Databricks Unity Catalog.
+#[cfg(not(any(feature = "aws", feature = "azure", feature = "gcp", feature = "r2")))]
+compile_error!(
+    "At least one of the following crate features `aws`, `azure`, `gcp`, or `r2` must be enabled \
+    for this crate to function properly."
+);
+
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use std::str::FromStr;
 

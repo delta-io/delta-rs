@@ -403,7 +403,7 @@ pub struct TemporaryTableCredentials {
     pub url: String,
 }
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "r2"))]
 static INIT_AWS: Once = Once::new();
 #[cfg(feature = "azure")]
 static INIT_AZURE: Once = Once::new();
@@ -419,6 +419,7 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "aws"))]
     pub fn get_aws_credentials(&self) -> Option<HashMap<String, String>> {
+        tracing::warn!("AWS Credentials found, but the feature is not enabled.");
         None
     }
 
@@ -430,6 +431,7 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "azure"))]
     pub fn get_azure_credentials(&self) -> Option<HashMap<String, String>> {
+        tracing::warn!("Azure credentials found, but the feature is not enabled.");
         None
     }
 
@@ -441,6 +443,7 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "gcp"))]
     pub fn get_gcp_credentials(&self) -> Option<HashMap<String, String>> {
+        tracing::warn!("GCP credentials found, but the feature is not enabled.");
         None
     }
 
@@ -452,6 +455,7 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "r2"))]
     pub fn get_r2_credentials(&self) -> Option<HashMap<String, String>> {
+        tracing::warn!("r2 credentials found, but feature is not enabled.");
         None
     }
 
