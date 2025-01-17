@@ -1,7 +1,7 @@
-//! Auxiliary module for generating a valig Google cloud configuration.
+//! Auxiliary module for generating a valid Google cloud configuration.
 //!
 //! Google offers few ways to authenticate against storage accounts and
-//! provide credentials for a service principal. Some of this configutaion may
+//! provide credentials for a service principal. Some of this configuration may
 //! partially be specified in the environment. This module establishes a structured
 //! way how we discover valid credentials and some heuristics on how they are prioritized.
 use std::collections::{hash_map::Entry, HashMap};
@@ -42,7 +42,7 @@ impl GcpCredential {
 
 /// Helper struct to create full configuration from passed options and environment
 ///
-/// Main concern is to pick the desired credential for connecting to starage backend
+/// Main concern is to pick the desired credential for connecting to storage backend
 /// based on a provided configuration and configuration set in the environment.
 pub(crate) struct GcpConfigHelper {
     config: HashMap<GoogleConfigKey, String>,
@@ -96,7 +96,7 @@ impl GcpConfigHelper {
             .all(|key| self.config.contains_key(key) || self.env_config.contains_key(key))
     }
 
-    /// Generate a cofiguration augmented with options from the environment
+    /// Generate a configuration augmented with options from the environment
     pub fn build(mut self) -> Result<HashMap<GoogleConfigKey, String>> {
         let mut has_credential = false;
 
@@ -110,7 +110,7 @@ impl GcpConfigHelper {
             }
         }
 
-        // try partially avaialbe credentials augmented by environment
+        // try partially available credentials augmented by environment
         if !has_credential {
             for cred in &self.priority {
                 if self.has_any_config(cred) && self.has_full_config_with_env(cred) {

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Once;
 
 /// Error response from unity API
 #[derive(Deserialize, Debug)]
@@ -402,6 +403,66 @@ pub struct TemporaryTableCredentials {
     pub url: String,
 }
 
+#[cfg(feature = "aws")]
+static INIT_AWS: Once = Once::new();
+#[cfg(feature = "azure")]
+static INIT_AZURE: Once = Once::new();
+#[cfg(feature = "gcp")]
+static INIT_GCP: Once = Once::new();
+
+impl TemporaryTableCredentials {
+    #[cfg(feature = "aws")]
+    pub fn get_aws_credentials(&self) -> Option<HashMap<String, String>> {
+        INIT_AWS.call_once(|| deltalake_aws::register_handlers(None));
+        self.aws_temp_credentials.clone().map(Into::into)
+    }
+
+    #[cfg(not(feature = "aws"))]
+    pub fn get_aws_credentials(&self) -> Option<HashMap<String, String>> {
+        None
+    }
+
+    #[cfg(feature = "azure")]
+    pub fn get_azure_credentials(&self) -> Option<HashMap<String, String>> {
+        INIT_AZURE.call_once(|| deltalake_azure::register_handlers(None));
+        self.azure_user_delegation_sas.clone().map(Into::into)
+    }
+
+    #[cfg(not(feature = "azure"))]
+    pub fn get_azure_credentials(&self) -> Option<HashMap<String, String>> {
+        None
+    }
+
+    #[cfg(feature = "gcp")]
+    pub fn get_gcp_credentials(&self) -> Option<HashMap<String, String>> {
+        INIT_GCP.call_once(|| deltalake_gcp::register_handlers(None));
+        self.gcp_oauth_token.clone().map(Into::into)
+    }
+
+    #[cfg(not(feature = "gcp"))]
+    pub fn get_gcp_credentials(&self) -> Option<HashMap<String, String>> {
+        None
+    }
+
+    #[cfg(feature = "r2")]
+    pub fn get_r2_credentials(&self) -> Option<HashMap<String, String>> {
+        INIT_AWS.call_once(|| deltalake_aws::register_handlers(None));
+        self.r2_temp_credentials.clone().map(Into::into)
+    }
+
+    #[cfg(not(feature = "r2"))]
+    pub fn get_r2_credentials(&self) -> Option<HashMap<String, String>> {
+        None
+    }
+
+    pub fn get_credentials(self) -> Option<HashMap<String, String>> {
+        self.get_aws_credentials()
+            .or(self.get_azure_credentials())
+            .or(self.get_gcp_credentials())
+            .or(self.get_r2_credentials())
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct AwsTempCredentials {
     pub access_key_id: String,
@@ -437,6 +498,36 @@ impl From<AwsTempCredentials> for HashMap<String, String> {
 impl From<AzureUserDelegationSas> for HashMap<String, String> {
     fn from(value: AzureUserDelegationSas) -> Self {
         HashMap::from_iter([("azure_storage_sas_key".to_string(), value.sas_token)])
+    }
+}
+
+#[cfg(feature = "gcp")]
+impl From<GcpOauthToken> for HashMap<String, String> {
+    fn from(value: GcpOauthToken) -> Self {
+        HashMap::from_iter([(
+            "google_application_credentials".to_string(),
+            value.oauth_token,
+        )])
+    }
+}
+
+#[cfg(feature = "r2")]
+impl From<R2TempCredentials> for HashMap<String, String> {
+    fn from(value: R2TempCredentials) -> Self {
+        HashMap::from_iter([
+            (
+                deltalake_aws::constants::AWS_ACCESS_KEY_ID.to_string(),
+                value.access_key_id,
+            ),
+            (
+                deltalake_aws::constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                value.secret_access_key,
+            ),
+            (
+                deltalake_aws::constants::AWS_SESSION_TOKEN.to_string(),
+                value.session_token,
+            ),
+        ])
     }
 }
 
