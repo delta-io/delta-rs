@@ -22,9 +22,9 @@ use datafusion_common::ScalarValue::*;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
-    physical_plan_from_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
+    logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
-use deltalake_core::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
+use deltalake_core::delta_datafusion::DeltaScan;
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::logstore_for;
 use deltalake_core::operations::create::CreateBuilder;
@@ -41,8 +41,16 @@ use serial_test::serial;
 use url::Url;
 
 mod local {
-    use datafusion::common::stats::Precision;
-    use deltalake_core::{logstore::default_logstore, writer::JsonWriter};
+    use datafusion::{
+        common::stats::Precision, datasource::provider_as_source, prelude::DataFrame,
+    };
+    use datafusion_expr::LogicalPlanBuilder;
+    use deltalake_core::{
+        delta_datafusion::{DeltaLogicalCodec, DeltaScanConfigBuilder, DeltaTableProvider},
+        logstore::default_logstore,
+        writer::JsonWriter,
+    };
+    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
 
     use super::*;
@@ -194,56 +202,32 @@ mod local {
             let ctx = SessionContext::new();
             let state = ctx.state();
             let source_table = open_table("../test/tests/data/delta-0.8.0-date").await?;
-            let source_scan = source_table.scan(&state, None, &[], None).await?;
-            physical_plan_to_bytes_with_extension_codec(source_scan, &DeltaPhysicalCodec {})?
+
+            let target_provider = provider_as_source(Arc::new(source_table));
+            let source =
+                LogicalPlanBuilder::scan("source", target_provider.clone(), None)?.build()?;
+            // We don't want to verify the predicate against existing data
+            logical_plan_to_bytes_with_extension_codec(&source, &DeltaLogicalCodec {})?
         };
 
         // Build a new context from scratch and deserialize the plan
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let source_scan = physical_plan_from_bytes_with_extension_codec(
+        let source_scan = Arc::new(logical_plan_from_bytes_with_extension_codec(
             &source_scan_bytes,
             &ctx,
-            &DeltaPhysicalCodec {},
-        )?;
-        let schema = StructType::try_from(source_scan.schema()).unwrap();
+            &DeltaLogicalCodec {},
+        )?);
+        let schema = StructType::try_from(source_scan.schema().as_arrow()).unwrap();
         let fields = schema.fields().cloned();
 
+        dbg!(schema.fields().collect_vec().clone());
         // Create target Delta Table
         let target_table = CreateBuilder::new()
             .with_location("memory:///target")
             .with_columns(fields)
             .with_table_name("target")
             .await?;
-
-        // Trying to execute the write from the input plan without providing Datafusion with a session
-        // state containing the referenced object store in the registry results in an error.
-        assert!(WriteBuilder::new(
-            target_table.log_store(),
-            target_table.snapshot().ok().cloned()
-        )
-        .with_input_execution_plan(source_scan.clone())
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("No suitable object store found for delta-rs://"));
-
-        // Register the missing source table object store
-        let source_uri = Url::parse(
-            &source_scan
-                .as_any()
-                .downcast_ref::<DeltaScan>()
-                .unwrap()
-                .table_uri
-                .clone(),
-        )
-        .unwrap();
-        let source_store = logstore_for(source_uri, HashMap::new(), None).unwrap();
-        let object_store_url = source_store.object_store_url();
-        let source_store_url: &Url = object_store_url.as_ref();
-        state
-            .runtime_env()
-            .register_object_store(source_store_url, source_store.object_store(None));
 
         // Execute write to the target table with the proper state
         let target_table = WriteBuilder::new(
@@ -1129,13 +1113,13 @@ mod local {
             );
         let tbl = tbl.await.unwrap();
         let ctx = SessionContext::new();
-        let plan = ctx
-            .sql("SELECT 1 as id")
-            .await
-            .unwrap()
-            .create_physical_plan()
-            .await
-            .unwrap();
+        let plan = Arc::new(
+            ctx.sql("SELECT 1 as id")
+                .await
+                .unwrap()
+                .logical_plan()
+                .clone(),
+        );
         let write_builder = WriteBuilder::new(log_store, tbl.state);
         let _ = write_builder
             .with_input_execution_plan(plan)
