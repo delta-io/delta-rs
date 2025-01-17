@@ -48,7 +48,7 @@ impl ObjectStoreFactory for GcpFactory {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
 
         let (_, path) =
-            ObjectStoreScheme::parse(&url).map_err(|e| DeltaTableError::GenericError {
+            ObjectStoreScheme::parse(url).map_err(|e| DeltaTableError::GenericError {
                 source: Box::new(e),
             })?;
         let prefix = Path::parse(path)?;
@@ -56,11 +56,11 @@ impl ObjectStoreFactory for GcpFactory {
         let mut builder = GoogleCloudStorageBuilder::new().with_url(url.to_string());
 
         for (key, value) in config.iter() {
-            builder = builder.with_config(key.clone(), value.clone());
+            builder = builder.with_config(*key, value.clone());
         }
 
         let inner = builder
-            .with_retry(self.parse_retry_config(&options)?)
+            .with_retry(self.parse_retry_config(options)?)
             .build()?;
 
         let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
