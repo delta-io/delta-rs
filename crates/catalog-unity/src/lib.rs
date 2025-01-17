@@ -767,7 +767,6 @@ mod tests {
         let get_table_response = client
             .get_table("catalog_name", "schema_name", "table_name")
             .await;
-        dbg!(&get_table_response);
         assert!(matches!(
             get_table_response.unwrap(),
             GetTableResponse::Success(_)
