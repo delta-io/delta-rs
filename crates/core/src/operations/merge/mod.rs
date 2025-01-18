@@ -80,14 +80,16 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
-use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
+use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::table::GeneratedColumn;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use writer::write_execution_plan_v2;
 
 mod barrier;
 mod filter;
+mod writer;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
@@ -1205,6 +1207,8 @@ async fn execute(
         }),
     });
 
+    // We should observe the metrics before we union the merge plan with the cdf_merge plan
+    // so that we get the metrics only for the merge plan.
     let operation_count = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: OUTPUT_COUNT_ID.into(),
@@ -1222,7 +1226,7 @@ async fn execute(
                 .clone()
                 .filter(col(DELETE_COLUMN))?
                 .select(write_projection.clone())?
-                .with_column(crate::operations::cdc::CDC_COLUMN_NAME, lit("delete"))?,
+                .with_column(CDC_COLUMN_NAME, lit("delete"))?,
         );
     }
 
@@ -1235,7 +1239,7 @@ async fn execute(
             lit(5),
         ))?;
 
-        let mut cdc_insert_df = cdc_projection
+        let cdc_insert_df = cdc_projection
             .clone()
             .filter(
                 col(SOURCE_COLUMN)
@@ -1245,30 +1249,16 @@ async fn execute(
             .select(write_projection.clone())?
             .with_column(CDC_COLUMN_NAME, lit("insert"))?;
 
-        cdc_insert_df = add_generated_columns(
-            cdc_insert_df,
-            &generated_col_expressions,
-            &missing_generated_columns,
-            &state,
-        )?;
-
         change_data.push(cdc_insert_df);
 
-        let mut after = cdc_projection
+        let after = cdc_projection
             .clone()
             .filter(col(TARGET_COLUMN).is_true())?
             .select(write_projection.clone())?;
 
-        after = add_generated_columns(
-            after,
-            &generated_col_expressions,
-            &missing_generated_columns,
-            &state,
-        )?;
-
         // Extra select_columns is required so that before and after have same schema order
         // DataFusion doesn't have UnionByName yet, see https://github.com/apache/datafusion/issues/12650
-        let mut before = cdc_projection
+        let before = cdc_projection
             .clone()
             .filter(col(crate::delta_datafusion::PATH_COLUMN).is_not_null())?
             .select(
@@ -1288,18 +1278,26 @@ async fn execute(
                     .collect::<Vec<_>>(),
             )?;
 
-        before = add_generated_columns(
-            before,
-            &generated_col_expressions,
-            &missing_generated_columns,
-            &state,
-        )?;
-
         let tracker = CDCTracker::new(before, after);
         change_data.push(tracker.collect()?);
     }
 
     let mut project = filtered.clone().select(write_projection)?;
+
+    if should_cdc && !change_data.is_empty() {
+        let mut df = change_data
+            .pop()
+            .expect("change_data should never be empty");
+        // Accumulate all the changes together into a single data frame to produce the necessary
+        // change data files
+        for change in change_data {
+            df = df.union(change)?;
+        }
+        project = project
+            .with_column(CDC_COLUMN_NAME, lit(ScalarValue::Null))?
+            .union(df)?;
+    }
+
     project = add_generated_columns(
         project,
         &generated_col_expressions,
@@ -1327,7 +1325,7 @@ async fn execute(
     );
 
     let rewrite_start = Instant::now();
-    let mut add_actions = write_execution_plan(
+    let mut actions: Vec<Action> = write_execution_plan_v2(
         Some(&snapshot),
         state.clone(),
         write,
@@ -1338,38 +1336,11 @@ async fn execute(
         writer_properties.clone(),
         writer_stats_config.clone(),
         None,
+        should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
     )
     .await?;
 
-    if should_cdc && !change_data.is_empty() {
-        let mut df = change_data
-            .pop()
-            .expect("change_data should never be empty");
-        // Accumulate all the changes together into a single data frame to produce the necessary
-        // change data files
-        for change in change_data {
-            df = df.union(change)?;
-        }
-        add_actions.extend(
-            write_execution_plan_cdc(
-                Some(&snapshot),
-                state.clone(),
-                df.create_physical_plan().await?,
-                table_partition_cols.clone(),
-                log_store.object_store(Some(operation_id)),
-                Some(snapshot.table_config().target_file_size() as usize),
-                None,
-                writer_properties,
-                writer_stats_config,
-                None,
-            )
-            .await?,
-        );
-    }
-
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
-
-    let mut actions: Vec<Action> = add_actions.clone();
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
