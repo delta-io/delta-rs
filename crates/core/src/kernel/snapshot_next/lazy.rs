@@ -1,5 +1,6 @@
 //! Snapshot of a Delta Table at a specific version.
 //!
+use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use arrow::compute::filter_record_batch;
@@ -12,6 +13,7 @@ use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
 use delta_kernel::engine::default::DefaultEngine;
+use delta_kernel::log_segment::LogSegment;
 use delta_kernel::schema::Schema;
 use delta_kernel::snapshot::Snapshot as SnapshotInner;
 use delta_kernel::table_properties::TableProperties;
@@ -23,6 +25,7 @@ use url::Url;
 
 use super::cache::CommitCacheObjectStore;
 use super::Snapshot;
+use crate::kernel::{Action, CommitInfo};
 use crate::{DeltaResult, DeltaTableError};
 
 // TODO: avoid repetitive parsing of json stats
@@ -35,7 +38,7 @@ pub struct LazySnapshot {
 
 impl Snapshot for LazySnapshot {
     fn table_root(&self) -> &Url {
-        &self.inner.table_root()
+        self.inner.table_root()
     }
 
     fn version(&self) -> Version {
@@ -55,7 +58,7 @@ impl Snapshot for LazySnapshot {
     }
 
     fn table_properties(&self) -> &TableProperties {
-        &self.inner.table_properties()
+        self.inner.table_properties()
     }
 
     fn files(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
@@ -95,6 +98,58 @@ impl Snapshot for LazySnapshot {
     ) -> DeltaResult<Option<SetTransaction>> {
         let scanner = SetTransactionScanner::new(self.inner.clone());
         Ok(scanner.application_transaction(self.engine.as_ref(), app_id.as_ref())?)
+    }
+
+    fn commit_infos(
+        &self,
+        start_version: impl Into<Option<Version>>,
+        limit: impl Into<Option<usize>>,
+    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
+        // let start_version = start_version.into();
+        let fs_client = self.engine.get_file_system_client();
+        let end_version = start_version.into().unwrap_or_else(|| self.version());
+        let start_version = limit
+            .into()
+            .and_then(|limit| {
+                if limit == 0 {
+                    Some(end_version)
+                } else {
+                    Some(end_version.saturating_sub(limit as u64 - 1))
+                }
+            })
+            .unwrap_or(0);
+        let log_root = self.inner.table_root().join("_delta_log").unwrap();
+        let mut log_segment = LogSegment::for_table_changes(
+            fs_client.as_ref(),
+            log_root,
+            start_version,
+            end_version,
+        )?;
+        log_segment.ascending_commit_files.reverse();
+        let files = log_segment
+            .ascending_commit_files
+            .iter()
+            .map(|commit_file| (commit_file.location.location.clone(), None))
+            .collect_vec();
+
+        Ok(fs_client
+            .read_files(files)?
+            .zip(log_segment.ascending_commit_files.into_iter())
+            .filter_map(|(data, path)| {
+                data.ok().and_then(|d| {
+                    let reader = BufReader::new(Cursor::new(d));
+                    for line in reader.lines() {
+                        match line.and_then(|l| Ok(serde_json::from_str::<Action>(&l)?)) {
+                            Ok(Action::CommitInfo(commit_info)) => {
+                                return Some((path.version, commit_info))
+                            }
+                            Err(e) => return None,
+                            _ => continue,
+                        };
+                    }
+                    None
+                })
+            }))
     }
 }
 
@@ -138,7 +193,7 @@ impl LazySnapshot {
     }
 
     /// A shared reference to the engine used for interacting with the Delta Table.
-    pub(super) fn engine_ref(&self) -> &Arc<dyn Engine> {
+    pub(crate) fn engine_ref(&self) -> &Arc<dyn Engine> {
         &self.engine
     }
 

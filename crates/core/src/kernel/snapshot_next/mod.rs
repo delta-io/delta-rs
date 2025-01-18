@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use delta_kernel::actions::visitors::SetTransactionMap;
-use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
+use delta_kernel::actions::{Metadata, Protocol, SetTransaction};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::Version;
-use iterators::{AddIterator, AddView, AddViewItem};
+use iterators::{AddView, AddViewItem};
 use url::Url;
 
+use crate::kernel::actions::CommitInfo;
 use crate::{DeltaResult, DeltaTableError};
 
 pub use eager::EagerSnapshot;
@@ -77,7 +78,7 @@ pub trait Snapshot {
     fn files_view(
         &self,
     ) -> DeltaResult<impl Iterator<Item = DeltaResult<impl Iterator<Item = AddViewItem>>>> {
-        Ok(self.files()?.map(|r| r.and_then(|b| AddView::try_new(b))))
+        Ok(self.files()?.map(|r| r.and_then(AddView::try_new)))
     }
 
     fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>>;
@@ -93,10 +94,40 @@ pub trait Snapshot {
     ///
     /// Initiates a log scan, but terminates as soon as the transaction
     /// for the given application is found.
+    ///
+    /// # Parameters
+    /// - `app_id`: The application id for which to fetch the transaction.
+    ///
+    /// # Returns
+    /// The latest transaction for the given application id, if it exists.
     fn application_transaction(
         &self,
         app_id: impl AsRef<str>,
     ) -> DeltaResult<Option<SetTransaction>>;
+
+    /// Get commit info for the table.
+    ///
+    /// The [`CommitInfo`]s are returned in descending order of version
+    /// with the most recent commit first starting from the `start_version`.
+    ///
+    /// [`CommitInfo`]s are read on a best-effort basis. If the action
+    /// for a version is not available or cannot be parsed, it is skipped.
+    ///
+    /// # Parameters
+    /// - `start_version`: The version from which to start fetching commit info.
+    ///   Defaults to the latest version.
+    /// - `limit`: The maximum number of commit infos to fetch.
+    ///
+    /// # Returns
+    /// An iterator of commit info tuples. The first element of the tuple is the version
+    /// of the commit, the second element is the corresponding commit info.
+    // TODO(roeap): this is currently using our commit info, we should be using
+    // the definition form kernel, once handling over there matured.
+    fn commit_infos(
+        &self,
+        start_version: impl Into<Option<Version>>,
+        limit: impl Into<Option<usize>>,
+    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>>;
 }
 
 impl<T: Snapshot> Snapshot for Arc<T> {
@@ -141,6 +172,67 @@ impl<T: Snapshot> Snapshot for Arc<T> {
         app_id: impl AsRef<str>,
     ) -> DeltaResult<Option<SetTransaction>> {
         self.as_ref().application_transaction(app_id)
+    }
+
+    fn commit_infos(
+        &self,
+        start_version: impl Into<Option<Version>>,
+        limit: impl Into<Option<usize>>,
+    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
+        self.as_ref().commit_infos(start_version, limit)
+    }
+}
+
+impl<T: Snapshot> Snapshot for Box<T> {
+    fn table_root(&self) -> &Url {
+        self.as_ref().table_root()
+    }
+
+    fn version(&self) -> Version {
+        self.as_ref().version()
+    }
+
+    fn schema(&self) -> &Schema {
+        self.as_ref().schema()
+    }
+
+    fn metadata(&self) -> &Metadata {
+        self.as_ref().metadata()
+    }
+
+    fn protocol(&self) -> &Protocol {
+        self.as_ref().protocol()
+    }
+
+    fn table_properties(&self) -> &TableProperties {
+        self.as_ref().table_properties()
+    }
+
+    fn files(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        self.as_ref().files()
+    }
+
+    fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        self.as_ref().tombstones()
+    }
+
+    fn application_transactions(&self) -> DeltaResult<SetTransactionMap> {
+        self.as_ref().application_transactions()
+    }
+
+    fn application_transaction(
+        &self,
+        app_id: impl AsRef<str>,
+    ) -> DeltaResult<Option<SetTransaction>> {
+        self.as_ref().application_transaction(app_id)
+    }
+
+    fn commit_infos(
+        &self,
+        start_version: impl Into<Option<Version>>,
+        limit: impl Into<Option<usize>>,
+    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
+        self.as_ref().commit_infos(start_version, limit)
     }
 }
 

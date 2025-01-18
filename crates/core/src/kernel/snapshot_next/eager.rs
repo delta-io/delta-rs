@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use arrow::compute::{concat_batches, filter_record_batch};
 use arrow_array::{BooleanArray, RecordBatch};
-use chrono::format::Item;
 use delta_kernel::actions::set_transaction::SetTransactionMap;
 use delta_kernel::actions::{get_log_add_schema, get_log_schema, ADD_NAME, REMOVE_NAME};
 use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
@@ -11,7 +10,7 @@ use delta_kernel::log_segment::LogSegment;
 use delta_kernel::scan::log_replay::scan_action_iter;
 use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{EngineData, Expression, Table, Version};
+use delta_kernel::{Engine, EngineData, Expression, Table, Version};
 use itertools::Itertools;
 use object_store::ObjectStore;
 use url::Url;
@@ -19,6 +18,7 @@ use url::Url;
 use super::iterators::{AddIterator, AddView, AddViewItem};
 use super::lazy::LazySnapshot;
 use super::{Snapshot, SnapshotError};
+use crate::kernel::CommitInfo;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 /// An eager snapshot of a Delta Table at a specific version.
@@ -77,6 +77,14 @@ impl Snapshot for EagerSnapshot {
     ) -> DeltaResult<Option<SetTransaction>> {
         self.snapshot.application_transaction(app_id)
     }
+
+    fn commit_infos(
+        &self,
+        start_version: impl Into<Option<Version>>,
+        limit: impl Into<Option<usize>>,
+    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
+        self.snapshot.commit_infos(start_version, limit)
+    }
 }
 
 impl EagerSnapshot {
@@ -92,13 +100,17 @@ impl EagerSnapshot {
             LazySnapshot::try_new(Table::try_from_uri(table_root)?, store, version).await?;
         let files = config
             .require_files
-            .then(|| -> DeltaResult<_> { Ok(replay_file_actions(&snapshot)?) })
+            .then(|| -> DeltaResult<_> { replay_file_actions(&snapshot) })
             .transpose()?;
         Ok(Self {
             snapshot,
             files,
             predicate: predicate.into(),
         })
+    }
+
+    pub(crate) fn engine_ref(&self) -> &Arc<dyn Engine> {
+        self.snapshot.engine_ref()
     }
 
     pub fn file_data(&self) -> DeltaResult<&RecordBatch> {
@@ -122,7 +134,7 @@ impl EagerSnapshot {
             .files
             .as_ref()
             .map(|f| f.num_rows())
-            .ok_or_else(|| SnapshotError::FilesNotInitialized)?)
+            .ok_or(SnapshotError::FilesNotInitialized)?)
     }
 
     pub(crate) fn update(&mut self) -> DeltaResult<()> {

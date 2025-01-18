@@ -25,7 +25,7 @@ pub struct AddIterator<'a> {
 }
 
 impl AddIterator<'_> {
-    pub fn try_new<'a>(actions: &'a RecordBatch) -> DeltaResult<AddIterator<'a>> {
+    pub fn try_new(actions: &RecordBatch) -> DeltaResult<AddIterator<'_>> {
         validate_column::<StringArray>(actions, &[ADD_NAME, "path"])?;
         validate_column::<Int64Array>(actions, &[ADD_NAME, "size"])?;
         validate_column::<Int64Array>(actions, &[ADD_NAME, "modificationTime"])?;
@@ -108,7 +108,7 @@ pub struct AddViewItem {
 }
 
 impl AddViewItem {
-    pub fn path<T: Array>(&self) -> &str {
+    pub fn path(&self) -> &str {
         extract_column(&self.actions, &[ADD_NAME, "path"])
             .unwrap()
             .as_string::<i32>()
@@ -273,7 +273,7 @@ fn validate_column<'a, T: Array + 'static>(
         }
     } else {
         return Err(DeltaTableError::from(
-            crate::protocol::ProtocolError::InvalidField(format!("Column not found",)),
+            crate::protocol::ProtocolError::InvalidField("Column not found".to_string()),
         ));
     }
     Ok(())
