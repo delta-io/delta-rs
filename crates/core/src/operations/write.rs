@@ -78,7 +78,7 @@ use crate::DeltaTable;
 use tokio::sync::mpsc::Sender;
 
 #[derive(thiserror::Error, Debug)]
-enum WriteError {
+pub(crate) enum WriteError {
     #[error("No data source supplied to write command.")]
     MissingData,
 
@@ -403,9 +403,9 @@ impl WriteBuilder {
 #[derive(Clone)]
 pub struct WriterStatsConfig {
     /// Number of columns to collect stats for, idx based
-    num_indexed_cols: i32,
+    pub num_indexed_cols: i32,
     /// Optional list of columns which to collect stats for, takes precedende over num_index_cols
-    stats_columns: Option<Vec<String>>,
+    pub stats_columns: Option<Vec<String>>,
 }
 
 impl WriterStatsConfig {
