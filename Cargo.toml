@@ -31,7 +31,7 @@ debug = "line-tables-only"
 #     "default-engine",
 #     "developer-visibility",
 # ] }
-delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "023abf1ee604b77bbaa5efec97e043fc4bdf220b", features = [
+delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "2e09bfcc0447283a3acc320ad2350f4075dba83e", features = [
     "default-engine",
     "developer-visibility",
 ] }

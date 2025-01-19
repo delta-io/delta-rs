@@ -4,7 +4,8 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, StructArray,
+    Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, RecordBatchReader, StringArray,
+    StructArray,
 };
 use chrono::{DateTime, Utc};
 use delta_kernel::actions::visitors::AddVisitor;
@@ -76,38 +77,6 @@ pub struct AddView {
 }
 
 impl AddView {
-    pub fn try_new(actions: RecordBatch) -> DeltaResult<Self> {
-        validate_column::<StringArray>(&actions, &[ADD_NAME, "path"])?;
-        validate_column::<Int64Array>(&actions, &[ADD_NAME, "size"])?;
-        validate_column::<Int64Array>(&actions, &[ADD_NAME, "modificationTime"])?;
-        validate_column::<BooleanArray>(&actions, &[ADD_NAME, "dataChange"])?;
-        Ok(Self { actions, index: 0 })
-    }
-}
-
-impl Iterator for AddView {
-    type Item = AddViewItem;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.actions.num_rows() {
-            let add = AddViewItem {
-                actions: self.actions.clone(),
-                index: self.index,
-            };
-            self.index += 1;
-            Some(add)
-        } else {
-            None
-        }
-    }
-}
-
-pub struct AddViewItem {
-    actions: RecordBatch,
-    index: usize,
-}
-
-impl AddViewItem {
     pub fn path(&self) -> &str {
         extract_column(&self.actions, &[ADD_NAME, "path"])
             .unwrap()
@@ -251,6 +220,77 @@ impl Iterator for LogicalFileView {
             None
         }
     }
+}
+
+pub struct AddViewIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
+{
+    inner: I::IntoIter,
+    batch: Option<RecordBatch>,
+    current: usize,
+}
+
+impl<I> AddViewIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
+{
+    /// Create a new [AddViewIterator].
+    ///
+    /// If `iter` is an infallible iterator, use `.map(Ok)`.
+    pub fn new(iter: I) -> Self {
+        Self {
+            inner: iter.into_iter(),
+            batch: None,
+            current: 0,
+        }
+    }
+}
+
+impl<I> Iterator for AddViewIterator<I>
+where
+    I: IntoIterator<Item = DeltaResult<RecordBatch>>,
+{
+    type Item = DeltaResult<AddView>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(batch) = &self.batch {
+            if self.current < batch.num_rows() {
+                let item = AddView {
+                    actions: batch.clone(),
+                    index: self.current,
+                };
+                self.current += 1;
+                return Some(Ok(item));
+            }
+        }
+        match self.inner.next() {
+            Some(Ok(batch)) => {
+                if validate_add(&batch).is_err() {
+                    return Some(Err(DeltaTableError::generic(
+                        "Invalid add action data encountered.",
+                    )));
+                }
+                self.batch = Some(batch);
+                self.current = 0;
+                self.next()
+            }
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+pub(crate) fn validate_add(batch: &RecordBatch) -> DeltaResult<()> {
+    validate_column::<StringArray>(batch, &[ADD_NAME, "path"])?;
+    validate_column::<Int64Array>(batch, &[ADD_NAME, "size"])?;
+    validate_column::<Int64Array>(batch, &[ADD_NAME, "modificationTime"])?;
+    validate_column::<BooleanArray>(batch, &[ADD_NAME, "dataChange"])?;
+    Ok(())
 }
 
 fn validate_column<'a, T: Array + 'static>(

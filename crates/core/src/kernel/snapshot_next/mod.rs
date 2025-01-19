@@ -1,15 +1,13 @@
 //! Snapshot of a Delta Table at a specific version.
-//!
-use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use delta_kernel::actions::visitors::SetTransactionMap;
-use delta_kernel::actions::{Metadata, Protocol, SetTransaction};
+use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::Version;
-use iterators::{AddView, AddViewItem};
+use delta_kernel::{ExpressionRef, Version};
+use iterators::{AddView, AddViewIterator};
 use url::Url;
 
 use crate::kernel::actions::CommitInfo;
@@ -54,6 +52,10 @@ impl StructDataExt for StructData {
     }
 }
 
+/// In-memory representation of a specific snapshot of a Delta table. While a `DeltaTable` exists
+/// throughout time, `Snapshot`s represent a view of a table at a specific point in time; they
+/// have a defined schema (which may change over time for any given table), specific version, and
+/// frozen log segment.
 pub trait Snapshot {
     /// Location where the Delta Table (metadata) is stored.
     fn table_root(&self) -> &Url;
@@ -65,22 +67,47 @@ pub trait Snapshot {
     fn schema(&self) -> &Schema;
 
     /// Table [`Metadata`] at this `Snapshot`s version.
+    ///
+    /// Metadata contains information about the table, such as the table name,
+    /// the schema, the partition columns, the configuration, etc.
     fn metadata(&self) -> &Metadata;
 
     /// Table [`Protocol`] at this `Snapshot`s version.
+    ///
+    /// The protocol indicates the min reader / writer version required to
+    /// read / write the table. For modern readers / writers, the reader /
+    /// writer features active in the table are also available.
     fn protocol(&self) -> &Protocol;
 
     /// Get the [`TableProperties`] for this [`Snapshot`].
     fn table_properties(&self) -> &TableProperties;
 
-    fn files(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>>;
+    /// Get all currently active files in the table.
+    ///
+    /// # Parameters
+    /// - `predicate`: An optional predicate to filter the files based on file statistics.
+    ///
+    /// # Returns
+    /// An iterator of [`RecordBatch`]es, where each batch contains add action data.
+    fn files(
+        &self,
+        predicate: impl Into<Option<ExpressionRef>>,
+    ) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>>;
 
     fn files_view(
         &self,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<impl Iterator<Item = AddViewItem>>>> {
-        Ok(self.files()?.map(|r| r.and_then(AddView::try_new)))
+        predicate: impl Into<Option<ExpressionRef>>,
+    ) -> DeltaResult<impl Iterator<Item = DeltaResult<AddView>>> {
+        Ok(AddViewIterator::new(self.files(predicate)?))
     }
 
+    /// Get all tombstones in the table.
+    ///
+    /// Remove Actions (tombstones) are records that indicate that a file has been deleted.
+    /// They are returned mostly for the purposes of VACUUM operations.
+    ///
+    /// # Returns
+    /// An iterator of [`RecordBatch`]es, where each batch contains remove action data.
     fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>>;
 
     /// Scan the Delta Log to obtain the latest transaction for all applications
@@ -128,59 +155,17 @@ pub trait Snapshot {
         start_version: impl Into<Option<Version>>,
         limit: impl Into<Option<usize>>,
     ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>>;
-}
 
-impl<T: Snapshot> Snapshot for Arc<T> {
-    fn table_root(&self) -> &Url {
-        self.as_ref().table_root()
-    }
-
-    fn version(&self) -> Version {
-        self.as_ref().version()
-    }
-
-    fn schema(&self) -> &Schema {
-        self.as_ref().schema()
-    }
-
-    fn metadata(&self) -> &Metadata {
-        self.as_ref().metadata()
-    }
-
-    fn protocol(&self) -> &Protocol {
-        self.as_ref().protocol()
-    }
-
-    fn table_properties(&self) -> &TableProperties {
-        self.as_ref().table_properties()
-    }
-
-    fn files(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
-        self.as_ref().files()
-    }
-
-    fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
-        self.as_ref().tombstones()
-    }
-
-    fn application_transactions(&self) -> DeltaResult<SetTransactionMap> {
-        self.as_ref().application_transactions()
-    }
-
-    fn application_transaction(
-        &self,
-        app_id: impl AsRef<str>,
-    ) -> DeltaResult<Option<SetTransaction>> {
-        self.as_ref().application_transaction(app_id)
-    }
-
-    fn commit_infos(
-        &self,
-        start_version: impl Into<Option<Version>>,
-        limit: impl Into<Option<usize>>,
-    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
-        self.as_ref().commit_infos(start_version, limit)
-    }
+    /// Update the snapshot to a specific version.
+    ///
+    /// The target version must be greater then the current version of the snapshot.
+    ///
+    /// # Parameters
+    /// - `target_version`: The version to update the snapshot to. Defaults to latest.
+    ///
+    /// # Returns
+    /// A boolean indicating if the snapshot was updated.
+    fn update(&mut self, target_version: impl Into<Option<Version>>) -> DeltaResult<bool>;
 }
 
 impl<T: Snapshot> Snapshot for Box<T> {
@@ -208,8 +193,11 @@ impl<T: Snapshot> Snapshot for Box<T> {
         self.as_ref().table_properties()
     }
 
-    fn files(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
-        self.as_ref().files()
+    fn files(
+        &self,
+        predicate: impl Into<Option<ExpressionRef>>,
+    ) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        self.as_ref().files(predicate)
     }
 
     fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
@@ -233,6 +221,10 @@ impl<T: Snapshot> Snapshot for Box<T> {
         limit: impl Into<Option<usize>>,
     ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
         self.as_ref().commit_infos(start_version, limit)
+    }
+
+    fn update(&mut self, target_version: impl Into<Option<Version>>) -> DeltaResult<bool> {
+        self.as_mut().update(target_version)
     }
 }
 

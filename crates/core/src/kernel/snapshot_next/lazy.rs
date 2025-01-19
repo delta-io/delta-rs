@@ -61,9 +61,24 @@ impl Snapshot for LazySnapshot {
         self.inner.table_properties()
     }
 
-    fn files(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
-        Ok(self
-            .files_impl(None)?
+    fn files(
+        &self,
+        predicate: impl Into<Option<Arc<Expression>>>,
+    ) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        let scan = self
+            .inner
+            .clone()
+            .scan_builder()
+            .with_predicate(predicate)
+            .build()?;
+        Ok(scan
+            .scan_data(self.engine.as_ref())?
+            .map(|res| {
+                res.and_then(|(data, predicate)| {
+                    let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+                    Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
+                })
+            })
             .map(|batch| batch.map_err(|e| e.into())))
     }
 
@@ -151,6 +166,13 @@ impl Snapshot for LazySnapshot {
                 })
             }))
     }
+
+    fn update(&mut self, target_version: impl Into<Option<Version>>) -> DeltaResult<bool> {
+        let mut snapshot = self.inner.as_ref().clone();
+        let did_update = snapshot.update(target_version, self.engine_ref().as_ref())?;
+        self.inner = Arc::new(snapshot);
+        Ok(did_update)
+    }
 }
 
 impl LazySnapshot {
@@ -209,29 +231,6 @@ impl LazySnapshot {
             .iter()
             .find(|f| f.version == version)
             .map(|f| f.location.last_modified)
-    }
-
-    /// read all active files from the log
-    fn files_impl(
-        &self,
-        predicate: impl Into<Option<Arc<Expression>>>,
-    ) -> DeltaResult<impl Iterator<Item = Result<RecordBatch, delta_kernel::Error>>> {
-        let scan = self
-            .inner
-            .clone()
-            .scan_builder()
-            .with_predicate(predicate)
-            .build()?;
-        Ok(scan.scan_data(self.engine.as_ref())?.map(|res| {
-            res.and_then(|(data, mut predicate)| {
-                let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
-                if predicate.len() < batch.num_rows() {
-                    predicate
-                        .extend(std::iter::repeat(true).take(batch.num_rows() - predicate.len()));
-                }
-                Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
-            })
-        }))
     }
 }
 

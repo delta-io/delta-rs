@@ -16,17 +16,25 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+
       - name: Install rust
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.81'
+          toolchain: "1.81"
           override: true
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+
       - uses: Swatinem/rust-cache@v2
+
+      - name: Load DAT data
+        uses: ./.github/actions/load-dat
+
       - name: Generate code coverage
         run: cargo llvm-cov --features ${DEFAULT_FEATURES} --workspace --codecov --output-path codecov.json -- --skip read_table_version_hdfs --skip test_read_tables_lakefs
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
