@@ -1,14 +1,13 @@
 //! Delta log store.
 use std::cmp::min;
 use std::io::{BufRead, BufReader, Cursor};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use delta_kernel::AsAny;
 use futures::{StreamExt, TryStreamExt};
-use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
@@ -92,9 +91,7 @@ pub fn logstores() -> FactoryRegistry {
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
 
-lazy_static! {
-    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-}
+static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Return the [LogStoreRef] for the provided [Url] location
 ///
@@ -417,9 +414,8 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
     }
 }
 
-lazy_static! {
-    static ref DELTA_LOG_REGEX: Regex = Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap();
-}
+static DELTA_LOG_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
 
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
