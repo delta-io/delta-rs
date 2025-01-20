@@ -9,7 +9,7 @@ use arrow_schema::{Schema, SchemaRef as ArrowSchemaRef};
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion_expr::col;
+use datafusion_expr::{col, lit};
 use datafusion_physical_plan::ExecutionPlan;
 use futures::StreamExt;
 use object_store::prefix::PrefixStore;
@@ -170,9 +170,21 @@ pub(crate) async fn write_execution_plan_v2(
 
                         let normal_df = batch_df
                             .clone()
-                            .filter(col(CDC_COLUMN_NAME).is_null())?
+                            .filter(col(CDC_COLUMN_NAME).in_list(
+                                vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
+                                true,
+                            ))?
                             .drop_columns(&[CDC_COLUMN_NAME])?;
-                        let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).is_not_null())?;
+
+                        let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
+                            vec![
+                                lit("delete"),
+                                lit("insert"),
+                                lit("update_preimage"),
+                                lit("update_postimage"),
+                            ],
+                            false,
+                        ))?;
 
                         let normal_batch =
                             concat_batches(&write_schema, &normal_df.collect().await?)?;
