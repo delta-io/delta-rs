@@ -30,7 +30,6 @@ serde_json = { workspace = true }
 # "stdlib"
 chrono = { workspace = true }
 env_logger = "0"
-lazy_static = "1"
 regex = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

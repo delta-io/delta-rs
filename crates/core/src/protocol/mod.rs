@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use arrow_schema::ArrowError;
 use futures::StreamExt;
-use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -629,12 +629,11 @@ pub(crate) async fn find_latest_check_point_for_version(
     log_store: &dyn LogStore,
     version: i64,
 ) -> Result<Option<CheckPoint>, ProtocolError> {
-    lazy_static! {
-        static ref CHECKPOINT_REGEX: Regex =
-            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
-        static ref CHECKPOINT_PARTS_REGEX: Regex =
-            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
-    }
+    static CHECKPOINT_REGEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap());
+    static CHECKPOINT_PARTS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap()
+    });
 
     let mut cp: Option<CheckPoint> = None;
     let object_store = log_store.object_store(None);

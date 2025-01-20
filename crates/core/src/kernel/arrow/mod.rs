@@ -1,12 +1,11 @@
 //! Conversions between Delta and Arrow data types
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, FieldRef as ArrowFieldRef,
     Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use lazy_static::lazy_static;
 
 pub(crate) mod extract;
 pub(crate) mod json;
@@ -184,8 +183,8 @@ pub(crate) fn delta_log_schema_for_table(
     partition_columns: &[String],
     use_extended_remove_schema: bool,
 ) -> ArrowSchemaRef {
-    lazy_static! {
-        static ref SCHEMA_FIELDS: Vec<ArrowField> = arrow_defs![
+    static SCHEMA_FIELDS: LazyLock<Vec<ArrowField>> = LazyLock::new(|| {
+        arrow_defs![
                 metaData[
                     id:Utf8,
                     name:Utf8,
@@ -206,8 +205,10 @@ pub(crate) fn delta_log_schema_for_table(
                     appId:Utf8,
                     version:Int64
                 ]
-        ];
-        static ref ADD_FIELDS: Vec<ArrowField> = arrow_defs![
+        ]
+    });
+    static ADD_FIELDS: LazyLock<Vec<ArrowField>> = LazyLock::new(|| {
+        arrow_defs![
             path:Utf8,
             size:Int64,
             modificationTime:Int64,
@@ -222,16 +223,18 @@ pub(crate) fn delta_log_schema_for_table(
                 sizeInBytes:Int32 not_null,
                 cardinality:Int64 not_null
             ]
-        ];
-        static ref REMOVE_FIELDS: Vec<ArrowField> = arrow_defs![
+        ]
+    });
+    static REMOVE_FIELDS: LazyLock<Vec<ArrowField>> = LazyLock::new(|| {
+        arrow_defs![
             path: Utf8,
             deletionTimestamp: Int64,
             dataChange: Boolean,
             extendedFileMetadata: Boolean
-        ];
-        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> =
-            arrow_defs![size: Int64, partitionValues, tags];
-    };
+        ]
+    });
+    static REMOVE_EXTENDED_FILE_METADATA_FIELDS: LazyLock<Vec<ArrowField>> =
+        LazyLock::new(|| arrow_defs![size: Int64, partitionValues, tags]);
 
     // create add fields according to the specific data table schema
     let (partition_fields, non_partition_fields): (Vec<ArrowFieldRef>, Vec<ArrowFieldRef>) =
