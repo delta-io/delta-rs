@@ -1,9 +1,9 @@
 //! Delta Table configuration
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
 use delta_kernel::table_features::ColumnMappingMode;
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
 use super::Constraint;
@@ -295,9 +295,8 @@ impl TableConfig<'_> {
     /// * If you run a streaming query that reads from the table, that query does not stop for longer
     ///   than this value. Otherwise, the query may not be able to restart, as it must still read old files.
     pub fn deleted_file_retention_duration(&self) -> Duration {
-        lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 weeks").unwrap();
-        }
+        static DEFAULT_DURATION: LazyLock<Duration> =
+            LazyLock::new(|| parse_interval("interval 1 weeks").unwrap());
         self.0
             .get(TableProperty::DeletedFileRetentionDuration.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
@@ -311,9 +310,8 @@ impl TableConfig<'_> {
     /// entries are retained. This should not impact performance as operations against the log are
     /// constant time. Operations on history are parallel but will become more expensive as the log size increases.
     pub fn log_retention_duration(&self) -> Duration {
-        lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 days").unwrap();
-        }
+        static DEFAULT_DURATION: LazyLock<Duration> =
+            LazyLock::new(|| parse_interval("interval 30 days").unwrap());
         self.0
             .get(TableProperty::LogRetentionDuration.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
