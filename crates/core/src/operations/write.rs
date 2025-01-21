@@ -1274,7 +1274,6 @@ mod tests {
     use crate::TableProperty;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
-    use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use itertools::Itertools;
     use serde_json::{json, Value};
