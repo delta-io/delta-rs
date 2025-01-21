@@ -4,8 +4,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, RecordBatchReader, StringArray,
-    StructArray,
+    Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, StructArray,
 };
 use chrono::{DateTime, Utc};
 use delta_kernel::actions::visitors::AddVisitor;
@@ -27,10 +26,7 @@ pub struct AddIterator<'a> {
 
 impl AddIterator<'_> {
     pub fn try_new(actions: &RecordBatch) -> DeltaResult<AddIterator<'_>> {
-        validate_column::<StringArray>(actions, &[ADD_NAME, "path"])?;
-        validate_column::<Int64Array>(actions, &[ADD_NAME, "size"])?;
-        validate_column::<Int64Array>(actions, &[ADD_NAME, "modificationTime"])?;
-        validate_column::<BooleanArray>(actions, &[ADD_NAME, "dataChange"])?;
+        validate_add(&actions)?;
 
         let visitor = AddVisitor::new();
         let fields = visitor.selected_column_names_and_types();

@@ -1,13 +1,23 @@
 //! Snapshot of a Delta Table at a specific version.
 
-use arrow_array::RecordBatch;
+use std::sync::Arc;
+
+use arrow_array::{BooleanArray, RecordBatch, StructArray};
+use arrow_select::concat::concat_batches;
+use arrow_select::filter::filter_record_batch;
 use delta_kernel::actions::visitors::SetTransactionMap;
-use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
+use delta_kernel::actions::{
+    get_log_add_schema, get_log_schema, Metadata, Protocol, SetTransaction, ADD_NAME, REMOVE_NAME,
+};
+use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::engine::arrow_expression::apply_schema;
 use delta_kernel::expressions::{Scalar, StructData};
-use delta_kernel::schema::Schema;
+use delta_kernel::scan::log_replay::scan_action_iter;
+use delta_kernel::schema::{DataType, Schema};
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{ExpressionRef, Version};
+use delta_kernel::{EngineData, ExpressionRef, Version};
 use iterators::{AddView, AddViewIterator};
+use itertools::Itertools;
 use url::Url;
 
 use crate::kernel::actions::CommitInfo;
@@ -91,14 +101,19 @@ pub trait Snapshot {
     /// An iterator of [`RecordBatch`]es, where each batch contains add action data.
     fn files(
         &self,
-        predicate: impl Into<Option<ExpressionRef>>,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>>;
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
+
+    fn logical_files(
+        &self,
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
 
     fn files_view(
         &self,
-        predicate: impl Into<Option<ExpressionRef>>,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<AddView>>> {
-        Ok(AddViewIterator::new(self.files(predicate)?))
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<AddView>>>> {
+        Ok(Box::new(AddViewIterator::new(self.files(predicate)?)))
     }
 
     /// Get all tombstones in the table.
@@ -108,7 +123,7 @@ pub trait Snapshot {
     ///
     /// # Returns
     /// An iterator of [`RecordBatch`]es, where each batch contains remove action data.
-    fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>>;
+    fn tombstones(&self) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
 
     /// Scan the Delta Log to obtain the latest transaction for all applications
     ///
@@ -127,10 +142,7 @@ pub trait Snapshot {
     ///
     /// # Returns
     /// The latest transaction for the given application id, if it exists.
-    fn application_transaction(
-        &self,
-        app_id: impl AsRef<str>,
-    ) -> DeltaResult<Option<SetTransaction>>;
+    fn application_transaction(&self, app_id: &str) -> DeltaResult<Option<SetTransaction>>;
 
     /// Get commit info for the table.
     ///
@@ -152,9 +164,9 @@ pub trait Snapshot {
     // the definition form kernel, once handling over there matured.
     fn commit_infos(
         &self,
-        start_version: impl Into<Option<Version>>,
-        limit: impl Into<Option<usize>>,
-    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>>;
+        start_version: Option<Version>,
+        limit: Option<usize>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = (Version, CommitInfo)>>>;
 
     /// Update the snapshot to a specific version.
     ///
@@ -165,7 +177,7 @@ pub trait Snapshot {
     ///
     /// # Returns
     /// A boolean indicating if the snapshot was updated.
-    fn update(&mut self, target_version: impl Into<Option<Version>>) -> DeltaResult<bool>;
+    fn update(&mut self, target_version: Option<Version>) -> DeltaResult<bool>;
 }
 
 impl<T: Snapshot> Snapshot for Box<T> {
@@ -193,14 +205,21 @@ impl<T: Snapshot> Snapshot for Box<T> {
         self.as_ref().table_properties()
     }
 
+    fn logical_files(
+        &self,
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
+        self.as_ref().logical_files(predicate)
+    }
+
     fn files(
         &self,
-        predicate: impl Into<Option<ExpressionRef>>,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
         self.as_ref().files(predicate)
     }
 
-    fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+    fn tombstones(&self) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
         self.as_ref().tombstones()
     }
 
@@ -208,29 +227,114 @@ impl<T: Snapshot> Snapshot for Box<T> {
         self.as_ref().application_transactions()
     }
 
-    fn application_transaction(
-        &self,
-        app_id: impl AsRef<str>,
-    ) -> DeltaResult<Option<SetTransaction>> {
+    fn application_transaction(&self, app_id: &str) -> DeltaResult<Option<SetTransaction>> {
         self.as_ref().application_transaction(app_id)
     }
 
     fn commit_infos(
         &self,
-        start_version: impl Into<Option<Version>>,
-        limit: impl Into<Option<usize>>,
-    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
+        start_version: Option<Version>,
+        limit: Option<usize>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = (Version, CommitInfo)>>> {
         self.as_ref().commit_infos(start_version, limit)
     }
 
-    fn update(&mut self, target_version: impl Into<Option<Version>>) -> DeltaResult<bool> {
+    fn update(&mut self, target_version: Option<Version>) -> DeltaResult<bool> {
         self.as_mut().update(target_version)
     }
 }
 
+fn replay_file_actions(
+    snapshot: &LazySnapshot,
+    predicate: impl Into<Option<ExpressionRef>>,
+) -> DeltaResult<RecordBatch> {
+    let commit_read_schema = get_log_schema().project(&[ADD_NAME, REMOVE_NAME])?;
+    let checkpoint_read_schema = get_log_add_schema().clone();
+
+    let curr_data = snapshot
+        .inner
+        ._log_segment()
+        .replay(
+            snapshot.engine_ref().as_ref(),
+            commit_read_schema.clone(),
+            checkpoint_read_schema.clone(),
+            None,
+        )?
+        .map_ok(
+            |(data, flag)| -> Result<(RecordBatch, bool), delta_kernel::Error> {
+                Ok((ArrowEngineData::try_from_engine_data(data)?.into(), flag))
+            },
+        )
+        .flatten()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    scan_as_log_data(snapshot, curr_data, predicate)
+}
+
+// helper function to replay log data as stored using kernel log replay.
+// The kernel replay usually emits a tuple of (data, selection) where data is the
+// data is a re-ordered subset of the full data in the log which is relevant to the
+// engine. this function leverages the replay, but applies the selection to the
+// original data to get the final data.
+fn scan_as_log_data(
+    snapshot: &LazySnapshot,
+    curr_data: impl IntoIterator<Item = (RecordBatch, bool)>,
+    predicate: impl Into<Option<ExpressionRef>>,
+) -> Result<RecordBatch, DeltaTableError> {
+    let curr_data = curr_data.into_iter().collect::<Vec<_>>();
+    let scan_iter = curr_data.clone().into_iter().map(|(data, flag)| {
+        Ok((
+            Box::new(ArrowEngineData::new(data.clone())) as Box<dyn EngineData>,
+            flag,
+        ))
+    });
+
+    let scan = snapshot
+        .inner
+        .as_ref()
+        .clone()
+        .into_scan_builder()
+        .with_predicate(predicate)
+        .build()?;
+
+    let res = scan_action_iter(
+        snapshot.engine_ref().as_ref(),
+        scan_iter,
+        scan.physical_predicate()
+            .map(|p| (p, scan.schema().clone())),
+    )
+    .map(|res| {
+        res.and_then(|(d, selection)| {
+            Ok((
+                RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?),
+                selection,
+            ))
+        })
+    })
+    .zip(curr_data.into_iter())
+    .map(|(scan_res, (data_raw, _))| match scan_res {
+        Ok((_, selection)) => {
+            let data = filter_record_batch(&data_raw, &BooleanArray::from(selection))?;
+            let dt: DataType = get_log_add_schema().as_ref().clone().into();
+            let data: StructArray = data.project(&[0])?.into();
+            apply_schema(&data, &dt)
+        }
+        Err(e) => Err(e),
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+
+    let schema_ref = Arc::new(get_log_add_schema().as_ref().try_into()?);
+    Ok(concat_batches(&schema_ref, &res)?)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{future::Future, path::PathBuf, pin::Pin};
+
+    use delta_kernel::Table;
+    use deltalake_test::utils::*;
+
+    use super::*;
 
     pub(super) fn get_dat_dir() -> PathBuf {
         let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -241,5 +345,100 @@ mod tests {
             .to_path_buf();
         rep_root.push("dat/out/reader_tests/generated");
         rep_root
+    }
+
+    fn get_lazy(
+        ctx: &IntegrationContext,
+        table: TestTables,
+        version: Option<Version>,
+    ) -> TestResult<Pin<Box<dyn Future<Output = TestResult<Box<dyn Snapshot>>>>>> {
+        let store = ctx.table_builder(table).build_storage()?.object_store(None);
+        let table = Table::try_from_uri("memory:///")?;
+        Ok(Box::pin(async move {
+            Ok(Box::new(LazySnapshot::try_new(table, store, version).await?) as Box<dyn Snapshot>)
+        }))
+    }
+
+    fn get_eager(
+        ctx: &IntegrationContext,
+        table: TestTables,
+        version: Option<Version>,
+    ) -> TestResult<Pin<Box<dyn Future<Output = TestResult<Box<dyn Snapshot>>>>>> {
+        let store = ctx.table_builder(table).build_storage()?.object_store(None);
+        let config = Default::default();
+        Ok(Box::pin(async move {
+            Ok(
+                Box::new(EagerSnapshot::try_new("memory:///", store, config, version).await?)
+                    as Box<dyn Snapshot>,
+            )
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_snapshots() -> TestResult {
+        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
+        context.load_table(TestTables::Checkpoints).await?;
+        context.load_table(TestTables::Simple).await?;
+        context.load_table(TestTables::SimpleWithCheckpoint).await?;
+        context.load_table(TestTables::WithDvSmall).await?;
+
+        test_snapshot(&context, get_lazy).await?;
+        test_snapshot(&context, get_eager).await?;
+
+        Ok(())
+    }
+
+    // NOTE: test needs to be async, so that we can pick up the runtime from the context
+    async fn test_snapshot<F>(ctx: &IntegrationContext, get_snapshot: F) -> TestResult<()>
+    where
+        F: Fn(
+            &IntegrationContext,
+            TestTables,
+            Option<Version>,
+        ) -> TestResult<Pin<Box<dyn Future<Output = TestResult<Box<dyn Snapshot>>>>>>,
+    {
+        for version in 0..=12 {
+            let snapshot = get_snapshot(ctx, TestTables::Checkpoints, Some(version))?.await?;
+            assert_eq!(snapshot.version(), version);
+
+            test_files(snapshot.as_ref())?;
+            test_files_view(snapshot.as_ref())?;
+            test_commit_infos(snapshot.as_ref())?;
+        }
+
+        let mut snapshot = get_snapshot(ctx, TestTables::Checkpoints, Some(0))?.await?;
+        for version in 1..=12 {
+            snapshot.update(Some(version))?;
+            assert_eq!(snapshot.version(), version);
+
+            test_files(snapshot.as_ref())?;
+            test_files_view(snapshot.as_ref())?;
+            test_commit_infos(snapshot.as_ref())?;
+        }
+
+        Ok(())
+    }
+
+    fn test_files(snapshot: &dyn Snapshot) -> TestResult<()> {
+        let batches = snapshot.files(None)?.collect::<Result<Vec<_>, _>>()?;
+        let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+        assert_eq!((num_files as u64), snapshot.version());
+        Ok(())
+    }
+
+    fn test_commit_infos(snapshot: &dyn Snapshot) -> TestResult<()> {
+        let commit_infos = snapshot.commit_infos(None, Some(100))?.collect::<Vec<_>>();
+        assert_eq!((commit_infos.len() as u64), snapshot.version() + 1);
+        assert_eq!(commit_infos.first().unwrap().0, snapshot.version());
+        Ok(())
+    }
+
+    fn test_files_view(snapshot: &dyn Snapshot) -> TestResult<()> {
+        let num_files_view = snapshot
+            .files_view(None)?
+            .map(|f| f.unwrap().path().to_string())
+            .count() as u64;
+        assert_eq!(num_files_view, snapshot.version());
+        Ok(())
     }
 }

@@ -24,7 +24,7 @@ use object_store::ObjectStore;
 use url::Url;
 
 use super::cache::CommitCacheObjectStore;
-use super::Snapshot;
+use super::{replay_file_actions, Snapshot};
 use crate::kernel::{Action, CommitInfo};
 use crate::{DeltaResult, DeltaTableError};
 
@@ -61,45 +61,57 @@ impl Snapshot for LazySnapshot {
         self.inner.table_properties()
     }
 
-    fn files(
+    fn logical_files(
         &self,
-        predicate: impl Into<Option<Arc<Expression>>>,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
         let scan = self
             .inner
             .clone()
             .scan_builder()
             .with_predicate(predicate)
             .build()?;
-        Ok(scan
-            .scan_data(self.engine.as_ref())?
-            .map(|res| {
-                res.and_then(|(data, predicate)| {
-                    let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
-                    Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
+        Ok(Box::new(
+            scan.scan_data(self.engine.as_ref())?
+                .map(|res| {
+                    res.and_then(|(data, predicate)| {
+                        let batch: RecordBatch =
+                            ArrowEngineData::try_from_engine_data(data)?.into();
+                        Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
+                    })
                 })
-            })
-            .map(|batch| batch.map_err(|e| e.into())))
+                .map(|batch| batch.map_err(|e| e.into())),
+        ))
     }
 
-    fn tombstones(&self) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+    fn files(
+        &self,
+        predicate: Option<Arc<Expression>>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
+        Ok(Box::new(std::iter::once(replay_file_actions(
+            &self, predicate,
+        ))))
+    }
+
+    fn tombstones(&self) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
         static META_PREDICATE: LazyLock<Option<ExpressionRef>> = LazyLock::new(|| {
             Some(Arc::new(
                 Expression::column([REMOVE_NAME, "path"]).is_not_null(),
             ))
         });
         let read_schema = get_log_schema().project(&[REMOVE_NAME])?;
-        Ok(self
-            .inner
-            ._log_segment()
-            .replay(
-                self.engine.as_ref(),
-                read_schema.clone(),
-                read_schema,
-                META_PREDICATE.clone(),
-            )?
-            .map_ok(|(d, _)| Ok(RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?)))
-            .flatten())
+        Ok(Box::new(
+            self.inner
+                ._log_segment()
+                .replay(
+                    self.engine.as_ref(),
+                    read_schema.clone(),
+                    read_schema,
+                    META_PREDICATE.clone(),
+                )?
+                .map_ok(|(d, _)| Ok(RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?)))
+                .flatten(),
+        ))
     }
 
     fn application_transactions(&self) -> DeltaResult<SetTransactionMap> {
@@ -107,24 +119,20 @@ impl Snapshot for LazySnapshot {
         Ok(scanner.application_transactions(self.engine.as_ref())?)
     }
 
-    fn application_transaction(
-        &self,
-        app_id: impl AsRef<str>,
-    ) -> DeltaResult<Option<SetTransaction>> {
+    fn application_transaction(&self, app_id: &str) -> DeltaResult<Option<SetTransaction>> {
         let scanner = SetTransactionScanner::new(self.inner.clone());
-        Ok(scanner.application_transaction(self.engine.as_ref(), app_id.as_ref())?)
+        Ok(scanner.application_transaction(self.engine.as_ref(), app_id)?)
     }
 
     fn commit_infos(
         &self,
-        start_version: impl Into<Option<Version>>,
-        limit: impl Into<Option<usize>>,
-    ) -> DeltaResult<impl Iterator<Item = (Version, CommitInfo)>> {
+        start_version: Option<Version>,
+        limit: Option<usize>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = (Version, CommitInfo)>>> {
         // let start_version = start_version.into();
         let fs_client = self.engine.get_file_system_client();
-        let end_version = start_version.into().unwrap_or_else(|| self.version());
+        let end_version = start_version.unwrap_or_else(|| self.version());
         let start_version = limit
-            .into()
             .and_then(|limit| {
                 if limit == 0 {
                     Some(end_version)
@@ -133,6 +141,7 @@ impl Snapshot for LazySnapshot {
                 }
             })
             .unwrap_or(0);
+
         let log_root = self.inner.table_root().join("_delta_log").unwrap();
         let mut log_segment = LogSegment::for_table_changes(
             fs_client.as_ref(),
@@ -147,27 +156,29 @@ impl Snapshot for LazySnapshot {
             .map(|commit_file| (commit_file.location.location.clone(), None))
             .collect_vec();
 
-        Ok(fs_client
-            .read_files(files)?
-            .zip(log_segment.ascending_commit_files.into_iter())
-            .filter_map(|(data, path)| {
-                data.ok().and_then(|d| {
-                    let reader = BufReader::new(Cursor::new(d));
-                    for line in reader.lines() {
-                        match line.and_then(|l| Ok(serde_json::from_str::<Action>(&l)?)) {
-                            Ok(Action::CommitInfo(commit_info)) => {
-                                return Some((path.version, commit_info))
-                            }
-                            Err(e) => return None,
-                            _ => continue,
-                        };
-                    }
-                    None
-                })
-            }))
+        Ok(Box::new(
+            fs_client
+                .read_files(files)?
+                .zip(log_segment.ascending_commit_files.into_iter())
+                .filter_map(|(data, path)| {
+                    data.ok().and_then(|d| {
+                        let reader = BufReader::new(Cursor::new(d));
+                        for line in reader.lines() {
+                            match line.and_then(|l| Ok(serde_json::from_str::<Action>(&l)?)) {
+                                Ok(Action::CommitInfo(commit_info)) => {
+                                    return Some((path.version, commit_info))
+                                }
+                                Err(_) => return None,
+                                _ => continue,
+                            };
+                        }
+                        None
+                    })
+                }),
+        ))
     }
 
-    fn update(&mut self, target_version: impl Into<Option<Version>>) -> DeltaResult<bool> {
+    fn update(&mut self, target_version: Option<Version>) -> DeltaResult<bool> {
         let mut snapshot = self.inner.as_ref().clone();
         let did_update = snapshot.update(target_version, self.engine_ref().as_ref())?;
         self.inner = Arc::new(snapshot);
