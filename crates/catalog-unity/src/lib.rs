@@ -242,9 +242,10 @@ impl FromStr for UnityCatalogConfigKey {
             "use_azure_cli" | "unity_use_azure_cli" | "databricks_use_azure_cli" => {
                 Ok(UnityCatalogConfigKey::UseAzureCli)
             }
-            "workspace_url" | "unity_workspace_url" | "databricks_workspace_url" => {
-                Ok(UnityCatalogConfigKey::WorkspaceUrl)
-            }
+            "workspace_url"
+            | "unity_workspace_url"
+            | "databricks_workspace_url"
+            | "databricks_host" => Ok(UnityCatalogConfigKey::WorkspaceUrl),
             _ => Err(DataCatalogError::UnknownConfigKey {
                 catalog: "unity",
                 key: s.to_string(),
@@ -373,6 +374,7 @@ impl UnityCatalogBuilder {
                     if let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
                     {
+                        tracing::debug!("Trying: {} with {}", key, value);
                         builder = builder.try_with_option(config_key, value).unwrap();
                     }
                 }
