@@ -130,6 +130,8 @@ pub struct MergeBuilder {
     snapshot: DeltaTableState,
     /// The source data
     source: DataFrame,
+    /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
+    streaming: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -176,6 +178,7 @@ impl MergeBuilder {
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
             safe_cast: false,
+            streaming: false,
             custom_execute_handler: None,
         }
     }
@@ -394,6 +397,12 @@ impl MergeBuilder {
     /// Test123     ->      null
     pub fn with_safe_cast(mut self, safe_cast: bool) -> Self {
         self.safe_cast = safe_cast;
+        self
+    }
+
+    /// Set streaming mode execution
+    pub fn with_streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
         self
     }
 
@@ -705,6 +714,7 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
+    streaming: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
     match_operations: Vec<MergeOperationConfig>,
@@ -870,7 +880,8 @@ async fn execute(
     // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
-    let target_subset_filter = if !not_match_source_operations.is_empty() {
+
+    let target_subset_filter: Option<Expr> = if !not_match_source_operations.is_empty() {
         // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
         // that implies a full scan
         None
@@ -882,6 +893,7 @@ async fn execute(
             &source,
             &source_name,
             &target_name,
+            streaming,
         )
         .await?
     };
@@ -1450,6 +1462,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.writer_properties,
                 this.commit_properties,
                 this.safe_cast,
+                this.streaming,
                 this.source_alias,
                 this.target_alias,
                 this.match_operations,
@@ -2632,6 +2645,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            false,
         )
         .unwrap();
 
@@ -2664,6 +2678,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            false,
         )
         .unwrap();
 
@@ -2708,6 +2723,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            false,
         )
         .unwrap();
 
@@ -2747,6 +2763,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            false,
         )
         .unwrap();
 
@@ -2777,6 +2794,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            false,
         )
         .unwrap();
         let expected_filter_l = Expr::Placeholder(Placeholder {
@@ -2810,6 +2828,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
+            false,
         )
         .unwrap();
 

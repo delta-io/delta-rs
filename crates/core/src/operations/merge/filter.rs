@@ -182,36 +182,39 @@ pub(crate) fn generalize_filter(
     source_name: &TableReference,
     target_name: &TableReference,
     placeholders: &mut Vec<PredicatePlaceholder>,
+    streaming_source: bool,
 ) -> Option<Expr> {
     match predicate {
         Expr::BinaryExpr(binary) => {
-            if references_table(&binary.right, source_name).has_reference() {
-                if let ReferenceTableCheck::HasReference(left_target) =
-                    references_table(&binary.left, target_name)
-                {
-                    return construct_placeholder(
-                        binary,
-                        false,
-                        partition_columns.contains(&left_target),
-                        left_target,
-                        placeholders,
-                    );
+            if !streaming_source {
+                if references_table(&binary.right, source_name).has_reference() {
+                    if let ReferenceTableCheck::HasReference(left_target) =
+                        references_table(&binary.left, target_name)
+                    {
+                        return construct_placeholder(
+                            binary,
+                            false,
+                            partition_columns.contains(&left_target),
+                            left_target,
+                            placeholders,
+                        );
+                    }
+                    return None;
                 }
-                return None;
-            }
-            if references_table(&binary.left, source_name).has_reference() {
-                if let ReferenceTableCheck::HasReference(right_target) =
-                    references_table(&binary.right, target_name)
-                {
-                    return construct_placeholder(
-                        binary,
-                        true,
-                        partition_columns.contains(&right_target),
-                        right_target,
-                        placeholders,
-                    );
+                if references_table(&binary.left, source_name).has_reference() {
+                    if let ReferenceTableCheck::HasReference(right_target) =
+                        references_table(&binary.right, target_name)
+                    {
+                        return construct_placeholder(
+                            binary,
+                            true,
+                            partition_columns.contains(&right_target),
+                            right_target,
+                            placeholders,
+                        );
+                    }
+                    return None;
                 }
-                return None;
             }
 
             let left = generalize_filter(
@@ -220,6 +223,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
+                streaming_source,
             );
             let right = generalize_filter(
                 *binary.right,
@@ -227,6 +231,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
+                streaming_source,
             );
 
             match (left, right) {
@@ -258,6 +263,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
+                streaming_source,
             )?;
 
             let mut list_expr = Vec::new();
@@ -272,6 +278,7 @@ pub(crate) fn generalize_filter(
                             source_name,
                             target_name,
                             placeholders,
+                            streaming_source,
                         ) {
                             list_expr.push(item)
                         }
@@ -291,19 +298,23 @@ pub(crate) fn generalize_filter(
         }
         other => match references_table(&other, source_name) {
             ReferenceTableCheck::HasReference(col) => {
-                let placeholder_name = format!("{col}_{}", placeholders.len());
+                if !streaming_source {
+                    let placeholder_name = format!("{col}_{}", placeholders.len());
 
-                let placeholder = Expr::Placeholder(Placeholder {
-                    id: placeholder_name.clone(),
-                    data_type: None,
-                });
+                    let placeholder = Expr::Placeholder(Placeholder {
+                        id: placeholder_name.clone(),
+                        data_type: None,
+                    });
 
-                placeholders.push(PredicatePlaceholder {
-                    expr: other,
-                    alias: placeholder_name,
-                    is_aggregate: true,
-                });
-                Some(placeholder)
+                    placeholders.push(PredicatePlaceholder {
+                        expr: other,
+                        alias: placeholder_name,
+                        is_aggregate: true,
+                    });
+                    Some(placeholder)
+                } else {
+                    None
+                }
             }
             ReferenceTableCheck::NoReference => Some(other),
             ReferenceTableCheck::Unknown => None,
@@ -318,6 +329,7 @@ pub(crate) async fn try_construct_early_filter(
     source: &LogicalPlan,
     source_name: &TableReference,
     target_name: &TableReference,
+    streaming_source: bool,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
     let partition_columns = &table_metadata.partition_columns;
@@ -330,10 +342,11 @@ pub(crate) async fn try_construct_early_filter(
         source_name,
         target_name,
         &mut placeholders,
+        streaming_source,
     ) {
         None => Ok(None),
         Some(filter) => {
-            if placeholders.is_empty() {
+            if placeholders.is_empty() || streaming_source {
                 // if we haven't recognised any source predicates in the join predicate, return our filter with static only predicates
                 Ok(Some(filter))
             } else {
@@ -382,7 +395,6 @@ pub(crate) async fn try_construct_early_filter(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use crate::operations::merge::tests::setup_table;
@@ -457,6 +469,7 @@ mod tests {
             &source,
             &source_name,
             &target_name,
+            false,
         )
         .await
         .unwrap();
@@ -554,6 +567,7 @@ mod tests {
             &source,
             &source_name,
             &target_name,
+            false,
         )
         .await
         .unwrap();
@@ -632,6 +646,7 @@ mod tests {
             &source,
             &source_name,
             &target_name,
+            false,
         )
         .await
         .unwrap();
@@ -711,6 +726,7 @@ mod tests {
             &source_plan,
             &source_name,
             &target_name,
+            false,
         )
         .await
         .unwrap();
@@ -807,6 +823,7 @@ mod tests {
             &source_plan,
             &source_name,
             &target_name,
+            false,
         )
         .await
         .unwrap();
@@ -908,6 +925,7 @@ mod tests {
             &source_plan,
             &source_name,
             &target_name,
+            false,
         )
         .await
         .unwrap();
