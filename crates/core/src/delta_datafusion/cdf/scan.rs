@@ -21,7 +21,7 @@ impl DeltaCdfScan {
 
 impl DisplayAs for DeltaCdfScan {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
