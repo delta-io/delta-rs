@@ -3,8 +3,8 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
-use arrow::compute::filter_record_batch;
 use arrow_array::{BooleanArray, RecordBatch};
+use arrow_select::filter::filter_record_batch;
 use delta_kernel::actions::set_transaction::{SetTransactionMap, SetTransactionScanner};
 use delta_kernel::actions::{get_log_schema, REMOVE_NAME};
 use delta_kernel::actions::{Metadata, Protocol, SetTransaction};

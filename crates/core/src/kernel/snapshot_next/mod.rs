@@ -13,6 +13,7 @@ use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::arrow_expression::apply_schema;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::log_replay::scan_action_iter;
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::{DataType, Schema};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EngineData, ExpressionRef, Version};
@@ -92,6 +93,22 @@ pub trait Snapshot {
     /// Get the [`TableProperties`] for this [`Snapshot`].
     fn table_properties(&self) -> &TableProperties;
 
+    fn logical_file_schema(&self) -> &'static Schema {
+        scan_row_schema()
+    }
+
+    /// Get all logical files present in the current snapshot.
+    ///
+    /// # Parameters
+    /// - `predicate`: An optional predicate to filter the files based on file statistics.
+    ///
+    /// # Returns
+    /// An iterator of [`RecordBatch`]es, where each batch contains logical file data.
+    fn logical_files(
+        &self,
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
+
     /// Get all currently active files in the table.
     ///
     /// # Parameters
@@ -99,12 +116,11 @@ pub trait Snapshot {
     ///
     /// # Returns
     /// An iterator of [`RecordBatch`]es, where each batch contains add action data.
+    #[deprecated(
+        since = "0.25.0",
+        note = "Use `logical_files` instead, which returns a more focussed dataset and avoids computational overhead."
+    )]
     fn files(
-        &self,
-        predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
-
-    fn logical_files(
         &self,
         predicate: Option<ExpressionRef>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
@@ -113,6 +129,7 @@ pub trait Snapshot {
         &self,
         predicate: Option<ExpressionRef>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<AddView>>>> {
+        #[allow(deprecated)]
         Ok(Box::new(AddViewIterator::new(self.files(predicate)?)))
     }
 
@@ -216,6 +233,7 @@ impl<T: Snapshot> Snapshot for Box<T> {
         &self,
         predicate: Option<ExpressionRef>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
+        #[allow(deprecated)]
         self.as_ref().files(predicate)
     }
 
@@ -404,6 +422,7 @@ mod tests {
             test_files(snapshot.as_ref())?;
             test_files_view(snapshot.as_ref())?;
             test_commit_infos(snapshot.as_ref())?;
+            test_logical_files(snapshot.as_ref())?;
         }
 
         let mut snapshot = get_snapshot(ctx, TestTables::Checkpoints, Some(0))?.await?;
@@ -414,22 +433,29 @@ mod tests {
             test_files(snapshot.as_ref())?;
             test_files_view(snapshot.as_ref())?;
             test_commit_infos(snapshot.as_ref())?;
+            test_logical_files(snapshot.as_ref())?;
         }
 
         Ok(())
     }
 
-    fn test_files(snapshot: &dyn Snapshot) -> TestResult<()> {
-        let batches = snapshot.files(None)?.collect::<Result<Vec<_>, _>>()?;
-        let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+    fn test_logical_files(snapshot: &dyn Snapshot) -> TestResult<()> {
+        let logical_files = snapshot
+            .logical_files(None)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let num_files = logical_files
+            .iter()
+            .map(|b| b.num_rows() as i64)
+            .sum::<i64>();
         assert_eq!((num_files as u64), snapshot.version());
         Ok(())
     }
 
-    fn test_commit_infos(snapshot: &dyn Snapshot) -> TestResult<()> {
-        let commit_infos = snapshot.commit_infos(None, Some(100))?.collect::<Vec<_>>();
-        assert_eq!((commit_infos.len() as u64), snapshot.version() + 1);
-        assert_eq!(commit_infos.first().unwrap().0, snapshot.version());
+    fn test_files(snapshot: &dyn Snapshot) -> TestResult<()> {
+        #[allow(deprecated)]
+        let batches = snapshot.files(None)?.collect::<Result<Vec<_>, _>>()?;
+        let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+        assert_eq!((num_files as u64), snapshot.version());
         Ok(())
     }
 
@@ -439,6 +465,13 @@ mod tests {
             .map(|f| f.unwrap().path().to_string())
             .count() as u64;
         assert_eq!(num_files_view, snapshot.version());
+        Ok(())
+    }
+
+    fn test_commit_infos(snapshot: &dyn Snapshot) -> TestResult<()> {
+        let commit_infos = snapshot.commit_infos(None, Some(100))?.collect::<Vec<_>>();
+        assert_eq!((commit_infos.len() as u64), snapshot.version() + 1);
+        assert_eq!(commit_infos.first().unwrap().0, snapshot.version());
         Ok(())
     }
 }

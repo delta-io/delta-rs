@@ -27,14 +27,14 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
-delta_kernel = { path = "../delta-kernel-rs/kernel", features = [
-    "default-engine",
-    "developer-visibility",
-] }
-# delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "2e09bfcc0447283a3acc320ad2350f4075dba83e", features = [
+# delta_kernel = { path = "../delta-kernel-rs/kernel", features = [
 #     "default-engine",
 #     "developer-visibility",
 # ] }
+delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "50c1c023b7e9d60df69f6e592b91e4cc06a5a0b1", features = [
+    "default-engine",
+    "developer-visibility",
+] }
 
 # arrow
 arrow = { version = "53" }

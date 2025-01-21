@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
+use arrow_array::{BooleanArray, RecordBatch};
+use arrow_select::filter::filter_record_batch;
 use delta_kernel::actions::set_transaction::SetTransactionMap;
 use delta_kernel::actions::{get_log_add_schema, get_log_schema, ADD_NAME, REMOVE_NAME};
 use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::log_segment::LogSegment;
+use delta_kernel::scan::log_replay::scan_action_iter;
 use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{ExpressionRef, Table, Version};
+use delta_kernel::{EngineData, ExpressionRef, Table, Version};
 use itertools::Itertools;
 use object_store::ObjectStore;
 use url::Url;
@@ -55,9 +57,36 @@ impl Snapshot for EagerSnapshot {
 
     fn logical_files(
         &self,
-        _predicate: Option<ExpressionRef>,
+        predicate: Option<ExpressionRef>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
-        todo!()
+        let scan = self
+            .snapshot
+            .inner
+            .as_ref()
+            .clone()
+            .into_scan_builder()
+            .with_predicate(predicate)
+            .build()?;
+
+        let iter = scan_action_iter(
+            self.snapshot.engine_ref().as_ref(),
+            vec![Ok((
+                Box::new(ArrowEngineData::new(self.file_data()?.clone())) as Box<dyn EngineData>,
+                false,
+            ))]
+            .into_iter(),
+            scan.physical_predicate()
+                .map(|p| (p, scan.schema().clone())),
+        )
+        .map(|res| {
+            res.and_then(|(data, predicate)| {
+                let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+                Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
+            })
+        })
+        .map(|batch| batch.map_err(|e| e.into()));
+
+        Ok(Box::new(iter))
     }
 
     fn files(
