@@ -1,5 +1,5 @@
 #![cfg(feature = "datafusion")]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +26,6 @@ use datafusion_proto::bytes::{
 };
 use deltalake_core::delta_datafusion::DeltaScan;
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::logstore_for;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
@@ -41,14 +40,10 @@ use serial_test::serial;
 use url::Url;
 
 mod local {
-    use datafusion::{
-        common::stats::Precision, datasource::provider_as_source, prelude::DataFrame,
-    };
+    use datafusion::{common::stats::Precision, datasource::provider_as_source};
     use datafusion_expr::LogicalPlanBuilder;
     use deltalake_core::{
-        delta_datafusion::{DeltaLogicalCodec, DeltaScanConfigBuilder, DeltaTableProvider},
-        logstore::default_logstore,
-        writer::JsonWriter,
+        delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
     use itertools::Itertools;
     use object_store::local::LocalFileSystem;
