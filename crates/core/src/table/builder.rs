@@ -349,7 +349,7 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
         let scheme = url.scheme().to_string();
         if url.scheme() == "file" {
             Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
-                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
+                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
                 DeltaTableError::InvalidTableLocation(msg)
             })?))
         // NOTE this check is required to support absolute windows paths which may properly parse as url
@@ -361,8 +361,7 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
             Ok(UriType::LocalPath(PathBuf::from(table_uri)))
         } else {
             Err(DeltaTableError::InvalidTableLocation(format!(
-                "Unknown scheme: {}. Known schemes: {}",
-                scheme,
+                "Unknown scheme: {scheme}. Known schemes: {}",
                 known_schemes.join(",")
             )))
         }
@@ -392,22 +391,19 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
         UriType::LocalPath(path) => {
             if !path.exists() {
                 std::fs::create_dir_all(&path).map_err(|err| {
-                    let msg = format!(
-                        "Could not create local directory: {}\nError: {:?}",
-                        table_uri, err
-                    );
+                    let msg =
+                        format!("Could not create local directory: {table_uri}\nError: {err:?}");
                     DeltaTableError::InvalidTableLocation(msg)
                 })?;
             }
             let path = std::fs::canonicalize(path).map_err(|err| {
-                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
+                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
                 DeltaTableError::InvalidTableLocation(msg)
             })?;
             Url::from_directory_path(path).map_err(|_| {
                 let msg = format!(
-                    "Could not construct a URL from the canonical path: {}.\n\
+                    "Could not construct a URL from the canonical path: {table_uri}.\n\
                     Something must be very wrong with the table path.",
-                    table_uri
                 );
                 DeltaTableError::InvalidTableLocation(msg)
             })?

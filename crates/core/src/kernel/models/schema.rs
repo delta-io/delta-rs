@@ -83,17 +83,17 @@ impl StructTypeExt for StructType {
                     )),
                     Value::Number(sql) => generated_cols.push(GeneratedColumn::new(
                         &field_path,
-                        &format!("{}", sql),
+                        &format!("{sql}"),
                         field.data_type(),
                     )),
                     Value::Bool(sql) => generated_cols.push(GeneratedColumn::new(
                         &field_path,
-                        &format!("{}", sql),
+                        &format!("{sql}"),
                         field.data_type(),
                     )),
                     Value::Array(sql) => generated_cols.push(GeneratedColumn::new(
                         &field_path,
-                        &format!("{:?}", sql),
+                        &format!("{sql:?}"),
                         field.data_type(),
                     )),
                     _ => (), // Other types not sure what to do then

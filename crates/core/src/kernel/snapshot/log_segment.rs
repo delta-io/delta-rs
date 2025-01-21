@@ -787,7 +787,7 @@ pub(super) mod tests {
         let mut actions = vec![Action::Metadata(metadata), Action::Protocol(protocol)];
         for i in 0..10 {
             actions.push(Action::Add(Add {
-                path: format!("part-{}.parquet", i),
+                path: format!("part-{i}.parquet"),
                 modification_time: chrono::Utc::now().timestamp_millis(),
                 ..Default::default()
             }));
@@ -811,7 +811,7 @@ pub(super) mod tests {
         // remove all but one file
         for i in 0..9 {
             actions.push(Action::Remove(Remove {
-                path: format!("part-{}.parquet", i),
+                path: format!("part-{i}.parquet"),
                 deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
                 ..Default::default()
             }))

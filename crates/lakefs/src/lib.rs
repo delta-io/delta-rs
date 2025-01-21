@@ -43,7 +43,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let object_stores = Arc::new(LakeFSObjectStoreFactory::default());
     let log_stores = Arc::new(LakeFSLogStoreFactory::default());
     let scheme = "lakefs";
-    let url = Url::parse(&format!("{}://", scheme)).unwrap();
+    let url = Url::parse(&format!("{scheme}://")).unwrap();
     factories().insert(url.clone(), object_stores.clone());
     logstores().insert(url.clone(), log_stores.clone());
 }
