@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use update_field_metadata::UpdateFieldMetadataBuilder;
 use uuid::Uuid;
 
 use add_feature::AddTableFeatureBuilder;
@@ -45,6 +46,7 @@ pub mod filesystem_check;
 pub mod optimize;
 pub mod restore;
 pub mod transaction;
+pub mod update_field_metadata;
 pub mod vacuum;
 
 #[cfg(all(feature = "cdf", feature = "datafusion"))]
@@ -294,6 +296,11 @@ impl DeltaOps {
     /// Add new columns
     pub fn add_columns(self) -> AddColumnBuilder {
         AddColumnBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Update field metadata
+    pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
+        UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 
