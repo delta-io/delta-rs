@@ -450,6 +450,12 @@ pub enum DeltaOperation {
         /// The status of the operation
         status: String,
     },
+    /// Set table field metadata operations
+    #[serde(rename_all = "camelCase")]
+    UpdateFieldMetadata {
+        /// Fields added to existing schema
+        fields: Vec<StructField>,
+    },
 }
 
 impl DeltaOperation {
@@ -477,6 +483,7 @@ impl DeltaOperation {
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
             DeltaOperation::AddFeature { .. } => "ADD FEATURE",
+            DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
         }
     }
 
@@ -513,6 +520,7 @@ impl DeltaOperation {
     pub fn changes_data(&self) -> bool {
         match self {
             Self::Optimize { .. }
+            | Self::UpdateFieldMetadata { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
             | Self::AddFeature { .. }
