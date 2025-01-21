@@ -168,8 +168,7 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
                 let field = partition_schema
                     .field(k.as_str())
                     .ok_or(DeltaTableError::generic(format!(
-                        "Partition column {} not found in schema.",
-                        k
+                        "Partition column {k} not found in schema."
                     )))?;
                 let field_type = match field.data_type() {
                     DataType::Primitive(p) => Ok(p),

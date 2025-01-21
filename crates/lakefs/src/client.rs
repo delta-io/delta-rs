@@ -57,7 +57,7 @@ impl LakeFSClient {
 
         let request_url = format!("{}/api/v1/repositories/{}/branches", self.config.host, repo);
 
-        let transaction_branch = format!("delta-tx-{}", operation_id);
+        let transaction_branch = format!("delta-tx-{operation_id}");
         let body = json!({
             "name": transaction_branch,
             "source": source_branch,
@@ -78,11 +78,8 @@ impl LakeFSClient {
         match response.status() {
             StatusCode::CREATED => {
                 // Branch created successfully
-                let new_url = Url::parse(&format!(
-                    "lakefs://{}/{}/{}",
-                    repo, transaction_branch, table
-                ))
-                .unwrap();
+                let new_url =
+                    Url::parse(&format!("lakefs://{repo}/{transaction_branch}/{table}")).unwrap();
                 Ok((new_url, transaction_branch))
             }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
@@ -314,7 +311,7 @@ mod tests {
         let result = rt().block_on(async { client.create_branch(&source_url, operation_id).await });
         assert!(result.is_ok());
         let (new_url, branch_name) = result.unwrap();
-        assert_eq!(branch_name, format!("delta-tx-{}", operation_id));
+        assert_eq!(branch_name, format!("delta-tx-{operation_id}"));
         assert!(new_url.as_str().contains("lakefs://test_repo"));
         mock.assert();
     }

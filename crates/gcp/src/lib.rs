@@ -84,7 +84,7 @@ impl LogStoreFactory for GcpFactory {
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(GcpFactory {});
     let scheme = &"gs";
-    let url = Url::parse(&format!("{}://", scheme)).unwrap();
+    let url = Url::parse(&format!("{scheme}://")).unwrap();
     factories().insert(url.clone(), factory.clone());
     logstores().insert(url.clone(), factory.clone());
 }

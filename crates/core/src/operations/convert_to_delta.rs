@@ -91,8 +91,7 @@ impl FromStr for PartitionStrategy {
         match s.to_ascii_lowercase().as_str() {
             "hive" => Ok(PartitionStrategy::Hive),
             _ => Err(DeltaTableError::Generic(format!(
-                "Invalid partition strategy provided {}",
-                s
+                "Invalid partition strategy provided {s}"
             ))),
         }
     }

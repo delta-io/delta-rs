@@ -117,10 +117,7 @@ impl FromStr for SchemaMode {
         match s.to_ascii_lowercase().as_str() {
             "overwrite" => Ok(SchemaMode::Overwrite),
             "merge" => Ok(SchemaMode::Merge),
-            _ => Err(DeltaTableError::Generic(format!(
-                "Invalid schema write mode provided: {}, only these are supported: ['overwrite', 'merge']",
-                s
-            ))),
+            _ => Err(DeltaTableError::Generic(format!("Invalid schema write mode provided: {s}, only these are supported: ['overwrite', 'merge']"))),
         }
     }
 }

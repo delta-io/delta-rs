@@ -682,7 +682,7 @@ impl MergePlan {
             .execute_stream()
             .await?
             .map_err(|err| {
-                ParquetError::General(format!("Z-order failed while scanning data: {:?}", err))
+                ParquetError::General(format!("Z-order failed while scanning data: {err:?}"))
             })
             .boxed();
 

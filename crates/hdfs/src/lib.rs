@@ -41,7 +41,7 @@ impl LogStoreFactory for HdfsFactory {
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(HdfsFactory {});
     for scheme in ["hdfs", "viewfs"].iter() {
-        let url = Url::parse(&format!("{}://", scheme)).unwrap();
+        let url = Url::parse(&format!("{scheme}://")).unwrap();
         factories().insert(url.clone(), factory.clone());
         logstores().insert(url.clone(), factory.clone());
     }

@@ -19,8 +19,7 @@ fn try_merge_metadata<T: std::cmp::PartialEq + Clone>(
         if let Some(vl) = left.get(k) {
             if vl != v {
                 return Err(ArrowError::SchemaError(format!(
-                    "Cannot merge metadata with different values for key {}",
-                    k
+                    "Cannot merge metadata with different values for key {k}"
                 )));
             }
         } else {
@@ -30,8 +29,7 @@ fn try_merge_metadata<T: std::cmp::PartialEq + Clone>(
                 left.insert(k.clone(), v.clone());
             } else {
                 return Err(ArrowError::SchemaError(format!(
-                    "Cannot add generated expressions to exists columns {}",
-                    k
+                    "Cannot add generated expressions to exists columns {k}"
                 )));
             }
         }
@@ -68,8 +66,7 @@ pub(crate) fn merge_delta_type(
             Ok(DeltaDataType::Struct(Box::new(merged)))
         }
         (a, b) => Err(ArrowError::SchemaError(format!(
-            "Cannot merge types {} and {}",
-            a, b
+            "Cannot merge types {a} and {b}"
         ))),
     }
 }
