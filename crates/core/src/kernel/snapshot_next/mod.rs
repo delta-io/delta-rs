@@ -361,23 +361,12 @@ fn scan_as_log_data(
 
 #[cfg(test)]
 mod tests {
-    use std::{future::Future, path::PathBuf, pin::Pin};
+    use std::{future::Future, pin::Pin};
 
     use delta_kernel::Table;
     use deltalake_test::utils::*;
 
     use super::*;
-
-    pub(super) fn get_dat_dir() -> PathBuf {
-        let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mut rep_root = d
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("valid directory")
-            .to_path_buf();
-        rep_root.push("dat/out/reader_tests/generated");
-        rep_root
-    }
 
     fn get_lazy(
         ctx: &IntegrationContext,
