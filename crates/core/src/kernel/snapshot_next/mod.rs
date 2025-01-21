@@ -17,7 +17,7 @@ use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::{DataType, Schema};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EngineData, ExpressionRef, Version};
-use iterators::{AddView, AddViewIterator};
+use iterators::{AddView, AddViewIterator, LogicalFileView, LogicalFileViewIterator};
 use itertools::Itertools;
 use url::Url;
 
@@ -109,6 +109,16 @@ pub trait Snapshot {
         predicate: Option<ExpressionRef>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
 
+    fn logical_files_view(
+        &self,
+        predicate: Option<ExpressionRef>,
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<LogicalFileView>>>> {
+        #[allow(deprecated)]
+        Ok(Box::new(LogicalFileViewIterator::new(
+            self.logical_files(predicate)?,
+        )))
+    }
+
     /// Get all currently active files in the table.
     ///
     /// # Parameters
@@ -125,6 +135,10 @@ pub trait Snapshot {
         predicate: Option<ExpressionRef>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
 
+    #[deprecated(
+        since = "0.25.0",
+        note = "Use `logical_files_view` instead, which returns a more focussed dataset and avoids computational overhead."
+    )]
     fn files_view(
         &self,
         predicate: Option<ExpressionRef>,
@@ -423,6 +437,7 @@ mod tests {
             test_files_view(snapshot.as_ref())?;
             test_commit_infos(snapshot.as_ref())?;
             test_logical_files(snapshot.as_ref())?;
+            test_logical_files_view(snapshot.as_ref())?;
         }
 
         let mut snapshot = get_snapshot(ctx, TestTables::Checkpoints, Some(0))?.await?;
@@ -434,6 +449,7 @@ mod tests {
             test_files_view(snapshot.as_ref())?;
             test_commit_infos(snapshot.as_ref())?;
             test_logical_files(snapshot.as_ref())?;
+            test_logical_files_view(snapshot.as_ref())?;
         }
 
         Ok(())
@@ -451,6 +467,15 @@ mod tests {
         Ok(())
     }
 
+    fn test_logical_files_view(snapshot: &dyn Snapshot) -> TestResult<()> {
+        let num_files_view = snapshot
+            .logical_files_view(None)?
+            .map(|f| f.unwrap().path().to_string())
+            .count() as u64;
+        assert_eq!(num_files_view, snapshot.version());
+        Ok(())
+    }
+
     fn test_files(snapshot: &dyn Snapshot) -> TestResult<()> {
         #[allow(deprecated)]
         let batches = snapshot.files(None)?.collect::<Result<Vec<_>, _>>()?;
@@ -460,6 +485,7 @@ mod tests {
     }
 
     fn test_files_view(snapshot: &dyn Snapshot) -> TestResult<()> {
+        #[allow(deprecated)]
         let num_files_view = snapshot
             .files_view(None)?
             .map(|f| f.unwrap().path().to_string())

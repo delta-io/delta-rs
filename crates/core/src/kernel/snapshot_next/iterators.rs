@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
@@ -14,7 +14,6 @@ use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::arrow_expression::ProvidesColumnByName;
 use delta_kernel::engine_data::{GetData, RowVisitor};
 use delta_kernel::expressions::{Scalar, StructData};
-use delta_kernel::scan::scan_row_schema;
 
 use crate::kernel::scalars::ScalarExt;
 use crate::{DeltaResult, DeltaTableError};
@@ -202,23 +201,6 @@ impl LogicalFileView {
     }
 }
 
-impl Iterator for LogicalFileView {
-    type Item = LogicalFileView;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.files.num_rows() {
-            let file = LogicalFileView {
-                files: self.files.clone(),
-                index: self.index,
-            };
-            self.index += 1;
-            Some(file)
-        } else {
-            None
-        }
-    }
-}
-
 pub struct LogicalFileViewIterator<I>
 where
     I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
@@ -244,43 +226,43 @@ where
     }
 }
 
-// impl<I> Iterator for LogicalFileViewIterator<I>
-// where
-//     I: IntoIterator<Item = DeltaResult<RecordBatch>>,
-// {
-//     type Item = DeltaResult<LogicalFileView>;
-//
-//     fn next(&mut self) -> Option<Self::Item> {
-//         if let Some(batch) = &self.batch {
-//             if self.current < batch.num_rows() {
-//                 let item = LogicalFileView {
-//                     files: batch.clone(),
-//                     index: self.current,
-//                 };
-//                 self.current += 1;
-//                 return Some(Ok(item));
-//             }
-//         }
-//         match self.inner.next() {
-//             Some(Ok(batch)) => {
-//                 if validate_logical_file(&batch).is_err() {
-//                     return Some(Err(DeltaTableError::generic(
-//                         "Invalid logical file data encountered.",
-//                     )));
-//                 }
-//                 self.batch = Some(batch);
-//                 self.current = 0;
-//                 self.next()
-//             }
-//             Some(Err(e)) => Some(Err(e)),
-//             None => None,
-//         }
-//     }
-//
-//     fn size_hint(&self) -> (usize, Option<usize>) {
-//         self.inner.size_hint()
-//     }
-// }
+impl<I> Iterator for LogicalFileViewIterator<I>
+where
+    I: IntoIterator<Item = DeltaResult<RecordBatch>>,
+{
+    type Item = DeltaResult<LogicalFileView>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(batch) = &self.batch {
+            if self.current < batch.num_rows() {
+                let item = LogicalFileView {
+                    files: batch.clone(),
+                    index: self.current,
+                };
+                self.current += 1;
+                return Some(Ok(item));
+            }
+        }
+        match self.inner.next() {
+            Some(Ok(batch)) => {
+                if validate_logical_file(&batch).is_err() {
+                    return Some(Err(DeltaTableError::generic(
+                        "Invalid logical file data encountered.",
+                    )));
+                }
+                self.batch = Some(batch);
+                self.current = 0;
+                self.next()
+            }
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
 
 pub struct AddViewIterator<I>
 where
@@ -350,6 +332,15 @@ pub(crate) fn validate_add(batch: &RecordBatch) -> DeltaResult<()> {
     validate_column::<Int64Array>(batch, &[ADD_NAME, "size"])?;
     validate_column::<Int64Array>(batch, &[ADD_NAME, "modificationTime"])?;
     validate_column::<BooleanArray>(batch, &[ADD_NAME, "dataChange"])?;
+    Ok(())
+}
+
+fn validate_logical_file(batch: &RecordBatch) -> DeltaResult<()> {
+    validate_column::<StringArray>(batch, &["path"])?;
+    validate_column::<Int64Array>(batch, &["size"])?;
+    validate_column::<Int64Array>(batch, &["modificationTime"])?;
+    // validate_column::<StructArray>(batch, &["deletionVector"])?;
+    // validate_column::<StructArray>(batch, &["fileConstantValues"])?;
     Ok(())
 }
 
