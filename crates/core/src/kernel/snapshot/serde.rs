@@ -166,16 +166,12 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
         let mut files = Vec::new();
         while let Some(elem) = seq.next_element::<Vec<u8>>()? {
-            let mut reader =
-                FileReader::try_new(std::io::Cursor::new(elem), None).map_err(|e| {
-                    de::Error::custom(format!("failed to read ipc record batch: {}", e))
-                })?;
+            let mut reader = FileReader::try_new(std::io::Cursor::new(elem), None)
+                .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?;
             let rb = reader
                 .next()
                 .ok_or(de::Error::custom("missing ipc data"))?
-                .map_err(|e| {
-                    de::Error::custom(format!("failed to read ipc record batch: {}", e))
-                })?;
+                .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?;
             files.push(rb);
         }
         Ok(EagerSnapshot {

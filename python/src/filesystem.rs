@@ -305,9 +305,8 @@ impl DeltaFileSystemHandler {
                 py,
                 "UserWarning",
                 format!(
-                    "You specified a `max_buffer_size` of {} bits less than {} bits. Most object 
+                    "You specified a `max_buffer_size` of {max_buffer_size} bits less than {DEFAULT_MAX_BUFFER_SIZE} bits. Most object
                     stores expect greater than that number, you may experience issues",
-                    max_buffer_size, DEFAULT_MAX_BUFFER_SIZE
                 )
                 .as_str(),
                 Some(2),

@@ -417,8 +417,7 @@ impl DeltaScanConfigBuilder {
                 Some(name) => {
                     if column_names.contains(name) {
                         return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {} exits",
-                            name
+                            "Unable to add file path column since column with name {name} exits"
                         )));
                     }
 
@@ -431,7 +430,7 @@ impl DeltaScanConfigBuilder {
 
                     while column_names.contains(&name) {
                         idx += 1;
-                        name = format!("{}_{}", prefix, idx);
+                        name = format!("{prefix}_{idx}");
                     }
 
                     Some(name)
@@ -1112,8 +1111,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         | ArrowDataType::LargeListView(_)
         | ArrowDataType::ListView(_)
         | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
-            "Unsupported data type for Delta Lake {}",
-            t
+            "Unsupported data type for Delta Lake {t}"
         ))),
     }
 }
@@ -1622,8 +1620,7 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
             }
             _ => {
                 self.result = Err(DeltaTableError::Generic(format!(
-                    "Find files predicate contains unsupported expression {}",
-                    expr
+                    "Find files predicate contains unsupported expression {expr}"
                 )));
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -1670,8 +1667,7 @@ fn join_batches_with_add_actions(
 
         for path in iter {
             let path = path.ok_or(DeltaTableError::Generic(format!(
-                "{} cannot be null",
-                path_column
+                "{path_column} cannot be null"
             )))?;
 
             match actions.remove(path) {
@@ -2923,7 +2919,7 @@ mod tests {
             } else if value.to_string().starts_with("part-") {
                 LocationType::Data
             } else {
-                panic!("Unknown location type: {:?}", value)
+                panic!("Unknown location type: {value:?}")
             }
         }
     }
