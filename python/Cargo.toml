@@ -34,6 +34,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
+parking_lot = "0.12"
 
 # runtime
 futures = { workspace = true }

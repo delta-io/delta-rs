@@ -196,7 +196,9 @@ def test_merge_with_gc(table_with_gc: DeltaTable, data_without_gc):
     expected_data = pa.Table.from_pydict(
         {"id": [1, 2], "gc": [5, 5]}, schema=pa.schema([id_col, gc])
     )
-    assert table_with_gc.to_pyarrow_table() == expected_data
+    assert (
+        table_with_gc.to_pyarrow_table().sort_by([("id", "ascending")]) == expected_data
+    )
 
 
 def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):

@@ -1029,14 +1029,17 @@ class DeltaTable:
             convert_pyarrow_table,
         )
 
+        streaming = False
         if isinstance(source, pyarrow.RecordBatchReader):
             source = convert_pyarrow_recordbatchreader(source, conversion_mode)
+            streaming = True
         elif isinstance(source, pyarrow.RecordBatch):
             source = convert_pyarrow_recordbatch(source, conversion_mode)
         elif isinstance(source, pyarrow.Table):
             source = convert_pyarrow_table(source, conversion_mode)
         elif isinstance(source, ds.Dataset):
             source = convert_pyarrow_dataset(source, conversion_mode)
+            streaming = True
         elif _has_pandas and isinstance(source, pd.DataFrame):
             source = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), conversion_mode
@@ -1056,6 +1059,7 @@ class DeltaTable:
             source_alias=source_alias,
             target_alias=target_alias,
             safe_cast=not error_on_type_mismatch,
+            streaming=streaming,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
