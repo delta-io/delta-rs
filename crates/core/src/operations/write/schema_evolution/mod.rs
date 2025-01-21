@@ -1,7 +1,10 @@
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields};
 
-pub(crate) fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
+mod physical;
+mod logical;
+
+pub(crate) fn try_cast_schema(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {
         return Err(ArrowError::SchemaError(format!(
             "Cannot cast schema, number of fields does not match: {} vs {}",
@@ -17,7 +20,7 @@ pub(crate) fn try_cast_batch(from_fields: &Fields, to_fields: &Fields) -> Result
                 if let (DataType::Struct(fields0), DataType::Struct(fields1)) =
                     (f.data_type(), target_field.data_type())
                 {
-                    try_cast_batch(fields0, fields1)
+                    try_cast_schema(fields0, fields1)
                 } else {
                     match (f.data_type(), target_field.data_type()) {
                         (
