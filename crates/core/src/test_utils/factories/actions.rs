@@ -149,5 +149,5 @@ pub fn add_as_remove(add: &Add, data_change: bool) -> Remove {
 
 fn generate_file_name() -> String {
     let file_name = uuid::Uuid::new_v4().hyphenated().to_string();
-    format!("part-0001-{}.parquet", file_name)
+    format!("part-0001-{file_name}.parquet")
 }

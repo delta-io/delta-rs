@@ -95,7 +95,7 @@ impl LogStoreFactory for MountFactory {
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(MountFactory {});
     for scheme in ["dbfs", "file"].iter() {
-        let url = Url::parse(&format!("{}://", scheme)).unwrap();
+        let url = Url::parse(&format!("{scheme}://")).unwrap();
         factories().insert(url.clone(), factory.clone());
         logstores().insert(url.clone(), factory.clone());
     }

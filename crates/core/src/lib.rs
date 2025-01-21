@@ -679,8 +679,7 @@ mod tests {
 
         let error = crate::open_table(non_existing_path_str).await.unwrap_err();
         let _expected_error_msg = format!(
-            "Local path \"{}\" does not exist or you don't have access!",
-            non_existing_path_str
+            "Local path \"{non_existing_path_str}\" does not exist or you don't have access!"
         );
         assert!(matches!(
             error,
