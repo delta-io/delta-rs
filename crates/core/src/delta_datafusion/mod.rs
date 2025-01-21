@@ -48,7 +48,6 @@ use datafusion::execution::context::{SessionConfig, SessionContext, SessionState
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion_common::project_schema;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
@@ -59,7 +58,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
-use datafusion_physical_expr::{create_physical_expr, create_physical_exprs, PhysicalExpr};
+use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
@@ -886,7 +885,7 @@ impl TableProvider for LazyTableProvider {
 
     async fn scan(
         &self,
-        session: &dyn Session,
+        _session: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
