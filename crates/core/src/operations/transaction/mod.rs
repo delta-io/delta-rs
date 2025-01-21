@@ -80,7 +80,6 @@ use bytes::Bytes;
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use futures::future::BoxFuture;
-use itertools::Itertools;
 use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
 use serde_json::Value;
@@ -269,37 +268,22 @@ pub struct CommitData {
 impl CommitData {
     /// Create new data to be committed
     pub fn new(
-        actions: Vec<Action>,
+        mut actions: Vec<Action>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
-        // When in-commit-timestamps are enabled, we need to ensure that the commit info is the first action
-        // in the commit log. If it is not present, we need to add it.
-        // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#writer-requirements-for-in-commit-timestamps
-        let mut commit_info = None::<Action>;
-        let mut actions = actions
-            .into_iter()
-            .inspect(|a| {
-                if matches!(a, Action::CommitInfo(..)) {
-                    commit_info = Some(a.clone())
-                }
-            })
-            .filter(|a| matches!(a, Action::CommitInfo(..)))
-            .collect_vec();
-        if !commit_info.is_some() {
-            let mut cm = operation.get_commit_info();
-            cm.timestamp = Some(Utc::now().timestamp_millis());
+        if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+            let mut commit_info = operation.get_commit_info();
+            commit_info.timestamp = Some(Utc::now().timestamp_millis());
             app_metadata.insert(
                 "clientVersion".to_string(),
                 Value::String(format!("delta-rs.{}", crate_version())),
             );
-            app_metadata.extend(cm.info);
-            cm.info = app_metadata.clone();
-            commit_info = Some(Action::CommitInfo(cm));
+            app_metadata.extend(commit_info.info);
+            commit_info.info = app_metadata.clone();
+            actions.push(Action::CommitInfo(commit_info))
         }
-        // safety: we assured commit_info is Some just above.
-        actions.insert(0, commit_info.unwrap());
 
         for txn in &app_transactions {
             actions.push(Action::Txn(txn.clone()))
