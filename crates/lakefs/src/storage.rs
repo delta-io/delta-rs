@@ -101,7 +101,7 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
 
         for (key, value) in config.iter() {
-            builder = builder.with_config(key.clone(), value.clone());
+            builder = builder.with_config(*key, value.clone());
         }
 
         let inner = builder

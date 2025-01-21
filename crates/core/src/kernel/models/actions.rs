@@ -188,19 +188,19 @@ impl Protocol {
         mut self,
         writer_features: impl IntoIterator<Item = impl Into<WriterFeatures>>,
     ) -> Self {
-        let all_writer_feautures = writer_features
+        let all_writer_features = writer_features
             .into_iter()
             .map(|c| c.into())
             .collect::<HashSet<_>>();
-        if !all_writer_feautures.is_empty() {
+        if !all_writer_features.is_empty() {
             self.min_writer_version = 7;
 
             match self.writer_features {
                 Some(mut features) => {
-                    features.extend(all_writer_feautures);
+                    features.extend(all_writer_features);
                     self.writer_features = Some(features);
                 }
-                None => self.writer_features = Some(all_writer_feautures),
+                None => self.writer_features = Some(all_writer_features),
             };
         }
         self

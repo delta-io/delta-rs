@@ -63,7 +63,7 @@ impl MountConfigHelper {
         })
     }
 
-    /// Generate a cofiguration augmented with options from the environment
+    /// Generate a configuration augmented with options from the environment
     pub fn build(mut self) -> Result<HashMap<MountConfigKey, String>> {
         // Add keys from the environment to the configuration, as e.g. client configuration options.
         // NOTE We have to specifically configure omitting keys, since workload identity can

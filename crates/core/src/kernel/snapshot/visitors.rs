@@ -144,7 +144,7 @@ mod tests {
             Some(Some(123))
         );
 
-        // test that only the first encountered txn ist tacked for every app id.
+        // test that only the first encountered txn is tacked for every app id.
         data_app.extend([None, Some("my-app")]);
         data_version.extend([None, Some(2)]);
         data_last_updated.extend([None, Some(124)]);

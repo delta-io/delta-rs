@@ -1,4 +1,4 @@
-//! Delete records from a Delta Table that statisfy a predicate
+//! Delete records from a Delta Table that satisfy a predicate
 //!
 //! When a predicate is not provided then all records are deleted from the Delta
 //! Table. Otherwise a scan of the Delta table is performed to mark any files
@@ -134,7 +134,7 @@ impl DeleteBuilder {
         self
     }
 
-    /// Additonal information to write to the commit
+    /// Additional information to write to the commit
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self
@@ -184,7 +184,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn excute_non_empty_expr(
+async fn execute_non_empty_expr(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -330,7 +330,7 @@ async fn execute(
 
     let mut actions = {
         let write_start = Instant::now();
-        let add = excute_non_empty_expr(
+        let add = execute_non_empty_expr(
             &snapshot,
             log_store.clone(),
             &state,

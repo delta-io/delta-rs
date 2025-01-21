@@ -136,7 +136,7 @@ impl LogSegment {
 
     /// Try to create a new [`LogSegment`] from a slice of the log.
     ///
-    /// Ths will create a new [`LogSegment`] from the log with all relevant log files
+    /// This will create a new [`LogSegment`] from the log with all relevant log files
     /// starting at `start_version` and ending at `end_version`.
     pub async fn try_new_slice(
         table_root: &Path,
@@ -190,7 +190,7 @@ impl LogSegment {
         Ok(())
     }
 
-    /// Returns the highes commit version number in the log segment
+    /// Returns the highest commit version number in the log segment
     pub fn file_version(&self) -> Option<i64> {
         self.commit_files
             .iter()
@@ -358,7 +358,7 @@ impl LogSegment {
     /// Advance the log segment with new commits
     ///
     /// Returns an iterator over record batches, as if the commits were read from the log.
-    /// The input commits should be in order in which they would be commited to the table.
+    /// The input commits should be in order in which they would be committed to the table.
     pub(super) fn advance<'a>(
         &mut self,
         commits: impl IntoIterator<Item = &'a CommitData>,

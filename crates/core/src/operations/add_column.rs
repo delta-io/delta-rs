@@ -6,7 +6,7 @@ use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::{StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
@@ -28,7 +28,7 @@ pub struct AddColumnBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for AddColumnBuilder {
+impl Operation<()> for AddColumnBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

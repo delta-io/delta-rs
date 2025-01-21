@@ -2031,3 +2031,18 @@ def test_write_structs(tmp_path: pathlib.Path):
     arrow_dt = dt.to_pyarrow_dataset()
     new_df = pl.scan_pyarrow_dataset(arrow_dt)
     new_df.collect()
+
+
+@pytest.mark.polars
+def test_write_type_coercion_predicate(tmp_path: pathlib.Path):
+    import polars as pl
+
+    df = pl.DataFrame({"A": [1, 2], "B": ["hi", "hello"], "C": ["a", "b"]})
+    df.write_delta(tmp_path)
+
+    df = pl.DataFrame({"A": [10], "B": ["yeah"], "C": ["a"]})
+    df.write_delta(
+        tmp_path,
+        mode="overwrite",
+        delta_write_options=dict(engine="rust", predicate="C = 'a'"),
+    )

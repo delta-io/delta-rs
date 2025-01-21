@@ -153,7 +153,7 @@ impl RawDeltaTable {
             ._table
             .lock()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        (*original).state = state;
+        original.state = state;
         Ok(())
     }
 }

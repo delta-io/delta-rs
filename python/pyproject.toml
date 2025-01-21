@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = ["pyarrow>=16"]
+dependencies = ["pyarrow>=16,<19"]
 dynamic = ["version"]
 
 [project.optional-dependencies]

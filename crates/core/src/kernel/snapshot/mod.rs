@@ -447,7 +447,7 @@ impl EagerSnapshot {
 
         schema_actions.insert(ActionType::Add);
         let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
-            // NOTE: we don't need to add the visitor relevant data here, as it is repüresented in teh state already
+            // NOTE: we don't need to add the visitor relevant data here, as it is repüresented in the state already
             futures::stream::iter(files.into_iter().map(Ok)).boxed()
         } else {
             let read_schema =

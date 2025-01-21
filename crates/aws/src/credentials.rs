@@ -211,7 +211,7 @@ mod options_tests {
 }
 
 /// Generate a random session name for assuming IAM roles
-fn assume_role_sessio_name() -> String {
+fn assume_role_session_name() -> String {
     let now = chrono::Utc::now();
 
     format!("delta-rs_{}", now.timestamp_millis())
@@ -256,7 +256,7 @@ fn assume_session_name(options: &StorageOptions) -> String {
         )
         .cloned();
 
-    assume_session.unwrap_or_else(assume_role_sessio_name)
+    assume_session.unwrap_or_else(assume_role_session_name)
 }
 
 /// Take a set of [StorageOptions] and produce an appropriate AWS SDK [SdkConfig]

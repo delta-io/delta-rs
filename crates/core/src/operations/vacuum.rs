@@ -187,7 +187,7 @@ impl VacuumBuilder {
         self
     }
 
-    /// Determine which files can be deleted. Does not actually peform the deletion
+    /// Determine which files can be deleted. Does not actually perform the deletion
     async fn create_vacuum_plan(&self) -> Result<VacuumPlan, VacuumError> {
         let min_retention = Duration::milliseconds(
             self.snapshot
@@ -302,7 +302,7 @@ struct VacuumPlan {
     pub retention_check_enabled: bool,
     /// Default retention in milliseconds
     pub default_retention_millis: i64,
-    /// Overrided retention in milliseconds
+    /// Overridden retention in milliseconds
     pub specified_retention_millis: Option<i64>,
 }
 

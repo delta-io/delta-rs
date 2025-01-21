@@ -158,7 +158,7 @@ impl LogicalFile<'_> {
     /// An object store [`Path`] to the file.
     ///
     /// this tries to parse the file string and if that fails, it will return the string as is.
-    // TODO assert consisent handling of the paths encoding when reading log data so this logic can be removed.
+    // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
     pub fn object_store_path(&self) -> Path {
         let path = self.path();
         // Try to preserve percent encoding if possible

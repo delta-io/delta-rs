@@ -1,4 +1,4 @@
-//! Update records from a Delta Table for records statisfy a predicate
+//! Update records from a Delta Table for records satisfy a predicate
 //!
 //! When a predicate is not provided then all records are updated from the Delta
 //! Table. Otherwise a scan of the Delta table is performed to mark any files
@@ -150,7 +150,7 @@ impl UpdateBuilder {
         self
     }
 
-    /// Perform an additional update expression during the operaton
+    /// Perform an additional update expression during the operation
     pub fn with_update<S: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: S,
@@ -339,7 +339,7 @@ async fn execute(
     let df = DataFrame::new(state.clone(), plan);
 
     // Take advantage of how null counts are tracked in arrow arrays use the
-    // null count to track how many records do NOT statisfy the predicate.  The
+    // null count to track how many records do NOT satisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
     let predicate_null =

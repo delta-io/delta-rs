@@ -547,8 +547,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_barrier_changing_indicies() {
-        // Validate implementation can handle different dictionary indicies between batches
+    async fn test_barrier_changing_indices() {
+        // Validate implementation can handle different dictionary indices between batches
 
         let schema = get_schema();
         let mut batches = vec![];

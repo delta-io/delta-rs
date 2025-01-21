@@ -329,7 +329,7 @@ pub enum RepairLogEntryResult {
     MovedFileAndFixedEntry,
     /// The database entry has been rewritten, but the file was already moved.
     FixedEntry,
-    /// Moved file, but the database entry was alrady updated.
+    /// Moved file, but the database entry was already updated.
     MovedFile,
     /// Both parts of the repair process where already carried.
     AlreadyCompleted,

@@ -118,7 +118,7 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
-/// Convience trait for calling common methods on snapshot heirarchies
+/// Convenience trait for calling common methods on snapshot hierarchies
 pub trait DataFusionMixins {
     /// The physical datafusion schema of a table
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
@@ -2659,7 +2659,7 @@ mod tests {
     #[tokio::test]
     async fn passes_sanity_checker_when_all_files_filtered() {
         // Run a query that filters out all files and sorts.
-        // Verify that it returns an empty set of rows without panicing.
+        // Verify that it returns an empty set of rows without panicking.
         //
         // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
         // datafusion rejected.

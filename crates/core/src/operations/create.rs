@@ -224,7 +224,7 @@ impl CreateBuilder {
         self
     }
 
-    /// Specify whether to raise an error if the table properties in the configuration are not TablePropertys
+    /// Specify whether to raise an error if the table properties in the configuration are not TableProperties
     pub fn with_raise_if_key_not_exists(mut self, raise_if_key_not_exists: bool) -> Self {
         self.raise_if_key_not_exists = raise_if_key_not_exists;
         self

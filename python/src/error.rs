@@ -101,9 +101,9 @@ pub enum PythonError {
     ThreadingError(String),
 }
 
-impl<T> Into<PythonError> for std::sync::PoisonError<T> {
-    fn into(self) -> PythonError {
-        PythonError::ThreadingError(self.to_string())
+impl<T> From<std::sync::PoisonError<T>> for PythonError {
+    fn from(val: std::sync::PoisonError<T>) -> Self {
+        PythonError::ThreadingError(val.to_string())
     }
 }
 
