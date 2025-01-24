@@ -217,6 +217,7 @@ impl VacuumBuilder {
             self.log_store.object_store(None).clone(),
         )
         .await?;
+
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
 
         let mut files_to_delete = vec![];

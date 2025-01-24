@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.81'
+          toolchain: "1.81"
           override: true
 
       - name: Format
@@ -42,7 +42,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.81'
+          toolchain: "1.81"
           override: true
 
       - name: build and lint with clippy
@@ -79,8 +79,11 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.81'
+          toolchain: "1.81"
           override: true
+
+      - name: Load DAT data
+        uses: ./.github/actions/load-dat
 
       - name: Run tests
         run: cargo test --verbose --features ${{ env.DEFAULT_FEATURES }}
@@ -114,7 +117,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.81'
+          toolchain: "1.81"
           override: true
 
       # Install Java and Hadoop for HDFS integration tests
@@ -128,6 +131,9 @@ jobs:
           wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
           tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
           echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
+
+      - name: Load DAT data
+        uses: ./.github/actions/load-dat
 
       - name: Start emulated services
         run: docker compose up -d
@@ -160,7 +166,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.81'
+          toolchain: "1.81"
           override: true
 
       - name: Download Lakectl
@@ -175,4 +181,3 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           cargo test --features integration_test_lakefs,lakefs,datafusion
-

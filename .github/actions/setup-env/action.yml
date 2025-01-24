@@ -4,12 +4,12 @@ description: "Set up Python, virtual environment, and Rust toolchain"
 inputs:
   python-version:
     description: "The Python version to set up"
-    required: true
+    required: false
     default: "3.10"
 
   rust-toolchain:
     description: "The Rust toolchain to set up"
-    required: true
+    required: false
     default: "stable"
 
 runs:
