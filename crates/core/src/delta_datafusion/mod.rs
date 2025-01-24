@@ -54,12 +54,16 @@ use datafusion_common::{
     config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
     TableReference, ToDFSchema,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
+use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     Statistics,
@@ -71,7 +75,9 @@ use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::ObjectMeta;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+
 use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
@@ -118,7 +124,7 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
-/// Convience trait for calling common methods on snapshot heirarchies
+/// Convenience trait for calling common methods on snapshot hierarchies
 pub trait DataFusionMixins {
     /// The physical datafusion schema of a table
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
@@ -836,6 +842,107 @@ impl TableProvider for DeltaTableProvider {
 
     fn statistics(&self) -> Option<Statistics> {
         self.snapshot.datafusion_table_statistics()
+    }
+}
+
+#[derive(Debug)]
+pub struct LazyTableProvider {
+    schema: Arc<ArrowSchema>,
+    batches: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
+}
+
+impl LazyTableProvider {
+    /// Build a DeltaTableProvider
+    pub fn try_new(
+        schema: Arc<ArrowSchema>,
+        batches: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
+    ) -> DeltaResult<Self> {
+        Ok(LazyTableProvider { schema, batches })
+    }
+}
+
+#[async_trait]
+impl TableProvider for LazyTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> Arc<ArrowSchema> {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
+        None
+    }
+
+    async fn scan(
+        &self,
+        _session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(LazyMemoryExec::try_new(
+            self.schema(),
+            self.batches.clone(),
+        )?);
+
+        let df_schema: DFSchema = plan.schema().try_into()?;
+
+        if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
+            let physical_expr =
+                create_physical_expr(&filter_expr, &df_schema, &ExecutionProps::new())?;
+            plan = Arc::new(FilterExec::try_new(physical_expr, plan)?);
+        }
+
+        if let Some(projection) = projection {
+            let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
+            if projection != &current_projection {
+                let execution_props = &ExecutionProps::new();
+                let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
+                    .into_iter()
+                    .map(|i| {
+                        let (table_ref, field) = df_schema.qualified_field(*i);
+                        create_physical_expr(
+                            &Expr::Column(Column::from((table_ref, field))),
+                            &df_schema,
+                            execution_props,
+                        )
+                        .map(|expr| (expr, field.name().clone()))
+                        .map_err(DeltaTableError::from)
+                    })
+                    .collect();
+                plan = Arc::new(ProjectionExec::try_new(fields?, plan)?);
+            }
+        }
+
+        if let Some(limit) = limit {
+            plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(limit)))
+        };
+
+        Ok(plan)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        None
     }
 }
 
@@ -2659,7 +2766,7 @@ mod tests {
     #[tokio::test]
     async fn passes_sanity_checker_when_all_files_filtered() {
         // Run a query that filters out all files and sorts.
-        // Verify that it returns an empty set of rows without panicing.
+        // Verify that it returns an empty set of rows without panicking.
         //
         // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
         // datafusion rejected.

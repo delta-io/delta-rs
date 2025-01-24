@@ -404,7 +404,7 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
             })?;
             Url::from_directory_path(path).map_err(|_| {
                 let msg = format!(
-                    "Could not construct a URL from canonicalized path: {}.\n\
+                    "Could not construct a URL from the canonical path: {}.\n\
                     Something must be very wrong with the table path.",
                     table_uri
                 );

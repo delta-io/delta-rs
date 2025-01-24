@@ -1,9 +1,9 @@
 //! Add a commit entry to the Delta Table.
 //! This module provides a unified interface for modifying commit behavior and attributes
 //!
-//! [`CommitProperties`] provides an unified client interface for all Delta opeartions.
+//! [`CommitProperties`] provides an unified client interface for all Delta operations.
 //! Internally this is used to initialize a [`CommitBuilder`].
-//!  
+//!
 //! For advanced use cases [`CommitBuilder`] can be used which allows
 //! finer control over the commit process. The builder can be converted
 //! into a future the yield either a [`PreparedCommit`] or a [`FinalizedCommit`].
@@ -14,64 +14,64 @@
 //!
 //!<pre>
 //!                                          Client Interface
-//!        ┌─────────────────────────────┐                    
-//!        │      Commit Properties      │                    
-//!        │                             │                    
-//!        │ Public commit interface for │                    
-//!        │     all Delta Operations    │                    
-//!        │                             │                    
-//!        └─────────────┬───────────────┘                    
-//!                      │                                    
+//!        ┌─────────────────────────────┐
+//!        │      Commit Properties      │
+//!        │                             │
+//!        │ Public commit interface for │
+//!        │     all Delta Operations    │
+//!        │                             │
+//!        └─────────────┬───────────────┘
+//!                      │
 //! ─────────────────────┼────────────────────────────────────
-//!                      │                                    
+//!                      │
 //!                      ▼                  Advanced Interface
-//!        ┌─────────────────────────────┐                    
-//!        │       Commit Builder        │                    
-//!        │                             │                    
-//!        │   Advanced entry point for  │                    
-//!        │     creating a commit       │                    
-//!        └─────────────┬───────────────┘                    
-//!                      │                                    
-//!                      ▼                                    
-//!     ┌───────────────────────────────────┐                 
-//!     │                                   │                 
-//!     │ ┌───────────────────────────────┐ │                 
-//!     │ │        Prepared Commit        │ │                 
-//!     │ │                               │ │                 
-//!     │ │     Represents a temporary    │ │                 
-//!     │ │   commit marker written to    │ │                 
-//!     │ │           storage             │ │                 
-//!     │ └──────────────┬────────────────┘ │                 
-//!     │                │                  │                 
-//!     │                ▼                  │                 
-//!     │ ┌───────────────────────────────┐ │                 
-//!     │ │       Finalize Commit         │ │                 
-//!     │ │                               │ │                 
-//!     │ │   Convert the commit marker   │ │                 
-//!     │ │   to a commit using atomic    │ │                 
-//!     │ │         operations            │ │                 
-//!     │ │                               │ │                 
-//!     │ └───────────────────────────────┘ │                 
-//!     │                                   │                 
-//!     └────────────────┬──────────────────┘                 
-//!                      │                                    
-//!                      ▼                                    
-//!       ┌───────────────────────────────┐                   
-//!       │          Post Commit          │                   
-//!       │                               │                   
-//!       │ Commit that was materialized  │                   
-//!       │ to storage with post commit   │                   
-//!       │      hooks to be executed     │                   
-//!       └──────────────┬────────────────┘                 
-//!                      │                                    
-//!                      ▼    
-//!       ┌───────────────────────────────┐                   
-//!       │        Finalized Commit       │                   
-//!       │                               │                   
-//!       │ Commit that was materialized  │                   
-//!       │         to storage            │                   
-//!       │                               │                   
-//!       └───────────────────────────────┘           
+//!        ┌─────────────────────────────┐
+//!        │       Commit Builder        │
+//!        │                             │
+//!        │   Advanced entry point for  │
+//!        │     creating a commit       │
+//!        └─────────────┬───────────────┘
+//!                      │
+//!                      ▼
+//!     ┌───────────────────────────────────┐
+//!     │                                   │
+//!     │ ┌───────────────────────────────┐ │
+//!     │ │        Prepared Commit        │ │
+//!     │ │                               │ │
+//!     │ │     Represents a temporary    │ │
+//!     │ │   commit marker written to    │ │
+//!     │ │           storage             │ │
+//!     │ └──────────────┬────────────────┘ │
+//!     │                │                  │
+//!     │                ▼                  │
+//!     │ ┌───────────────────────────────┐ │
+//!     │ │       Finalize Commit         │ │
+//!     │ │                               │ │
+//!     │ │   Convert the commit marker   │ │
+//!     │ │   to a commit using atomic    │ │
+//!     │ │         operations            │ │
+//!     │ │                               │ │
+//!     │ └───────────────────────────────┘ │
+//!     │                                   │
+//!     └────────────────┬──────────────────┘
+//!                      │
+//!                      ▼
+//!       ┌───────────────────────────────┐
+//!       │          Post Commit          │
+//!       │                               │
+//!       │ Commit that was materialized  │
+//!       │ to storage with post commit   │
+//!       │      hooks to be executed     │
+//!       └──────────────┬────────────────┘
+//!                      │
+//!                      ▼
+//!       ┌───────────────────────────────┐
+//!       │        Finalized Commit       │
+//!       │                               │
+//!       │ Commit that was materialized  │
+//!       │         to storage            │
+//!       │                               │
+//!       └───────────────────────────────┘
 //!</pre>
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -135,7 +135,7 @@ pub enum TransactionError {
         source: ObjectStoreError,
     },
 
-    /// Error returned when a commit conflict ocurred
+    /// Error returned when a commit conflict occurred
     #[error("Failed to commit transaction: {0}")]
     CommitConflict(#[from] CommitConflictError),
 
@@ -266,7 +266,7 @@ pub struct CommitData {
 }
 
 impl CommitData {
-    /// Create new data to be comitted
+    /// Create new data to be committed
     pub fn new(
         mut actions: Vec<Action>,
         operation: DeltaOperation,
@@ -319,7 +319,7 @@ pub struct PostCommitHookProperties {
 
 #[derive(Clone, Debug)]
 /// End user facing interface to be used by operations on the table.
-/// Enable controling commit behaviour and modifying metadata that is written during a commit.
+/// Enable controlling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     pub(crate) app_transaction: Vec<Transaction>,
@@ -341,7 +341,7 @@ impl Default for CommitProperties {
 }
 
 impl CommitProperties {
-    /// Specify metadata the be comitted
+    /// Specify metadata the be committed
     pub fn with_metadata(
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
@@ -362,7 +362,7 @@ impl CommitProperties {
         self
     }
 
-    /// Add an additonal application transaction to the commit
+    /// Add an additional application transaction to the commit
     pub fn with_application_transaction(mut self, txn: Transaction) -> Self {
         self.app_transaction.push(txn);
         self
@@ -446,7 +446,7 @@ impl<'a> CommitBuilder {
         self
     }
 
-    /// Propogate operation id to log store
+    /// Propagate operation id to log store
     pub fn with_operation_id(mut self, operation_id: Uuid) -> Self {
         self.operation_id = operation_id;
         self
@@ -693,7 +693,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 pub struct PostCommit<'a> {
     /// The winning version number of the commit
     pub version: i64,
-    /// The data that was comitted to the log store
+    /// The data that was committed to the log store
     pub data: CommitData,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
@@ -804,7 +804,7 @@ impl PostCommit<'_> {
 
 /// A commit that successfully completed
 pub struct FinalizedCommit {
-    /// The new table state after a commmit
+    /// The new table state after a commit
     pub snapshot: DeltaTableState,
 
     /// Version of the finalized commit
@@ -812,7 +812,7 @@ pub struct FinalizedCommit {
 }
 
 impl FinalizedCommit {
-    /// The new table state after a commmit
+    /// The new table state after a commit
     pub fn snapshot(&self) -> DeltaTableState {
         self.snapshot.clone()
     }

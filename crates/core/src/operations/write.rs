@@ -33,15 +33,13 @@ use std::vec;
 use arrow_array::RecordBatch;
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields, SchemaRef as ArrowSchemaRef};
+use datafusion::catalog::TableProvider;
+use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::prelude::DataFrame;
 use datafusion_common::DFSchema;
-use datafusion_expr::{col, lit, when, Expr, ExprSchemable};
-use datafusion_physical_expr::expressions::{self};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::{memory::MemoryExec, ExecutionPlan};
+use datafusion_expr::{col, lit, when, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use datafusion_physical_plan::ExecutionPlan;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use object_store::prefix::PrefixStore;
@@ -58,7 +56,7 @@ use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::{
-    find_files, register_store, DeltaScanBuilder, DeltaScanConfigBuilder,
+    find_files, register_store, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -78,7 +76,7 @@ use crate::DeltaTable;
 use tokio::sync::mpsc::Sender;
 
 #[derive(thiserror::Error, Debug)]
-enum WriteError {
+pub(crate) enum WriteError {
     #[error("No data source supplied to write command.")]
     MissingData,
 
@@ -136,7 +134,7 @@ pub struct WriteBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// The input plan
-    input: Option<Arc<dyn ExecutionPlan>>,
+    input: Option<Arc<LogicalPlan>>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// SaveMode defines how to treat data already written to table location
@@ -245,8 +243,8 @@ impl WriteBuilder {
         self
     }
 
-    /// Execution plan that produces the data to be written to the delta table
-    pub fn with_input_execution_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
+    /// Logical execution plan that produces the data to be written to the delta table
+    pub fn with_input_execution_plan(mut self, plan: Arc<LogicalPlan>) -> Self {
         self.input = Some(plan);
         self
     }
@@ -351,7 +349,7 @@ impl WriteBuilder {
         };
 
         let schema: StructType = match &self.input {
-            Some(plan) => (plan.schema()).try_into()?,
+            Some(plan) => (plan.schema().as_arrow()).try_into()?,
             None => (batches[0].schema()).try_into()?,
         };
 
@@ -403,9 +401,9 @@ impl WriteBuilder {
 #[derive(Clone)]
 pub struct WriterStatsConfig {
     /// Number of columns to collect stats for, idx based
-    num_indexed_cols: i32,
+    pub num_indexed_cols: i32,
     /// Optional list of columns which to collect stats for, takes precedende over num_index_cols
-    stats_columns: Option<Vec<String>>,
+    pub stats_columns: Option<Vec<String>>,
 }
 
 impl WriterStatsConfig {
@@ -438,7 +436,7 @@ async fn write_execution_plan_with_predicate(
     let checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
-        debug!("Using plan schema to derive generated columns, since no shapshot was provided. Implies first write.");
+        debug!("Using plan schema to derive generated columns, since no snapshot was provided. Implies first write.");
         let delta_schema: StructType = schema.as_ref().try_into()?;
         DeltaDataChecker::new_with_generated_columns(
             delta_schema.get_generated_columns().unwrap_or_default(),
@@ -602,7 +600,7 @@ async fn execute_non_empty_expr(
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
-    insert_plan: Arc<dyn ExecutionPlan>,
+    insert_df: DataFrame,
     operation_id: Uuid,
 ) -> DeltaResult<Vec<Action>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
@@ -611,30 +609,30 @@ async fn execute_non_empty_expr(
 
     // Take the insert plan schema since it might have been schema evolved, if its not
     // it is simply the table schema
-    let df_schema = insert_plan.schema();
-    let input_dfschema: DFSchema = df_schema.as_ref().clone().try_into()?;
-
     let scan_config = DeltaScanConfigBuilder::new()
         .with_schema(snapshot.input_schema()?)
         .build(snapshot)?;
 
-    let scan = DeltaScanBuilder::new(snapshot, log_store.clone(), &state)
-        .with_files(rewrite)
-        // Use input schema which doesn't wrap partition values, otherwise divide_by_partition_value won't work on UTF8 partitions
-        // Since it can't fetch a scalar from a dictionary type
-        .with_scan_config(scan_config)
-        .build()
-        .await?;
-    let scan = Arc::new(scan);
+    let target_provider = Arc::new(
+        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_files(rewrite.to_vec()),
+    );
 
+    let target_provider = provider_as_source(target_provider);
+    let source = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
     // We don't want to verify the predicate against existing data
+
+    let df = DataFrame::new(state.clone(), source);
+
     if !partition_scan {
         // Apply the negation of the filter and rewrite files
         let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
-        let predicate_expr = state.create_physical_expr(negated_expression, &input_dfschema)?;
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
+        let filter = df
+            .clone()
+            .filter(negated_expression)?
+            .create_physical_plan()
+            .await?;
 
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
@@ -662,13 +660,12 @@ async fn execute_non_empty_expr(
             snapshot,
             log_store,
             state.clone(),
-            scan,
-            input_dfschema,
+            df,
             expression,
             partition_columns,
             writer_properties,
             writer_stats_config,
-            insert_plan,
+            insert_df,
             operation_id,
         )
         .await?
@@ -685,71 +682,34 @@ pub(crate) async fn execute_non_empty_expr_cdc(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: SessionState,
-    scan: Arc<crate::delta_datafusion::DeltaScan>,
-    input_dfschema: DFSchema,
+    scan: DataFrame,
     expression: &Expr,
     table_partition_cols: Vec<String>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
-    insert_plan: Arc<dyn ExecutionPlan>,
+    insert_df: DataFrame,
     operation_id: Uuid,
 ) -> DeltaResult<Option<Vec<Action>>> {
     match should_write_cdc(snapshot) {
         // Create CDC scan
         Ok(true) => {
-            let cdc_predicate_expr =
-                state.create_physical_expr(expression.clone(), &input_dfschema)?;
-            let cdc_scan: Arc<dyn ExecutionPlan> =
-                Arc::new(FilterExec::try_new(cdc_predicate_expr, scan.clone())?);
+            let filter = scan.clone().filter(expression.clone())?;
 
             // Add literal column "_change_type"
-            let delete_change_type_expr =
-                state.create_physical_expr(lit("delete"), &input_dfschema)?;
+            let delete_change_type_expr = lit("delete").alias("_change_type");
 
-            let insert_change_type_expr =
-                state.create_physical_expr(lit("insert"), &input_dfschema)?;
+            let insert_change_type_expr = lit("insert").alias("_change_type");
 
-            // Project columns and lit
-            let mut delete_project_expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = scan
-                .schema()
-                .fields()
-                .into_iter()
-                .enumerate()
-                .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
-                    (
-                        Arc::new(expressions::Column::new(field.name(), idx)),
-                        field.name().to_owned(),
-                    )
-                })
-                .collect();
+            let delete_df = filter.with_column("_change_type", delete_change_type_expr)?;
 
-            let mut insert_project_expressions = delete_project_expressions.clone();
-            delete_project_expressions.insert(
-                delete_project_expressions.len(),
-                (delete_change_type_expr, "_change_type".to_owned()),
-            );
-            insert_project_expressions.insert(
-                insert_project_expressions.len(),
-                (insert_change_type_expr, "_change_type".to_owned()),
-            );
+            let insert_df = insert_df.with_column("_change_type", insert_change_type_expr)?;
 
-            let delete_plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-                delete_project_expressions,
-                cdc_scan.clone(),
-            )?);
-
-            let insert_plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-                insert_project_expressions,
-                insert_plan.clone(),
-            )?);
-
-            let cdc_plan: Arc<dyn ExecutionPlan> =
-                Arc::new(UnionExec::new(vec![delete_plan, insert_plan]));
+            let cdc_df = delete_df.union(insert_df)?;
 
             let cdc_actions = write_execution_plan_cdc(
                 Some(snapshot),
                 state.clone(),
-                cdc_plan.clone(),
+                cdc_df.create_physical_plan().await?,
                 table_partition_cols.clone(),
                 log_store.object_store(Some(operation_id)),
                 Some(snapshot.table_config().target_file_size() as usize),
@@ -765,7 +725,7 @@ pub(crate) async fn execute_non_empty_expr_cdc(
     }
 }
 
-// This should only be called wth a valid predicate
+// This should only be called with a valid predicate
 #[allow(clippy::too_many_arguments)]
 async fn prepare_predicate_actions(
     predicate: Expr,
@@ -776,7 +736,7 @@ async fn prepare_predicate_actions(
     writer_properties: Option<WriterProperties>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
-    insert_plan: Arc<dyn ExecutionPlan>,
+    insert_df: DataFrame,
     operation_id: Uuid,
 ) -> DeltaResult<Vec<Action>> {
     let candidates =
@@ -792,7 +752,7 @@ async fn prepare_predicate_actions(
         writer_properties,
         writer_stats_config,
         candidates.partition_scan,
-        insert_plan,
+        insert_df,
         operation_id,
     )
     .await?;
@@ -858,19 +818,28 @@ impl std::future::IntoFuture for WriteBuilder {
                 Ok(this.partition_columns.unwrap_or_default())
             }?;
 
+            let state = match this.state {
+                Some(state) => state,
+                None => {
+                    let ctx = SessionContext::new();
+                    register_store(this.log_store.clone(), ctx.runtime_env());
+                    ctx.state()
+                }
+            };
+
             let generated_col_expressions = this
                 .snapshot
                 .as_ref()
                 .map(|v| v.schema().get_generated_columns().unwrap_or_default())
                 .unwrap_or_default();
             let mut schema_drift = false;
-            let mut plan = if let Some(plan) = this.input {
+            let mut df = if let Some(plan) = this.input {
                 if this.schema_mode == Some(SchemaMode::Merge) {
                     return Err(DeltaTableError::Generic(
                         "Schema merge not supported yet for Datafusion".to_string(),
                     ));
                 }
-                Ok(plan)
+                Ok(DataFrame::new(state.clone(), plan.as_ref().clone()))
             } else if let Some(batches) = this.batches {
                 if batches.is_empty() {
                     Err(WriteError::MissingData)
@@ -993,17 +962,19 @@ impl std::future::IntoFuture for WriteBuilder {
                         }
                     };
 
-                    Ok(Arc::new(MemoryExec::try_new(
-                        &data,
-                        new_schema.unwrap_or(schema).clone(),
-                        None,
-                    )?) as Arc<dyn ExecutionPlan>)
+                    let ctx = SessionContext::new();
+                    let table_provider: Arc<dyn TableProvider> = Arc::new(
+                        MemTable::try_new(new_schema.unwrap_or(schema).clone(), data).unwrap(),
+                    );
+                    let df = ctx.read_table(table_provider).unwrap();
+
+                    Ok(df)
                 }
             } else {
                 Err(WriteError::MissingData)
             }?;
 
-            let schema = plan.schema();
+            let schema = Arc::new(df.schema().as_arrow().clone());
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = schema.clone().try_into()?;
@@ -1025,47 +996,33 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                 }
             }
-            let state = match this.state {
-                Some(state) => state,
-                None => {
-                    let ctx = SessionContext::new();
-                    register_store(this.log_store.clone(), ctx.runtime_env());
-                    ctx.state()
-                }
-            };
 
             // Add when.then expr for generated columns
             if !generated_col_expressions.is_empty() {
                 fn create_field(
-                    idx: usize,
                     field: &arrow_schema::Field,
                     generated_cols_map: &HashMap<String, GeneratedColumn>,
                     state: &datafusion::execution::session_state::SessionState,
                     dfschema: &DFSchema,
-                ) -> DeltaResult<(Arc<dyn PhysicalExpr>, String)> {
+                ) -> DeltaResult<Expr> {
                     match generated_cols_map.get(field.name()) {
                         Some(generated_col) => {
-                            let generation_expr = state.create_physical_expr(
-                                when(
-                                    col(generated_col.get_name()).is_null(),
-                                    state.create_logical_expr(
-                                        generated_col.get_generation_expression(),
-                                        dfschema,
-                                    )?,
-                                )
-                                .otherwise(col(generated_col.get_name()))?
-                                .cast_to(
-                                    &arrow_schema::DataType::try_from(&generated_col.data_type)?,
+                            let generation_expr = when(
+                                col(generated_col.get_name()).is_null(),
+                                state.create_logical_expr(
+                                    generated_col.get_generation_expression(),
                                     dfschema,
                                 )?,
+                            )
+                            .otherwise(col(generated_col.get_name()))?
+                            .cast_to(
+                                &arrow_schema::DataType::try_from(&generated_col.data_type)?,
                                 dfschema,
-                            )?;
-                            Ok((generation_expr, field.name().to_owned()))
+                            )?
+                            .alias(field.name().to_owned());
+                            Ok(generation_expr)
                         }
-                        None => Ok((
-                            Arc::new(expressions::Column::new(field.name(), idx)),
-                            field.name().to_owned(),
-                        )),
+                        None => Ok(col(field.name().to_owned())),
                     }
                 }
 
@@ -1074,17 +1031,14 @@ impl std::future::IntoFuture for WriteBuilder {
                     .into_iter()
                     .map(|v| (v.name.clone(), v))
                     .collect::<HashMap<String, GeneratedColumn>>();
-                let current_fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = plan
+                let current_fields: DeltaResult<Vec<Expr>> = df
                     .schema()
                     .fields()
                     .into_iter()
-                    .enumerate()
-                    .map(|(idx, field)| {
-                        create_field(idx, field, &generated_cols_map, &state, &dfschema)
-                    })
+                    .map(|field| create_field(field, &generated_cols_map, &state, &dfschema))
                     .collect();
 
-                plan = Arc::new(ProjectionExec::try_new(current_fields?, plan.clone())?);
+                df = df.select(current_fields?)?;
             };
 
             let (predicate_str, predicate) = match this.predicate {
@@ -1123,7 +1077,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 predicate.clone(),
                 this.snapshot.as_ref(),
                 state.clone(),
-                plan.clone(),
+                df.clone().create_physical_plan().await?,
                 partition_columns.clone(),
                 this.log_store.object_store(Some(operation_id)).clone(),
                 target_file_size,
@@ -1177,7 +1131,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 this.writer_properties,
                                 deletion_timestamp,
                                 writer_stats_config,
-                                plan,
+                                df,
                                 operation_id,
                             )
                             .await?;
@@ -1320,7 +1274,6 @@ mod tests {
     use crate::TableProperty;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
-    use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use itertools::Itertools;
     use serde_json::{json, Value};
@@ -2075,7 +2028,7 @@ mod tests {
         let table_logstore = table.log_store.clone();
         let table_state = table.state.clone().unwrap();
 
-        // An attempt to write records non comforming to predicate should fail
+        // An attempt to write records non conforming to predicate should fail
         let batch_fail = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -2494,13 +2447,13 @@ mod tests {
                 .await?;
 
             let ctx = SessionContext::new();
-            let plan = ctx
-                .sql("SELECT 1 as id")
-                .await
-                .unwrap()
-                .create_physical_plan()
-                .await
-                .unwrap();
+            let plan = Arc::new(
+                ctx.sql("SELECT 1 as id")
+                    .await
+                    .unwrap()
+                    .logical_plan()
+                    .clone(),
+            );
             let writer = WriteBuilder::new(table.log_store.clone(), table.state)
                 .with_input_execution_plan(plan)
                 .with_save_mode(SaveMode::Overwrite);

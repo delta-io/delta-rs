@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use arrow_schema::ArrowError;
 use futures::StreamExt;
-use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ pub enum ProtocolError {
         source: parquet::errors::ParquetError,
     },
 
-    /// Faild to serialize operation
+    /// Failed to serialize operation
     #[error("Failed to serialize operation: {source}")]
     SerializeOperation {
         #[from]
@@ -450,6 +450,12 @@ pub enum DeltaOperation {
         /// The status of the operation
         status: String,
     },
+    /// Set table field metadata operations
+    #[serde(rename_all = "camelCase")]
+    UpdateFieldMetadata {
+        /// Fields added to existing schema
+        fields: Vec<StructField>,
+    },
 }
 
 impl DeltaOperation {
@@ -477,6 +483,7 @@ impl DeltaOperation {
             DeltaOperation::AddConstraint { .. } => "ADD CONSTRAINT",
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
             DeltaOperation::AddFeature { .. } => "ADD FEATURE",
+            DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
         }
     }
 
@@ -513,6 +520,7 @@ impl DeltaOperation {
     pub fn changes_data(&self) -> bool {
         match self {
             Self::Optimize { .. }
+            | Self::UpdateFieldMetadata { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
             | Self::AddFeature { .. }
@@ -629,12 +637,11 @@ pub(crate) async fn find_latest_check_point_for_version(
     log_store: &dyn LogStore,
     version: i64,
 ) -> Result<Option<CheckPoint>, ProtocolError> {
-    lazy_static! {
-        static ref CHECKPOINT_REGEX: Regex =
-            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
-        static ref CHECKPOINT_PARTS_REGEX: Regex =
-            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
-    }
+    static CHECKPOINT_REGEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap());
+    static CHECKPOINT_PARTS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap()
+    });
 
     let mut cp: Option<CheckPoint> = None;
     let object_store = log_store.object_store(None);
@@ -819,7 +826,7 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
 
-        // assert that commit info has no required filelds
+        // assert that commit info has no required fields
         let raw = "{}";
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());

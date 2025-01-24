@@ -153,7 +153,7 @@ impl RawDeltaTable {
             ._table
             .lock()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        (*original).state = state;
+        original.state = state;
         Ok(())
     }
 }
@@ -895,6 +895,7 @@ impl RawDeltaTable {
         source_alias = None,
         target_alias = None,
         safe_cast = false,
+        streaming = false,
         writer_properties = None,
         post_commithook_properties = None,
         commit_properties = None,
@@ -907,6 +908,7 @@ impl RawDeltaTable {
         source_alias: Option<String>,
         target_alias: Option<String>,
         safe_cast: bool,
+        streaming: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -927,6 +929,7 @@ impl RawDeltaTable {
                 source_alias,
                 target_alias,
                 safe_cast,
+                streaming,
                 writer_properties,
                 post_commithook_properties,
                 commit_properties,

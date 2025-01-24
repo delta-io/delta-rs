@@ -158,7 +158,7 @@ impl LogicalFile<'_> {
     /// An object store [`Path`] to the file.
     ///
     /// this tries to parse the file string and if that fails, it will return the string as is.
-    // TODO assert consisent handling of the paths encoding when reading log data so this logic can be removed.
+    // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
     pub fn object_store_path(&self) -> Path {
         let path = self.path();
         // Try to preserve percent encoding if possible
@@ -480,7 +480,7 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
 #[cfg(feature = "datafusion")]
 mod datafusion {
     use std::collections::HashSet;
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock};
 
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
@@ -794,13 +794,14 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            lazy_static::lazy_static! {
-                static ref ROW_COUNTS_EVAL: Arc<dyn ExpressionEvaluator> =  ARROW_HANDLER.get_evaluator(
+            static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
+                ARROW_HANDLER.get_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column(["add", "stats_parsed","numRecords"]),
+                    Expression::column(["add", "stats_parsed", "numRecords"]),
                     DataType::Primitive(PrimitiveType::Long),
-                );
-            }
+                )
+            });
+
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
                 let engine = ArrowEngineData::new(batch.clone());

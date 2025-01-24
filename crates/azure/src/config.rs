@@ -6,14 +6,14 @@
 //! way how we discover valid credentials and some heuristics on how they are prioritized.
 use std::collections::{hash_map::Entry, HashMap};
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use object_store::azure::AzureConfigKey;
 use object_store::Error as ObjectStoreError;
 
 use crate::error::Result;
 
-lazy_static::lazy_static! {
-    static ref CREDENTIAL_KEYS: Vec<AzureConfigKey> =
+static CREDENTIAL_KEYS: LazyLock<Vec<AzureConfigKey>> = LazyLock::new(|| {
     Vec::from_iter([
         AzureConfigKey::ClientId,
         AzureConfigKey::ClientSecret,
@@ -23,8 +23,8 @@ lazy_static::lazy_static! {
         AzureConfigKey::MsiEndpoint,
         AzureConfigKey::ObjectId,
         AzureConfigKey::MsiResourceId,
-    ]);
-}
+    ])
+});
 
 /// Credential
 enum AzureCredential {
@@ -124,7 +124,7 @@ impl AzureConfigHelper {
             .all(|key| self.config.contains_key(key) || self.env_config.contains_key(key))
     }
 
-    /// Generate a cofiguration augmented with options from the environment
+    /// Generate a configuration augmented with options from the environment
     pub fn build(mut self) -> Result<HashMap<AzureConfigKey, String>> {
         let mut has_credential = false;
 
@@ -142,7 +142,7 @@ impl AzureConfigHelper {
             }
         }
 
-        // try partially avaialbe credentials augmented by environment
+        // try partially available credentials augmented by environment
         if !has_credential {
             for cred in &self.priority {
                 if self.has_any_config(cred) && self.has_full_config_with_env(cred) {

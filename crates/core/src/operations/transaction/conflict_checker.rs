@@ -411,7 +411,7 @@ impl<'a> ConflictChecker<'a> {
             );
             if curr_read < win_read || win_write < curr_write {
                 return Err(CommitConflictError::ProtocolChanged(
-                    format!("reqired read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
+                    format!("required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
                 ));
             };
         }
@@ -638,7 +638,7 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
     match isolation_level {
         IsolationLevel::Serializable => !data_changed,
         IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
-        IsolationLevel::SnapshotIsolation => false, // this case should never happen, since spanpshot isolation canot be configured on table
+        IsolationLevel::SnapshotIsolation => false, // this case should never happen, since spanpshot isolation cannot be configured on table
     }
 }
 
@@ -857,7 +857,7 @@ mod tests {
         setup_actions.push(file_part1);
         let result = execute_test(
             Some(setup_actions),
-            // filter matches neither exisiting nor added files
+            // filter matches neither existing nor added files
             Some(col("value").lt(lit::<i32>(0))),
             vec![file_part2],
             vec![file_part3],

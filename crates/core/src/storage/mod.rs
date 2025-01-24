@@ -1,6 +1,6 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use crate::{DeltaResult, DeltaTableError};
 use dashmap::DashMap;
@@ -8,7 +8,6 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
 use humantime::parse_duration;
-use lazy_static::lazy_static;
 use object_store::limit::LimitStore;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
@@ -35,9 +34,7 @@ pub mod file;
 pub mod retry_ext;
 pub mod utils;
 
-lazy_static! {
-    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-}
+static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Creates static IO Runtime with optional configuration
 fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
@@ -131,7 +128,7 @@ impl DeltaIOStorageBackend {
         }
     }
 
-    /// spawn taks on IO runtime
+    /// spawn tasks on IO runtime
     pub fn spawn_io_rt<F, O>(
         &self,
         f: F,
@@ -156,7 +153,7 @@ impl DeltaIOStorageBackend {
         .boxed()
     }
 
-    /// spawn taks on IO runtime
+    /// spawn tasks on IO runtime
     pub fn spawn_io_rt_from_to<F, O>(
         &self,
         f: F,
@@ -356,13 +353,13 @@ pub trait RetryConfigParse {
         }
 
         if let Some(retry_timeout) = options.0.get("retry_timeout") {
-            retry_config.retry_timeout = parse_duration(&retry_timeout).map_err(|_| {
+            retry_config.retry_timeout = parse_duration(retry_timeout).map_err(|_| {
                 DeltaTableError::generic(format!("failed to parse \"{retry_timeout}\" as Duration"))
             })?;
         }
 
         if let Some(bc_init_backoff) = options.0.get("backoff_config.init_backoff") {
-            retry_config.backoff.init_backoff = parse_duration(&bc_init_backoff).map_err(|_| {
+            retry_config.backoff.init_backoff = parse_duration(bc_init_backoff).map_err(|_| {
                 DeltaTableError::generic(format!(
                     "failed to parse \"{bc_init_backoff}\" as Duration"
                 ))
@@ -370,7 +367,7 @@ pub trait RetryConfigParse {
         }
 
         if let Some(bc_max_backoff) = options.0.get("backoff_config.max_backoff") {
-            retry_config.backoff.max_backoff = parse_duration(&bc_max_backoff).map_err(|_| {
+            retry_config.backoff.max_backoff = parse_duration(bc_max_backoff).map_err(|_| {
                 DeltaTableError::generic(format!(
                     "failed to parse \"{bc_max_backoff}\" as Duration"
                 ))
@@ -668,6 +665,6 @@ mod tests {
         assert_eq!(retry_config.retry_timeout, Duration::from_secs(300));
         assert_eq!(retry_config.backoff.init_backoff, Duration::from_secs(20));
         assert_eq!(retry_config.backoff.max_backoff, Duration::from_secs(3600));
-        assert_eq!(retry_config.backoff.base, 50 as f64);
+        assert_eq!(retry_config.backoff.base, 50_f64);
     }
 }

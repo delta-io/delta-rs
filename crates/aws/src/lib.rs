@@ -30,12 +30,11 @@ use deltalake_core::storage::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
-use lazy_static::lazy_static;
 use regex::Regex;
 use std::{
     collections::HashMap,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, SystemTime},
 };
 use storage::S3StorageOptionsConversion;
@@ -249,7 +248,7 @@ impl DynamoDbLockClient {
     /// Transparently handles the case where that table already exists, so it's safe to call.
     /// After `create_table` operation is executed, the table state in DynamoDb is `creating`, and
     /// it's not immediately useable. This method does not wait for the table state to become
-    /// `active`, so transient failures might occurr when immediately using the lock client.
+    /// `active`, so transient failures might occur when immediately using the lock client.
     pub async fn try_create_lock_table(&self) -> Result<CreateLockTableResult, LockClientError> {
         let attribute_definitions = vec![
             AttributeDefinition::builder()
@@ -703,10 +702,9 @@ fn num_attr<T: ToString>(n: T) -> AttributeValue {
     AttributeValue::N(n.to_string())
 }
 
-lazy_static! {
-    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-    static ref DELTA_LOG_REGEX: Regex = Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap();
-}
+static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
+static DELTA_LOG_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
 
 /// Extract version from a file name in the delta log
 fn extract_version_from_filename(name: &str) -> Option<i64> {

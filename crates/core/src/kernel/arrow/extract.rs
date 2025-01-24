@@ -1,4 +1,4 @@
-//! Utilties to extract columns from a record batch or nested / complex arrays.
+//! Utilities to extract columns from a record batch or nested / complex arrays.
 
 use std::sync::Arc;
 
@@ -70,7 +70,7 @@ pub(crate) fn extract_column<'a>(
     if let Some(next_path_step) = remaining_path_steps.next() {
         match child.data_type() {
             DataType::Map(_, _) => {
-                // NOTE a map has exatly one child, but we wnat to be agnostic of its name.
+                // NOTE a map has exactly one child, but we want to be agnostic of its name.
                 // so we case the current array as map, and use the entries accessor.
                 let maparr = cast_column_as::<MapArray>(path_step, &Some(child))?;
                 if let Some(next_path) = remaining_path_steps.next() {
