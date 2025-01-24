@@ -41,10 +41,6 @@ futures = { workspace = true }
 num_cpus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
-# reqwest is pulled in by azure sdk, but not used by python binding itself
-# for binary wheel best practice, statically link openssl
-reqwest = { version = "*", features = ["native-tls-vendored"] }
-
 deltalake-mount = { path = "../crates/mount" }
 
 # Non-unix or emscripten os
@@ -72,9 +68,6 @@ features = ["azure", "gcs", "python", "datafusion", "unity-experimental", "hdfs"
 default = ["rustls"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
-
-[build-dependencies]
-openssl-src = "=300.3.1"
 
 [profile.release]
 opt-level = 3
