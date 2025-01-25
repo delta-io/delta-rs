@@ -2,7 +2,7 @@ use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree, warn};
 use crate::RawDeltaTable;
 use deltalake::storage::object_store::{MultipartUpload, PutPayloadMut};
-use deltalake::storage::{DynObjectStore, ListResult, ObjectStoreError, Path};
+use deltalake::storage::{DynObjectStore, IORuntime, ListResult, ObjectStoreError, Path};
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
@@ -49,6 +49,7 @@ impl DeltaFileSystemHandler {
     ) -> PyResult<Self> {
         let storage = DeltaTableBuilder::from_uri(&table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
+            .with_io_runtime(IORuntime::default())
             .build_storage()
             .map_err(PythonError::from)?
             .object_store(None);

@@ -72,7 +72,7 @@ pub async fn convert_tpcds_web_returns(input_path: String, table_path: String) -
         .await
         .unwrap();
 
-    DeltaOps::try_from_uri(table_path)
+    DeltaOps::try_from_uri(table_path, None)
         .await
         .unwrap()
         .write(table.collect().await.unwrap())
@@ -564,7 +564,7 @@ async fn main() {
             )
             .unwrap();
 
-            DeltaOps::try_from_uri(output)
+            DeltaOps::try_from_uri(output, None)
                 .await
                 .unwrap()
                 .write(vec![batch])

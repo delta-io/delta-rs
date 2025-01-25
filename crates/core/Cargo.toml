@@ -75,6 +75,7 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
+tokio-stream = { workspace = true}
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"

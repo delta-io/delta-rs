@@ -124,7 +124,7 @@ Let’s write 100 hours worth of data to the Delta table.
 
 === "Rust"
     ```rust
-    let mut table = DeltaOps::try_from_uri("observation_data")
+    let mut table = DeltaOps::try_from_uri("observation_data", IORuntime::default())
       .await?
       .create()
       .with_table_name("observations_data")

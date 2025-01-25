@@ -6,9 +6,9 @@ use deltalake::DeltaOps;
 async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     // Create a delta operations client pointing at an un-initialized location.
     let ops = if let Ok(table_uri) = std::env::var("TABLE_URI") {
-        DeltaOps::try_from_uri(table_uri).await?
+        DeltaOps::try_from_uri(table_uri, None).await?
     } else {
-        DeltaOps::try_from_uri("../test/tests/data/delta-0.8.0").await?
+        DeltaOps::try_from_uri("../test/tests/data/delta-0.8.0", None).await?
     };
 
     let (_table, stream) = ops.load().await?;

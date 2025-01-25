@@ -76,5 +76,6 @@ uuid = { version = "1" }
 async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
+tokio-stream = { version = "0.1" }
 num_cpus = { version = "1" }
 

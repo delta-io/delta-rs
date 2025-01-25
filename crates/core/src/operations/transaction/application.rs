@@ -17,7 +17,7 @@ mod tests {
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::try_from_uri(tmp_path.to_str().unwrap())
+        let table = DeltaOps::try_from_uri(tmp_path.to_str().unwrap(), None)
             .await
             .unwrap()
             .write(vec![batch.clone()])

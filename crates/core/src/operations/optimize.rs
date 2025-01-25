@@ -1728,7 +1728,7 @@ pub(super) mod zorder {
 
             // Run optimize
             let (_, metrics) =
-                DeltaOps::try_from_uri(tmp_dir.path().join(table_name).to_str().unwrap())
+                DeltaOps::try_from_uri(tmp_dir.path().join(table_name).to_str().unwrap(), None)
                     .await
                     .unwrap()
                     .optimize()

@@ -33,6 +33,7 @@ use self::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
+use crate::storage::IORuntime;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
@@ -130,11 +131,19 @@ impl DeltaOps {
     /// use deltalake_core::DeltaOps;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    ///     let ops = DeltaOps::try_from_uri("memory://", None).await.unwrap();
     /// };
     /// ```
-    pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri).build()?;
+    pub async fn try_from_uri(
+        uri: impl AsRef<str>,
+        io_runtime: Option<IORuntime>,
+    ) -> DeltaResult<Self> {
+        let mut builder = DeltaTableBuilder::from_uri(uri);
+
+        if let Some(io_runtime) = io_runtime {
+            builder = builder.with_io_runtime(io_runtime)
+        };
+        let mut table = builder.build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),
@@ -147,10 +156,15 @@ impl DeltaOps {
     pub async fn try_from_uri_with_storage_options(
         uri: impl AsRef<str>,
         storage_options: HashMap<String, String>,
+        io_runtime: Option<IORuntime>,
     ) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri)
-            .with_storage_options(storage_options)
-            .build()?;
+        let mut builder = DeltaTableBuilder::from_uri(uri).with_storage_options(storage_options);
+
+        if let Some(io_runtime) = io_runtime {
+            builder = builder.with_io_runtime(io_runtime)
+        };
+        let mut table = builder.build()?;
+
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),
@@ -183,7 +197,7 @@ impl DeltaOps {
     /// use deltalake_core::DeltaOps;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    ///     let ops = DeltaOps::try_from_uri("memory://", None).await.unwrap();
     ///     let table = ops.create().with_table_name("my_table").await.unwrap();
     ///     assert_eq!(table.version(), 0);
     /// };

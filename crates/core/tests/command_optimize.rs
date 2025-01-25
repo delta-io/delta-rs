@@ -57,7 +57,7 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
 
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
-    let dt = DeltaOps::try_from_uri(table_uri)
+    let dt = DeltaOps::try_from_uri(table_uri, None)
         .await?
         .create()
         .with_columns(columns)

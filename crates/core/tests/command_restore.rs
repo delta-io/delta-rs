@@ -37,7 +37,7 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
 
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
-    let table = DeltaOps::try_from_uri(table_uri)
+    let table = DeltaOps::try_from_uri(table_uri, None)
         .await?
         .create()
         .with_columns(columns)
@@ -102,7 +102,7 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     assert_eq!(result.1.num_removed_file, 2);
     assert_eq!(result.0.snapshot()?.version(), 4);
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let mut table = DeltaOps::try_from_uri(table_uri).await?;
+    let mut table = DeltaOps::try_from_uri(table_uri, None).await?;
     table.0.load_version(1).await?;
     let curr_files = table.0.snapshot()?.file_paths_iter().collect_vec();
     let result_files = result.0.snapshot()?.file_paths_iter().collect_vec();
@@ -158,7 +158,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
 
     // version too large
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let ops = DeltaOps::try_from_uri(table_uri).await?;
+    let ops = DeltaOps::try_from_uri(table_uri, None).await?;
     let result = ops.restore().with_version_to_restore(5).await;
     assert!(result.is_err());
     Ok(())

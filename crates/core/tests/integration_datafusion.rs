@@ -112,7 +112,7 @@ mod local {
         let table_uri = table_path.to_str().unwrap().to_string();
         let table_schema: StructType = batches[0].schema().try_into().unwrap();
 
-        let mut table = DeltaOps::try_from_uri(table_uri)
+        let mut table = DeltaOps::try_from_uri(table_uri, None)
             .await
             .unwrap()
             .create()
@@ -1202,7 +1202,7 @@ mod date_partitions {
 
         let tmp_dir = tempfile::tempdir().unwrap();
         let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
-        let dt = DeltaOps::try_from_uri(table_uri)
+        let dt = DeltaOps::try_from_uri(table_uri, None)
             .await?
             .create()
             .with_columns(columns)
