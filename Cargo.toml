@@ -30,19 +30,19 @@ delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
 #delta_kernel = { path = "../delta-kernel-rs/kernel", features = ["sync-engine"]  }
 
 # arrow
-arrow = { version = "53" }
-arrow-arith = { version = "53" }
-arrow-array = { version = "53", features = ["chrono-tz"] }
-arrow-buffer = { version = "53" }
-arrow-cast = { version = "53" }
-arrow-ipc = { version = "53" }
-arrow-json = { version = "53" }
-arrow-ord = { version = "53" }
-arrow-row = { version = "53" }
-arrow-schema = { version = "53" }
-arrow-select = { version = "53" }
+arrow = { version = "54" }
+arrow-arith = { version = "54" }
+arrow-array = { version = "54", features = ["chrono-tz"] }
+arrow-buffer = { version = "54" }
+arrow-cast = { version = "54" }
+arrow-ipc = { version = "54" }
+arrow-json = { version = "54" }
+arrow-ord = { version = "54" }
+arrow-row = { version = "54" }
+arrow-schema = { version = "54" }
+arrow-select = { version = "54" }
 object_store = { version = "0.11.2" , features = ["cloud"]}
-parquet = { version = "53" }
+parquet = { version = "54" }
 
 # datafusion
 datafusion = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45" }
