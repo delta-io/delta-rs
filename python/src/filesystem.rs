@@ -4,6 +4,7 @@ use crate::RawDeltaTable;
 use deltalake::storage::object_store::{MultipartUpload, PutPayloadMut};
 use deltalake::storage::{DynObjectStore, ListResult, ObjectStoreError, Path};
 use deltalake::DeltaTableBuilder;
+use parking_lot::Mutex;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes, PyType};
@@ -519,7 +520,9 @@ impl ObjectInputFile {
 // TODO the C++ implementation track an internal lock on all random access files, DO we need this here?
 #[pyclass(weakref, module = "deltalake._internal")]
 pub struct ObjectOutputStream {
-    upload: Box<dyn MultipartUpload>,
+    // wrap in mutex as rustc says `MultipartUpload` can't be
+    // shared across threads (it isn't sync)
+    upload: Mutex<Box<dyn MultipartUpload>>,
     pos: i64,
     #[pyo3(get)]
     closed: bool,
@@ -537,7 +540,7 @@ impl ObjectOutputStream {
     ) -> Result<Self, ObjectStoreError> {
         let upload = store.put_multipart(&path).await?;
         Ok(Self {
-            upload,
+            upload: Mutex::new(upload),
             pos: 0,
             closed: false,
             mode: "wb".into(),
@@ -555,14 +558,15 @@ impl ObjectOutputStream {
     }
 
     fn abort(&mut self) -> PyResult<()> {
-        rt().block_on(self.upload.abort())
+        rt().block_on(self.upload.lock().abort())
             .map_err(PythonError::from)?;
         Ok(())
     }
 
     fn upload_buffer(&mut self) -> PyResult<()> {
         let payload = std::mem::take(&mut self.buffer).freeze();
-        match rt().block_on(self.upload.put_part(payload)) {
+        let res = rt().block_on(self.upload.lock().put_part(payload));
+        match res {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.abort()?;
@@ -580,7 +584,7 @@ impl ObjectOutputStream {
             if !self.buffer.is_empty() {
                 self.upload_buffer()?;
             }
-            match rt().block_on(self.upload.complete()) {
+            match rt().block_on(self.upload.lock().complete()) {
                 Ok(_) => Ok(()),
                 Err(err) => Err(PyIOError::new_err(err.to_string())),
             }
