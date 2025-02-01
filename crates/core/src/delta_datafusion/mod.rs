@@ -51,8 +51,8 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
-    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
-    TableReference, ToDFSchema,
+    config::ConfigOptions, Column, Constraints, DFSchema, DataFusionError,
+    Result as DataFusionResult, TableReference, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
@@ -659,6 +659,7 @@ impl<'a> DeltaScanBuilder<'a> {
             } else {
                 file_groups.into_values().collect()
             },
+            constraints: Constraints::default(),
             statistics: stats,
             projection: self.projection.cloned(),
             limit: self.limit,

@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::catalog::CatalogProvider;
-    use datafusion::catalog_common::MemoryCatalogProvider;
+    use datafusion::catalog::MemoryCatalogProvider;
     use datafusion::execution::context::SessionContext;
 
     #[test]
