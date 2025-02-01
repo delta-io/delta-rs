@@ -10,7 +10,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{ScalarValue, Statistics};
+use datafusion_common::{Constraints, ScalarValue, Statistics};
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -389,6 +389,7 @@ impl CdfLoadBuilder {
                     object_store_url: self.log_store.object_store_url(),
                     file_schema: cdc_file_schema.clone(),
                     file_groups: cdc_file_groups.into_values().collect(),
+                    constraints: Constraints::default(),
                     statistics: Statistics::new_unknown(&cdc_file_schema),
                     projection: None,
                     limit: None,
@@ -406,6 +407,7 @@ impl CdfLoadBuilder {
                     object_store_url: self.log_store.object_store_url(),
                     file_schema: add_remove_file_schema.clone(),
                     file_groups: add_file_groups.into_values().collect(),
+                    constraints: Constraints::default(),
                     statistics: Statistics::new_unknown(&add_remove_file_schema.clone()),
                     projection: None,
                     limit: None,
@@ -423,6 +425,7 @@ impl CdfLoadBuilder {
                     object_store_url: self.log_store.object_store_url(),
                     file_schema: add_remove_file_schema.clone(),
                     file_groups: remove_file_groups.into_values().collect(),
+                    constraints: Constraints::default(),
                     statistics: Statistics::new_unknown(&add_remove_file_schema),
                     projection: None,
                     limit: None,
