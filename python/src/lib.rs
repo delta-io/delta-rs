@@ -79,6 +79,20 @@ use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+use jemallocator::Jemalloc;
+
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+static ALLOC: Jemalloc = Jemalloc;
+
+#[global_allocator]
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+static ALLOC: MiMalloc = MiMalloc;
+
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
     Single(PyBackedStr),
