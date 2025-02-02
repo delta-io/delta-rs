@@ -976,6 +976,7 @@ class DeltaTable:
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: Optional[bool] = None,
+        streaming: bool = False,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
@@ -993,6 +994,7 @@ class DeltaTable:
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: Deprecated, will be removed in 1.0
+            streaming: Will execute MERGE using a LazyMemoryExec plan
             arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
             custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
@@ -1031,17 +1033,14 @@ class DeltaTable:
             convert_pyarrow_table,
         )
 
-        streaming = False
         if isinstance(source, pyarrow.RecordBatchReader):
             source = convert_pyarrow_recordbatchreader(source, conversion_mode)
-            streaming = True
         elif isinstance(source, pyarrow.RecordBatch):
             source = convert_pyarrow_recordbatch(source, conversion_mode)
         elif isinstance(source, pyarrow.Table):
             source = convert_pyarrow_table(source, conversion_mode)
         elif isinstance(source, ds.Dataset):
             source = convert_pyarrow_dataset(source, conversion_mode)
-            streaming = True
         elif _has_pandas and isinstance(source, pd.DataFrame):
             source = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), conversion_mode
