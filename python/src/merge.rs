@@ -33,6 +33,8 @@ pub(crate) struct PyMergeBuilder {
     source_alias: Option<String>,
     #[pyo3(get)]
     target_alias: Option<String>,
+    #[pyo3(get)]
+    merge_schema: bool,
     arrow_schema: Arc<ArrowSchema>,
 }
 #[derive(Debug)]
@@ -85,6 +87,7 @@ impl PyMergeBuilder {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        merge_schema: bool,
         safe_cast: bool,
         streaming: bool,
         writer_properties: Option<PyWriterProperties>,
@@ -124,6 +127,8 @@ impl PyMergeBuilder {
             cmd = cmd.with_target_alias(trgt_alias);
         }
 
+        cmd = cmd.with_merge_schema(merge_schema);
+
         if let Some(writer_props) = writer_properties {
             cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
         }
@@ -142,6 +147,7 @@ impl PyMergeBuilder {
             _builder: Some(cmd),
             source_alias,
             target_alias,
+            merge_schema,
             arrow_schema: schema,
         })
     }

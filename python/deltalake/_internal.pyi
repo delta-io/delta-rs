@@ -192,6 +192,7 @@ class RawDeltaTable:
         predicate: str,
         source_alias: Optional[str],
         target_alias: Optional[str],
+        merge_schema: bool,
         writer_properties: Optional[WriterProperties],
         commit_properties: Optional[CommitProperties],
         post_commithook_properties: Optional[PostCommitHookProperties],
@@ -286,6 +287,7 @@ def get_num_idx_cols_and_stats_columns(
 class PyMergeBuilder:
     source_alias: str
     target_alias: str
+    merge_schema: bool
     arrow_schema: pyarrow.Schema
 
     def when_matched_update(
