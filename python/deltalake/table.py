@@ -972,6 +972,7 @@ class DeltaTable:
         predicate: str,
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
+        merge_schema: bool = False,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: Optional[bool] = None,
@@ -988,6 +989,7 @@ class DeltaTable:
             predicate: SQL like predicate on how to merge
             source_alias: Alias for the source table
             target_alias: Alias for the target table
+            merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: Deprecated, will be removed in 1.0
@@ -1058,6 +1060,7 @@ class DeltaTable:
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
+            merge_schema=merge_schema,
             safe_cast=not error_on_type_mismatch,
             streaming=streaming,
             writer_properties=writer_properties,
