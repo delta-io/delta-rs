@@ -638,6 +638,7 @@ mod datafusion {
                 null_count,
                 max_value,
                 min_value,
+                sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             })
         }
@@ -653,6 +654,7 @@ mod datafusion {
                 null_count: self.null_count.add(&other.null_count),
                 max_value: self.max_value.max(&other.max_value),
                 min_value: self.min_value.min(&other.min_value),
+                sum_value: Precision::Absent,
                 distinct_count: self.distinct_count.add(&other.distinct_count),
             }
         }
