@@ -78,6 +78,7 @@ use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
+use deltalake_catalog_unity::{CatalogFactory, UnityCatalogBuilder, UnityCatalogFactory};
 
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
 use jemallocator::Jemalloc;
@@ -170,6 +171,29 @@ impl RawDeltaTable {
         original.state = state;
         Ok(())
     }
+
+    fn get_builder(
+        table_uri: &str,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> (DeltaTableBuilder, String, HashMap<String, String>) {
+        let (table_path, temp_creds) = if UnityCatalogBuilder::is_unity_catalog_uri(table_uri) {
+            rt().block_on(UnityCatalogFactory::with_table_uri(table_uri))
+                .unwrap()
+        } else {
+            (table_uri.to_string(), HashMap::new())
+        };
+        let mut options = storage_options.clone().unwrap_or_default();
+        if !temp_creds.is_empty() {
+            options.extend(temp_creds);
+        }
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(&table_path)
+            .with_io_runtime(IORuntime::default());
+        if !options.is_empty() {
+            builder = builder.with_storage_options(options.clone());
+        }
+
+        (builder, table_path, options)
+    }
 }
 
 #[pymethods]
@@ -185,12 +209,8 @@ impl RawDeltaTable {
         log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         py.allow_threads(|| {
-            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri)
-                .with_io_runtime(IORuntime::default());
-            let options = storage_options.clone().unwrap_or_default();
-            if let Some(storage_options) = storage_options {
-                builder = builder.with_storage_options(storage_options)
-            }
+            let (mut builder, table_path, options) =
+                RawDeltaTable::get_builder(table_uri, storage_options);
             if let Some(version) = version {
                 builder = builder.with_version(version)
             }
@@ -207,7 +227,7 @@ impl RawDeltaTable {
             Ok(RawDeltaTable {
                 _table: Arc::new(Mutex::new(table)),
                 _config: FsConfig {
-                    root_url: table_uri.into(),
+                    root_url: table_path,
                     options,
                 },
             })
@@ -220,10 +240,7 @@ impl RawDeltaTable {
         table_uri: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<bool> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
-        if let Some(storage_options) = storage_options {
-            builder = builder.with_storage_options(storage_options)
-        }
+        let (builder, _, _) = RawDeltaTable::get_builder(table_uri, storage_options);
         Ok(rt()
             .block_on(async {
                 match builder.build() {
