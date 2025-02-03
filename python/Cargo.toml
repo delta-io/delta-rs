@@ -47,6 +47,18 @@ reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
+# Non-unix or emscripten os
+[target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
+# Unix (excluding macOS & emscripten) → jemalloc 
+[target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten")))'.dependencies]
+jemallocator = { version = "0.5", features = ["disable_initial_exec_tls", "background_threads"] }
+
+# macOS → jemalloc (without background_threads) (https://github.com/jemalloc/jemalloc/issues/843)
+[target.'cfg(all(target_family = "unix", target_os = "macos"))'.dependencies]
+jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
+
 [dependencies.pyo3]
 version = "0.22.6"
 features = ["extension-module", "abi3", "abi3-py39", "gil-refs"]
@@ -63,3 +75,8 @@ rustls = ["deltalake/s3", "deltalake/glue"]
 
 [build-dependencies]
 openssl-src = "=300.3.1"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"

@@ -148,6 +148,49 @@ def test_merge_when_matched_update_wo_predicate(
     assert result == expected
 
 
+def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["4", "5"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "customer": pa.array(["john", "doe"]),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update(
+        {"price": "s.price", "sold": "s.sold+int'10'", "customer": "s.customer"}
+    ).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 20, 30], pa.int32()),
+            "deleted": pa.array([False] * 5),
+            "customer": pa.array([None, None, None, "john", "doe"]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
+    assert result == expected
+
+
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_all_wo_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
@@ -388,6 +431,57 @@ def test_merge_when_not_matched_insert_with_predicate(
     assert result == expected
 
 
+def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["6", "10"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "customer": pa.array(["john", "doe"]),
+            "deleted": pa.array([False, False]),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        source_alias="source",
+        target_alias="target",
+        merge_schema=True,
+        predicate="target.id = source.id",
+    ).when_not_matched_insert(
+        updates={
+            "id": "source.id",
+            "price": "source.price",
+            "sold": "source.sold",
+            "customer": "source.customer",
+            "deleted": "False",
+        },
+        predicate="source.price < 50",
+    ).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
+            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
+            "deleted": pa.array([False] * 6),
+            "customer": pa.array([None, None, None, None, None, "john"]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
+    assert result == expected
+
+
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_predicate(
     tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
@@ -475,6 +569,48 @@ def test_merge_when_not_matched_insert_all_with_exclude(
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
+    assert result == expected
+
+
+def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["6", "9"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "deleted": pa.array([None, None], pa.bool_()),
+            "customer": pa.array(["john", "doe"]),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        source_alias="source",
+        target_alias="target",
+        merge_schema=True,
+        predicate="target.id = source.id",
+    ).when_not_matched_insert_all(except_cols=["sold"]).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5", "6", "9"]),
+            "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, None, None], pa.int32()),
+            "deleted": pa.array([False, False, False, False, False, None, None]),
+            "customer": pa.array([None, None, None, None, None, "john", "doe"]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
     assert result == expected
 
 

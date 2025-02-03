@@ -79,6 +79,20 @@ use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+use jemallocator::Jemalloc;
+
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+static ALLOC: Jemalloc = Jemalloc;
+
+#[global_allocator]
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+static ALLOC: MiMalloc = MiMalloc;
+
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
     Single(PyBackedStr),
@@ -895,6 +909,7 @@ impl RawDeltaTable {
         predicate,
         source_alias = None,
         target_alias = None,
+        merge_schema = false,
         safe_cast = false,
         streaming = false,
         writer_properties = None,
@@ -908,6 +923,7 @@ impl RawDeltaTable {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        merge_schema: bool,
         safe_cast: bool,
         streaming: bool,
         writer_properties: Option<PyWriterProperties>,
@@ -929,6 +945,7 @@ impl RawDeltaTable {
                 predicate,
                 source_alias,
                 target_alias,
+                merge_schema,
                 safe_cast,
                 streaming,
                 writer_properties,
