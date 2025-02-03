@@ -891,6 +891,6 @@ mod tests {
             .log_data();
 
         let col_stats = file_stats.statistics();
-        println!("{:?}", col_stats);
+        println!("{col_stats:?}");
     }
 }

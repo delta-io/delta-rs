@@ -150,7 +150,7 @@ impl LakeFSLogStore {
             .commit(
                 repo,
                 transaction_branch,
-                format!("Delta file operations {{ table: {}}}", table),
+                format!("Delta file operations {{ table: {table}}}"),
                 true, // Needs to be true, it could be a file operation but no logs were deleted.
             )
             .await?;
@@ -165,7 +165,7 @@ impl LakeFSLogStore {
                 target_branch,
                 self.client.get_transaction(operation_id)?,
                 0,
-                format!("Finished delta file operations {{ table: {}}}", table),
+                format!("Finished delta file operations {{ table: {table}}}"),
                 true, // Needs to be true, it could be a file operation but no logs were deleted.
             )
             .await
@@ -245,7 +245,7 @@ impl LogStore for LakeFSLogStore {
                     .commit(
                         repo,
                         transaction_branch,
-                        format!("Delta commit {{ table: {}, version: {}}}", table, version),
+                        format!("Delta commit {{ table: {table}, version: {version}}}"),
                         false,
                     )
                     .await
@@ -264,10 +264,7 @@ impl LogStore for LakeFSLogStore {
                         target_branch,
                         self.client.get_transaction(operation_id)?,
                         version,
-                        format!(
-                            "Finished deltalake transaction {{ table: {}, version: {} }}",
-                            table, version
-                        ),
+                        format!("Finished deltalake transaction {{ table: {table}, version: {version} }}"),
                         false,
                     )
                     .await
@@ -318,7 +315,7 @@ impl LogStore for LakeFSLogStore {
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
         match operation_id {
             Some(id) => {
-                let (_, store) = self.get_transaction_objectstore(id).unwrap_or_else(|_| panic!("The object_store registry inside LakeFSLogstore didn't have a store for operation_id {} Something went wrong.", id));
+                let (_, store) = self.get_transaction_objectstore(id).unwrap_or_else(|_| panic!("The object_store registry inside LakeFSLogstore didn't have a store for operation_id {id} Something went wrong."));
                 store
             }
             _ => self.storage.get_store(&self.config.location).unwrap(),

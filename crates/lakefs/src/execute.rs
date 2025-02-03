@@ -144,7 +144,7 @@ mod tests {
             assert!(lakefs_store
                 .storage
                 .get_store(
-                    &Url::parse(format!("lakefs://repo/delta-tx-{}/table", operation_id).as_str())
+                    &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
                         .unwrap()
                 )
                 .is_ok());
@@ -185,7 +185,7 @@ mod tests {
             assert!(lakefs_store
                 .storage
                 .get_store(
-                    &Url::parse(format!("lakefs://repo/delta-tx-{}/table", operation_id).as_str())
+                    &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
                         .unwrap()
                 )
                 .is_ok());
@@ -210,11 +210,7 @@ mod tests {
         let mock_2 = server
             .mock(
                 "DELETE",
-                format!(
-                    "/api/v1/repositories/repo/branches/delta-tx-{}",
-                    operation_id
-                )
-                .as_str(),
+                format!("/api/v1/repositories/repo/branches/delta-tx-{operation_id}").as_str(),
             )
             .with_status(StatusCode::NO_CONTENT.as_u16().into())
             .create();
@@ -257,11 +253,8 @@ mod tests {
         let create_commit_mock = server
             .mock(
                 "POST",
-                format!(
-                    "/api/v1/repositories/repo/branches/delta-tx-{}/commits",
-                    operation_id
-                )
-                .as_str(),
+                format!("/api/v1/repositories/repo/branches/delta-tx-{operation_id}/commits")
+                    .as_str(),
             )
             .with_status(StatusCode::CREATED.as_u16().into())
             .create();
@@ -269,11 +262,8 @@ mod tests {
         let merge_branch_mock = server
             .mock(
                 "POST",
-                format!(
-                    "/api/v1/repositories/repo/refs/delta-tx-{}/merge/branch",
-                    operation_id
-                )
-                .as_str(),
+                format!("/api/v1/repositories/repo/refs/delta-tx-{operation_id}/merge/branch")
+                    .as_str(),
             )
             .with_status(StatusCode::OK.as_u16().into())
             .create();
@@ -281,11 +271,7 @@ mod tests {
         let delete_branch_mock = server
             .mock(
                 "DELETE",
-                format!(
-                    "/api/v1/repositories/repo/branches/delta-tx-{}",
-                    operation_id
-                )
-                .as_str(),
+                format!("/api/v1/repositories/repo/branches/delta-tx-{operation_id}").as_str(),
             )
             .with_status(StatusCode::NO_CONTENT.as_u16().into())
             .create();
