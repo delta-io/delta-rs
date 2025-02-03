@@ -63,3 +63,8 @@ rustls = ["deltalake/s3", "deltalake/glue"]
 
 [build-dependencies]
 openssl-src = "=300.3.1"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
