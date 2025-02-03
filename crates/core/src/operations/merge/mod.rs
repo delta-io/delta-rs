@@ -30,10 +30,11 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -48,13 +49,14 @@ use datafusion::{
     prelude::{cast, DataFrame, SessionContext},
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
+use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
     ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UNNAMED_TABLE,
 };
 
+use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -75,8 +77,10 @@ use crate::delta_datafusion::{
     register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
     DeltaSessionConfig, DeltaTableProvider,
 };
-use crate::kernel::{Action, DataCheck, StructTypeExt};
+
+use crate::kernel::{Action, DataCheck, Metadata, StructTypeExt};
 use crate::logstore::LogStoreRef;
+use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schema};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
@@ -132,6 +136,8 @@ pub struct MergeBuilder {
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
     streaming: bool,
+    /// Enable merge schema evolution
+    merge_schema: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -174,6 +180,7 @@ impl MergeBuilder {
             state: None,
             commit_properties: CommitProperties::default(),
             writer_properties: None,
+            merge_schema: false,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
@@ -365,6 +372,11 @@ impl MergeBuilder {
     /// Rename columns in the target dataset to have a prefix of `alias`.`original column name`
     pub fn with_target_alias<S: ToString>(mut self, alias: S) -> Self {
         self.target_alias = Some(alias.to_string());
+        self
+    }
+    /// Add Schema Write Mode
+    pub fn with_merge_schema(mut self, merge_schema: bool) -> Self {
+        self.merge_schema = merge_schema;
         self
     }
 
@@ -717,6 +729,7 @@ async fn execute(
     streaming: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
+    merge_schema: bool,
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
@@ -870,6 +883,7 @@ async fn execute(
 
     let source_schema = source.schema();
     let target_schema = target.schema();
+
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
 
     let predicate = match predicate {
@@ -950,6 +964,52 @@ async fn execute(
         .into_iter()
         .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
+
+    // merge_arrow_schema is used to tell whether the two schema can be merge but we use the operation statement to pick new columns
+    // this avoid the side effect of adding unnecessary columns (eg. target.id = source.ID) "ID" will not be added since "id" exist in target and end user intended it to be "id"
+    let mut new_schema = None;
+    let mut schema_action = None;
+    if merge_schema {
+        let merge_schema = merge_arrow_schema(
+            snapshot.input_schema()?,
+            source_schema.inner().clone(),
+            false,
+        )?;
+
+        let mut schema_builder = SchemaBuilder::from(merge_schema.deref());
+
+        modify_schema(
+            &mut schema_builder,
+            target_schema,
+            source_schema,
+            &match_operations,
+        )?;
+
+        modify_schema(
+            &mut schema_builder,
+            target_schema,
+            source_schema,
+            &not_match_source_operations,
+        )?;
+
+        modify_schema(
+            &mut schema_builder,
+            target_schema,
+            source_schema,
+            &not_match_target_operations,
+        )?;
+        let schema = Arc::new(schema_builder.finish());
+        new_schema = Some(schema.clone());
+        let schema_struct: StructType = schema.try_into()?;
+        if &schema_struct != snapshot.schema() {
+            let action = Action::Metadata(Metadata::try_new(
+                schema_struct,
+                current_metadata.partition_columns.clone(),
+                snapshot.metadata().configuration.clone(),
+            )?);
+            schema_action = Some(action);
+        }
+    }
 
     let matched = col(SOURCE_COLUMN)
         .is_true()
@@ -1059,10 +1119,17 @@ async fn execute(
     let projection = join.with_column(OPERATION_COLUMN, case)?;
 
     let mut new_columns = vec![];
+
     let mut write_projection = Vec::new();
     let mut write_projection_with_cdf = Vec::new();
 
-    for delta_field in snapshot.schema().fields() {
+    let schema = if let Some(schema) = new_schema {
+        &schema.try_into()?
+    } else {
+        snapshot.schema()
+    };
+
+    for delta_field in schema.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
         let mut then_expr = Vec::with_capacity(operations_size);
 
@@ -1072,8 +1139,34 @@ async fn execute(
             }),
             None => TableReference::none(),
         };
+        let mut null_target_column = None;
+
+        let source_qualifier = match &source_alias {
+            Some(alias) => Some(TableReference::Bare {
+                table: alias.to_owned().into(),
+            }),
+            None => TableReference::none(),
+        };
         let name = delta_field.name();
-        let column = Column::new(qualifier.clone(), name);
+        let mut cast_type: DataType = delta_field.data_type().try_into()?;
+
+        // Receive the correct column reference given that some columns are only in source table
+        let column = if let Some(field) = snapshot.schema().field(name) {
+            if field == delta_field {
+                Column::new(qualifier.clone(), name)
+            } else {
+                // when there is a change in the field such as an added column in a nested data types casts will break with the new field data type
+                let col_ref = Column::new(source_qualifier.clone(), name);
+                cast_type = source_schema.data_type(&col_ref)?.to_owned();
+                col_ref
+            }
+        } else {
+            null_target_column = Some(cast(
+                lit(ScalarValue::Null).alias(name),
+                delta_field.data_type().try_into()?,
+            ));
+            Column::new(source_qualifier.clone(), name)
+        };
 
         for (idx, (operations, _)) in ops.iter().enumerate() {
             let op = operations
@@ -1094,9 +1187,10 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
+
         write_projection.push(cast(
             Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
-            delta_field.data_type().try_into()?,
+            cast_type.clone(),
         ));
 
         write_projection_with_cdf.push(
@@ -1104,13 +1198,13 @@ async fn execute(
                 col(CDC_COLUMN_NAME).not_eq(lit("update_preimage")),
                 cast(
                     Expr::Column(Column::from_name(name.clone())),
-                    delta_field.data_type().try_into()?,
+                    cast_type.clone(),
                 ),
             )
-            .otherwise(cast(
-                Expr::Column(Column::new(Some(target_name.clone()), delta_field.name())), // We take the column from target table
-                delta_field.data_type().try_into()?,
-            ))?
+            .otherwise(null_target_column.unwrap_or(cast(
+                Expr::Column(Column::new(qualifier, delta_field.name())),
+                cast_type,
+            )))? // We take the column from target table but in case of schema evolution we assign the column as null
             .alias(delta_field.name()),
         );
         new_columns.push((name, case));
@@ -1334,6 +1428,9 @@ async fn execute(
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
     )
     .await?;
+    if let Some(schema_metadata) = schema_action {
+        actions.push(schema_metadata);
+    }
 
     metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
     metrics.num_target_files_added = actions.len();
@@ -1410,6 +1507,41 @@ async fn execute(
     Ok((commit.snapshot(), metrics))
 }
 
+fn modify_schema(
+    ending_schema: &mut SchemaBuilder,
+    target_schema: &DFSchema,
+    source_schema: &DFSchema,
+    operations: &[MergeOperation],
+) -> DeltaResult<()> {
+    for columns in operations
+        .iter()
+        .filter(|ops| matches!(ops.r#type, OperationType::Update | OperationType::Insert))
+        .flat_map(|ops| ops.operations.keys())
+    {
+        // This assume that all the columns in the MERGE operations of UPDATE and INSERT at least exists in the source table
+        let source_field = source_schema.field_with_unqualified_name(columns.name())?;
+        if source_field
+            .metadata()
+            .contains_key(ColumnMetadataKey::GenerationExpression.as_ref())
+        {
+            let error = arrow::error::ArrowError::SchemaError("Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.".to_string());
+            return Err(DeltaTableError::Arrow { source: error });
+        }
+
+        if let Some(target_field) = target_schema.field_from_column(columns).ok() {
+            // for nested data types we need to first merge then see if there a change then replace the pre-existing field
+            let new_field = merge_arrow_field(target_field, source_field, true)?;
+            if &new_field == target_field {
+                continue;
+            }
+            ending_schema.try_merge(&Arc::new(new_field))?;
+        } else {
+            ending_schema.push(source_field.to_owned().with_nullable(true));
+        }
+    }
+    Ok(())
+}
+
 fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     expr.transform(&|expr| match expr {
         Expr::Column(c) => match c.relation {
@@ -1465,6 +1597,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.streaming,
                 this.source_alias,
                 this.target_alias,
+                this.merge_schema,
                 this.match_operations,
                 this.not_match_operations,
                 this.not_match_source_operations,
@@ -1487,6 +1620,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::kernel::Action;
     use crate::kernel::DataType;
     use crate::kernel::PrimitiveType;
     use crate::kernel::StructField;
@@ -1513,6 +1647,7 @@ mod tests {
     use datafusion_expr::expr::Placeholder;
     use datafusion_expr::lit;
     use datafusion_expr::Expr;
+    use delta_kernel::schema::StructType;
     use itertools::Itertools;
     use regex::Regex;
     use serde_json::json;
@@ -1571,6 +1706,39 @@ mod tests {
         DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap()
+    }
+
+    async fn write_data_struct(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
+        let count_array = arrow::array::Int64Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "count",
+            ArrowDataType::Int64,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StructArray::from(
+                    RecordBatch::try_new(nested_schema, vec![Arc::new(count_array)]).unwrap(),
+                )),
+            ],
+        )
+        .unwrap();
+        // write some data
+        DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_schema_mode(crate::operations::write::SchemaMode::Overwrite)
+            .with_save_mode(SaveMode::Overwrite)
             .await
             .unwrap()
     }
@@ -1662,6 +1830,7 @@ mod tests {
             .unwrap();
 
         let commit_info = table.history(None).await.unwrap();
+
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
@@ -1680,6 +1849,429 @@ mod tests {
         );
 
         assert_merge(table, metrics).await;
+    }
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_no_change_of_schema() {
+        let (table, _) = setup().await;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::LargeUtf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+        ]));
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::LargeStringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (after_table, metrics) = DeltaOps(table.clone())
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let commit_info = after_table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["matchedPredicates"],
+            json!(r#"[{"actionType":"update"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedPredicates"],
+            json!(r#"[{"actionType":"insert"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
+        );
+
+        assert_eq!(table.schema(), after_table.schema());
+
+        let snapshot_bytes = after_table
+            .log_store
+            .read_commit_entry(2)
+            .await
+            .unwrap()
+            .expect("failed to get snapshot bytes");
+        let actions = crate::logstore::get_actions(2, snapshot_bytes)
+            .await
+            .unwrap();
+
+        let schema_actions = actions
+            .iter()
+            .any(|action| matches!(action, Action::Metadata(_)));
+
+        assert!(!schema_actions);
+        assert_merge(after_table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_and_struct() {
+        let (table, _) = setup().await;
+
+        let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "count",
+            ArrowDataType::Int64,
+            true,
+        )]));
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(nested_schema.fields().clone()),
+                true,
+            ),
+        ]));
+        let count_array = arrow::array::Int64Array::from(vec![Some(1)]);
+        let id_array = arrow::array::StringArray::from(vec![Some("X")]);
+        let value_array = arrow::array::Int32Array::from(vec![Some(1)]);
+        let modified_array = arrow::array::StringArray::from(vec![Some("2021-02-02")]);
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(id_array),
+                Arc::new(value_array),
+                Arc::new(modified_array),
+                Arc::new(arrow::array::StructArray::from(
+                    RecordBatch::try_new(nested_schema, vec![Arc::new(count_array)]).unwrap(),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let ctx = SessionContext::new();
+
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = DeltaOps(table.clone())
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("nested", col("source.nested"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await
+            .unwrap()
+            .expect("failed to get snapshot bytes");
+        let actions = crate::logstore::get_actions(2, snapshot_bytes)
+            .await
+            .unwrap();
+
+        let schema_actions = actions
+            .iter()
+            .any(|action| matches!(action, Action::Metadata(_)));
+
+        dbg!(&schema_actions);
+
+        assert!(schema_actions);
+        let expected = vec![
+            "+----+-------+------------+------------+",
+            "| id | value | modified   | nested     |",
+            "+----+-------+------------+------------+",
+            "| A  | 1     | 2021-02-01 |            |",
+            "| B  | 10    | 2021-02-01 |            |",
+            "| C  | 10    | 2021-02-02 |            |",
+            "| D  | 100   | 2021-02-02 |            |",
+            "| X  | 1     | 2021-02-02 | {count: 1} |",
+            "+----+-------+------------+------------+",
+        ];
+        let actual = get_data(&table).await;
+
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_and_pre_existing_struct_added_column() {
+        let table = setup_table(None).await;
+
+        let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "count",
+            ArrowDataType::Int64,
+            true,
+        )]));
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(nested_schema.fields().clone()),
+                true,
+            ),
+        ]));
+
+        let table_with_struct = write_data_struct(table, &schema).await;
+
+        let nested_schema_source = Arc::new(ArrowSchema::new(vec![Field::new(
+            "name",
+            ArrowDataType::Utf8,
+            true,
+        )]));
+
+        let schema_source = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(nested_schema_source.fields().clone()),
+                true,
+            ),
+        ]));
+
+        let name_array = arrow::array::StringArray::from(vec![Some("John")]);
+        let id_array = arrow::array::StringArray::from(vec![Some("X")]);
+        let value_array = arrow::array::Int32Array::from(vec![Some(1)]);
+        let modified_array = arrow::array::StringArray::from(vec![Some("2021-02-02")]);
+
+        let batch = RecordBatch::try_new(
+            schema_source,
+            vec![
+                Arc::new(id_array),
+                Arc::new(value_array),
+                Arc::new(modified_array),
+                Arc::new(arrow::array::StructArray::from(
+                    RecordBatch::try_new(nested_schema_source, vec![Arc::new(name_array)]).unwrap(),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let ctx = SessionContext::new();
+
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = DeltaOps(table_with_struct)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("nested", col("source.nested"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await
+            .unwrap()
+            .expect("failed to get snapshot bytes");
+        let actions = crate::logstore::get_actions(2, snapshot_bytes)
+            .await
+            .unwrap();
+
+        let schema_actions = actions
+            .iter()
+            .any(|action| matches!(action, Action::Metadata(_)));
+
+        dbg!(&schema_actions);
+
+        assert!(schema_actions);
+        let expected = vec![
+            "+----+-------+------------+-----------------------+",
+            "| id | value | modified   | nested                |",
+            "+----+-------+------------+-----------------------+",
+            "| A  | 1     | 2021-02-01 | {count: 1, name: }    |",
+            "| B  | 10    | 2021-02-01 | {count: 2, name: }    |",
+            "| C  | 10    | 2021-02-02 | {count: 3, name: }    |",
+            "| D  | 100   | 2021-02-02 | {count: 4, name: }    |",
+            "| X  | 1     | 2021-02-02 | {count: , name: John} |",
+            "+----+-------+------------+-----------------------+",
+        ];
+        let actual = get_data(&table).await;
+
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_evolution_simple_update() {
+        let (table, _) = setup().await;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![50, 200, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value").add(lit(1)))
+                    .update("modified", col("source.modified"))
+                    .update("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let commit_info = table.history(None).await.unwrap();
+
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        let expected = vec![
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 1     | 2021-02-01 |             |",
+            "| B  | 51    | 2021-02-02 | B1          |",
+            "| C  | 201   | 2023-07-04 | C1          |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "+----+-------+------------+-------------+",
+        ];
+        let actual = get_data(&table).await;
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
+        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_evolution_simple_insert() {
+        let (table, _) = setup().await;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("inserted_by", "source.inserted_by")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["notMatchedPredicates"],
+            json!(r#"[{"actionType":"insert"}]"#)
+        );
+        let expected = vec![
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 1     | 2021-02-01 |             |",
+            "| B  | 10    | 2021-02-01 |             |",
+            "| C  | 10    | 2021-02-02 |             |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "| X  | 30    | 2023-07-04 | X1          |",
+            "+----+-------+------------+-------------+",
+        ];
+        let actual = get_data(&table).await;
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
+        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
@@ -2467,6 +3059,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_delete_not_matched_with_schema_merge() {
+        // Validate behaviours of not match delete
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 2);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 2);
+        assert_eq!(metrics.num_output_rows, 2);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert!(!parameters.contains_key("predicate"));
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"delete"}]"#)
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_by_source_delete(|delete| {
+                delete.predicate(col("target.modified").gt(lit("2021-02-01")))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert!(metrics.num_target_files_added == 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_output_rows, 1);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"delete","predicate":"target.modified > '2021-02-01'"}]"#)
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
     async fn test_merge_empty_table() {
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
@@ -2545,6 +3272,92 @@ mod tests {
             "+----+-------+------------+",
         ];
         let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_empty_table_with_schema_merge() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_files_count(), 0);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.modified").eq(lit("2021-02-02"))),
+            )
+            .with_merge_schema(true)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 1);
+        assert!(table.get_files_count() >= 2);
+        assert!(metrics.num_target_files_added >= 2);
+        assert_eq!(metrics.num_target_files_removed, 0);
+        assert_eq!(metrics.num_target_rows_copied, 0);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 3);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_output_rows, 3);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[0];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+
+        assert_eq!(
+            parameters["predicate"],
+            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+        );
+
+        let expected = vec![
+            "+----+-------+-------------+------------+",
+            "| id | value | inserted_by | modified   |",
+            "+----+-------+-------------+------------+",
+            "| B  | 10    | B1          | 2021-02-02 |",
+            "| C  | 20    | C1          | 2023-07-04 |",
+            "| X  | 30    | X1          | 2023-07-04 |",
+            "+----+-------+-------------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
+        assert_eq!(&expected_schema_struct, table.schema().unwrap());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -3303,6 +4116,124 @@ mod tests {
         "| D  | 100   | 2021-02-02 | insert           | 1               |",
         "+----+-------+------------+------------------+-----------------+",
         ], &batches }
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdc_enabled_simple_with_schema_merge() {
+        // Manually creating the desired table with the right minimum CDC features
+        use crate::kernel::Protocol;
+        use crate::operations::merge::Action;
+
+        let schema = get_delta_schema();
+
+        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let table: DeltaTable = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let schema = get_arrow_schema(&None);
+
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let table = write_data(table, &schema).await;
+
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_files_count(), 1);
+        let source = merge_source(schema);
+        let source = source.with_column("inserted_by", lit("new_value")).unwrap();
+
+        let (table, _) = DeltaOps(table)
+            .merge(source.clone(), col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.value").eq(lit(1)))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 2     | 2021-02-01 |             |",
+            "| B  | 10    | 2021-02-02 | new_value   |",
+            "| C  | 20    | 2023-07-04 | new_value   |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "| X  | 30    | 2023-07-04 | new_value   |",
+            "+----+-------+------------+-------------+",
+        ];
+        let actual = get_data(&table).await;
+        let expected_schema_struct: StructType = source_schema.try_into().unwrap();
+        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let ctx = SessionContext::new();
+        let table = DeltaOps(table)
+            .load_cdf()
+            .with_session_ctx(ctx.clone())
+            .with_starting_version(0)
+            .build()
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect_batches(
+            table.properties().output_partitioning().partition_count(),
+            table,
+            ctx,
+        )
+        .await
+        .expect("Failed to collect batches");
+
+        let _ = arrow::util::pretty::print_batches(&batches);
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(6)).collect();
+
+        assert_batches_sorted_eq! {[
+        "+----+-------+------------+-------------+------------------+-----------------+",
+        "| id | value | modified   | inserted_by | _change_type     | _commit_version |",
+        "+----+-------+------------+-------------+------------------+-----------------+",
+        "| A  | 1     | 2021-02-01 |             | insert           | 1               |",
+        "| A  | 1     | 2021-02-01 |             | update_preimage  | 2               |",
+        "| A  | 2     | 2021-02-01 |             | update_postimage | 2               |",
+        "| B  | 10    | 2021-02-01 |             | insert           | 1               |",
+        "| B  | 10    | 2021-02-01 |             | update_preimage  | 2               |",
+        "| B  | 10    | 2021-02-02 | new_value   | update_postimage | 2               |",
+        "| C  | 10    | 2021-02-02 |             | insert           | 1               |",
+        "| C  | 10    | 2021-02-02 |             | update_preimage  | 2               |",
+        "| C  | 20    | 2023-07-04 | new_value   | update_postimage | 2               |",
+        "| D  | 100   | 2021-02-02 |             | insert           | 1               |",
+        "| X  | 30    | 2023-07-04 | new_value   | insert           | 2               |",
+        "+----+-------+------------+-------------+------------------+-----------------+",
+            ], &batches }
     }
 
     #[tokio::test]
