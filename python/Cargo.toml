@@ -17,6 +17,9 @@ doc = false
 [dependencies]
 delta_kernel.workspace = true
 
+# deltalake_catalog_unity - local crate
+deltalake-catalog-unity = { path = "../crates/catalog-unity" }
+
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
 
