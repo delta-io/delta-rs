@@ -980,7 +980,7 @@ class DeltaTable:
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: Optional[bool] = None,
-        streaming: bool = False,
+        streamed_exec: bool = False,
         custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
@@ -998,7 +998,7 @@ class DeltaTable:
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: Deprecated, will be removed in 1.0
-            streaming: Will execute MERGE using a LazyMemoryExec plan
+            streamed_exec: Will execute MERGE using a LazyMemoryExec plan
             arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
             custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
@@ -1065,7 +1065,7 @@ class DeltaTable:
             target_alias=target_alias,
             merge_schema=merge_schema,
             safe_cast=not error_on_type_mismatch,
-            streaming=streaming,
+            streamed_exec=streamed_exec,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,

@@ -89,7 +89,7 @@ impl PyMergeBuilder {
         target_alias: Option<String>,
         merge_schema: bool,
         safe_cast: bool,
-        streaming: bool,
+        streamed_exec: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -98,7 +98,7 @@ impl PyMergeBuilder {
         let ctx = SessionContext::new();
         let schema = source.schema();
 
-        let source_df = if streaming {
+        let source_df = if streamed_exec {
             let arrow_stream: Arc<Mutex<ArrowArrayStreamReader>> = Arc::new(Mutex::new(source));
             let arrow_stream_batch_generator: Arc<RwLock<dyn LazyBatchGenerator>> =
                 Arc::new(RwLock::new(ArrowStreamBatchGenerator::new(arrow_stream)));
@@ -117,7 +117,7 @@ impl PyMergeBuilder {
 
         let mut cmd = MergeBuilder::new(log_store, snapshot, predicate, source_df)
             .with_safe_cast(safe_cast)
-            .with_streaming(streaming);
+            .with_streaming(streamed_exec);
 
         if let Some(src_alias) = &source_alias {
             cmd = cmd.with_source_alias(src_alias);

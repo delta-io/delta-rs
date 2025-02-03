@@ -34,7 +34,7 @@ def test_merge_when_matched_delete_wo_predicate(
         source_alias="s",
         target_alias="t",
         commit_properties=commit_properties,
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_delete().execute()
 
     nrows = 4
@@ -77,7 +77,7 @@ def test_merge_when_matched_delete_with_predicate(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_delete("s.deleted = True").execute()
 
     nrows = 4
@@ -117,7 +117,7 @@ def test_merge_when_matched_update_wo_predicate(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update({"price": "s.price", "sold": "s.sold"}).execute()
 
     expected = pa.table(
@@ -201,7 +201,7 @@ def test_merge_when_matched_update_all_wo_predicate(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update_all().execute()
 
     expected = pa.table(
@@ -242,7 +242,7 @@ def test_merge_when_matched_update_all_with_exclude(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update_all(except_cols=["sold"]).execute()
 
     expected = pa.table(
@@ -282,7 +282,7 @@ def test_merge_when_matched_update_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update(
         updates={"price": "source.price", "sold": "source.sold"},
         predicate="source.deleted = False",
@@ -325,7 +325,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -372,7 +372,7 @@ def test_merge_when_not_matched_insert_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -471,7 +471,7 @@ def test_merge_when_not_matched_insert_all_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert_all(
         predicate="source.price < 50",
     ).execute()
@@ -513,7 +513,7 @@ def test_merge_when_not_matched_insert_all_with_exclude(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert_all(except_cols=["sold"]).execute()
 
     expected = pa.table(
@@ -595,7 +595,7 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
         source_alias="source",
         target_alias="target",
         predicate="target.`1id` = source.`1id`",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert_all(
         predicate="source.price < 50",
     ).execute()
@@ -637,7 +637,7 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -681,7 +681,7 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -725,7 +725,7 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_by_source_delete(predicate="target.price > 3").execute()
 
     expected = pa.table(
@@ -763,7 +763,7 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_by_source_delete().execute()
 
     expected = pa.table(
@@ -806,7 +806,7 @@ def test_merge_multiple_when_matched_update_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update(
         updates={"price": "source.price", "sold": "source.sold"},
         predicate="source.deleted = False",
@@ -852,7 +852,7 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update_all(
         predicate="source.deleted = False",
     ).when_matched_update_all(
@@ -896,7 +896,7 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -953,7 +953,7 @@ def test_merge_multiple_when_matched_delete_with_predicate(
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_delete("s.deleted = True").when_matched_delete(
         "s.deleted = false"
     ).execute()
@@ -999,7 +999,7 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -1055,7 +1055,7 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
         predicate="s.date = t.date",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     result = dt.to_pyarrow_table()
@@ -1172,7 +1172,7 @@ def test_merge_stats_columns_stats_provided(
         predicate="source.foo = target.foo",
         source_alias="source",
         target_alias="target",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_matched_update_all().execute()
 
     dt = DeltaTable(tmp_path)
@@ -1289,7 +1289,7 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
             predicate="t.id = s.id and t.partition in (3,4)",
             source_alias="s",
             target_alias="t",
-            streaming=streaming,
+            streamed_exec=streaming,
         )
         .when_matched_update_all()
         .execute()
@@ -1340,7 +1340,7 @@ def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
         predicate="s.id = t.id",
         source_alias="s",
         target_alias="t",
-        streaming=streaming,
+        streamed_exec=streaming,
     ).when_not_matched_insert_all().execute()
 
     last_action = dt.history(1)[0]
