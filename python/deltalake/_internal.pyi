@@ -197,7 +197,7 @@ class RawDeltaTable:
         commit_properties: Optional[CommitProperties],
         post_commithook_properties: Optional[PostCommitHookProperties],
         safe_cast: bool,
-        streaming: bool,
+        streamed_exec: bool,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
