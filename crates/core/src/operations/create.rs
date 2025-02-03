@@ -440,7 +440,7 @@ mod tests {
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
         );
-        let table = DeltaOps::try_from_uri(relative_path)
+        let table = DeltaOps::try_from_uri(relative_path, None)
             .await
             .unwrap()
             .create()

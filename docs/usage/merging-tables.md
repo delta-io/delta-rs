@@ -81,7 +81,7 @@ For example, let’s update the value of a column in the target table based on a
 === "Rust"
     ```rust
     // define target table
-    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await?;
+    let delta_ops = DeltaOps::try_from_uri("tmp/some-table", IORuntime::default()).await?;
     let mut table = delta_ops
         .create()
         .with_table_name("some-table")
@@ -176,7 +176,7 @@ For example, let’s say we start with the same target table:
     ```
 === "Rust"
     ```rust
-    let delta_ops = DeltaOps::try_from_uri("./data/simple_table").await?;
+    let delta_ops = DeltaOps::try_from_uri("./data/simple_table", IORuntime::default()).await?;
     let mut table = delta_ops
         .create()
         .with_table_name("some-table")

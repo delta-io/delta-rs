@@ -1,20 +1,29 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock, OnceLock};
+use std::task::{Context, Poll};
 
 use crate::{DeltaResult, DeltaTableError};
+use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use futures::TryFutureExt;
+use futures::{FutureExt, Stream, StreamExt};
 use humantime::parse_duration;
 use object_store::limit::LimitStore;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::prefix::PrefixStore;
-use object_store::{GetOptions, PutOptions, PutPayload, PutResult, RetryConfig};
+use object_store::{
+    GetOptions, GetResultPayload, PutOptions, PutPayload, PutResult, RetryConfig, UploadPart,
+};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
+use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::ReceiverStream;
 use url::Url;
 
 use bytes::Bytes;
@@ -113,6 +122,42 @@ impl IORuntime {
     }
 }
 
+/// A wrapper around a receiver stream and task that ensures the inner
+/// task is cancelled on drop
+struct StreamAndTask<T> {
+    inner: ReceiverStream<T>,
+    /// Task which produces no output. On drop the outstanding task is cancelled
+    #[expect(dead_code)]
+    set: JoinSet<()>,
+}
+
+impl<T> Stream for StreamAndTask<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
+}
+
+struct DropGuard<T>(JoinHandle<T>);
+impl<T> Drop for DropGuard<T> {
+    fn drop(&mut self) {
+        self.0.abort()
+    }
+}
+
+impl<T> Future for DropGuard<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(match std::task::ready!(self.0.poll_unpin(cx)) {
+            Ok(v) => v,
+            Err(e) if e.is_cancelled() => panic!("IO runtime was shut down"),
+            Err(e) => std::panic::resume_unwind(e.into_panic()),
+        })
+    }
+}
+
 /// Wraps any object store and runs IO in it's own runtime [EXPERIMENTAL]
 pub struct DeltaIOStorageBackend {
     inner: ObjectStoreRef,
@@ -181,6 +226,50 @@ impl DeltaIOStorageBackend {
         })
         .boxed()
     }
+
+    // Wraps a future stream on the IO runtime
+    // Sourced from: https://github.com/apache/datafusion/commit/b5d4ae19dfb69ceeccadfa4a4699382add23a05e
+    pub fn run_io_stream<X, E, S>(
+        &self,
+        stream: S,
+    ) -> impl Stream<Item = Result<X, E>> + Send + 'static
+    where
+        X: Send + 'static,
+        E: Send + 'static,
+        S: Stream<Item = Result<X, E>> + Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+
+        let mut set = JoinSet::new();
+
+        set.spawn(DropGuard(self.rt_handle.spawn(async move {
+            // drive the stream forward on the IO runtime, sending results
+            // back to the original runtime
+            let mut stream = Box::pin(stream);
+            while let Some(result) = stream.next().await {
+                // try to send to the sender, if error means the
+                // receiver has been closed and we terminate early
+                if tx.send(result).await.is_err() {
+                    return;
+                }
+            }
+        })));
+        StreamAndTask {
+            inner: ReceiverStream::new(rx),
+            set,
+        }
+    }
+
+    /// Wrap the result stream if necessary
+    fn wrap_if_necessary(&self, payload: GetResultPayload) -> GetResultPayload {
+        match payload {
+            GetResultPayload::File(_, _) => payload,
+            GetResultPayload::Stream(stream) => {
+                let new_stream = self.run_io_stream(stream).boxed();
+                GetResultPayload::Stream(new_stream)
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for DeltaIOStorageBackend {
@@ -226,12 +315,18 @@ impl ObjectStore for DeltaIOStorageBackend {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
-        self.spawn_io_rt(
-            |store, path| store.get_opts(path, options),
-            &self.inner,
-            location.clone(),
-        )
-        .await
+        let mut result = self
+            .spawn_io_rt(
+                |store, path| store.get_opts(path, options),
+                &self.inner,
+                location.clone(),
+            )
+            .await?;
+
+        // The payload result can also be a stream, this needs to be wrapped as well on the IO runtime
+        // before consuming the stream. Otherwise it ends up on the CPU runtime
+        result.payload = self.wrap_if_necessary(result.payload);
+        Ok(result)
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
@@ -262,7 +357,33 @@ impl ObjectStore for DeltaIOStorageBackend {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
-        self.inner.list(prefix)
+        // Listing also returns a stream which needs to be wrapped onto the IO executor
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let prefix_captured = prefix.cloned();
+        let inner_store = Arc::clone(&self.inner);
+        let rt_handle = self.rt_handle.clone();
+        let mut set = JoinSet::new();
+        set.spawn(async move {
+            let _ = rt_handle
+                .spawn(async move {
+                    // run and buffer on the IO stream
+                    let mut list_stream = inner_store.list(prefix_captured.as_ref());
+                    while let Some(result) = list_stream.next().await {
+                        // try to send to the sender, if error means the
+                        // receiver has been closed and we terminate early
+                        if tx.send(result).await.is_err() {
+                            return;
+                        }
+                    }
+                })
+                .await;
+        });
+
+        StreamAndTask {
+            inner: ReceiverStream::new(rx),
+            set,
+        }
+        .boxed()
     }
 
     fn list_with_offset(
@@ -308,12 +429,19 @@ impl ObjectStore for DeltaIOStorageBackend {
     }
 
     async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.spawn_io_rt(
-            |store, path| store.put_multipart(path),
-            &self.inner,
-            location.clone(),
-        )
-        .await
+        let result = self
+            .spawn_io_rt(
+                |store, path| store.put_multipart(path),
+                &self.inner,
+                location.clone(),
+            )
+            .await?;
+
+        // the resulting multiPartUpload has async functions too which must be wrapped
+        Ok(Box::new(IoMultipartUpload::new(
+            self.rt_handle.clone(),
+            result,
+        )))
     }
 
     async fn put_multipart_opts(
@@ -321,12 +449,73 @@ impl ObjectStore for DeltaIOStorageBackend {
         location: &Path,
         options: PutMultipartOpts,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.spawn_io_rt(
-            |store, path| store.put_multipart_opts(path, options),
-            &self.inner,
-            location.clone(),
-        )
-        .await
+        let result = self
+            .spawn_io_rt(
+                |store, path| store.put_multipart_opts(path, options),
+                &self.inner,
+                location.clone(),
+            )
+            .await?;
+
+        // the resulting multiPartUpload has async functions too which must be wrapped
+        Ok(Box::new(IoMultipartUpload::new(
+            self.rt_handle.clone(),
+            result,
+        )))
+    }
+}
+
+/// A wrapper around a `MultipartUpload` that runs the async functions on the
+/// IO thread of the provided IO runtime handle
+#[derive(Debug)]
+struct IoMultipartUpload {
+    rt_handle: Handle,
+    /// Inner upload (needs to be an option so we can send in closure)
+    inner: Option<Box<dyn MultipartUpload>>,
+}
+impl IoMultipartUpload {
+    fn new(rt_handle: Handle, inner: Box<dyn MultipartUpload>) -> Self {
+        Self {
+            rt_handle,
+            inner: Some(inner),
+        }
+    }
+}
+
+#[async_trait]
+impl MultipartUpload for IoMultipartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        self.inner
+            .as_mut()
+            .expect("paths that take put inner back")
+            .put_part(data)
+    }
+
+    async fn complete(&mut self) -> object_store::Result<PutResult> {
+        // because we are running the task on a different runtime, we
+        // can't send references to &self. Thus take out of self.inner
+        // to run on io thread
+        let mut inner = self.inner.take().expect("paths that take put inner back");
+
+        let (inner, result) = DropGuard(self.rt_handle.spawn(async move {
+            let result = inner.as_mut().complete().await;
+            (inner, result)
+        }))
+        .await;
+        self.inner = Some(inner);
+        result
+    }
+
+    async fn abort(&mut self) -> object_store::Result<()> {
+        let mut inner = self.inner.take().expect("paths that take put inner back");
+
+        let (inner, result) = DropGuard(self.rt_handle.spawn(async move {
+            let result = inner.as_mut().abort().await;
+            (inner, result)
+        }))
+        .await;
+        self.inner = Some(inner);
+        result
     }
 }
 
