@@ -30,31 +30,31 @@ delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
 #delta_kernel = { path = "../delta-kernel-rs/kernel", features = ["sync-engine"]  }
 
 # arrow
-arrow = { version = "53" }
-arrow-arith = { version = "53" }
-arrow-array = { version = "53", features = ["chrono-tz"] }
-arrow-buffer = { version = "53" }
-arrow-cast = { version = "53" }
-arrow-ipc = { version = "53" }
-arrow-json = { version = "53" }
-arrow-ord = { version = "53" }
-arrow-row = { version = "53" }
-arrow-schema = { version = "53" }
-arrow-select = { version = "53" }
+arrow = { version = "54" }
+arrow-arith = { version = "54" }
+arrow-array = { version = "54", features = ["chrono-tz"] }
+arrow-buffer = { version = "54" }
+arrow-cast = { version = "54" }
+arrow-ipc = { version = "54" }
+arrow-json = { version = "54" }
+arrow-ord = { version = "54" }
+arrow-row = { version = "54" }
+arrow-schema = { version = "54" }
+arrow-select = { version = "54" }
 object_store = { version = "0.11.2" , features = ["cloud"]}
-parquet = { version = "53" }
+parquet = { version = "54" }
 
 # datafusion
-datafusion = { version = "44" }
-datafusion-expr = { version = "44" }
-datafusion-common = { version = "44" }
-datafusion-ffi = { version = "44" }
-datafusion-functions = { version = "44" }
-datafusion-functions-aggregate = { version = "44" }
-datafusion-physical-expr = { version = "44" }
-datafusion-physical-plan = { version = "44" }
-datafusion-proto = { version = "44" }
-datafusion-sql = { version = "44" }
+datafusion = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-common = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-ffi = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-functions = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
+datafusion-sql = { git = "https://github.com/apache/datafusion", rev = "45.0.0-rc1" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
