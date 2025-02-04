@@ -7,8 +7,7 @@ Below, we demonstrate how to create, query, and update partitioned Delta tables,
 
 ## Creating a Partitioned Table
 
-To create a partitioned Delta table, specify one or more partition columns when writing the data. If you’re using Python, pass `partition_by=[<column>]` to the [write_deltalake()][deltalake.write_deltalake] function. In Rust, you can use `with_partition_columns(...)` on the builder when creating the table.
-
+To create a partitioned Delta table, specify one or more partition columns when creating the table. Here we partition by the country column.
 ```python
 from deltalake import write_deltalake
 import pandas as pd
@@ -22,7 +21,8 @@ df = pd.DataFrame({
 # Create a table partitioned by the "country" column
 write_deltalake("tmp/partitioned-table", df, partition_by=["country"])
 ```
-The structure in the “tmp/partitioned-table” folder is showing how Delta Lake organizes data by the partition column. The “_delta_log” folder holds transaction metadata, while each “country=<value>” subfolder contains the Parquet files for rows matching that partition value. This layout allows efficient queries and updates on partitioned data.
+
+The structure in the "tmp/partitioned-table" folder shows how Delta Lake organizes data by the partition column. The "_delta_log" folder holds transaction metadata, while each "country=<value>" subfolder contains the Parquet files for rows matching that partition value. This layout allows efficient queries and updates on partitioned data.
 ```plaintext
 tmp/partitioned-table/
 ├── _delta_log/
@@ -37,14 +37,13 @@ tmp/partitioned-table/
 
 ### Filtering by partition columns
 
-Because partition columns are part of the storage path, queries that filter on those columns can skip reading unneeded partitions. You can specify partition filters when reading data with [DeltaTable.to_pandas()][deltalake.table.DeltaTable.to_pandas], [DeltaTable.to_pyarrow_table()][deltalake.table.DeltaTable.to_pyarrow_table], or [DeltaTable.to_pyarrow_dataset()][deltalake.table.DeltaTable.to_pyarrow_dataset].
+Because partition columns are part of the storage path, queries that filter on those columns can skip reading unneeded partitions. You can specify partition filters when reading data with [DeltaTable.to_pandas()](../../delta_table/#deltalake.DeltaTable.to_pandas).
 
+
+In this example we restrict our query to the `country="US"` partition.
 ```python
-from deltalake import DeltaTable
-
 dt = DeltaTable("tmp/partitioned-table")
 
-# Only read files from partitions where country = 'US'
 pdf = dt.to_pandas(partitions=[("country", "=", "US")])
 print(pdf)
 ```
@@ -56,11 +55,9 @@ print(pdf)
 
 ### Partition Columns in Table Metadata
 
-Partition columns can also be inspected via metadata:
+Partition columns can also be inspected via metadata on a `DeltaTable`.
 
 ```python
-from deltalake import DeltaTable
-
 dt = DeltaTable("tmp/partitioned-table")
 print(dt.metadata().partition_columns)
 ```
@@ -73,7 +70,7 @@ print(dt.metadata().partition_columns)
 
 ### Appending to a Partitioned Table
 
-You can simply write additional data with mode="append" and the partition columns will be used to place data in the correct partition directories.
+You can write additional data to partitions (or create new partitions) with `mode="append"` and the partition columns will be used to place data in the correct partition directories.
 
 ```python
 new_data = pd.DataFrame({
@@ -81,14 +78,30 @@ new_data = pd.DataFrame({
     "letter": ["x", "y", "z"],
     "country": ["CA", "DE", "DE"]
 })
-from deltalake import write_deltalake
 
 write_deltalake("tmp/partitioned-table", new_data, mode="append")
+
+dt = DeltaTable("tmp/partitioned-table")
+pdf = dt.to_pandas()
+print(pdf)
 ```
 
-### Overwriting an Entire Partition
+```plaintext
+   num letter country
+0   20      y      DE
+1   30      z      DE
+2   10      x      CA
+3    3      c      CA
+4    1      a      US
+5    2      b      US
+```
 
-You can overwrite a specific partition, leaving the other partitions intact. Pass in mode="overwrite" together with partition_filters.
+### Overwriting a Partition
+
+You can overwrite a specific partition, leaving the other partitions intact. Pass in `mode="overwrite"` together with a predicate string.
+
+In this example we overwrite the `DE` paritition with new data.
+
 ```python
 df_overwrite = pd.DataFrame({
     "num": [900, 1000],
@@ -96,42 +109,41 @@ df_overwrite = pd.DataFrame({
     "country": ["DE", "DE"]
 })
 
-from deltalake import DeltaTable, write_deltalake
-
 dt = DeltaTable("tmp/partitioned-table")
 write_deltalake(
     dt,
     df_overwrite,
-    partition_filters=[("country", "=", "DE")],
+    predicate="country = 'DE'",
     mode="overwrite",
 )
+
+dt = DeltaTable("tmp/partitioned-table")
+pdf = dt.to_pandas()
+print(pdf)
 ```
-This will remove only the `country=DE` partition files and overwrite them with the new data.
 
-### Overwriting Parts of the Table Using a Predicate
-
-If you have a more fine-grained predicate than a partition filter, you can use the [predicate argument][deltalake.write_deltalake] (sometimes called replaceWhere) to overwrite only rows matching a specific condition.
-
-(See the “Overwriting part of the table data using a predicate” section in the Writing Delta Tables docs for more details.)
+```plaintext
+    num letter country
+0   900      m      DE
+1  1000      n      DE
+2    10      x      CA
+3     3      c      CA
+4     1      a      US
+5     2      b      US
+```
 
 ## Updating Partitioned Tables with Merge
 
 You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. Simply provide a matching predicate that references partition columns if needed.
 
-You can match on both the partition column (country) and some other condition. This example shows a merge operation that checks both the partition column (“country”) and a numeric column (“num”) when merging:
-- The table is partitioned by “country,” so underlying data is physically split by each country value.
-- The merge condition (predicate) matches target rows where both “country” and “num” align with the source.
-- When a match occurs, it updates “letter”; otherwise, it inserts the new row.
-- This approach ensures that only rows in the relevant partition (“US”) are processed, keeping operations efficient.
+You can match on both the partition column (country) and some other condition. This example shows a merge operation that checks both the partition column ("country") and a numeric column ("num") when merging:
+- The merge condition (predicate) matches target rows where both "country" and "num" align with the source.
+- When a match occurs, it updates the "letter" column; otherwise, it inserts the new row.
 
 ```python
-from deltalake import DeltaTable
-import pyarrow as pa
-
 dt = DeltaTable("tmp/partitioned-table")
 
-# New data that references an existing partition "US"
-source_data = pa.table({"num": [1, 101], "letter": ["A", "B"], "country": ["US", "US"]})
+source_data = pd.DataFrame({"num": [1, 101], "letter": ["A", "B"], "country": ["US", "US"]})
 
 (
     dt.merge(
@@ -146,7 +158,24 @@ source_data = pa.table({"num": [1, 101], "letter": ["A", "B"], "country": ["US",
     .when_not_matched_insert_all()
     .execute()
 )
+
+dt = DeltaTable("tmp/partitioned-table")
+pdf = dt.to_pandas()
+print(pdf)
 ```
+
+```plaintext
+    num letter country
+0   101      B      US
+1     1      A      US
+2     2      b      US
+3   900      m      DE
+4  1000      n      DE
+5    10      x      CA
+6     3      c      CA
+```
+
+This approach ensures that only rows in the relevant partition ("US") are processed, keeping operations efficient.
 
 ## Deleting Partition Data
 
@@ -154,8 +183,19 @@ You may want to delete all rows from a specific partition. For example:
 ```python
 dt = DeltaTable("tmp/partitioned-table")
 
-# Delete all rows from the 'US' partition:
 dt.delete("country = 'US'")
+
+dt = DeltaTable("tmp/partitioned-table")
+pdf = dt.to_pandas()
+print(pdf)
+```
+
+```plaintext
+    num letter country
+0   900      m      DE
+1  1000      n      DE
+2    10      x      CA
+3     3      c      CA
 ```
 This command logically deletes the data by creating a new transaction.
 
@@ -163,14 +203,13 @@ This command logically deletes the data by creating a new transaction.
 
 ### Optimize & Vacuum
 
-Partitioned tables can accummulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition:
+Partitioned tables can accummulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition with [`optimize.compact`](../../delta_table/#deltalake.DeltaTable.optimize).
 ```python
-dt.optimize(partition_filters=[("country", "=", "US")])
-```
+ dt.optimize.compact(partition_filters=[("country", "=", "CA")])
+ ```
 
-Then optionally vacuum the table to remove older, unreferenced files.
+Then optionally [`vacuum`](../../delta_table/#deltalake.DeltaTable.vacuum) the table to remove older, unreferenced files.
 
 ### Handling High-Cardinality Columns
 
-Partitioning can be very powerful, but be mindful of using high-cardinality columns (columns with too many unique values). This can create an excessive number of directories and can hurt performance. For example, partitioning by date is typically better than partitioning by user_id if user_id has
-
+Partitioning can be very powerful, but be mindful of using high-cardinality columns (columns with too many unique values). This can create an excessive number of directories and can hurt performance. For example, partitioning by date is typically better than partitioning by user_id if user_id has millions of unique values.
