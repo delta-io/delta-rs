@@ -2167,6 +2167,28 @@ class TableAlterer:
             commit_properties,
         )
 
+    def set_column_metadata(
+        self,
+        column: str,
+        metadata: dict[str, str],
+        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """
+        Update a field's metadata in a schema. If the metadata key does not exist, the entry is inserted.
+
+        If the column name doesn't exist in the schema - an error is raised.
+
+        :param column: name of the column to update metadata for.
+        :param metadata: the metadata to be added or modified on the column.
+        :param commit_properties: properties of the transaction commit. If None, default values are used.
+        :param post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        :return:
+        """
+        self.table._table.set_column_metadata(
+            column, metadata, commit_properties, post_commithook_properties
+        )
+
 
 class TableOptimizer:
     """API for various table optimization commands."""
