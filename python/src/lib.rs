@@ -18,7 +18,7 @@ use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::schema::StructField;
+use delta_kernel::schema::{MetadataValue, StructField};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
@@ -63,13 +63,6 @@ use error::DeltaError;
 use futures::future::join_all;
 use tracing::log::*;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
-use serde_json::{Map, Value};
-use uuid::Uuid;
-
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::features::TableFeatures;
@@ -78,6 +71,14 @@ use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
+use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
+use deltalake::protocol::DeltaOperation::UpdateFieldMetadata;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
+use serde_json::{Map, Value};
+use uuid::Uuid;
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
@@ -1505,6 +1506,43 @@ impl RawDeltaTable {
                 HashMap::default()
             }
         }
+    }
+
+    #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
+    pub fn set_column_metadata(
+        &self,
+        py: Python,
+        field_name: &str,
+        metadata: HashMap<String, String>,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = UpdateFieldMetadataBuilder::new(self.log_store()?, self.cloned_state()?);
+
+            cmd = cmd.with_field_name(field_name).with_metadata(
+                metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
+                    .collect(),
+            );
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties)
+            }
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(cmd.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+        self.set_state(table.state)?;
+        Ok(())
     }
 
     fn __datafusion_table_provider__<'py>(
