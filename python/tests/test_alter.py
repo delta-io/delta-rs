@@ -457,3 +457,18 @@ def test_add_feautres(existing_sample_table: DeltaTable):
             "v2Checkpoint",
         ]
     )  # type: ignore
+
+
+def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: pa.Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    dt.alter.set_column_metadata("price", {"comment": "my comment"})
+
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["price"].metadata == {"comment": "my comment"}
+
+    with pytest.raises(DeltaError):
+        # Can't set metadata for non existing column.
+        dt.alter.set_column_metadata("non_existing_column", {"comment": "my comment"})
