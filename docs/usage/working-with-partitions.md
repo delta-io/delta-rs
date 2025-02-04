@@ -116,17 +116,22 @@ If you have a more fine-grained predicate than a partition filter, you can use t
 
 ## Updating Partitioned Tables with Merge
 
-You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones—simply provide a matching predicate that references partition columns if needed.
+You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. Simply provide a matching predicate that references partition columns if needed.
 
-For example, you can match on both the partition column (country) and some other condition:
+You can match on both the partition column (country) and some other condition. This example shows a merge operation that checks both the partition column (“country”) and a numeric column (“num”) when merging:
+- The table is partitioned by “country,” so underlying data is physically split by each country value.
+- The merge condition (predicate) matches target rows where both “country” and “num” align with the source.
+- When a match occurs, it updates “letter”; otherwise, it inserts the new row.
+- This approach ensures that only rows in the relevant partition (“US”) are processed, keeping operations efficient.
+
 ```python
 from deltalake import DeltaTable
 import pyarrow as pa
 
 dt = DeltaTable("tmp/partitioned-table")
 
-# Source data referencing an existing partition "US"
-source_data = pa.table({"num": [100, 101], "letter": ["A", "B"], "country": ["US", "US"]})
+# New data that references an existing partition "US"
+source_data = pa.table({"num": [1, 101], "letter": ["A", "B"], "country": ["US", "US"]})
 
 (
     dt.merge(
@@ -143,23 +148,6 @@ source_data = pa.table({"num": [100, 101], "letter": ["A", "B"], "country": ["US
 )
 ```
 
-If the partition does not exist (say for a new country value), a new partition folder will be created automatically.
-
-(See more in the docs on merging tables.)
-
-## Query Optimizations with Partitions
-
-Partitions allow data skipping for queries that include the partition columns. For example, if your partition column is date, any query with a clause like WHERE date = '2023-01-01' or WHERE date >= '2023-01-01' AND date < '2023-01-10' can skip reading all files not in those partitions.
-
-You can confirm partition-based skipping by:
-
-```python
-dt = DeltaTable("path/to/table")
-df = dt.to_pandas(partitions=[("date", "=", "2023-01-01")])
-```
-Using pushdown predicates in DataFusion or DuckDB from Rust/Python.
-(See more details in the Querying Delta Tables docs.)
-
 ## Deleting Partition Data
 
 You may want to delete all rows from a specific partition. For example:
@@ -169,13 +157,13 @@ dt = DeltaTable("tmp/partitioned-table")
 # Delete all rows from the 'US' partition:
 dt.delete("country = 'US'")
 ```
-This command logically deletes the data by creating a new transaction. (See docs on deleting rows for more.)
+This command logically deletes the data by creating a new transaction.
 
 ## Maintaining Partitioned Tables
 
 ### Optimize & Vacuum
 
-Partitioned tables can suffer from many small files if frequently appended to. If needed, you can run optimize compaction on a specific partition:
+Partitioned tables can accummulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition:
 ```python
 dt.optimize(partition_filters=[("country", "=", "US")])
 ```
