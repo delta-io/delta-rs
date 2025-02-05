@@ -69,6 +69,57 @@ pub fn create_add(
     })
 }
 
+#[allow(dead_code)]
+/// Creates an [`Add`] log action struct.
+pub fn create_add_from_read(
+    partition_values: &IndexMap<String, Scalar>,
+    path: String,
+    size: i64,
+    parquet_metadata: &ParquetMetaData,
+    num_indexed_cols: i32,
+    stats_columns: &Option<Vec<String>>,
+) -> Result<Add, DeltaTableError> {
+    let stats = stats_from_parquet_metadata(
+        partition_values,
+        parquet_metadata,
+        num_indexed_cols,
+        stats_columns,
+    )?;
+    let stats_string = serde_json::to_string(&stats)?;
+
+    // Determine the modification timestamp to include in the add action - milliseconds since epoch
+    // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
+    let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let modification_time = modification_time.as_millis() as i64;
+
+    Ok(Add {
+        path,
+        size,
+        partition_values: partition_values
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    if v.is_null() {
+                        None
+                    } else {
+                        Some(v.serialize())
+                    },
+                )
+            })
+            .collect(),
+        modification_time,
+        data_change: true,
+        stats: Some(stats_string),
+        tags: None,
+        deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        stats_parsed: None,
+        clustering_provider: None,
+    })
+}
+
 // As opposed to `stats_from_file_metadata` which operates on `parquet::format::FileMetaData`,
 // this function produces the stats by reading the metadata from already written out files.
 //
