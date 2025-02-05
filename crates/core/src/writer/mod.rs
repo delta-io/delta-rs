@@ -14,7 +14,7 @@ use crate::DeltaTable;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
-pub use stats::create_add;
+pub use stats::{create_add, create_add_from_read};
 
 pub mod json;
 pub mod record_batch;
