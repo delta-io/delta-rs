@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.24.0"
+version = "0.24.1"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -46,6 +46,18 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 deltalake-mount = { path = "../crates/mount" }
+
+# Non-unix or emscripten os
+[target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
+# Unix (excluding macOS & emscripten) → jemalloc 
+[target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten")))'.dependencies]
+jemallocator = { version = "0.5", features = ["disable_initial_exec_tls", "background_threads"] }
+
+# macOS → jemalloc (without background_threads) (https://github.com/jemalloc/jemalloc/issues/843)
+[target.'cfg(all(target_family = "unix", target_os = "macos"))'.dependencies]
+jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
 version = "0.22.6"

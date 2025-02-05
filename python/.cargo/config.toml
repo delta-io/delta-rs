@@ -9,3 +9,7 @@ rustflags = [
   "-C", "link-arg=-undefined",
   "-C", "link-arg=dynamic_lookup",
 ]
+
+# Custom jemalloc conf, ref https://github.com/jemalloc/jemalloc/issues/2688
+[env]
+JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:500,muzzy_decay_ms:-1"

@@ -80,6 +80,20 @@ use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+use jemallocator::Jemalloc;
+
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+static ALLOC: Jemalloc = Jemalloc;
+
+#[global_allocator]
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+static ALLOC: MiMalloc = MiMalloc;
+
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
     Single(PyBackedStr),
