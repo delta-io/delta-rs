@@ -14,7 +14,7 @@ def gc_schema() -> Schema:
             Field(
                 name="gc",
                 type=PrimitiveType("integer"),
-                metadata={"delta.generationExpression": "'5'"},
+                metadata={"delta.generationExpression": "5"},
             ),
         ]
     )
@@ -118,7 +118,7 @@ def test_write_with_invalid_gc_to_table(table_with_gc, invalid_gc_data):
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            "Invariant violations: [\"Check or Invariant (gc = '5' OR (gc IS NULL AND '5' IS NULL)) violated by value in row: [10]\"]"
+            'Invariant violations: ["Check or Invariant (gc = 5 OR (gc IS NULL AND 5 IS NULL)) violated by value in row: [10]"]'
         ),
     ):
         write_deltalake(table_with_gc, mode="append", data=invalid_gc_data)
@@ -177,7 +177,7 @@ def test_raise_when_gc_passed_during_adding_new_columns(tmp_path, data_without_g
                 Field(
                     name="gc",
                     type=PrimitiveType("integer"),
-                    metadata={"delta.generationExpression": "'5'"},
+                    metadata={"delta.generationExpression": "5"},
                 )
             ]
         )
@@ -257,7 +257,7 @@ def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            "Invariant violations: [\"Check or Invariant (gc = '5' OR (gc IS NULL AND '5' IS NULL)) violated by value in row: [10]\"]"
+            'Invariant violations: ["Check or Invariant (gc = 5 OR (gc IS NULL AND 5 IS NULL)) violated by value in row: [10]"]'
         ),
     ):
         (
