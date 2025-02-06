@@ -80,7 +80,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
 async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     let _ = std::fs::remove_dir_all("./tests/data/issue_1420");
 
-    let mut table = DeltaOps::try_from_uri("./tests/data/issue_1420")
+    let mut table = DeltaOps::try_from_uri("./tests/data/issue_1420", None)
         .await?
         .create()
         .with_column(
