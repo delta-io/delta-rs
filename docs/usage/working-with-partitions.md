@@ -9,7 +9,7 @@ Below, we demonstrate how to create, query, and update partitioned Delta tables,
 
 To create a partitioned Delta table, specify one or more partition columns when creating the table. Here we partition by the country column.
 ```python
-from deltalake import write_deltalake
+from deltalake import write_deltalake,DeltaTable
 import pandas as pd
 
 df = pd.DataFrame({
@@ -98,9 +98,10 @@ print(pdf)
 
 ### Overwriting a Partition
 
-You can overwrite a specific partition, leaving the other partitions intact. Pass in `mode="overwrite"` together with a predicate string.
+To overwrite a specific partition or partitions set `mode="overwrite"` together with a predicate string that specifies
+which partitions are present in the new data. By setting the predicate `deltalake` is able to skip the other partitions.
 
-In this example we overwrite the `DE` paritition with new data.
+In this example we overwrite the `DE` partition with new data.
 
 ```python
 df_overwrite = pd.DataFrame({
@@ -134,16 +135,17 @@ print(pdf)
 
 ## Updating Partitioned Tables with Merge
 
-You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. Simply provide a matching predicate that references partition columns if needed.
+You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. If only a subset of existing partitions need to be read then provide a matching predicate that references the partition columns represented in the source data. The predicate then allows `deltalake` to skip reading the partitions not referenced by the predicate. 
 
-You can match on both the partition column (country) and some other condition. This example shows a merge operation that checks both the partition column ("country") and a numeric column ("num") when merging:
+This example shows a merge operation that checks both the partition column (`"country"`) and another column (`"num"`) when merging:
 - The merge condition (predicate) matches target rows where both "country" and "num" align with the source.
-- When a match occurs, it updates the "letter" column; otherwise, it inserts the new row.
+- If a match is found between a source row and a target row, the `"letter"` column is updated with the source data
+- Otherwise if no match is found for a source row it inserts the new row, creating a new partition if necessary
 
 ```python
 dt = DeltaTable("tmp/partitioned-table")
 
-source_data = pd.DataFrame({"num": [1, 101], "letter": ["A", "B"], "country": ["US", "US"]})
+source_data = pd.DataFrame({"num": [1, 101], "letter": ["A", "B"], "country": ["US", "CH"]})
 
 (
     dt.merge(
@@ -166,7 +168,7 @@ print(pdf)
 
 ```plaintext
     num letter country
-0   101      B      US
+0   101      B      CH
 1     1      A      US
 2     2      b      US
 3   900      m      DE
@@ -192,10 +194,11 @@ print(pdf)
 
 ```plaintext
     num letter country
-0   900      m      DE
-1  1000      n      DE
-2    10      x      CA
-3     3      c      CA
+0   101      B      CH
+1   900      m      DE
+2  1000      n      DE
+3    10      x      CA
+4     3      c      CA
 ```
 This command logically deletes the data by creating a new transaction.
 
@@ -204,6 +207,9 @@ This command logically deletes the data by creating a new transaction.
 ### Optimize & Vacuum
 
 Partitioned tables can accummulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition with [`optimize.compact`](../../delta_table/#deltalake.DeltaTable.optimize).
+
+If we want to target compaction at specific partitions we can include partition filters.
+
 ```python
  dt.optimize.compact(partition_filters=[("country", "=", "CA")])
  ```
@@ -212,4 +218,4 @@ Then optionally [`vacuum`](../../delta_table/#deltalake.DeltaTable.vacuum) the t
 
 ### Handling High-Cardinality Columns
 
-Partitioning can be very powerful, but be mindful of using high-cardinality columns (columns with too many unique values). This can create an excessive number of directories and can hurt performance. For example, partitioning by date is typically better than partitioning by user_id if user_id has millions of unique values.
+Partitioning can be useful for reducing the time it takes to update and query a table, but be mindful of creating partitions against high-cardinality columns (columns with many unique values). Doing so can create an excessive number of partition directories which can hurt performance. For example, partitioning by date is typically better than partitioning by user_id if user_id has millions of unique values.
