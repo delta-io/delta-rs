@@ -135,12 +135,12 @@ print(pdf)
 
 ## Updating Partitioned Tables with Merge
 
-You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. If only a subset of existing partitions need to be read then provide a matching predicate that references the partition columns represented in the source data. The predicate then allows `deltalake` to skip reading the partitions not referenced by the predicate. 
+You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. If only a subset of existing partitions are present in the source (i.e. new) data then `deltalake` can skip reading the partitions not present in the source data. You can do this by providing a predicate that specifies which partition values are in the source data.
 
-This example shows a merge operation that checks both the partition column (`"country"`) and another column (`"num"`) when merging:
-- The merge condition (predicate) matches target rows where both "country" and "num" align with the source.
+This example shows an upsert merge operation:
+- The merge condition (`predicate`) matches rows between source and target based on the partition column and specifies which partitions are present in the source data
 - If a match is found between a source row and a target row, the `"letter"` column is updated with the source data
-- Otherwise if no match is found for a source row it inserts the new row, creating a new partition if necessary
+- Otherwise if no match is found for a source row then the row is inserted, creating a new partition if necessary
 
 ```python
 dt = DeltaTable("tmp/partitioned-table")
@@ -150,7 +150,7 @@ source_data = pd.DataFrame({"num": [1, 101], "letter": ["A", "B"], "country": ["
 (
     dt.merge(
         source=source_data,
-        predicate="target.country = source.country AND target.num = source.num",
+        predicate="target.country = source.country AND target.country in ('US','CH')",
         source_alias="source",
         target_alias="target"
     )
@@ -170,14 +170,12 @@ print(pdf)
     num letter country
 0   101      B      CH
 1     1      A      US
-2     2      b      US
+2     2      A      US
 3   900      m      DE
 4  1000      n      DE
 5    10      x      CA
 6     3      c      CA
 ```
-
-This approach ensures that only rows in the relevant partition ("US") are processed, keeping operations efficient.
 
 ## Deleting Partition Data
 
