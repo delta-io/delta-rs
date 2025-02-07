@@ -349,6 +349,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                         ParquetError::IndexOutOfBound(u.to_owned(), v.to_owned())
                     }
                     ParquetError::NYI(msg) => ParquetError::NYI(msg.to_owned()),
+                    // ParquetError is non exhaustive, so have a fallback
+                    e => ParquetError::General(e.to_string()),
                 },
                 skipped_values: partial_writes,
             }
