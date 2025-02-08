@@ -221,7 +221,8 @@ impl RawDeltaTable {
         table_uri: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<bool> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        let mut builder =
+            deltalake::DeltaTableBuilder::from_uri(table_uri).with_io_runtime(IORuntime::default());
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }
@@ -2107,7 +2108,9 @@ fn write_to_deltalake(
             table.with_table(|t| Ok(DeltaOps::from(t.clone())))?
         } else {
             rt().block_on(DeltaOps::try_from_uri_with_storage_options(
-                &table_uri, options,
+                &table_uri,
+                options,
+                Some(IORuntime::default()),
             ))
             .map_err(PythonError::from)?
         };
@@ -2181,6 +2184,7 @@ fn create_deltalake(
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
+            .with_io_runtime(IORuntime::default())
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;
@@ -2244,6 +2248,7 @@ fn write_new_deltalake(
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
+            .with_io_runtime(IORuntime::default())
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;

@@ -1135,7 +1135,7 @@ mod tests {
         let table_schema = get_delta_schema();
         let temp_dir = tempfile::tempdir()?;
         let table_path = temp_dir.path().to_str().unwrap();
-        let mut table = DeltaOps::try_from_uri(&table_path)
+        let mut table = DeltaOps::try_from_uri(&table_path, None)
             .await?
             .create()
             .with_columns(table_schema.fields().cloned())
@@ -1210,7 +1210,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+        let mut table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap(), None)
             .await?
             .write(vec![batch])
             .await?;
@@ -1229,7 +1229,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+        let table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap(), None)
             .await?
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
