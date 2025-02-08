@@ -1589,13 +1589,6 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
     assert dt.to_pyarrow_table(columns=["baz", "bar", "foo"]) == expected
 
 
-def test_empty(existing_table: DeltaTable):
-    schema = existing_table.schema().to_pyarrow()
-    empty_table = pa.Table.from_pylist([], schema=schema)
-    with pytest.raises(DeltaError, match="No data source supplied to write command"):
-        write_deltalake(existing_table, empty_table, mode="append", engine="rust")
-
-
 def test_rust_decimal_cast(tmp_path: pathlib.Path):
     import re
 
@@ -1811,13 +1804,6 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     print(os.listdir(tmp_path))
     # This is kind of a weak test to verify that CDFs were written
     assert os.path.isdir(os.path.join(tmp_path, "_change_data"))
-
-
-def test_empty_dataset_write(tmp_path: pathlib.Path, sample_data: pa.Table):
-    empty_arrow_table = sample_data.schema.empty_table()
-    empty_dataset = dataset(empty_arrow_table)
-    with pytest.raises(DeltaError, match="No data source supplied to write command"):
-        write_deltalake(tmp_path, empty_dataset, mode="append")
 
 
 @pytest.mark.pandas

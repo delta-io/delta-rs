@@ -834,11 +834,22 @@ impl std::future::IntoFuture for WriteBuilder {
                 .unwrap_or_default();
             let mut schema_drift = false;
             let mut df = if let Some(plan) = this.input {
-                if this.schema_mode == Some(SchemaMode::Merge) {
-                    return Err(DeltaTableError::Generic(
-                        "Schema merge not supported yet for Datafusion".to_string(),
-                    ));
+                match this.schema_mode {
+                    Some(SchemaMode::Merge) => {
+                        return Err(DeltaTableError::Generic(
+                            "Schema merge not supported yet for Datafusion".to_string(),
+                        ));
+                    }
+                    Some(SchemaMode::Overwrite) => {}
+                    None => {
+                        if let Some(snapshot) = &this.snapshot {
+                            let table_schema = snapshot.input_schema()?;
+                            let plan_schema = plan.schema().as_arrow();
+                            try_cast_batch(table_schema.fields(), plan_schema.fields())?
+                        }
+                    }
                 }
+
                 Ok(DataFrame::new(state.clone(), plan.as_ref().clone()))
             } else if let Some(batches) = this.batches {
                 if batches.is_empty() {
