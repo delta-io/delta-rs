@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -16,7 +17,6 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
 use futures::Stream;
-use hashbrown::HashSet;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;

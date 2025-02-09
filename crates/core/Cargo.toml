@@ -54,7 +54,6 @@ strum = { workspace =  true}
 # "stdlib"
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
-hashbrown = "0.15.2"
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
