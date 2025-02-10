@@ -297,8 +297,8 @@ def write_deltalake(
 
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
-        storage_options = table._storage_options or {}
-        storage_options.update(storage_options or {})
+        if table._storage_options and storage_options:
+            table._storage_options.update(storage_options)
         table.update_incremental()
 
     _enforce_append_only(table=table, configuration=configuration, mode=mode)
