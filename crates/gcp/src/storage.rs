@@ -105,7 +105,7 @@ impl ObjectStore for GcsStorageBackend {
                         // That means we're experiencing concurrency conflicts, so return a transaction error
                         // Source would be a reqwest error which we don't have access to so the easiest thing to do is check
                         // for "429" in the error message
-                        if format!("{:?}", source).contains("429") {
+                        if format!("{source:?}").contains("429") {
                             Err(object_store::Error::AlreadyExists {
                                 path: to.to_string(),
                                 source,

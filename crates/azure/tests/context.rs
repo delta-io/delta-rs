@@ -43,20 +43,14 @@ impl StorageIntegration for MsftIntegration {
                     std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
                 let container_name = std::env::var("AZURE_STORAGE_CONTAINER_NAME")
                     .unwrap_or(String::from("delta-rs"));
-                format!(
-                    "{0}.dfs.fabric.microsoft.com/{1}",
-                    account_name, container_name
-                )
+                format!("{account_name}.dfs.fabric.microsoft.com/{container_name}")
             }
             Self::OnelakeAbfs => {
                 let account_name =
                     std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
                 let container_name = std::env::var("AZURE_STORAGE_CONTAINER_NAME")
                     .unwrap_or(String::from("delta-rs"));
-                format!(
-                    "{0}@{1}.dfs.fabric.microsoft.com",
-                    container_name, account_name
-                )
+                format!("{container_name}@{account_name}.dfs.fabric.microsoft.com")
             }
         }
     }

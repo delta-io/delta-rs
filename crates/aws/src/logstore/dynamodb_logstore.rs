@@ -277,7 +277,7 @@ impl LogStore for S3DynamoDbLogStore {
                 LockClientError::VersionAlreadyCompleted { version, .. } => {
                     error!("Trying to abort a completed commit");
                     TransactionError::LogStoreError {
-                        msg: format!("trying to abort a completed log entry: {}", version),
+                        msg: format!("trying to abort a completed log entry: {version}"),
                         source: Box::new(err),
                     }
                 }
