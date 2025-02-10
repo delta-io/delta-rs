@@ -5,6 +5,7 @@ mod merge;
 mod query;
 mod schema;
 mod utils;
+mod write;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -49,6 +50,7 @@ use deltalake::operations::transaction::{
 };
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::operations::write::{SchemaMode, WriteBuilder};
 use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
@@ -71,6 +73,7 @@ use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
+use crate::write::ArrowStreamBatchGenerator;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
 use deltalake::protocol::DeltaOperation::UpdateFieldMetadata;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -2099,7 +2102,6 @@ fn write_to_deltalake(
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
-        let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
@@ -2112,10 +2114,37 @@ fn write_to_deltalake(
             .map_err(PythonError::from)?
         };
 
-        let mut builder = table.write(batches).with_save_mode(save_mode);
-        if let Some(schema_mode) = schema_mode {
-            builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
+        let dont_be_so_lazy = match table.0.state.as_ref() {
+            Some(state) => state.table_config().enable_change_data_feed(),
+            // You don't have state somehow, so I guess it's okay to be lazy.
+            _ => false,
+        };
+
+        let mut builder =
+            WriteBuilder::new(table.0.log_store(), table.0.state).with_save_mode(save_mode);
+
+        if let Some(ref schema_mode) = schema_mode {
+            let schema_mode = schema_mode.parse().map_err(PythonError::from)?;
+            builder = builder.with_schema_mode(schema_mode);
         }
+
+        if (schema_mode == Some("merge".into())) || dont_be_so_lazy {
+            debug!(
+                "write_to_deltalake() is not able to lazily perform a write, collecting batches"
+            );
+            builder = builder.with_input_batches(data.0.map(|batch| batch.unwrap()));
+        } else {
+            use deltalake::datafusion::datasource::provider_as_source;
+            use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
+            let table_provider = crate::write::to_lazy_table(data.0).map_err(PythonError::from)?;
+
+            let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
+                .map_err(PythonError::from)?
+                .build()
+                .map_err(PythonError::from)?;
+            builder = builder.with_input_execution_plan(Arc::new(plan));
+        }
+
         if let Some(partition_columns) = partition_by {
             builder = builder.with_partition_columns(partition_columns);
         }
