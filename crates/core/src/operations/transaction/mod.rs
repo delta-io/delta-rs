@@ -405,6 +405,7 @@ pub struct CommitBuilder {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    disable_conflict_checker: bool,
 }
 
 impl Default for CommitBuilder {
@@ -417,6 +418,7 @@ impl Default for CommitBuilder {
             post_commit_hook: None,
             post_commit_hook_handler: None,
             operation_id: Uuid::new_v4(),
+            disable_conflict_checker: false,
         }
     }
 }
@@ -452,6 +454,11 @@ impl<'a> CommitBuilder {
         self
     }
 
+    pub fn with_disable_conflict_checker(mut self) -> Self {
+        self.disable_conflict_checker = true;
+        self
+    }
+
     /// Set a custom execute handler, for pre and post execution
     pub fn with_post_commit_hook_handler(
         mut self,
@@ -482,6 +489,7 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            disable_conflict_checker: self.disable_conflict_checker,
         }
     }
 }
@@ -495,6 +503,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    disable_conflict_checker: bool,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -552,6 +561,7 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                disable_conflict_checker: this.disable_conflict_checker,
             })
         })
     }
@@ -564,6 +574,7 @@ pub struct PreparedCommit<'a> {
     data: CommitData,
     table_data: Option<&'a dyn TableReference>,
     max_retries: usize,
+    disable_conflict_checker: bool,
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
@@ -611,7 +622,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     .get_latest_version(read_snapshot.version())
                     .await?;
 
-                if latest_version > read_snapshot.version() {
+                if latest_version > read_snapshot.version() && !this.disable_conflict_checker {
                     warn!("Attempting to write a transaction {} but the underlying table has been updated to {latest_version}\n{:?}", read_snapshot.version() + 1, this.log_store);
                     let mut steps = latest_version - read_snapshot.version();
 
