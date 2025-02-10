@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTable {
     let table_schema = get_delta_schema();
-    let ops = DeltaOps::try_from_uri(table_uri).await.unwrap();
+    let ops = DeltaOps::try_from_uri(table_uri, None).await.unwrap();
     let table = ops
         .create()
         .with_columns(table_schema.fields().cloned())
