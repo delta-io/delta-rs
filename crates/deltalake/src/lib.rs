@@ -7,6 +7,8 @@ pub use deltalake_core::*;
 pub use deltalake_aws as aws;
 #[cfg(feature = "azure")]
 pub use deltalake_azure as azure;
+#[cfg(feature = "unity-experimental")]
+pub use deltalake_catalog_unity as unity_catalog;
 #[cfg(feature = "gcs")]
 pub use deltalake_gcp as gcp;
 #[cfg(feature = "hdfs")]
