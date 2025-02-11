@@ -361,8 +361,9 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
             Ok(UriType::LocalPath(PathBuf::from(table_uri)))
         } else {
             Err(DeltaTableError::InvalidTableLocation(format!(
-                "Unknown scheme: {}",
-                scheme
+                "Unknown scheme: {}. Known schemes: {}",
+                scheme,
+                known_schemes.join(",")
             )))
         }
     } else {
