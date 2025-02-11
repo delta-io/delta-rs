@@ -56,10 +56,14 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 
 ## Table of contents
 
+- [Table of contents](#table-of-contents)
 - [Quick Start](#quick-start)
 - [Get Involved](#get-involved)
 - [Integrations](#integrations)
 - [Features](#features)
+  - [Cloud Integrations](#cloud-integrations)
+  - [Supported Operations](#supported-operations)
+  - [Protocol Support Level](#protocol-support-level)
 
 ## Quick Start
 
@@ -172,8 +176,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | -------------- | --------------------------------------------- | :-------------------------------: |
 | Version 2      | Append Only Tables                            |              ![done]              |
 | Version 2      | Column Invariants                             |              ![done]              |
-| Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   |       [![open]][writer-rs]        |
-| Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |       [![open]][writer-rs]        |
+| Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   |              ![done]              |
+| Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |              ![done]              |
 | Version 3      | CHECK constraints                             | [![done]][check-constraints]      |
 | Version 4      | Change Data Feed                              |              ![done]              |
 | Version 4      | Generated Columns                             |                                   |

@@ -182,6 +182,8 @@ pub(crate) fn delta_log_schema_for_table(
     table_schema: ArrowSchema,
     partition_columns: &[String],
     use_extended_remove_schema: bool,
+    write_stats_as_json: bool,
+    write_stats_as_struct: bool,
 ) -> ArrowSchemaRef {
     static SCHEMA_FIELDS: LazyLock<Vec<ArrowField>> = LazyLock::new(|| {
         arrow_defs![
@@ -213,7 +215,6 @@ pub(crate) fn delta_log_schema_for_table(
             size:Int64,
             modificationTime:Int64,
             dataChange:Boolean,
-            stats:Utf8,
             partitionValues,
             tags,
             deletionVector[
@@ -243,51 +244,57 @@ pub(crate) fn delta_log_schema_for_table(
             .iter()
             .map(|field| field.to_owned())
             .partition(|field| partition_columns.contains(field.name()));
+    let mut add_fields = ADD_FIELDS.clone();
 
-    let mut stats_parsed_fields: Vec<ArrowField> =
-        vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];
-    if !non_partition_fields.is_empty() {
-        let mut max_min_vec = Vec::new();
-        non_partition_fields
-            .iter()
-            .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
+    if write_stats_as_json {
+        add_fields.push(ArrowField::new("stats", ArrowDataType::Utf8, true))
+    }
 
-        if !max_min_vec.is_empty() {
-            stats_parsed_fields.extend(["minValues", "maxValues"].into_iter().map(|name| {
-                ArrowField::new(
-                    name,
-                    ArrowDataType::Struct(max_min_vec.clone().into()),
-                    true,
-                )
-            }));
+    if write_stats_as_struct {
+        let mut stats_parsed_fields: Vec<ArrowField> =
+            vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];
+        if !non_partition_fields.is_empty() {
+            let mut max_min_vec = Vec::new();
+            non_partition_fields
+                .iter()
+                .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
+
+            if !max_min_vec.is_empty() {
+                stats_parsed_fields.extend(["minValues", "maxValues"].into_iter().map(|name| {
+                    ArrowField::new(
+                        name,
+                        ArrowDataType::Struct(max_min_vec.clone().into()),
+                        true,
+                    )
+                }));
+            }
+
+            let mut null_count_vec = Vec::new();
+            non_partition_fields
+                .iter()
+                .for_each(|f| null_count_schema_for_fields(&mut null_count_vec, f));
+            let null_count_struct = ArrowField::new(
+                "nullCount",
+                ArrowDataType::Struct(null_count_vec.into()),
+                true,
+            );
+
+            stats_parsed_fields.push(null_count_struct);
         }
 
-        let mut null_count_vec = Vec::new();
-        non_partition_fields
-            .iter()
-            .for_each(|f| null_count_schema_for_fields(&mut null_count_vec, f));
-        let null_count_struct = ArrowField::new(
-            "nullCount",
-            ArrowDataType::Struct(null_count_vec.into()),
-            true,
-        );
-
-        stats_parsed_fields.push(null_count_struct);
-    }
-    let mut add_fields = ADD_FIELDS.clone();
-    add_fields.push(ArrowField::new(
-        "stats_parsed",
-        ArrowDataType::Struct(stats_parsed_fields.into()),
-        true,
-    ));
-    if !partition_fields.is_empty() {
         add_fields.push(ArrowField::new(
-            "partitionValues_parsed",
-            ArrowDataType::Struct(partition_fields.into()),
+            "stats_parsed",
+            ArrowDataType::Struct(stats_parsed_fields.into()),
             true,
         ));
+        if !partition_fields.is_empty() {
+            add_fields.push(ArrowField::new(
+                "partitionValues_parsed",
+                ArrowDataType::Struct(partition_fields.into()),
+                true,
+            ));
+        }
     }
-
     // create remove fields with or without extendedFileMetadata
     let mut remove_fields = REMOVE_FIELDS.clone();
     if use_extended_remove_schema {
@@ -381,8 +388,13 @@ mod tests {
             ArrowField::new("col1", ArrowDataType::Int32, true),
         ]);
         let partition_columns = vec!["pcol".to_string()];
-        let log_schema =
-            delta_log_schema_for_table(table_schema.clone(), partition_columns.as_slice(), false);
+        let log_schema = delta_log_schema_for_table(
+            table_schema.clone(),
+            partition_columns.as_slice(),
+            false,
+            true,
+            true,
+        );
 
         // verify top-level schema contains all expected fields and they are named correctly.
         let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
@@ -411,7 +423,264 @@ mod tests {
                 "size",
                 "modificationTime",
                 "dataChange",
+                "partitionValues",
+                "tags",
+                "deletionVector",
                 "stats",
+                "stats_parsed",
+                "partitionValues_parsed"
+            ],
+            field_names
+        );
+        let add_field_map: HashMap<_, _> = add_fields
+            .iter()
+            .map(|f| (f.name().to_owned(), f.clone()))
+            .collect();
+        let partition_values_parsed = add_field_map.get("partitionValues_parsed").unwrap();
+        if let ArrowDataType::Struct(fields) = partition_values_parsed.data_type() {
+            assert_eq!(1, fields.len());
+            let field = fields.first().unwrap().to_owned();
+            assert_eq!(
+                Arc::new(ArrowField::new("pcol", ArrowDataType::Int32, true)),
+                field
+            );
+        } else {
+            unreachable!();
+        }
+        let stats_parsed = add_field_map.get("stats_parsed").unwrap();
+        if let ArrowDataType::Struct(fields) = stats_parsed.data_type() {
+            assert_eq!(4, fields.len());
+
+            let field_map: HashMap<_, _> = fields
+                .iter()
+                .map(|f| (f.name().to_owned(), f.clone()))
+                .collect();
+
+            for (k, v) in field_map.iter() {
+                match k.as_ref() {
+                    "minValues" | "maxValues" | "nullCount" => match v.data_type() {
+                        ArrowDataType::Struct(fields) => {
+                            assert_eq!(1, fields.len());
+                            let field = fields.first().unwrap().to_owned();
+                            let data_type = if k == "nullCount" {
+                                ArrowDataType::Int64
+                            } else {
+                                ArrowDataType::Int32
+                            };
+                            assert_eq!(Arc::new(ArrowField::new("col1", data_type, true)), field);
+                        }
+                        _ => unreachable!(),
+                    },
+                    "numRecords" => {}
+                    _ => panic!(),
+                }
+            }
+        } else {
+            unreachable!();
+        }
+
+        // verify extended remove schema fields **ARE NOT** included when `use_extended_remove_schema` is false.
+        let num_remove_fields = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "remove")
+            .flat_map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().cloned()
+                } else {
+                    unreachable!();
+                }
+            })
+            .count();
+        assert_eq!(4, num_remove_fields);
+
+        // verify extended remove schema fields **ARE** included when `use_extended_remove_schema` is true.
+        let log_schema = delta_log_schema_for_table(
+            table_schema,
+            partition_columns.as_slice(),
+            true,
+            true,
+            false,
+        );
+        let remove_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "remove")
+            .flat_map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().cloned()
+                } else {
+                    unreachable!();
+                }
+            })
+            .collect();
+        assert_eq!(7, remove_fields.len());
+        let expected_fields = [
+            "path",
+            "deletionTimestamp",
+            "dataChange",
+            "extendedFileMetadata",
+            "partitionValues",
+            "size",
+            "tags",
+        ];
+        for f in remove_fields.iter() {
+            assert!(expected_fields.contains(&f.name().as_str()));
+        }
+    }
+
+    #[test]
+    fn delta_log_schema_for_table_test_stats_struct_disabled() {
+        // NOTE: We should future proof the checkpoint schema in case action schema changes.
+        // See https://github.com/delta-io/delta-rs/issues/287
+
+        let table_schema = ArrowSchema::new(vec![
+            ArrowField::new("pcol", ArrowDataType::Int32, true),
+            ArrowField::new("col1", ArrowDataType::Int32, true),
+        ]);
+        let partition_columns = vec!["pcol".to_string()];
+        let log_schema = delta_log_schema_for_table(
+            table_schema.clone(),
+            partition_columns.as_slice(),
+            false,
+            true,
+            false,
+        );
+
+        // verify top-level schema contains all expected fields and they are named correctly.
+        let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
+        for f in log_schema.fields().iter() {
+            assert!(expected_fields.contains(&f.name().as_str()));
+        }
+        assert_eq!(5, log_schema.fields().len());
+
+        // verify add fields match as expected. a lot of transformation goes into these.
+        let add_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "add")
+            .flat_map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().cloned()
+                } else {
+                    unreachable!();
+                }
+            })
+            .collect();
+        let field_names: Vec<&String> = add_fields.iter().map(|v| v.name()).collect();
+        assert_eq!(
+            vec![
+                "path",
+                "size",
+                "modificationTime",
+                "dataChange",
+                "partitionValues",
+                "tags",
+                "deletionVector",
+                "stats",
+            ],
+            field_names
+        );
+    }
+
+    #[test]
+    fn delta_log_schema_for_table_test_stats_json_and_struct_disabled() {
+        // NOTE: We should future proof the checkpoint schema in case action schema changes.
+        // See https://github.com/delta-io/delta-rs/issues/287
+
+        let table_schema = ArrowSchema::new(vec![
+            ArrowField::new("pcol", ArrowDataType::Int32, true),
+            ArrowField::new("col1", ArrowDataType::Int32, true),
+        ]);
+        let partition_columns = vec!["pcol".to_string()];
+        let log_schema = delta_log_schema_for_table(
+            table_schema.clone(),
+            partition_columns.as_slice(),
+            false,
+            false,
+            false,
+        );
+
+        // verify top-level schema contains all expected fields and they are named correctly.
+        let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
+        for f in log_schema.fields().iter() {
+            assert!(expected_fields.contains(&f.name().as_str()));
+        }
+        assert_eq!(5, log_schema.fields().len());
+
+        // verify add fields match as expected. a lot of transformation goes into these.
+        let add_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "add")
+            .flat_map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().cloned()
+                } else {
+                    unreachable!();
+                }
+            })
+            .collect();
+        let field_names: Vec<&String> = add_fields.iter().map(|v| v.name()).collect();
+        assert_eq!(
+            vec![
+                "path",
+                "size",
+                "modificationTime",
+                "dataChange",
+                "partitionValues",
+                "tags",
+                "deletionVector",
+            ],
+            field_names
+        );
+    }
+
+    #[test]
+    fn delta_log_schema_for_table_test_struct_stats_only() {
+        // NOTE: We should future proof the checkpoint schema in case action schema changes.
+        // See https://github.com/delta-io/delta-rs/issues/287
+
+        let table_schema = ArrowSchema::new(vec![
+            ArrowField::new("pcol", ArrowDataType::Int32, true),
+            ArrowField::new("col1", ArrowDataType::Int32, true),
+        ]);
+        let partition_columns = vec!["pcol".to_string()];
+        let log_schema = delta_log_schema_for_table(
+            table_schema.clone(),
+            partition_columns.as_slice(),
+            false,
+            false,
+            true,
+        );
+
+        // verify top-level schema contains all expected fields and they are named correctly.
+        let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
+        for f in log_schema.fields().iter() {
+            assert!(expected_fields.contains(&f.name().as_str()));
+        }
+        assert_eq!(5, log_schema.fields().len());
+
+        // verify add fields match as expected. a lot of transformation goes into these.
+        let add_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "add")
+            .flat_map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().cloned()
+                } else {
+                    unreachable!();
+                }
+            })
+            .collect();
+        let field_names: Vec<&String> = add_fields.iter().map(|v| v.name()).collect();
+        assert_eq!(
+            vec![
+                "path",
+                "size",
+                "modificationTime",
+                "dataChange",
                 "partitionValues",
                 "tags",
                 "deletionVector",
@@ -483,8 +752,13 @@ mod tests {
         assert_eq!(4, num_remove_fields);
 
         // verify extended remove schema fields **ARE** included when `use_extended_remove_schema` is true.
-        let log_schema =
-            delta_log_schema_for_table(table_schema, partition_columns.as_slice(), true);
+        let log_schema = delta_log_schema_for_table(
+            table_schema,
+            partition_columns.as_slice(),
+            true,
+            true,
+            false,
+        );
         let remove_fields: Vec<_> = log_schema
             .fields()
             .iter()
