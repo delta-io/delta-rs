@@ -2442,6 +2442,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake::hdfs::register_handlers(None);
     deltalake_mount::register_handlers(None);
     deltalake::lakefs::register_handlers(None);
+    deltalake::unity_catalog::register_handlers(None);
 
     let py = m.py();
     m.add("DeltaError", py.get_type_bound::<DeltaError>())?;
