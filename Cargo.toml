@@ -26,7 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "=0.6.1", features = ["default-engine"] }
+delta_kernel = { version = "=0.6.1", features = ["default-engine-rustls"] }
 #delta_kernel = { path = "../delta-kernel-rs/kernel", features = ["sync-engine"]  }
 
 # arrow
@@ -45,21 +45,21 @@ object_store = { version = "0.11.2" , features = ["cloud"]}
 parquet = { version = "54" }
 
 # datafusion
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45" }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-ffi = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-functions = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-functions-aggregate = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-physical-expr = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-physical-plan = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-proto = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
-datafusion-sql = { git = "https://github.com/apache/arrow-datafusion.git", branch = "branch-45"  }
+datafusion = "45"
+datafusion-expr = "45"
+datafusion-common = "45"
+datafusion-ffi = "45"
+datafusion-functions = "45"
+datafusion-functions-aggregate = "45"
+datafusion-physical-expr = "45"
+datafusion-physical-plan = "45"
+datafusion-proto = "45"
+datafusion-sql = "45"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "0"}
+strum = { version = "0.26"}
 
 
 # "stdlib"
