@@ -1,6 +1,5 @@
 from datetime import datetime
 
-import pandas as pd
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
@@ -11,6 +10,7 @@ from deltalake import DeltaTable, write_deltalake
 def test_stats_usage_3201(tmp_path):
     # https://github.com/delta-io/delta-rs/issues/3201
     # https://github.com/delta-io/delta-rs/issues/3173
+    import pandas as pd
     import polars as pl
     from polars.testing import assert_frame_equal
 
