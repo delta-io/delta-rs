@@ -84,7 +84,7 @@ jobs:
           uv pip uninstall pandas
           uv run --no-sync pytest -m "not pandas and not integration and not benchmark"
           uv pip install pandas
-  
+
   test-lakefs:
     name: Python Build (Python 3.10 LakeFS Integration tests)
     runs-on: ubuntu-latest
@@ -109,6 +109,64 @@ jobs:
 
       - name: Run tests
         run: uv run --no-sync pytest -m '(lakefs and integration)' --doctest-modules
+
+  test-unitycatalog-databricks:
+    name: Python Build (Python 3.10 Unity Catalog Integration tests)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Run Mockoon CLI
+        uses: mockoon/cli-action@v2
+        with:
+          version: "latest"
+          data-file: "./mockoon_data_files/unitycatalog_databricks.json"
+          port: 8080
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Download Data Acceptance Tests (DAT) files
+        run: make setup-dat
+
+      - name: Run tests
+        run: uv run --no-sync pytest -m '(unitycatalog_databricks and integration)' --doctest-modules
+
+  test-unitycatalog-oss:
+    name: Python Build (Python 3.10 Unity Catalog Integration tests)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Run Mockoon CLI
+        uses: mockoon/cli-action@v2
+        with:
+          version: "latest"
+          data-file: "./mockoon_data_files/unitycatalog_oss.json"
+          port: 8080
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Download Data Acceptance Tests (DAT) files
+        run: make setup-dat
+
+      - name: Run tests
+        run: uv run --no-sync pytest -m '(unitycatalog_oss and integration)' --doctest-modules
 
   test-pyspark:
     name: PySpark Integration Tests

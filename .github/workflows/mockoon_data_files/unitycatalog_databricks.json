@@ -1,0 +1,112 @@
+{
+  "uuid": "0696d6d5-62b6-4a0f-8524-917b0c3848d4",
+  "lastMigration": 33,
+  "name": "Unity Catalog (Databricks) Test API",
+  "endpointPrefix": "",
+  "latency": 0,
+  "port": 8080,
+  "hostname": "",
+  "folders": [],
+  "routes": [
+    {
+      "uuid": "16d88cdc-abcf-4b0d-a4d6-18a3205a9a6c",
+      "type": "http",
+      "documentation": "Temporary Table Credentials API",
+      "method": "post",
+      "endpoint": "api/2.1/unity-catalog/temporary-table-credentials",
+      "responses": [
+        {
+          "uuid": "50bba5c1-1e2c-4d5b-a611-ab478320f2b0",
+          "body": "{\n  \"aws_temp_credentials\": {\n    \"access_key_id\": \"string\",\n    \"secret_access_key\": \"string\",\n    \"session_token\": \"string\",\n    \"access_point\": \"string\"\n  },\n  \"azure_user_delegation_sas\": {\n    \"sas_token\": \"string\"\n  },\n  \"r2_temp_credentials\": {\n    \"access_key_id\": \"string\",\n    \"secret_access_key\": \"string\",\n    \"session_token\": \"string\"\n  },\n  \"expiration_time\": 0,\n  \"url\": \"string\"\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Default response",
+          "headers": [],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "66f51ad5-2ba3-4cb0-b633-c362a9f75836",
+      "type": "http",
+      "documentation": "Get Table Details API",
+      "method": "get",
+      "endpoint": "api/2.1/unity-catalog/tables/unity.default.testtable",
+      "responses": [
+        {
+          "uuid": "da280b2c-07b6-45ee-8da7-92c50e4e540e",
+          "body": "{\n  \"name\": \"string\",\n  \"catalog_name\": \"string\",\n  \"schema_name\": \"string\",\n  \"table_type\": \"MANAGED\",\n  \"data_source_format\": \"DELTA\",\n  \"columns\": [\n    {\n      \"name\": \"string\",\n      \"type_text\": \"string\",\n      \"type_name\": \"BOOLEAN\",\n      \"position\": 0,\n      \"type_precision\": 0,\n      \"type_scale\": 0,\n      \"type_interval_type\": \"string\",\n      \"type_json\": \"string\",\n      \"comment\": \"string\",\n      \"nullable\": true,\n      \"partition_index\": 0,\n      \"mask\": {\n        \"function_name\": \"string\",\n        \"using_column_names\": [\n          \"string\"\n        ]\n      }\n    }\n  ],\n  \"storage_location\": \"../crates/test/tests/data/delta-0.8.0-partitioned\",\n  \"view_definition\": \"string\",\n  \"view_dependencies\": {\n    \"dependencies\": [\n      {\n        \"table\": {\n          \"table_full_name\": \"string\"\n        },\n        \"function\": {\n          \"function_full_name\": \"string\"\n        }\n      }\n    ]\n  },\n  \"sql_path\": \"string\",\n  \"owner\": \"string\",\n  \"comment\": \"string\",\n  \"properties\": {\n    \"property1\": \"string\",\n    \"property2\": \"string\"\n  },\n  \"storage_credential_name\": \"string\",\n  \"table_constraints\": [\n    {\n      \"primary_key_constraint\": {\n        \"name\": \"string\",\n        \"child_columns\": [\n          \"string\"\n        ]\n      },\n      \"foreign_key_constraint\": {\n        \"name\": \"string\",\n        \"child_columns\": [\n          \"string\"\n        ],\n        \"parent_table\": \"string\",\n        \"parent_columns\": [\n          \"string\"\n        ]\n      },\n      \"named_table_constraint\": {\n        \"name\": \"string\"\n      }\n    }\n  ],\n  \"row_filter\": {\n    \"function_name\": \"string\",\n    \"input_column_names\": [\n      \"string\"\n    ]\n  },\n  \"enable_predictive_optimization\": \"DISABLE\",\n  \"metastore_id\": \"string\",\n  \"full_name\": \"string\",\n  \"data_access_configuration_id\": \"string\",\n  \"created_at\": 0,\n  \"created_by\": \"string\",\n  \"updated_at\": 0,\n  \"updated_by\": \"string\",\n  \"deleted_at\": 0,\n  \"table_id\": \"string\",\n  \"delta_runtime_properties_kvpairs\": {\n    \"delta_runtime_properties\": {\n      \"property1\": \"string\",\n      \"property2\": \"string\"\n    }\n  },\n  \"effective_predictive_optimization_flag\": {\n    \"value\": \"DISABLE\",\n    \"inherited_from_type\": \"CATALOG\",\n    \"inherited_from_name\": \"string\"\n  },\n  \"access_point\": \"string\",\n  \"pipeline_id\": \"string\",\n  \"browse_only\": true\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Default response",
+          "headers": [],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    }
+  ],
+  "rootChildren": [
+    {
+      "type": "route",
+      "uuid": "16d88cdc-abcf-4b0d-a4d6-18a3205a9a6c"
+    },
+    {
+      "type": "route",
+      "uuid": "66f51ad5-2ba3-4cb0-b633-c362a9f75836"
+    }
+  ],
+  "proxyMode": false,
+  "proxyHost": "",
+  "proxyRemovePrefix": false,
+  "tlsOptions": {
+    "enabled": false,
+    "type": "CERT",
+    "pfxPath": "",
+    "certPath": "",
+    "keyPath": "",
+    "caPath": "",
+    "passphrase": ""
+  },
+  "cors": true,
+  "headers": [],
+  "proxyReqHeaders": [
+    {
+      "key": "",
+      "value": ""
+    }
+  ],
+  "proxyResHeaders": [
+    {
+      "key": "",
+      "value": ""
+    }
+  ],
+  "data": [],
+  "callbacks": []
+}
