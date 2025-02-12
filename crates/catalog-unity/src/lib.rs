@@ -473,7 +473,7 @@ impl UnityCatalogBuilder {
             .await
         {
             Ok(s) => s,
-            Err(_e) => panic!("Unable to find the table's storage location."),
+            Err(err) => panic!("Unable to find the table's storage location. {}", err),
         };
         let temp_creds_res = unity_catalog
             .get_temp_table_credentials(catalog_id, database_name, table_name)
