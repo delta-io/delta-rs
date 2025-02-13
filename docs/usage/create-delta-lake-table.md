@@ -27,7 +27,7 @@ You can easily write a DataFrame to a Delta table.
 === "Rust"
 
     ```rust
-    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await?;
+    let delta_ops = DeltaOps::try_from_uri("tmp/some-table", IORuntime::default()).await?;
     let mut table = delta_ops
         .create()
         .with_table_name("some-table")

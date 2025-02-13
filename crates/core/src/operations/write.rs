@@ -20,7 +20,7 @@
 //! let schema = Arc::new(arrow::datatypes::Schema::new(vec![id_field]));
 //! let ids = arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5]);
 //! let batch = RecordBatch::try_new(schema, vec![Arc::new(ids)])?;
-//! let ops = DeltaOps::try_from_uri("../path/to/empty/dir").await?;
+//! let ops = DeltaOps::try_from_uri("../path/to/empty/dir", Some(IORuntime::default())).await?;
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
@@ -1904,7 +1904,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
             .unwrap();
 
-        let ops = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+        let ops = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap(), None)
             .await
             .unwrap();
 
