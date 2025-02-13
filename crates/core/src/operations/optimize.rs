@@ -331,6 +331,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
+                this.preserve_insertion_order,
             )?;
             let metrics = plan
                 .execute(
@@ -877,12 +878,15 @@ pub fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
+    preserve_insertion_order: bool,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
     let partitions_keys = &snapshot.metadata().partition_columns;
 
     let (operations, metrics) = match optimize_type {
-        OptimizeType::Compact => build_compaction_plan(snapshot, filters, target_size)?,
+        OptimizeType::Compact => {
+            build_compaction_plan(snapshot, filters, target_size, preserve_insertion_order)?
+        }
         OptimizeType::ZOrder(zorder_columns) => {
             build_zorder_plan(zorder_columns, snapshot, partitions_keys, filters)?
         }
@@ -958,6 +962,7 @@ fn build_compaction_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter],
     target_size: i64,
+    perserve_insertion_order: bool,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
@@ -985,8 +990,13 @@ fn build_compaction_plan(
     }
 
     for (_, file) in partition_files.values_mut() {
-        // Sort files by size: largest to smallest
-        file.sort_by(|a, b| b.size.cmp(&a.size));
+        if perserve_insertion_order {
+            // sort files by modification date
+            file.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+        } else {
+            // Sort files by size: largest to smallest
+            file.sort_by(|a, b| b.size.cmp(&a.size));
+        }
     }
 
     let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
