@@ -127,7 +127,7 @@ jobs:
         uses: mockoon/cli-action@v2
         with:
           version: "latest"
-          data-file: "./mockoon_data_files/unitycatalog_databricks.json"
+          data-file: ".github/mockoon_data_files/unitycatalog_databricks.json"
           port: 8080
 
       - name: Build and install deltalake
@@ -156,7 +156,7 @@ jobs:
         uses: mockoon/cli-action@v2
         with:
           version: "latest"
-          data-file: "./mockoon_data_files/unitycatalog_oss.json"
+          data-file: ".github/mockoon_data_files/unitycatalog_oss.json"
           port: 8080
 
       - name: Build and install deltalake
