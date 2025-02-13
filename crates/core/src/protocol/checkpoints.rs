@@ -13,6 +13,7 @@ use itertools::Itertools;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
+use parquet::basic::Encoding;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use regex::Regex;
@@ -354,17 +355,23 @@ fn parquet_bytes_from_state(
     );
 
     debug!("Writing to checkpoint parquet buffer...");
+
+    let writer_properties = if state.table_config().use_checkpoint_rle() {
+        WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build()
+    } else {
+        WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .build()
+    };
+
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(
-        &mut bytes,
-        arrow_schema.clone(),
-        Some(
-            WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build(),
-        ),
-    )?;
+    let mut writer =
+        ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), Some(writer_properties))?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
