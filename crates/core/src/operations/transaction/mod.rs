@@ -604,7 +604,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             // unwrap() is safe here due to the above check
             let read_snapshot = this.table_data.unwrap().eager_snapshot();
 
-            let mut attempt_number = 0;
+            let mut attempt_number = 1;
             let total_retries = this.max_retries + 1;
             while attempt_number <= total_retries {
                 let latest_version = this
