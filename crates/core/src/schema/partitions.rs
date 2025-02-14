@@ -178,13 +178,11 @@ impl Serialize for PartitionFilter {
             PartitionValue::LessThanOrEqual(value) => format!("{} <= '{}'", self.key, value),
             // used upper case for IN and NOT similar to SQL
             PartitionValue::In(values) => {
-                let quoted_values: Vec<String> =
-                    values.iter().map(|v| format!("'{}'", v)).collect();
+                let quoted_values: Vec<String> = values.iter().map(|v| format!("'{v}'")).collect();
                 format!("{} IN ({})", self.key, quoted_values.join(", "))
             }
             PartitionValue::NotIn(values) => {
-                let quoted_values: Vec<String> =
-                    values.iter().map(|v| format!("'{}'", v)).collect();
+                let quoted_values: Vec<String> = values.iter().map(|v| format!("'{v}'")).collect();
                 format!("{} NOT IN ({})", self.key, quoted_values.join(", "))
             }
         };
