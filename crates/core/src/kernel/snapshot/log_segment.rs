@@ -25,6 +25,9 @@ const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 
 static CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap());
+static UUID_CHECKPOINT_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d+\.checkpoint([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.(parquet|json)").unwrap()
+});
 static DELTA_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.json$").unwrap());
 static CRC_FILE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap());
@@ -50,7 +53,10 @@ pub(crate) trait PathExt {
     /// Returns true if the file is a checkpoint parquet file
     fn is_checkpoint_file(&self) -> bool {
         self.filename()
-            .map(|name| CHECKPOINT_FILE_PATTERN.captures(name).is_some())
+            .map(|name| {
+                CHECKPOINT_FILE_PATTERN.captures(name).is_some()
+                    || UUID_CHECKPOINT_FILE_PATTERN.captures(name).is_some()
+            })
             .unwrap_or(false)
     }
 
