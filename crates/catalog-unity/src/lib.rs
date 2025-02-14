@@ -23,7 +23,7 @@ use crate::models::{
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
-use deltalake_core::{DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, Path};
+use deltalake_core::{DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError, Path};
 
 use crate::client::retry::*;
 use deltalake_core::storage::{
@@ -70,6 +70,13 @@ pub enum UnityCatalogError {
         header_error: InvalidHeaderValue,
     },
 
+    /// Invalid Table URI
+    #[error("Invalid Unity Catalog Table URI: {table_uri}")]
+    InvalidTableURI {
+        /// Table URI
+        table_uri: String
+    },
+
     /// Unknown configuration key
     #[error("Missing configuration key: {0}")]
     MissingConfiguration(String),
@@ -77,6 +84,10 @@ pub enum UnityCatalogError {
     /// Unknown configuration key
     #[error("Failed to get a credential from UnityCatalog client configuration.")]
     MissingCredential,
+
+    /// Temporary Credentials Fetch Failure
+    #[error("Unable to get temporary credentials from Unity Catalog.")]
+    TemporaryCredentialsFetchFailure,
 
     #[error("Azure CLI error: {message}")]
     AzureCli {
@@ -90,6 +101,13 @@ pub enum UnityCatalogError {
     #[cfg(feature = "datafusion")]
     #[error("Datafusion error: {0}")]
     DatafusionError(#[from] datafusion_common::DataFusionError),
+
+    /// A generic error from a source
+    #[error("An error occurred in catalog: {source}")]
+    Generic {
+        /// Error message
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
@@ -101,10 +119,26 @@ impl From<ErrorResponse> for UnityCatalogError {
     }
 }
 
+impl From<DataCatalogError> for UnityCatalogError {
+    fn from(value: DataCatalogError) -> Self {
+        UnityCatalogError::Generic {
+            source: Box::new(value),
+        }
+    }
+}
+
 impl From<UnityCatalogError> for DataCatalogError {
     fn from(value: UnityCatalogError) -> Self {
         DataCatalogError::Generic {
             catalog: "Unity",
+            source: Box::new(value),
+        }
+    }
+}
+
+impl From<UnityCatalogError> for DeltaTableError {
+    fn from(value: UnityCatalogError) -> Self {
+        DeltaTableError::GenericError {
             source: Box::new(value),
         }
     }
@@ -457,24 +491,21 @@ impl UnityCatalogBuilder {
     ) -> Result<(String, HashMap<String, String>), UnityCatalogError> {
         let uri_parts: Vec<&str> = table_uri[5..].split('.').collect();
         if uri_parts.len() != 3 {
-            panic!("Invalid Unity Catalog URI: {}", table_uri);
+            return Err(UnityCatalogError::InvalidTableURI {
+                table_uri: table_uri.to_string()
+            });
         }
 
         let catalog_id = uri_parts[0];
         let database_name = uri_parts[1];
         let table_name = uri_parts[2];
 
-        let unity_catalog = match UnityCatalogBuilder::from_env().build() {
-            Ok(uc) => uc,
-            Err(_e) => panic!("Unable to build Unity Catalog."),
-        };
-        let storage_location = match unity_catalog
-            .get_table_storage_location(Some(catalog_id.to_string()), database_name, table_name)
-            .await
-        {
-            Ok(s) => s,
-            Err(err) => panic!("Unable to find the table's storage location. {}", err),
-        };
+        let unity_catalog = UnityCatalogBuilder::from_env().build()?;
+        let storage_location = unity_catalog.get_table_storage_location(
+            Some(catalog_id.to_string()),
+            database_name,
+            table_name
+        ).await?;
         let temp_creds_res = unity_catalog
             .get_temp_table_credentials(catalog_id, database_name, table_name)
             .await?;
@@ -483,7 +514,7 @@ impl UnityCatalogBuilder {
                 temp_creds.get_credentials().unwrap()
             }
             TableTempCredentialsResponse::Error(_error) => {
-                panic!("Unable to get temporary credentials from Unity Catalog.")
+                return Err(UnityCatalogError::TemporaryCredentialsFetchFailure)
             }
         };
         Ok((storage_location, credentials))
@@ -768,20 +799,13 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         use futures::executor::block_on;
 
-        let result = block_on(UnityCatalogBuilder::get_uc_location_and_token(
+        let (table_path, temp_creds) = block_on(
+            UnityCatalogBuilder::get_uc_location_and_token(
             table_uri.as_str(),
-        ));
-
-        let (table_path, temp_creds) = match result {
-            Ok(tup) => tup,
-            Err(_err) => panic!("Unable to get UC location and token."),
-        };
+        ))?;
 
         let mut storage_options = options.0.clone();
-
-        if !temp_creds.is_empty() {
-            storage_options.extend(temp_creds);
-        }
+        storage_options.extend(temp_creds);
 
         let mut builder =
             DeltaTableBuilder::from_uri(&table_path).with_io_runtime(IORuntime::default());
