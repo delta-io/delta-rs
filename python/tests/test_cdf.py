@@ -687,7 +687,10 @@ def test_read_cdf_version_out_of_range():
     with pytest.raises(DeltaError) as e:
         dt.load_cdf(4).read_all().to_pydict()
 
-    assert "invalid table version" in str(e).lower()
+    assert (
+        "invalid version. start version 4 is greater than end version 3"
+        in str(e).lower()
+    )
 
 
 def test_read_cdf_version_out_of_range_with_flag():
@@ -714,3 +717,34 @@ def test_read_timestamp_cdf_out_of_range_with_flag():
     b = dt.load_cdf(starting_timestamp=start, allow_out_of_range=True).read_all()
 
     assert len(b) == 0
+
+
+def test_read_cdf_last_version(tmp_path):
+    data = pa.Table.from_pydict({"foo": [1, 2, 3]})
+
+    expected = pa.Table.from_pydict(
+        {
+            "foo": [1, 2, 3],
+            "_change_type": ["insert", "insert", "insert"],
+            "_commit_version": [0, 0, 0],
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        data=data,
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+
+    data = (
+        DeltaTable(tmp_path)
+        .load_cdf(
+            starting_version=0,
+            ending_version=0,
+            allow_out_of_range=False,
+            columns=["foo", "_change_type", "_commit_version"],
+        )
+        .read_all()
+    )
+
+    assert expected == data
