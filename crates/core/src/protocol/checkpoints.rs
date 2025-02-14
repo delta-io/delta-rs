@@ -343,7 +343,13 @@ fn parquet_bytes_from_state(
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
     .chain(files.map(|f| {
-        checkpoint_add_from_state(&f, partition_col_data_types.as_slice(), &stats_conversions)
+        checkpoint_add_from_state(
+            &f,
+            partition_col_data_types.as_slice(),
+            &stats_conversions,
+            state.table_config().write_stats_as_json(),
+            state.table_config().write_stats_as_struct(),
+        )
     }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
@@ -351,6 +357,8 @@ fn parquet_bytes_from_state(
         (&schema).try_into()?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
+        state.table_config().write_stats_as_json(),
+        state.table_config().write_stats_as_struct(),
     );
 
     debug!("Writing to checkpoint parquet buffer...");
@@ -399,13 +407,16 @@ fn checkpoint_add_from_state(
     add: &AddAction,
     partition_col_data_types: &[(&String, &DataType)],
     stats_conversions: &[(SchemaPath, DataType)],
+    write_stats_as_json: bool,
+    write_stats_as_struct: bool,
 ) -> Result<Value, ProtocolError> {
     let mut v = serde_json::to_value(Action::Add(add.clone()))
         .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
     v["add"]["dataChange"] = Value::Bool(false);
 
-    if !add.partition_values.is_empty() {
+    // Only created partitionValues_parsed when delta.checkpoint.writeStatsAsStruct is enabled
+    if !add.partition_values.is_empty() && write_stats_as_struct {
         let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
 
         for (field_name, data_type) in partition_col_data_types.iter() {
@@ -421,25 +432,35 @@ fn checkpoint_add_from_state(
         v["add"]["partitionValues_parsed"] = partition_values_parsed;
     }
 
-    if let Ok(Some(stats)) = add.get_stats() {
-        let mut stats =
-            serde_json::to_value(stats).map_err(|err| ArrowError::JsonError(err.to_string()))?;
-        let min_values = stats.get_mut("minValues").and_then(|v| v.as_object_mut());
+    // Only created stats_parsed when delta.checkpoint.writeStatsAsStruct is enabled
+    if write_stats_as_struct {
+        if let Ok(Some(stats)) = add.get_stats() {
+            let mut stats = serde_json::to_value(stats)
+                .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+            let min_values = stats.get_mut("minValues").and_then(|v| v.as_object_mut());
 
-        if let Some(min_values) = min_values {
-            for (path, data_type) in stats_conversions {
-                apply_stats_conversion(min_values, path.as_slice(), data_type)
+            if let Some(min_values) = min_values {
+                for (path, data_type) in stats_conversions {
+                    apply_stats_conversion(min_values, path.as_slice(), data_type)
+                }
             }
-        }
 
-        let max_values = stats.get_mut("maxValues").and_then(|v| v.as_object_mut());
-        if let Some(max_values) = max_values {
-            for (path, data_type) in stats_conversions {
-                apply_stats_conversion(max_values, path.as_slice(), data_type)
+            let max_values = stats.get_mut("maxValues").and_then(|v| v.as_object_mut());
+            if let Some(max_values) = max_values {
+                for (path, data_type) in stats_conversions {
+                    apply_stats_conversion(max_values, path.as_slice(), data_type)
+                }
             }
-        }
 
-        v["add"]["stats_parsed"] = stats;
+            v["add"]["stats_parsed"] = stats;
+        }
+    }
+
+    // Don't write stats when delta.checkpoint.writeStatsAsJson is disabled
+    if !write_stats_as_json {
+        v.get_mut("add")
+            .and_then(|v| v.as_object_mut())
+            .and_then(|v| v.remove("stats"));
     }
     Ok(v)
 }
