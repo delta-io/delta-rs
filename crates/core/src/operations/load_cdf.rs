@@ -164,7 +164,7 @@ impl CdfLoadBuilder {
                 Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
             };
         }
-        if start >= latest_version {
+        if start > latest_version {
             return if self.allow_out_of_range {
                 Ok((change_files, add_files, remove_files))
             } else {
@@ -671,10 +671,10 @@ pub(crate) mod tests {
             .await;
 
         assert!(table.is_err());
-        assert!(matches!(
-            table.unwrap_err(),
-            DeltaTableError::InvalidVersion { .. }
-        ));
+        assert!(table
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid version. Start version 5 is greater than end version 4"));
 
         Ok(())
     }
