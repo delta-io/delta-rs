@@ -13,15 +13,13 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tempfile::TempDir;
 
 #[derive(Debug)]
 struct Context {
-    pub tmp_dir: TempDir,
     pub table: DeltaTable,
 }
 
-async fn setup_test() -> Result<Context, Box<dyn Error>> {
+async fn setup_test(table_uri: &str) -> Result<Context, Box<dyn Error>> {
     let columns = vec![
         StructField::new(
             "id".to_string(),
@@ -34,9 +32,6 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
             true,
         ),
     ];
-
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let table = DeltaOps::try_from_uri(table_uri)
         .await?
         .create()
@@ -65,7 +60,7 @@ async fn setup_test() -> Result<Context, Box<dyn Error>> {
         .await
         .unwrap();
 
-    Ok(Context { tmp_dir, table })
+    Ok(Context { table })
 }
 
 fn get_record_batch() -> RecordBatch {
@@ -95,13 +90,16 @@ fn get_record_batch() -> RecordBatch {
 
 #[tokio::test]
 async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
-    let context = setup_test().await?;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+
+    let context = setup_test(table_uri).await?;
     let table = context.table;
     let result = DeltaOps(table).restore().with_version_to_restore(1).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
     assert_eq!(result.0.snapshot()?.version(), 4);
-    let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+
     let mut table = DeltaOps::try_from_uri(table_uri).await?;
     table.0.load_version(1).await?;
     let curr_files = table.0.snapshot()?.file_paths_iter().collect_vec();
@@ -118,7 +116,9 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
-    let context = setup_test().await?;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let context = setup_test(table_uri).await?;
     let table = context.table;
     let version = 1;
 
@@ -142,7 +142,9 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
-    let context = setup_test().await?;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let context = setup_test(table_uri).await?;
     let table = context.table;
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
@@ -157,7 +159,6 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     assert!(result.is_err());
 
     // version too large
-    let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let ops = DeltaOps::try_from_uri(table_uri).await?;
     let result = ops.restore().with_version_to_restore(5).await;
     assert!(result.is_err());
@@ -166,10 +167,12 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
-    let context = setup_test().await?;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let context = setup_test(table_uri).await?;
 
     for file in context.table.snapshot()?.log_data() {
-        let p = context.tmp_dir.path().join(file.path().as_ref());
+        let p = tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
@@ -179,7 +182,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
         .all_tombstones(context.table.object_store().clone())
         .await?
     {
-        let p = context.tmp_dir.path().join(file.clone().path);
+        let p = tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }
 
@@ -193,10 +196,12 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
-    let context = setup_test().await?;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let context = setup_test(table_uri).await?;
 
     for file in context.table.snapshot()?.log_data() {
-        let p = context.tmp_dir.path().join(file.path().as_ref());
+        let p = tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
@@ -206,7 +211,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
         .all_tombstones(context.table.object_store().clone())
         .await?
     {
-        let p = context.tmp_dir.path().join(file.clone().path);
+        let p = tmp_dir.path().join(file.clone().path);
         fs::remove_file(p).unwrap();
     }
 
@@ -221,7 +226,9 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_restore_transaction_conflict() -> Result<(), Box<dyn Error>> {
-    let context = setup_test().await?;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let context = setup_test(table_uri).await?;
     let mut table = context.table;
     table.load_version(2).await?;
 

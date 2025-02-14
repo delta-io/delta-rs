@@ -467,7 +467,9 @@ pub async fn get_latest_version(
         // This implies no files were fetched during list_offset so either the starting_version is the latest
         // or starting_version is invalid, so we use current_version -1, and do one more try.
         if empty_stream {
-            let obj_meta = object_store.head(&commit_uri_from_version(max_version)).await;
+            let obj_meta = object_store
+                .head(&commit_uri_from_version(max_version))
+                .await;
             if obj_meta.is_err() {
                 return Box::pin(get_latest_version(log_store, -1)).await;
             }
@@ -479,7 +481,6 @@ pub async fn get_latest_version(
 
     Ok(version)
 }
-
 
 /// Default implementation for retrieving the earliest version
 pub async fn get_earliest_version(
