@@ -220,7 +220,9 @@ def test_merge_with_g_during_schema_evolution(
     expected_data = pa.Table.from_pydict(
         {"id": [1, 2], "gc": [5, 5]}, schema=pa.schema([id_col, gc])
     )
-    assert table_with_gc.to_pyarrow_table() == expected_data
+    assert (
+        table_with_gc.to_pyarrow_table().sort_by([("id", "ascending")]) == expected_data
+    )
 
 
 def test_raise_when_gc_passed_merge_statement_during_schema_evolution(

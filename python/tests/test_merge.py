@@ -1116,6 +1116,7 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
         predicate="s.datetime = t.datetime",
         source_alias="s",
         target_alias="t",
+        streamed_exec=False,  # only with streamed execution off can we use stats to create a pruning predicate
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     result = dt.to_pyarrow_table()
@@ -1441,6 +1442,7 @@ def test_merge_on_decimal_3033(tmp_path):
         predicate="target.timestamp = source.timestamp",
         source_alias="source",
         target_alias="target",
+        streamed_exec=False,
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     dt.merge(
@@ -1448,6 +1450,7 @@ def test_merge_on_decimal_3033(tmp_path):
         predicate="target.timestamp = source.timestamp AND target.altitude = source.altitude",
         source_alias="source",
         target_alias="target",
+        streamed_exec=False,  # only with streamed execution off can we use stats to create a pruning predicate
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     string_predicate = dt.history(1)[0]["operationParameters"]["predicate"]
