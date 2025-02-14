@@ -97,6 +97,8 @@ markers = [
     "pandas: marks tests that require pandas",
     "polars: marks tests that require polars",
     "lakefs: marks tests that require lakefs",
+    "unitycatalog_databricks: marks tests that require unitycatalog_databricks",
+    "unitycatalog_oss: marks tests that require unitycatalog_oss",
     "pyspark: marks tests that require pyspark",
 ]
 
