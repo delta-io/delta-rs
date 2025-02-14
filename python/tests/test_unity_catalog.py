@@ -1,9 +1,9 @@
 import os
 
-from deltalake._internal import DeltaError
 import pytest
 
 from deltalake import DeltaTable
+from deltalake._internal import DeltaError
 
 
 @pytest.mark.unitycatalog_databricks
