@@ -10,10 +10,12 @@ mod simple_checkpoint {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use pretty_assertions::assert_eq;
     use regex::Regex;
+    use serial_test::serial;
     use std::fs::{self, File};
     use std::path::{Path, PathBuf};
 
     #[tokio::test]
+    #[serial]
     async fn simple_checkpoint_test() {
         let table_location = "../test/tests/data/checkpoints";
         let table_path = PathBuf::from(table_location);
@@ -63,6 +65,7 @@ mod simple_checkpoint {
     }
 
     #[tokio::test]
+    #[serial]
     async fn checkpoint_run_length_encoding_test() {
         let table_location = "../test/tests/data/checkpoints";
         let table_path = PathBuf::from(table_location);
