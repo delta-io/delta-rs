@@ -431,13 +431,8 @@ pub async fn get_latest_version(
 ) -> DeltaResult<i64> {
     let version_start = match get_last_checkpoint(log_store).await {
         Ok(last_check_point) => last_check_point.version,
-        Err(ProtocolError::CheckpointNotFound) => {
-            // no checkpoint
-            -1
-        }
-        Err(e) => {
-            return Err(DeltaTableError::from(e));
-        }
+        Err(ProtocolError::CheckpointNotFound) => -1, // no checkpoint
+        Err(e) => return Err(DeltaTableError::from(e)),
     };
 
     debug!("latest checkpoint version: {version_start}");
@@ -451,6 +446,7 @@ pub async fn get_latest_version(
         let offset_path = commit_uri_from_version(max_version);
         let object_store = log_store.object_store(None);
         let mut files = object_store.list_with_offset(prefix, &offset_path);
+        let mut empty_stream = true;
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
@@ -461,17 +457,29 @@ pub async fn get_latest_version(
                 // self.version_timestamp
                 //     .insert(log_version, obj_meta.last_modified.timestamp());
             }
+            empty_stream = false;
         }
 
         if max_version < 0 {
             return Err(DeltaTableError::not_a_table(log_store.root_uri()));
         }
 
+        // This implies no files were fetched during list_offset so either the starting_version is the latest
+        // or starting_version is invalid, so we use current_version -1, and do one more try.
+        if empty_stream {
+            let obj_meta = object_store.head(&commit_uri_from_version(max_version)).await;
+            if obj_meta.is_err() {
+                return Box::pin(get_latest_version(log_store, -1)).await;
+            }
+        }
+
         Ok::<i64, DeltaTableError>(max_version)
     }
     .await?;
+
     Ok(version)
 }
+
 
 /// Default implementation for retrieving the earliest version
 pub async fn get_earliest_version(
