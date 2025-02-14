@@ -1,5 +1,6 @@
 import os
 
+from deltalake._internal import DeltaError
 import pytest
 
 from deltalake import DeltaTable
@@ -40,7 +41,7 @@ def test_uc_read_deltatable_failing():
     # @TODO: Currently, this will fail when used with Unity Catalog OSS
     # mock APIs. Need to add support for slightly different response payloads
     # of Unity Catalog OSS.
-    with pytest.raises(BaseException):
+    with pytest.raises(DeltaError):
         dt = DeltaTable("uc://unity.default.testtable")
         assert dt.is_deltatable(dt.table_uri), True
         expected = {
