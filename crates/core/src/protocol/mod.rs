@@ -243,7 +243,7 @@ impl Eq for Add {}
 
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
-    pub(crate) fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
             Ok(None) => self.get_json_stats(),

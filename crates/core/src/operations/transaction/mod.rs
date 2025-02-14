@@ -605,13 +605,21 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let read_snapshot = this.table_data.unwrap().eager_snapshot();
 
             let mut attempt_number = 1;
-            while attempt_number <= this.max_retries {
+            let total_retries = this.max_retries + 1;
+            while attempt_number <= total_retries {
                 let latest_version = this
                     .log_store
                     .get_latest_version(read_snapshot.version())
                     .await?;
 
                 if latest_version > read_snapshot.version() {
+                    // If max_retries are set to 0, do not try to use the conflict checker to resolve the conflict
+                    // and throw immediately
+                    if this.max_retries == 0 {
+                        return Err(
+                            TransactionError::MaxCommitAttempts(this.max_retries as i32).into()
+                        );
+                    }
                     warn!("Attempting to write a transaction {} but the underlying table has been updated to {latest_version}\n{:?}", read_snapshot.version() + 1, this.log_store);
                     let mut steps = latest_version - read_snapshot.version();
 

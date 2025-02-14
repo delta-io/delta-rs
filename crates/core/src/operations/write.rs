@@ -2363,6 +2363,8 @@ mod tests {
     /// SMall module to collect test cases which validate the [WriteBuilder]'s
     /// check_preconditions() function
     mod check_preconditions_test {
+        use crate::operations::transaction::TransactionError;
+
         use super::*;
 
         #[tokio::test]
@@ -2500,6 +2502,47 @@ mod tests {
             }
 
             Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_max_retries_zero_disables_conflict_checker() {
+            let table_schema = get_delta_schema();
+            let batch = get_record_batch(None, false);
+
+            let table = DeltaOps::new_in_memory()
+                .create()
+                .with_columns(table_schema.fields().cloned())
+                .await
+                .unwrap();
+            assert_eq!(table.version(), 0);
+            assert_eq!(table.history(None).await.unwrap().len(), 1);
+
+            let dt_for_conflicting_write = table.clone();
+
+            // write some data
+            let table = DeltaOps(table)
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::Append)
+                .with_commit_properties(CommitProperties::default().with_max_retries(0))
+                .await
+                .unwrap();
+            assert_eq!(table.version(), 1);
+            assert_eq!(table.get_files_count(), 1);
+
+            let dt_for_conflicting_write = DeltaOps(dt_for_conflicting_write)
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::Append)
+                .with_commit_properties(CommitProperties::default().with_max_retries(0))
+                .await;
+
+            assert!(dt_for_conflicting_write.is_err());
+            let err = dt_for_conflicting_write.err().unwrap();
+            assert!(matches!(
+                err,
+                DeltaTableError::Transaction {
+                    source: TransactionError::MaxCommitAttempts(0)
+                }
+            ));
         }
     }
 }
