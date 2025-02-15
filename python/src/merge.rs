@@ -15,12 +15,12 @@ use deltalake::{DeltaResult, DeltaTable};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use std::fmt::{self};
 use std::future::IntoFuture;
 use std::sync::{Arc, Mutex};
 
 use crate::error::PythonError;
 use crate::utils::rt;
+use crate::write::ArrowStreamBatchGenerator;
 use crate::{
     maybe_create_commit_properties, set_writer_properties, PyCommitProperties,
     PyPostCommitHookProperties, PyWriterProperties,
@@ -37,47 +37,6 @@ pub(crate) struct PyMergeBuilder {
     merge_schema: bool,
     arrow_schema: Arc<ArrowSchema>,
 }
-#[derive(Debug)]
-struct ArrowStreamBatchGenerator {
-    pub array_stream: Arc<Mutex<ArrowArrayStreamReader>>,
-}
-
-impl fmt::Display for ArrowStreamBatchGenerator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ArrowStreamBatchGenerator {{ array_stream: {:?} }}",
-            self.array_stream
-        )
-    }
-}
-
-impl ArrowStreamBatchGenerator {
-    fn new(array_stream: Arc<Mutex<ArrowArrayStreamReader>>) -> Self {
-        Self { array_stream }
-    }
-}
-
-impl LazyBatchGenerator for ArrowStreamBatchGenerator {
-    fn generate_next_batch(
-        &mut self,
-    ) -> deltalake::datafusion::error::Result<Option<deltalake::arrow::array::RecordBatch>> {
-        let mut stream_reader = self.array_stream.lock().map_err(|_| {
-            deltalake::datafusion::error::DataFusionError::Execution(
-                "Failed to lock the ArrowArrayStreamReader".to_string(),
-            )
-        })?;
-
-        match stream_reader.next() {
-            Some(Ok(record_batch)) => Ok(Some(record_batch)),
-            Some(Err(err)) => Err(deltalake::datafusion::error::DataFusionError::ArrowError(
-                err, None,
-            )),
-            None => Ok(None), // End of stream
-        }
-    }
-}
-
 impl PyMergeBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
