@@ -2313,9 +2313,8 @@ mod tests {
         let ctx = SessionContext::new();
         let cdf_scan = DeltaOps(table.clone())
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state())
             .await
             .expect("Failed to load CDF");
 
@@ -2331,18 +2330,18 @@ mod tests {
         .expect("Failed to collect batches");
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
-        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
 
         assert_batches_sorted_eq! {[
-        "+-------+----------+--------------+-----------------+----+",
-        "| value | modified | _change_type | _commit_version | id |",
-        "+-------+----------+--------------+-----------------+----+",
-        "| 1     | yes      | insert       | 1               | 1  |",
-        "| 2     | yes      | insert       | 1               | 2  |",
-        "| 3     | no       | delete       | 2               | 3  |",
-        "| 3     | no       | insert       | 1               | 3  |",
-        "| 3     | yes      | insert       | 2               | 3  |",
-        "+-------+----------+--------------+-----------------+----+",
+            "+-------+----------+----+--------------+-----------------+",
+            "| value | modified | id | _change_type | _commit_version |",
+            "+-------+----------+----+--------------+-----------------+",
+            "| 1     | yes      | 1  | insert       | 1               |",
+            "| 2     | yes      | 2  | insert       | 1               |",
+            "| 3     | no       | 3  | delete       | 2               |",
+            "| 3     | no       | 3  | insert       | 1               |",
+            "| 3     | yes      | 3  | insert       | 2               |",
+            "+-------+----------+----+--------------+-----------------+",
         ], &batches }
 
         let snapshot_bytes = table

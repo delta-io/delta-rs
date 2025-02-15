@@ -255,7 +255,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
 }
 
 /// Parse a string predicate into an `Expr`
-pub(crate) fn parse_predicate_expression(
+pub fn parse_predicate_expression(
     schema: &DFSchema,
     expr: impl AsRef<str>,
     df_state: &SessionState,
