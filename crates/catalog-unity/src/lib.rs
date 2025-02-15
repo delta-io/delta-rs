@@ -7,6 +7,7 @@ compile_error!(
     for this crate to function properly."
 );
 
+use datafusion_common::DataFusionError;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use reqwest::Url;
@@ -23,7 +24,9 @@ use crate::models::{
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
-use deltalake_core::{DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError, Path};
+use deltalake_core::{
+    DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError, Path,
+};
 
 use crate::client::retry::*;
 use deltalake_core::storage::{
@@ -74,7 +77,7 @@ pub enum UnityCatalogError {
     #[error("Invalid Unity Catalog Table URI: {table_uri}")]
     InvalidTableURI {
         /// Table URI
-        table_uri: String
+        table_uri: String,
     },
 
     /// Unknown configuration key
@@ -492,7 +495,7 @@ impl UnityCatalogBuilder {
         let uri_parts: Vec<&str> = table_uri[5..].split('.').collect();
         if uri_parts.len() != 3 {
             return Err(UnityCatalogError::InvalidTableURI {
-                table_uri: table_uri.to_string()
+                table_uri: table_uri.to_string(),
             });
         }
 
@@ -501,17 +504,17 @@ impl UnityCatalogBuilder {
         let table_name = uri_parts[2];
 
         let unity_catalog = UnityCatalogBuilder::from_env().build()?;
-        let storage_location = unity_catalog.get_table_storage_location(
-            Some(catalog_id.to_string()),
-            database_name,
-            table_name
-        ).await?;
+        let storage_location = unity_catalog
+            .get_table_storage_location(Some(catalog_id.to_string()), database_name, table_name)
+            .await?;
         let temp_creds_res = unity_catalog
             .get_temp_table_credentials(catalog_id, database_name, table_name)
             .await?;
         let credentials = match temp_creds_res {
             TableTempCredentialsResponse::Success(temp_creds) => {
-                temp_creds.get_credentials().unwrap()
+                temp_creds.get_credentials().ok_or_else(|| {
+                    DataFusionError::External(UnityCatalogError::MissingCredential.into())
+                })?
             }
             TableTempCredentialsResponse::Error(_error) => {
                 return Err(UnityCatalogError::TemporaryCredentialsFetchFailure)
@@ -799,8 +802,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         use futures::executor::block_on;
 
-        let (table_path, temp_creds) = block_on(
-            UnityCatalogBuilder::get_uc_location_and_token(
+        let (table_path, temp_creds) = block_on(UnityCatalogBuilder::get_uc_location_and_token(
             table_uri.as_str(),
         ))?;
 
