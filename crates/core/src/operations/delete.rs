@@ -456,7 +456,6 @@ impl std::future::IntoFuture for DeleteBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::delta_datafusion::cdf::DeltaCdfScan;
     use crate::kernel::DataType as DeltaDataType;
     use crate::operations::collect_sendable_stream;
     use crate::operations::DeltaOps;
@@ -975,9 +974,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state())
             .await
             .expect("Failed to load CDF");
 
@@ -1060,9 +1058,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state())
             .await
             .expect("Failed to load CDF");
 
@@ -1075,23 +1072,23 @@ mod tests {
         .expect("Failed to collect batches");
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
-        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
 
         assert_batches_sorted_eq! {[
-        "+-------+--------------+-----------------+------+",
-        "| value | _change_type | _commit_version | year |",
-        "+-------+--------------+-----------------+------+",
-        "| 1     | insert       | 1               | 2020 |",
-        "| 2     | delete       | 2               | 2020 |",
-        "| 2     | insert       | 1               | 2020 |",
-        "| 3     | insert       | 1               | 2024 |",
-        "+-------+--------------+-----------------+------+",
+            "+-------+------+--------------+-----------------+",
+            "| value | year | _change_type | _commit_version |",
+            "+-------+------+--------------+-----------------+",
+            "| 1     | 2020 | insert       | 1               |",
+            "| 2     | 2020 | delete       | 2               |",
+            "| 2     | 2020 | insert       | 1               |",
+            "| 3     | 2024 | insert       | 1               |",
+            "+-------+------+--------------+-----------------+",
         ], &batches }
     }
 
     async fn collect_batches(
         num_partitions: usize,
-        stream: DeltaCdfScan,
+        stream: Arc<dyn ExecutionPlan>,
         ctx: SessionContext,
     ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
         let mut batches = vec![];
