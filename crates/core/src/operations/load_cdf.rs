@@ -323,6 +323,7 @@ impl CdfLoadBuilder {
     pub(crate) async fn build(
         &self,
         session_sate: &SessionState,
+        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let (cdc, add, remove) = self.determine_files_to_read().await?;
         register_store(self.log_store.clone(), session_sate.runtime_env().clone());
@@ -388,7 +389,7 @@ impl CdfLoadBuilder {
                     table_partition_cols: cdc_partition_cols,
                     output_ordering: vec![],
                 },
-                None,
+                filters,
             )
             .await?;
 
@@ -406,7 +407,7 @@ impl CdfLoadBuilder {
                     table_partition_cols: add_remove_partition_cols.clone(),
                     output_ordering: vec![],
                 },
-                None,
+                filters,
             )
             .await?;
 
@@ -424,7 +425,7 @@ impl CdfLoadBuilder {
                     table_partition_cols: add_remove_partition_cols,
                     output_ordering: vec![],
                 },
-                None,
+                filters,
             )
             .await?;
 
@@ -502,7 +503,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -553,7 +554,7 @@ pub(crate) mod tests {
             .load_cdf()
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await
             .unwrap();
 
@@ -599,7 +600,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -652,7 +653,7 @@ pub(crate) mod tests {
             .load_cdf()
             .with_starting_version(4)
             .with_ending_version(1)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -671,7 +672,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_version(5)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -691,7 +692,7 @@ pub(crate) mod tests {
             .load_cdf()
             .with_starting_version(5)
             .with_allow_out_of_range()
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -714,7 +715,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -735,7 +736,7 @@ pub(crate) mod tests {
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .with_allow_out_of_range()
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -757,7 +758,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -777,7 +778,7 @@ pub(crate) mod tests {
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -868,7 +869,7 @@ pub(crate) mod tests {
         let cdf_scan = DeltaOps(table.clone())
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 

@@ -1275,7 +1275,7 @@ mod tests {
         let table = DeltaOps(table)
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -1365,7 +1365,7 @@ mod tests {
         let table = DeltaOps(table)
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 

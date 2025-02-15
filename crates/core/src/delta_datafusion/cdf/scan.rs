@@ -71,14 +71,20 @@ impl TableProvider for DeltaCdfTableProvider {
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let session_state = session_state_from_session(session)?;
-        let mut plan = self.cdf_builder.build(session_state).await?;
+        let schema: DFSchema = self.schema().try_into()?;
+
+        let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
+            let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
+            let plan = self
+                .cdf_builder
+                .build(session_state, Some(&physical_expr))
+                .await?;
+            Arc::new(FilterExec::try_new(physical_expr, plan)?)
+        } else {
+            self.cdf_builder.build(session_state, None).await?
+        };
 
         let df_schema: DFSchema = plan.schema().try_into()?;
-
-        if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr = session.create_physical_expr(filter_expr, &df_schema)?;
-            plan = Arc::new(FilterExec::try_new(physical_expr, plan)?);
-        }
 
         if let Some(projection) = projection {
             let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
