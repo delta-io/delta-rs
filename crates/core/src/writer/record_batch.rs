@@ -820,8 +820,7 @@ mod tests {
                 .await;
             assert!(
                 result.is_ok(),
-                "Failed to write with WriteMode::MergeSchema, {:?}",
-                result
+                "Failed to write with WriteMode::MergeSchema, {result:?}",
             );
             let version = writer.flush_and_commit(&mut table).await.unwrap();
             assert_eq!(version, 2);
@@ -946,8 +945,7 @@ mod tests {
                 .await;
             assert!(
                 result.is_err(),
-                "Did not expect to successfully add new writes with different column types: {:?}",
-                result
+                "Did not expect to successfully add new writes with different column types: {result:?}",
             );
         }
 
@@ -1029,8 +1027,7 @@ mod tests {
                 .await;
             assert!(
                 result.is_err(),
-                "Should not have been able to write with a missing non-nullable column: {:?}",
-                result
+                "Should not have been able to write with a missing non-nullable column: {result:?}",
             );
         }
     }

@@ -124,12 +124,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .ok_or_else(|| DeltaTableError::Generic("No Expression provided".to_string()))?;
 
             let mut metadata = this.snapshot.metadata().clone();
-            let configuration_key = format!("delta.constraints.{}", name);
+            let configuration_key = format!("delta.constraints.{name}");
 
             if metadata.configuration.contains_key(&configuration_key) {
                 return Err(DeltaTableError::Generic(format!(
-                    "Constraint with name: {} already exists",
-                    name
+                    "Constraint with name: {name} already exists"
                 )));
             }
 
@@ -180,10 +179,9 @@ impl std::future::IntoFuture for ConstraintBuilder {
             // We have validated the table passes it's constraints, now to add the constraint to
             // the table.
 
-            metadata.configuration.insert(
-                format!("delta.constraints.{}", name),
-                Some(expr_str.clone()),
-            );
+            metadata
+                .configuration
+                .insert(format!("delta.constraints.{name}"), Some(expr_str.clone()));
 
             let old_protocol = this.snapshot.protocol();
             let protocol = Protocol {

@@ -331,15 +331,12 @@ pub mod datafusion {
         );
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx.sql(&format!(
-            "select {} from test order by {}",
-            columns, columns
-        ))
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap()
+        ctx.sql(&format!("select {columns} from test order by {columns}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
     }
 
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
