@@ -18,6 +18,7 @@ def test_read_cdf_partitioned_with_predicate():
     assert len(values) == 1
     assert values[0] == date(2023, 12, 25)
 
+
 def test_read_cdf_partitioned():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
     b = dt.load_cdf(0, 3).read_all().to_pydict()

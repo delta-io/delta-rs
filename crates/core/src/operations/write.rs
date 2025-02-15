@@ -2314,7 +2314,7 @@ mod tests {
         let cdf_scan = DeltaOps(table.clone())
             .load_cdf()
             .with_starting_version(0)
-            .build(&ctx.state())
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
