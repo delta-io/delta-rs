@@ -4,12 +4,11 @@ use std::sync::LazyLock;
 
 use arrow_schema::{DataType, Field, TimeUnit};
 
-pub(crate) use self::scan::*;
 pub(crate) use self::scan_utils::*;
 use crate::kernel::{Add, AddCDCFile, Remove};
 use crate::DeltaResult;
 
-mod scan;
+pub mod scan;
 mod scan_utils;
 
 /// Change type column name

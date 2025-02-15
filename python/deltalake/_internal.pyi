@@ -218,6 +218,7 @@ class RawDeltaTable:
     def load_cdf(
         self,
         columns: Optional[List[str]] = None,
+        predicate: Optional[str] = None,
         starting_version: int = 0,
         ending_version: Optional[int] = None,
         starting_timestamp: Optional[str] = None,
