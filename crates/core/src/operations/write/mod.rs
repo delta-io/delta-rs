@@ -26,6 +26,7 @@
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
+pub mod lazy;
 pub(crate) mod schema_evolution;
 
 use arrow_schema::Schema;
@@ -44,7 +45,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::DataFrame;
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::{cast, col, lit, Expr, LogicalPlan, UNNAMED_TABLE};
+use datafusion_expr::{cast, lit, Expr, LogicalPlan};
 use execution::{prepare_predicate_actions, write_execution_plan_with_predicate};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -438,7 +439,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 .unwrap_or_default();
 
             let mut schema_drift = false;
-            let mut source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
+            let source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
 
             // Add missing generated columns to source_df
             let (mut source, missing_generated_columns) =
