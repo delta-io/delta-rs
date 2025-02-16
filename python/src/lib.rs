@@ -6,7 +6,6 @@ mod query;
 mod schema;
 mod utils;
 
-use core::num;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -74,7 +73,6 @@ use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
-use deltalake::protocol::DeltaOperation::UpdateFieldMetadata;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
@@ -85,7 +83,7 @@ use uuid::Uuid;
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
 use jemallocator::Jemalloc;
 
-#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -93,7 +91,7 @@ use mimalloc::MiMalloc;
 static ALLOC: Jemalloc = Jemalloc;
 
 #[global_allocator]
-#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 static ALLOC: MiMalloc = MiMalloc;
 
 #[derive(FromPyObject)]

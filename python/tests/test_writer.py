@@ -272,7 +272,7 @@ def test_write_type_castable_types(existing_table: DeltaTable):
     )
     with pytest.raises(
         Exception,
-        match="Cast error: Failed to cast int8 from Int8 to Utf8: Cannot cast string 'hello' to value of Int8 type",
+        match="Cast error: Cannot cast string 'hello' to value of Int8 type",
     ):
         write_deltalake(
             existing_table,
@@ -284,7 +284,7 @@ def test_write_type_castable_types(existing_table: DeltaTable):
 
     with pytest.raises(
         Exception,
-        match="Cast error: Failed to cast int8 from Int8 to Int64: Can't cast value 1000 to type Int8",
+        match="Cast error: Can't cast value 1000 to type Int8",
     ):
         write_deltalake(
             existing_table,
@@ -1034,7 +1034,6 @@ def test_partition_overwrite(
         write_deltalake(
             tmp_path, sample_data, mode="overwrite", predicate=f"p2 < {filter_string}"
         )
-
 
 @pytest.fixture()
 def sample_data_for_partitioning() -> pa.Table:

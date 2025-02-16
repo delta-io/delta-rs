@@ -51,7 +51,7 @@ use super::{
 };
 use super::{transaction::PROTOCOL, write::WriterStatsConfig};
 use super::{
-    write::{write_execution_plan, write_execution_plan_cdc},
+    write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
 use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
