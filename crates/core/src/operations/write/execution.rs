@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::vec;
 
-use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::{SessionState, TaskContext};
@@ -25,7 +24,6 @@ use crate::operations::writer::{DeltaWriter, WriterConfig};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
-use tokio::sync::mpsc::Sender;
 
 use super::configs::WriterStatsConfig;
 use super::WriteError;
@@ -42,7 +40,6 @@ pub(crate) async fn write_execution_plan_with_predicate(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
-    sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -81,24 +78,13 @@ pub(crate) async fn write_execution_plan_with_predicate(
         );
         let mut writer = DeltaWriter::new(object_store.clone(), config);
         let checker_stream = checker.clone();
-        let sender_stream = sender.clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
 
-        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> = tokio::task::spawn(
-            async move {
-                let sendable = sender_stream.clone();
+        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =
+            tokio::task::spawn(async move {
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
-
                     checker_stream.check_batch(&batch).await?;
-
-                    if let Some(s) = sendable.as_ref() {
-                        if let Err(e) = s.send(batch.clone()).await {
-                            error!("Failed to send data to observer: {e:#?}");
-                        }
-                    } else {
-                        debug!("write_execution_plan_with_predicate did not send any batches, no sender.");
-                    }
                     writer.write(&batch).await?;
                 }
                 let add_actions = writer.close().await;
@@ -106,8 +92,7 @@ pub(crate) async fn write_execution_plan_with_predicate(
                     Ok(actions) => Ok(actions.into_iter().map(Action::Add).collect::<Vec<_>>()),
                     Err(err) => Err(err),
                 }
-            },
-        );
+            });
 
         tasks.push(handle);
     }
@@ -136,7 +121,6 @@ pub(crate) async fn write_execution_plan_cdc(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
-    sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
 
@@ -150,7 +134,6 @@ pub(crate) async fn write_execution_plan_cdc(
         write_batch_size,
         writer_properties,
         writer_stats_config,
-        sender,
     )
     .await?
     .into_iter()
@@ -185,7 +168,6 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
-    sender: Option<Sender<RecordBatch>>,
 ) -> DeltaResult<Vec<Action>> {
     write_execution_plan_with_predicate(
         None,
@@ -198,7 +180,6 @@ pub(crate) async fn write_execution_plan(
         write_batch_size,
         writer_properties,
         writer_stats_config,
-        sender,
     )
     .await
 }
@@ -258,7 +239,6 @@ pub(crate) async fn execute_non_empty_expr(
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
-            None,
         )
         .await?;
 
@@ -330,7 +310,6 @@ pub(crate) async fn execute_non_empty_expr_cdc(
                 None,
                 writer_properties,
                 writer_stats_config,
-                None,
             )
             .await?;
             Ok(Some(cdc_actions))
