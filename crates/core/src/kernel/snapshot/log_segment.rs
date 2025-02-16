@@ -829,6 +829,10 @@ pub(super) mod tests {
             .await
             .unwrap();
 
+        assert_eq!(commit.metrics.num_retries, 0);
+        assert_eq!(commit.metrics.num_log_files_cleaned_up, 0);
+        assert_eq!(commit.metrics.new_checkpoint_created, false);
+
         let batches = LogSegment::try_new(
             &Path::default(),
             Some(commit.version),
