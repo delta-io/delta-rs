@@ -52,8 +52,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
-    UNNAMED_TABLE,
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
@@ -78,16 +77,18 @@ use crate::delta_datafusion::{
     DeltaSessionConfig, DeltaTableProvider,
 };
 
-use crate::kernel::{Action, DataCheck, Metadata, StructTypeExt};
+use crate::kernel::{Action, Metadata, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schema};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
+use crate::operations::write::generated_columns::{
+    add_generated_columns, add_missing_generated_columns,
+};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
-use crate::table::GeneratedColumn;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use writer::write_execution_plan_v2;
 
@@ -775,72 +776,6 @@ async fn execute(
         Some(alias) => TableReference::bare(alias.to_string()),
         None => TableReference::bare(UNNAMED_TABLE),
     };
-
-    /// Add generated column expressions to a dataframe
-    fn add_missing_generated_columns(
-        mut df: DataFrame,
-        generated_cols: &Vec<GeneratedColumn>,
-    ) -> DeltaResult<(DataFrame, Vec<String>)> {
-        let mut missing_cols = vec![];
-        for generated_col in generated_cols {
-            let col_name = generated_col.get_name();
-
-            if df
-                .clone()
-                .schema()
-                .field_with_unqualified_name(col_name)
-                .is_err()
-            // implies it doesn't exist
-            {
-                debug!(
-                    "Adding missing generated column {} in source as placeholder",
-                    col_name
-                );
-                // If column doesn't exist, we add a null column, later we will generate the values after
-                // all the merge is projected.
-                // Other generated columns that were provided upon the start we only validate during write
-                missing_cols.push(col_name.to_string());
-                df = df
-                    .clone()
-                    .with_column(col_name, Expr::Literal(ScalarValue::Null))?;
-            }
-        }
-        Ok((df, missing_cols))
-    }
-
-    /// Add generated column expressions to a dataframe
-    fn add_generated_columns(
-        mut df: DataFrame,
-        generated_cols: &Vec<GeneratedColumn>,
-        generated_cols_missing_in_source: &[String],
-        state: &SessionState,
-    ) -> DeltaResult<DataFrame> {
-        debug!("Generating columns in dataframe");
-        for generated_col in generated_cols {
-            // We only validate columns that were missing from the start. We don't update
-            // update generated columns that were provided during runtime
-            if !generated_cols_missing_in_source.contains(&generated_col.name) {
-                continue;
-            }
-
-            let generation_expr = state.create_logical_expr(
-                generated_col.get_generation_expression(),
-                df.clone().schema(),
-            )?;
-            let col_name = generated_col.get_name();
-
-            df = df.clone().with_column(
-                generated_col.get_name(),
-                when(col(col_name).is_null(), generation_expr)
-                    .otherwise(col(col_name))?
-                    .cast_to(
-                        &arrow_schema::DataType::try_from(&generated_col.data_type)?,
-                        df.schema(),
-                    )?,
-            )?
-        }
-        Ok(df)
-    }
 
     let generated_col_expressions = snapshot
         .schema()
