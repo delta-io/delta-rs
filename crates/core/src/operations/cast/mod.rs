@@ -179,6 +179,7 @@ pub fn cast_record_batch(
     safe: bool,
     add_missing: bool,
 ) -> DeltaResult<RecordBatch> {
+    dbg!("casting byaches!");
     let cast_options = CastOptions {
         safe,
         ..Default::default()

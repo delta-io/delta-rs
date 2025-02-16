@@ -1,8 +1,8 @@
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields};
 
-mod physical;
-mod logical;
+pub(crate) mod logical;
+pub mod physical;
 
 pub(crate) fn try_cast_schema(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {

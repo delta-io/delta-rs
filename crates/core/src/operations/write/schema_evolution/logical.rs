@@ -1,16 +1,30 @@
-use std::sync::Arc;
+use std::cmp::Ordering;
 
-use arrow_schema::SchemaRef;
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-
+use datafusion_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd)]
 pub(crate) struct SchemaEvolution {
     pub input: LogicalPlan,
-    pub new_schema: DFSchemaRef,
+    pub new_schema: SchemaWrapper,
     pub add_missing_columns: bool,
     pub safe_cast: bool,
+}
+
+
+#[derive(Debug, Hash, Eq, PartialEq, Clone)] // Remove PartialOrd from here
+pub struct SchemaWrapper {
+    pub inner: DFSchemaRef,
+}
+
+impl PartialOrd for SchemaWrapper {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // Define a meaningful comparison, e.g., based on the number of fields in the schema
+        let self_fields = self.inner.fields().len();
+        let other_fields = other.inner.fields().len();
+
+        self_fields.partial_cmp(&other_fields)
+    }
 }
 
 impl UserDefinedLogicalNodeCore for SchemaEvolution {
@@ -23,7 +37,7 @@ impl UserDefinedLogicalNodeCore for SchemaEvolution {
     }
 
     fn schema(&self) -> &datafusion_common::DFSchemaRef {
-        &self.new_schema
+        &self.new_schema.inner
     }
 
     fn expressions(&self) -> Vec<datafusion_expr::Expr> {
@@ -45,7 +59,7 @@ impl UserDefinedLogicalNodeCore for SchemaEvolution {
 
     fn with_exprs_and_inputs(
         &self,
-        exprs: Vec<datafusion_expr::Expr>,
+        _exprs: Vec<datafusion_expr::Expr>,
         inputs: Vec<datafusion_expr::LogicalPlan>,
     ) -> DataFusionResult<Self> {
         Ok(SchemaEvolution {

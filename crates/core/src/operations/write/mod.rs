@@ -28,7 +28,13 @@ pub(crate) mod execution;
 pub(crate) mod schema_evolution;
 
 use arrow_schema::Schema;
+use async_trait::async_trait;
 pub use configs::WriterStatsConfig;
+use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_physical_plan::ExecutionPlan;
+use schema_evolution::logical::{SchemaEvolution, SchemaWrapper};
+use schema_evolution::physical::SchemaEvolutionExec;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -40,8 +46,8 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::DataFrame;
-use datafusion_common::DFSchema;
-use datafusion_expr::{col, when, Expr, ExprSchemable, LogicalPlan};
+use datafusion_common::{DFSchema, Result, ToDFSchema};
+use datafusion_expr::{col, when, Expr, ExprSchemable, Extension, LogicalPlan, UserDefinedLogicalNode};
 use execution::{prepare_predicate_actions, write_execution_plan_with_predicate};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -54,6 +60,7 @@ use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOC
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::register_store;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -307,6 +314,20 @@ impl WriteBuilder {
         self
     }
 
+    /// Execution plan that produces the data to be written to the delta table
+    pub fn with_input_batches(mut self, batches: impl IntoIterator<Item = RecordBatch>) -> Self {
+        let ctx = SessionContext::new();
+        let batches: Vec<RecordBatch> = batches.into_iter().collect();
+        if batches.is_empty() {
+            panic!("Batches shoudn't be empty.")
+        }
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(MemTable::try_new(batches[0].schema(), vec![batches]).unwrap());
+        let df = ctx.read_table(table_provider).unwrap();
+        self.input = Some(Arc::new(df.logical_plan().clone()));
+        self
+    }
+
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         if self.schema_mode == Some(SchemaMode::Overwrite) && self.mode != SaveMode::Overwrite {
             return Err(DeltaTableError::Generic(
@@ -365,6 +386,37 @@ impl WriteBuilder {
     }
 }
 
+#[derive(Clone, Debug)]
+struct WriteExtensionPlanner {}
+
+
+#[async_trait]
+impl ExtensionPlanner for WriteExtensionPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        dbg!("im here");
+        if let Some(evolve_node) = node.as_any().downcast_ref::<SchemaEvolution>() {
+            dbg!("found node");
+            return Ok(Some(Arc::new(SchemaEvolutionExec::new(
+                physical_inputs.first().unwrap().clone(),
+                evolve_node.new_schema.inner.as_arrow().clone().into(),
+                evolve_node.add_missing_columns,
+                evolve_node.safe_cast
+            ))));
+        }
+
+        Ok(None)
+
+    }
+}
+
+
 impl std::future::IntoFuture for WriteBuilder {
     type Output = DeltaResult<DeltaTable>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -374,6 +426,10 @@ impl std::future::IntoFuture for WriteBuilder {
 
         Box::pin(async move {
             // Runs pre execution handler.
+            let write_planner = DeltaPlanner::<WriteExtensionPlanner> {
+                extension_planner: WriteExtensionPlanner {},
+            };
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
@@ -410,12 +466,15 @@ impl std::future::IntoFuture for WriteBuilder {
             let state = match this.state {
                 Some(state) => state,
                 None => {
-                    let ctx = SessionContext::new();
-                    register_store(this.log_store.clone(), ctx.runtime_env());
-                    ctx.state()
+                    let state = SessionStateBuilder::new()
+                    .with_default_features()
+                    .with_query_planner(Arc::new(write_planner))
+                    .build();
+                
+                    register_store(this.log_store.clone(), state.runtime_env().clone());
+                    state
                 }
             };
-
             let generated_col_expressions = this
                 .snapshot
                 .as_ref()
@@ -424,7 +483,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut schema_drift = false;
 
             let mut input_df = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
-            let mut schema: Arc<Schema> = (*input_df.schema().as_arrow()).into();
+            let mut schema: Arc<Schema> = Arc::new(input_df.schema().as_arrow().clone());
 
             // Schema merging code should be aware of columns that can be generated during write
             // so they might be empty in the batch, but the will exist in the input_schema()
@@ -478,71 +537,17 @@ impl std::future::IntoFuture for WriteBuilder {
                     )?);
                 }
             }
-
-            // CONVERT THIS TO LOGICAL PLAN STEP
-            // let data = if !partition_columns.is_empty() {
-            //     // TODO partitioning should probably happen in its own plan ...
-            //     let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
-            //     let mut num_partitions = 0;
-            //     let mut num_added_rows = 0;
-            //     for batch in batches {
-            //         let real_batch = match new_schema.clone() {
-            //             Some(new_schema) => cast_record_batch(
-            //                 &batch,
-            //                 new_schema,
-            //                 this.safe_cast,
-            //                 schema_drift || !generated_col_expressions.is_empty(), // Schema drifted so we have to add the missing columns/structfields  or missing generated cols..
-            //             )?,
-            //             None => batch,
-            //         };
-
-            //         let divided = divide_by_partition_values(
-            //             new_schema.clone().unwrap_or(schema.clone()),
-            //             partition_columns.clone(),
-            //             &real_batch,
-            //         )?;
-            //         num_partitions += divided.len();
-            //         for part in divided {
-            //             num_added_rows += part.record_batch.num_rows();
-            //             let key = part.partition_values.hive_partition_path();
-            //             match partitions.get_mut(&key) {
-            //                 Some(part_batches) => {
-            //                     part_batches.push(part.record_batch);
-            //                 }
-            //                 None => {
-            //                     partitions.insert(key, vec![part.record_batch]);
-            //                 }
-            //             }
-            //         }
-            //     }
-            //     metrics.num_partitions = num_partitions;
-            //     metrics.num_added_rows = num_added_rows;
-            //     partitions.into_values().collect::<Vec<_>>()
-            // } else {
-            //     match new_schema {
-            //         Some(ref new_schema) => {
-            //             let mut new_batches = vec![];
-            //             let mut num_added_rows = 0;
-            //             for batch in batches {
-            //                 new_batches.push(cast_record_batch(
-            //                     &batch,
-            //                     new_schema.clone(),
-            //                     this.safe_cast,
-            //                     schema_drift || !generated_col_expressions.is_empty(), // Schema drifted so we have to add the missing columns/structfields or missing generated cols.
-            //                 )?);
-            //                 num_added_rows += batch.num_rows();
-            //             }
-            //             metrics.num_added_rows = num_added_rows;
-            //             vec![new_batches]
-            //         }
-            //         None => {
-            //             metrics.num_added_rows = batches.iter().map(|b| b.num_rows()).sum();
-            //             vec![batches]
-            //         }
-            //     }
-            // };
-
-
+            if let Some(new_schema) = new_schema {
+                let schema_evolved: LogicalPlan = LogicalPlan::Extension(Extension {
+                    node: Arc::new(SchemaEvolution {
+                        input: input_df.logical_plan().clone(),
+                        new_schema: SchemaWrapper{inner: new_schema.to_dfschema()?.into()},
+                        add_missing_columns: schema_drift || !generated_col_expressions.is_empty(),
+                        safe_cast: this.safe_cast,
+                    }),
+                });
+                input_df = DataFrame::new(state.clone(), schema_evolved);
+            }
             let schema = Arc::new(input_df.schema().as_arrow().clone());
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
@@ -600,14 +605,14 @@ impl std::future::IntoFuture for WriteBuilder {
                     .into_iter()
                     .map(|v| (v.name.clone(), v))
                     .collect::<HashMap<String, GeneratedColumn>>();
-                let current_fields: DeltaResult<Vec<Expr>> = df
+                let current_fields: DeltaResult<Vec<Expr>> = input_df
                     .schema()
                     .fields()
                     .into_iter()
                     .map(|field| create_field(field, &generated_cols_map, &state, &dfschema))
                     .collect();
 
-                df = df.select(current_fields?)?;
+                input_df = input_df.select(current_fields?)?;
             };
 
             let (predicate_str, predicate) = match this.predicate {

@@ -21,7 +21,6 @@ use crate::operations::cast::cast_record_batch;
 #[derive(Debug)]
 pub struct SchemaEvolutionExec {
     input: Arc<dyn ExecutionPlan>,
-    expr: Arc<dyn PhysicalExpr>,
     new_schema: SchemaRef,
     add_missing_columns: bool,
     safe_cast: bool,
@@ -31,14 +30,12 @@ impl SchemaEvolutionExec {
     /// Create a new SchemaEvolutionExec Node
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        expr: Arc<dyn PhysicalExpr>,
         new_schema: SchemaRef,
         add_missing_columns: bool,
         safe_cast: bool,
     ) -> Self {
         SchemaEvolutionExec {
             input,
-            expr,
             new_schema,
             add_missing_columns,
             // I wonder since we use logical plans, this should be the default,
@@ -78,7 +75,7 @@ impl ExecutionPlan for SchemaEvolutionExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
+        vec![Distribution::SinglePartition]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -96,7 +93,6 @@ impl ExecutionPlan for SchemaEvolutionExec {
         }
         Ok(Arc::new(SchemaEvolutionExec::new(
             children[0].clone(),
-            self.expr.clone(),
             self.new_schema.clone(),
             self.add_missing_columns,
             self.safe_cast,
@@ -109,6 +105,8 @@ impl ExecutionPlan for SchemaEvolutionExec {
         context: Arc<datafusion::execution::TaskContext>,
     ) -> datafusion_common::Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
+        dbg!(input.schema());
+        dbg!(self.schema());
         let stream = SchemaEvolutionStream::new(
             input,
             self.schema(),
