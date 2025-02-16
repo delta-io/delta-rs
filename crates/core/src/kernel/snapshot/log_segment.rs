@@ -4,6 +4,7 @@ use std::sync::{Arc, LazyLock};
 
 use arrow_array::RecordBatch;
 use chrono::Utc;
+use futures::Stream;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::path::Path;
@@ -50,7 +51,7 @@ pub(crate) trait PathExt {
             .and_then(|(name, _)| name.parse().ok())
     }
 
-    /// Returns true if the file is a checkpoint parquet file
+    /// Returns true if the file is a checkpoint file
     fn is_checkpoint_file(&self) -> bool {
         self.filename()
             .map(|name| {
@@ -255,6 +256,39 @@ impl LogSegment {
     }
 
     pub(super) fn checkpoint_stream(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        read_schema: &Schema,
+        config: &DeltaTableConfig,
+    ) -> BoxStream<'_, DeltaResult<RecordBatch>> {
+        if let Some(file) = self.checkpoint_files.iter().next() {
+            match file.location.extension() {
+                Some("parquet") => self.checkpoint_stream_parquet(store, read_schema, config),
+                Some("json") => self.checkpoint_stream_json(store, read_schema, config),
+                _ => futures::stream::empty().boxed(),
+            }
+        } else {
+            futures::stream::empty().boxed()
+        }
+    }
+
+    fn checkpoint_stream_json(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        read_schema: &Schema,
+        config: &DeltaTableConfig,
+    ) -> BoxStream<'_, DeltaResult<RecordBatch>> {
+        let decoder = json::get_decoder(Arc::new(read_schema.try_into().unwrap()), config).unwrap();
+        let stream = futures::stream::iter(self.checkpoint_files.iter())
+            .map(move |meta| {
+                let store = store.clone();
+                async move { store.get(&meta.location).await.unwrap().bytes().await }
+            })
+            .buffered(config.log_buffer_size);
+        json::decode_stream(decoder, stream).boxed()
+    }
+
+    fn checkpoint_stream_parquet(
         &self,
         store: Arc<dyn ObjectStore>,
         read_schema: &Schema,
