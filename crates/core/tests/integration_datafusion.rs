@@ -1184,9 +1184,11 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 }
 
 mod date_partitions {
+    use tempfile::TempDir;
+
     use super::*;
 
-    async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
+    async fn setup_test(table_uri: &str) -> Result<DeltaTable, Box<dyn Error>> {
         let columns = vec![
             StructField::new(
                 "id".to_owned(),
@@ -1200,8 +1202,6 @@ mod date_partitions {
             ),
         ];
 
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
         let dt = DeltaOps::try_from_uri(table_uri)
             .await?
             .create()
@@ -1238,7 +1238,9 @@ mod date_partitions {
     #[tokio::test]
     async fn test_issue_1445_date_partition() -> Result<()> {
         let ctx = SessionContext::new();
-        let mut dt = setup_test().await.unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+        let mut dt = setup_test(table_uri).await.unwrap();
         let mut writer = RecordBatchWriter::for_table(&dt)?;
         write(
             &mut writer,
