@@ -1035,6 +1035,7 @@ def test_partition_overwrite(
             tmp_path, sample_data, mode="overwrite", predicate=f"p2 < {filter_string}"
         )
 
+
 @pytest.fixture()
 def sample_data_for_partitioning() -> pa.Table:
     return pa.table(
@@ -1590,9 +1591,13 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
 
 def test_empty(existing_table: DeltaTable):
     schema = existing_table.schema().to_pyarrow()
+    expected = existing_table.to_pyarrow_table()
     empty_table = pa.Table.from_pylist([], schema=schema)
-    with pytest.raises(DeltaError, match="No data source supplied to write command"):
-        write_deltalake(existing_table, empty_table, mode="append", engine="rust")
+    write_deltalake(existing_table, empty_table, mode="append", engine="rust")
+
+    existing_table.update_incremental()
+    assert existing_table.version() == 1
+    assert expected == existing_table.to_pyarrow_table()
 
 
 def test_rust_decimal_cast(tmp_path: pathlib.Path):
@@ -1815,8 +1820,11 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
 def test_empty_dataset_write(tmp_path: pathlib.Path, sample_data: pa.Table):
     empty_arrow_table = sample_data.schema.empty_table()
     empty_dataset = dataset(empty_arrow_table)
-    with pytest.raises(DeltaError, match="No data source supplied to write command"):
-        write_deltalake(tmp_path, empty_dataset, mode="append")
+    write_deltalake(tmp_path, empty_dataset, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    new_dataset = dt.to_pyarrow_dataset()
+    assert new_dataset.count_rows() == 0
 
 
 @pytest.mark.pandas
