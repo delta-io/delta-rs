@@ -11,7 +11,7 @@ use deltalake::kernel::{
     PrimitiveType as DeltaPrimitve, StructField, StructType as DeltaStructType, StructTypeExt,
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
-use pyo3::prelude::*;
+use pyo3::{prelude::*, IntoPyObjectExt};
 use std::collections::HashMap;
 
 use crate::utils::warn;
@@ -26,19 +26,19 @@ use crate::utils::warn;
 fn schema_type_to_python(schema_type: DataType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     match schema_type {
         DataType::Primitive(data_type) => Ok((PrimitiveType::new(data_type.to_string())?)
-            .into_py(py)
+            .into_py_any(py)?
             .into_bound(py)),
         DataType::Array(array_type) => {
             let array_type: ArrayType = (*array_type).into();
-            Ok(array_type.into_py(py).into_bound(py))
+            Ok(array_type.into_py_any(py)?.into_bound(py))
         }
         DataType::Map(map_type) => {
             let map_type: MapType = (*map_type).into();
-            Ok(map_type.into_py(py).into_bound(py))
+            Ok(map_type.into_py_any(py)?.into_bound(py))
         }
         DataType::Struct(struct_type) => {
             let struct_type: StructType = (*struct_type).into();
-            Ok(struct_type.into_py(py).into_bound(py))
+            Ok(struct_type.into_py_any(py)?.into_bound(py))
         }
     }
 }
@@ -230,7 +230,11 @@ impl ArrayType {
 
     #[getter]
     fn contains_null<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        Ok(self.inner_type.contains_null().into_py(py).into_bound(py))
+        Ok(self
+            .inner_type
+            .contains_null()
+            .into_py_any(py)?
+            .into_bound(py))
     }
 
     #[pyo3(text_signature = "($self)")]
@@ -363,7 +367,7 @@ impl MapType {
         Ok(self
             .inner_type
             .value_contains_null()
-            .into_py(py)
+            .into_py_any(py)?
             .into_bound(py))
     }
 
@@ -422,7 +426,7 @@ impl Field {
 
         // Serialize and de-serialize JSON (it needs to be valid JSON anyways)
         let metadata: HashMap<String, serde_json::Value> = if let Some(json) = metadata {
-            let json_dumps = PyModule::import_bound(py, "json")?.getattr("dumps")?;
+            let json_dumps = PyModule::import(py, "json")?.getattr("dumps")?;
             let metadata_json: String = json_dumps.call1((json,))?.extract()?;
             let metadata_json = Some(metadata_json)
                 .filter(|x| x != "null")
@@ -473,12 +477,12 @@ impl Field {
 
     #[getter]
     fn metadata<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let json_loads = PyModule::import_bound(py, "json")?.getattr("loads")?;
+        let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
         let metadata_json: String = serde_json::to_string(self.inner.metadata())
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
         Ok(json_loads
             .call1((metadata_json,))?
-            .to_object(py)
+            .into_py_any(py)?
             .bind(py)
             .to_owned())
     }
@@ -669,7 +673,7 @@ pub fn schema_to_pyobject(schema: DeltaStructType, py: Python<'_>) -> PyResult<B
         inner: field.clone(),
     });
 
-    let py_schema = PyModule::import_bound(py, "deltalake.schema")?.getattr("Schema")?;
+    let py_schema = PyModule::import(py, "deltalake.schema")?.getattr("Schema")?;
 
     py_schema.call1((fields.collect::<Vec<_>>(),))
 }
@@ -727,8 +731,8 @@ impl PySchema {
 
         let super_ = self_.as_ref();
         let json = super_.to_json()?;
-        let json_loads = PyModule::import_bound(py, "json")?.getattr("loads")?;
-        json_loads.call1((json.into_py(py),))
+        let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
+        json_loads.call1((json.into_pyobject(py)?,))
     }
 
     #[pyo3(signature = (as_large_types = false))]
