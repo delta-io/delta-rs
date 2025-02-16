@@ -27,7 +27,7 @@ const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 static CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap());
 static UUID_CHECKPOINT_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\d+\.checkpoint([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.(parquet|json)").unwrap()
+    Regex::new(r"\d+\.checkpoint\.([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.(parquet|json)").unwrap()
 });
 static DELTA_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.json$").unwrap());
 static CRC_FILE_PATTERN: LazyLock<Regex> =
