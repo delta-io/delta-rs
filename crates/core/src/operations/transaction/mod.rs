@@ -86,7 +86,9 @@ use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
 
+pub use self::conflict_checker::CommitConflictError;
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
+pub use self::protocol::INSTANCE as PROTOCOL;
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
@@ -98,8 +100,6 @@ use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
 use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 use serde::{Deserialize, Serialize};
-pub use self::conflict_checker::CommitConflictError;
-pub use self::protocol::INSTANCE as PROTOCOL;
 
 use super::CustomExecuteHandler;
 
@@ -783,16 +783,17 @@ impl PostCommit<'_> {
             let mut new_checkpoint_created = false;
             if self.create_checkpoint {
                 // Execute create checkpoint hook
-                new_checkpoint_created = self.create_checkpoint(
-                    &state,
-                    &self.log_store,
-                    self.version,
-                    post_commit_operation_id,
-                )
-                .await?;
+                new_checkpoint_created = self
+                    .create_checkpoint(
+                        &state,
+                        &self.log_store,
+                        self.version,
+                        post_commit_operation_id,
+                    )
+                    .await?;
             }
 
-            let mut num_log_files_cleaned_up : u64 = 0;
+            let mut num_log_files_cleaned_up: u64 = 0;
             if cleanup_logs {
                 // Execute clean up logs hook
                 num_log_files_cleaned_up = cleanup_expired_logs_for(
@@ -815,10 +816,13 @@ impl PostCommit<'_> {
                     )
                     .await?
             }
-            Ok((state, PostCommitMetrics {
-                new_checkpoint_created,
-                num_log_files_cleaned_up,
-            }))
+            Ok((
+                state,
+                PostCommitMetrics {
+                    new_checkpoint_created,
+                    num_log_files_cleaned_up,
+                },
+            ))
         } else {
             let state = DeltaTableState::try_new(
                 &Path::default(),
@@ -827,10 +831,13 @@ impl PostCommit<'_> {
                 Some(self.version),
             )
             .await?;
-            Ok((state, PostCommitMetrics {
-                new_checkpoint_created: false,
-                num_log_files_cleaned_up: 0,
-            }))
+            Ok((
+                state,
+                PostCommitMetrics {
+                    new_checkpoint_created: false,
+                    num_log_files_cleaned_up: 0,
+                },
+            ))
         }
     }
     async fn create_checkpoint(
