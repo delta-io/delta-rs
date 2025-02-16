@@ -97,24 +97,24 @@ You can check whether or not a Delta table exists at a particular path by using
 the :meth:`DeltaTable.is_deltatable()` method.
 
 .. code-block:: python
-    from deltalake import DeltaTable
-
-    table_path = "<path/to/valid/table>"
-    DeltaTable.is_deltatable(table_path)
-    # True
-
-    invalid_table_path = "<path/to/nonexistent/table>"
-    DeltaTable.is_deltatable(invalid_table_path)
-    # False
-
-    bucket_table_path = "<path/to/valid/table/in/bucket>"
-    storage_options = {
-        "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
-        ...
-    }
-    DeltaTable.is_deltatable(bucket_table_path)
-    # True
+    >>>from deltalake import DeltaTable
+    >>>
+    >>>table_path = "<path/to/valid/table>"
+    >>>DeltaTable.is_deltatable(table_path)
+    >>># True
+    >>>
+    >>>invalid_table_path = "<path/to/nonexistent/table>"
+    >>>DeltaTable.is_deltatable(invalid_table_path)
+    >>># False
+    >>>
+    >>>bucket_table_path = "<path/to/valid/table/in/bucket>"
+    >>>storage_options = {
+    >>>    "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
+    >>>    "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
+    >>>    ...
+    >>>}
+    >>>DeltaTable.is_deltatable(bucket_table_path)
+    >>># True
 
 Custom Storage Backends
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -175,6 +175,45 @@ number or datetime string:
 
     Previous table versions may not exist if they have been vacuumed, in which
     case an exception will be thrown. See `Vacuuming tables`_ for more information.
+
+Load table from Unity Catalog
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+You may load a Delta Table from your Databricks or Open Source Unity Catalog
+using a ``uc://`` URL of format ``uc://<catalog-name>.<db-name>.<table-name>``.
+Example as follows:
+
+.. code-block:: python
+
+    >>> import os
+    >>> from deltalake import DeltaTable
+    >>>
+    >>> # Set your Unity Catalog workspace URL in the
+    >>> # DATABRICKS_WORKSPACE_URL environment variable.
+    >>> os.environ["DATABRICKS_WORKSPACE_URL"] = "https://adb-1234567890.XX.azuredatabricks.net"
+    >>>
+    >>> # Set your Unity Catalog access token in the
+    >>> # DATABRICKS_ACCESS_TOKEN environment variable.
+    >>> os.environ["DATABRICKS_ACCESS_TOKEN"] = "<unity-catalog-access-token-here>"
+    >>>
+    >>> # Your Unity Catalog name here
+    >>> catalog_name = "unity"
+    >>>
+    >>> # Your UC database name here
+    >>> db_name = "my_database"
+    >>>
+    >>> # Your table name in the UC database here
+    >>> table_name = "my_table"
+    >>>
+    >>> # Full UC URL in required format
+    >>> uc_full_url = f"{catalog_name}.{db_name}.{table_name}"
+    >>>
+    >>> # This should load the valid delta table at specified location,
+    >>> # and you can start using it.
+    >>> dt = DeltaTable(uc_full_url)
+    >>> dt.is_deltatable(dt.table_uri)
+    >>> # True
+    ```
 
 Examining a Table
 -----------------
