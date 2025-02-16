@@ -654,7 +654,7 @@ mod tests {
             query_id: "test".into(),
             epoch_id,
         };
-        let v = CommitBuilder::default()
+        let finalized_commit = CommitBuilder::default()
             .with_actions(actions)
             .build(
                 table.state.as_ref().map(|f| f as &dyn TableReference),
@@ -662,10 +662,25 @@ mod tests {
                 operation,
             )
             .await
-            .unwrap()
-            .version();
+            .unwrap();
 
-        assert_eq!(1, v, "Expected the commit to create table version 1");
+        assert_eq!(
+            1,
+            finalized_commit.version(),
+            "Expected the commit to create table version 1"
+        );
+        assert_eq!(
+            0, finalized_commit.metrics.num_retries,
+            "Expected no retries"
+        );
+        assert_eq!(
+            0, finalized_commit.metrics.num_log_files_cleaned_up,
+            "Expected no log files cleaned up"
+        );
+        assert_eq!(
+            false, finalized_commit.metrics.new_checkpoint_created,
+            "Expected checkpoint created."
+        );
         table.load().await.expect("Failed to reload table");
         assert_eq!(
             table.version(),
