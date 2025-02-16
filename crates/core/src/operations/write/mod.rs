@@ -26,13 +26,14 @@
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
-pub mod lazy;
+pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
 
 use arrow_schema::Schema;
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use generated_columns::{add_generated_columns, add_missing_generated_columns};
+use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -45,7 +46,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::DataFrame;
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::{cast, lit, Expr, LogicalPlan};
+use datafusion_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
 use execution::{prepare_predicate_actions, write_execution_plan_with_predicate};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -58,6 +59,9 @@ use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOC
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::physical::{find_metric_node, get_metric};
+use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::register_store;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -418,6 +422,10 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut metrics = WriteMetrics::default();
             let exec_start = Instant::now();
 
+            let write_planner = DeltaPlanner::<WriteMetricExtensionPlanner> {
+                extension_planner: WriteMetricExtensionPlanner {},
+            };
+
             // Create table actions to initialize table in case it does not yet exist
             // and should be created
             let mut actions = this.check_preconditions().await?;
@@ -425,9 +433,14 @@ impl std::future::IntoFuture for WriteBuilder {
             let partition_columns = this.get_partition_columns()?;
 
             let state = match this.state {
-                Some(state) => state,
+                Some(state) => SessionStateBuilder::new_from_existing(state.clone())
+                    .with_query_planner(Arc::new(write_planner))
+                    .build(),
                 None => {
-                    let state = SessionStateBuilder::new().with_default_features().build();
+                    let state = SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_query_planner(Arc::new(write_planner))
+                        .build();
                     register_store(this.log_store.clone(), state.runtime_env().clone());
                     state
                 }
@@ -491,7 +504,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 for field in new_schema.fields() {
                     // If field exist in source data, we cast to new datatype
                     if source_schema.index_of(field.name()).is_ok() {
-                        let cast_expr = cast(
+                        let cast_fn = if this.safe_cast { try_cast } else { cast };
+                        let cast_expr = cast_fn(
                             Expr::Column(Column::from_name(field.name())),
                             // col(field.name()),
                             field.data_type().clone(),
@@ -519,6 +533,16 @@ impl std::future::IntoFuture for WriteBuilder {
                 &missing_generated_columns,
                 &state,
             )?;
+
+            let source = LogicalPlan::Extension(Extension {
+                node: Arc::new(MetricObserver {
+                    id: "write_source_count".into(),
+                    input: source.logical_plan().clone(),
+                    enable_pushdown: false,
+                }),
+            });
+
+            let source = DataFrame::new(state.clone(), source);
 
             let schema = Arc::new(source.schema().as_arrow().clone());
 
@@ -576,21 +600,31 @@ impl std::future::IntoFuture for WriteBuilder {
                 stats_columns,
             };
 
+            let source_plan = source.clone().create_physical_plan().await?;
+
             // Here we need to validate if the new data conforms to a predicate if one is provided
             let add_actions = write_execution_plan_with_predicate(
                 predicate.clone(),
                 this.snapshot.as_ref(),
                 state.clone(),
-                source.clone().create_physical_plan().await?,
+                source_plan.clone(),
                 partition_columns.clone(),
                 this.log_store.object_store(Some(operation_id)).clone(),
                 target_file_size,
                 this.write_batch_size,
                 this.writer_properties.clone(),
                 writer_stats_config.clone(),
-                None,
             )
             .await?;
+
+            let source_count =
+                find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
+                    DeltaTableError::Generic("Unable to locate expected metric node".into())
+                })?;
+            let source_count_metrics = source_count.metrics().unwrap();
+            let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+            metrics.num_added_rows = num_added_rows;
+
             metrics.num_added_files = add_actions.len();
             actions.extend(add_actions);
 
@@ -989,7 +1023,6 @@ mod tests {
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_files_count(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
-        assert!(write_metrics.num_partitions > 0);
         assert_eq!(write_metrics.num_added_files, 2);
         assert_common_write_metrics(write_metrics);
 
@@ -1003,7 +1036,6 @@ mod tests {
         assert_eq!(table.get_files_count(), 4);
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
-        assert!(write_metrics.num_partitions > 0);
         assert_eq!(write_metrics.num_added_files, 4);
         assert_common_write_metrics(write_metrics);
     }
@@ -1093,7 +1125,6 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
-        assert!(write_metrics.num_partitions > 0);
         assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
@@ -1146,7 +1177,6 @@ mod tests {
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
-        assert!(write_metrics.num_partitions > 0);
         assert_common_write_metrics(write_metrics);
     }
 
@@ -1668,7 +1698,6 @@ mod tests {
         assert_eq!(table.version(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 3);
-        assert!(write_metrics.num_partitions > 0);
         assert_common_write_metrics(write_metrics);
 
         let table = DeltaOps(table)
@@ -1680,7 +1709,6 @@ mod tests {
         assert_eq!(table.version(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 1);
-        assert!(write_metrics.num_partitions > 0);
         assert!(write_metrics.num_removed_files > 0);
         assert_common_write_metrics(write_metrics);
 

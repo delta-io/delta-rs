@@ -1119,6 +1119,7 @@ mod local {
         let _ = write_builder
             .with_input_execution_plan(plan)
             .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(deltalake_core::operations::write::SchemaMode::Overwrite)
             .await
             .unwrap();
 
