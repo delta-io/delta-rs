@@ -5,6 +5,7 @@ mod merge;
 mod query;
 mod schema;
 mod utils;
+mod writer;
 
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
@@ -2179,9 +2180,9 @@ fn write_to_deltalake(
             );
             builder = builder.with_input_batches(data.0.map(|batch| batch.unwrap()));
         } else {
+            use crate::writer::to_lazy_table;
             use deltalake::datafusion::datasource::provider_as_source;
             use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
-            use deltalake::operations::write::lazy::to_lazy_table;
             let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
 
             let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
