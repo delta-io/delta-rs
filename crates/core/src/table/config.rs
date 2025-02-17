@@ -1,9 +1,9 @@
 //! Delta Table configuration
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
 use delta_kernel::table_features::ColumnMappingMode;
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
 use super::Constraint;
@@ -35,6 +35,10 @@ pub enum TableProperty {
     /// true for Delta Lake to write file statistics to checkpoints in struct format for the
     /// stats_parsed column and to write partition values as a struct for partitionValues_parsed.
     CheckpointWriteStatsAsStruct,
+
+    /// true for Delta Lake to write checkpoint files using run length encoding (RLE).
+    /// Some readers don't support run length encoding (i.e. Fabric) so this can be disabled.
+    CheckpointUseRunLengthEncoding,
 
     /// Whether column mapping is enabled for Delta table columns and the corresponding
     /// Parquet columns that use different names.
@@ -126,6 +130,7 @@ impl AsRef<str> for TableProperty {
             Self::AutoOptimizeOptimizeWrite => "delta.autoOptimize.optimizeWrite",
             Self::CheckpointWriteStatsAsJson => "delta.checkpoint.writeStatsAsJson",
             Self::CheckpointWriteStatsAsStruct => "delta.checkpoint.writeStatsAsStruct",
+            Self::CheckpointUseRunLengthEncoding => "delta-rs.checkpoint.useRunLengthEncoding",
             Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
@@ -158,6 +163,7 @@ impl FromStr for TableProperty {
             "delta.autoOptimize.optimizeWrite" => Ok(Self::AutoOptimizeOptimizeWrite),
             "delta.checkpoint.writeStatsAsJson" => Ok(Self::CheckpointWriteStatsAsJson),
             "delta.checkpoint.writeStatsAsStruct" => Ok(Self::CheckpointWriteStatsAsStruct),
+            "delta-rs.checkpoint.useRunLengthEncoding" => Ok(Self::CheckpointUseRunLengthEncoding),
             "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
@@ -239,6 +245,13 @@ impl TableConfig<'_> {
             false
         ),
         (
+            "true for Delta Lake to write checkpoint files using run length encoding (RLE)",
+            TableProperty::CheckpointUseRunLengthEncoding,
+            use_checkpoint_rle,
+            bool,
+            true
+        ),
+        (
             "The target file size in bytes or higher units for file tuning",
             TableProperty::TargetFileSize,
             target_file_size,
@@ -295,9 +308,8 @@ impl TableConfig<'_> {
     /// * If you run a streaming query that reads from the table, that query does not stop for longer
     ///   than this value. Otherwise, the query may not be able to restart, as it must still read old files.
     pub fn deleted_file_retention_duration(&self) -> Duration {
-        lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 weeks").unwrap();
-        }
+        static DEFAULT_DURATION: LazyLock<Duration> =
+            LazyLock::new(|| parse_interval("interval 1 weeks").unwrap());
         self.0
             .get(TableProperty::DeletedFileRetentionDuration.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
@@ -311,9 +323,8 @@ impl TableConfig<'_> {
     /// entries are retained. This should not impact performance as operations against the log are
     /// constant time. Operations on history are parallel but will become more expensive as the log size increases.
     pub fn log_retention_duration(&self) -> Duration {
-        lazy_static! {
-            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 days").unwrap();
-        }
+        static DEFAULT_DURATION: LazyLock<Duration> =
+            LazyLock::new(|| parse_interval("interval 30 days").unwrap());
         self.0
             .get(TableProperty::LogRetentionDuration.as_ref())
             .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))

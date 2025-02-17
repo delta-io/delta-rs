@@ -480,7 +480,7 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
 #[cfg(feature = "datafusion")]
 mod datafusion {
     use std::collections::HashSet;
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock};
 
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
@@ -638,6 +638,7 @@ mod datafusion {
                 null_count,
                 max_value,
                 min_value,
+                sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             })
         }
@@ -653,6 +654,7 @@ mod datafusion {
                 null_count: self.null_count.add(&other.null_count),
                 max_value: self.max_value.max(&other.max_value),
                 min_value: self.min_value.min(&other.min_value),
+                sum_value: Precision::Absent,
                 distinct_count: self.distinct_count.add(&other.distinct_count),
             }
         }
@@ -794,13 +796,14 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            lazy_static::lazy_static! {
-                static ref ROW_COUNTS_EVAL: Arc<dyn ExpressionEvaluator> =  ARROW_HANDLER.get_evaluator(
+            static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
+                ARROW_HANDLER.get_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column(["add", "stats_parsed","numRecords"]),
+                    Expression::column(["add", "stats_parsed", "numRecords"]),
                     DataType::Primitive(PrimitiveType::Long),
-                );
-            }
+                )
+            });
+
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
                 let engine = ArrowEngineData::new(batch.clone());

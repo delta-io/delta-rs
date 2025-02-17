@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -42,25 +42,26 @@ impl TestSchemas {
     /// - value: integer
     /// - modified: string
     pub fn simple() -> &'static StructType {
-        lazy_static! {
-            static ref _simple: StructType = StructType::new(vec![
+        static SIMPLE: LazyLock<StructType> = LazyLock::new(|| {
+            StructType::new(vec![
                 StructField::new(
                     "id".to_string(),
                     DataType::Primitive(PrimitiveType::String),
-                    true
+                    true,
                 ),
                 StructField::new(
                     "value".to_string(),
                     DataType::Primitive(PrimitiveType::Integer),
-                    true
+                    true,
                 ),
                 StructField::new(
                     "modified".to_string(),
                     DataType::Primitive(PrimitiveType::String),
-                    true
+                    true,
                 ),
-            ]);
-        }
-        &_simple
+            ])
+        });
+
+        &SIMPLE
     }
 }

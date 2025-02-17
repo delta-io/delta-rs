@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::iter::Iterator;
+use std::sync::LazyLock;
 
 use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
@@ -9,10 +10,10 @@ use arrow_schema::ArrowError;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
+use parquet::basic::Encoding;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use regex::Regex;
@@ -211,10 +212,9 @@ pub async fn cleanup_expired_logs_for(
     cutoff_timestamp: i64,
     operation_id: Option<Uuid>,
 ) -> Result<usize, ProtocolError> {
-    lazy_static! {
-        static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap();
-    }
+    static DELTA_LOG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap()
+    });
 
     let object_store = log_store.object_store(None);
     let maybe_last_checkpoint = object_store
@@ -355,17 +355,23 @@ fn parquet_bytes_from_state(
     );
 
     debug!("Writing to checkpoint parquet buffer...");
+
+    let writer_properties = if state.table_config().use_checkpoint_rle() {
+        WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build()
+    } else {
+        WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .build()
+    };
+
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(
-        &mut bytes,
-        arrow_schema.clone(),
-        Some(
-            WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build(),
-        ),
-    )?;
+    let mut writer =
+        ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), Some(writer_properties))?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
@@ -577,7 +583,6 @@ mod tests {
     use arrow_array::{ArrayRef, Int32Array, RecordBatch};
     use arrow_schema::Schema as ArrowSchema;
     use chrono::Duration;
-    use lazy_static::lazy_static;
     use object_store::path::Path;
     use serde_json::json;
 
@@ -1081,8 +1086,8 @@ mod tests {
         create_checkpoint(&table, None).await.unwrap();
     }
 
-    lazy_static! {
-        static ref SCHEMA: Value = json!({
+    static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
+        json!({
             "type": "struct",
             "fields": [
                 {
@@ -1106,8 +1111,10 @@ mod tests {
                 { "name": "some_string", "type": "string", "nullable": true, "metadata": {} },
                 { "name": "some_timestamp", "type": "timestamp", "nullable": true, "metadata": {} },
             ]
-        });
-        static ref STATS_JSON: Value = json!({
+        })
+    });
+    static STATS_JSON: LazyLock<Value> = LazyLock::new(|| {
+        json!({
             "minValues": {
                 "some_struct": {
                     "struct_string": "A",
@@ -1124,8 +1131,8 @@ mod tests {
                 "some_string": "Q",
                 "some_timestamp": "2021-07-30T18:11:25.594Z"
             }
-        });
-    }
+        })
+    });
 
     #[ignore = "This test is only useful if the batch size has been made small"]
     #[tokio::test]

@@ -192,10 +192,12 @@ class RawDeltaTable:
         predicate: str,
         source_alias: Optional[str],
         target_alias: Optional[str],
+        merge_schema: bool,
         writer_properties: Optional[WriterProperties],
         commit_properties: Optional[CommitProperties],
         post_commithook_properties: Optional[PostCommitHookProperties],
         safe_cast: bool,
+        streaming: bool,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
@@ -223,6 +225,13 @@ class RawDeltaTable:
         allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader: ...
     def transaction_versions(self) -> Dict[str, Transaction]: ...
+    def set_column_metadata(
+        self,
+        column: str,
+        metadata: dict[str, str],
+        commit_properties: Optional[CommitProperties],
+        post_commithook_properties: Optional[PostCommitHookProperties],
+    ) -> None: ...
     def __datafusion_table_provider__(self) -> Any: ...
 
 def rust_core_version() -> str: ...
@@ -285,6 +294,7 @@ def get_num_idx_cols_and_stats_columns(
 class PyMergeBuilder:
     source_alias: str
     target_alias: str
+    merge_schema: bool
     arrow_schema: pyarrow.Schema
 
     def when_matched_update(

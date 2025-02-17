@@ -972,6 +972,7 @@ class DeltaTable:
         predicate: str,
         source_alias: Optional[str] = None,
         target_alias: Optional[str] = None,
+        merge_schema: bool = False,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: Optional[bool] = None,
@@ -988,6 +989,7 @@ class DeltaTable:
             predicate: SQL like predicate on how to merge
             source_alias: Alias for the source table
             target_alias: Alias for the target table
+            merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             large_dtypes: Deprecated, will be removed in 1.0
@@ -1029,14 +1031,17 @@ class DeltaTable:
             convert_pyarrow_table,
         )
 
+        streaming = False
         if isinstance(source, pyarrow.RecordBatchReader):
             source = convert_pyarrow_recordbatchreader(source, conversion_mode)
+            streaming = True
         elif isinstance(source, pyarrow.RecordBatch):
             source = convert_pyarrow_recordbatch(source, conversion_mode)
         elif isinstance(source, pyarrow.Table):
             source = convert_pyarrow_table(source, conversion_mode)
         elif isinstance(source, ds.Dataset):
             source = convert_pyarrow_dataset(source, conversion_mode)
+            streaming = True
         elif _has_pandas and isinstance(source, pd.DataFrame):
             source = convert_pyarrow_table(
                 pyarrow.Table.from_pandas(source), conversion_mode
@@ -1055,7 +1060,9 @@ class DeltaTable:
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
+            merge_schema=merge_schema,
             safe_cast=not error_on_type_mismatch,
+            streaming=streaming,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
@@ -1975,6 +1982,7 @@ class TableAlterer:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Example:
+            ```python
             from deltalake.schema import Field, PrimitiveType, StructType
             dt = DeltaTable("test_table")
             new_fields = [
@@ -2157,6 +2165,28 @@ class TableAlterer:
             properties,
             raise_if_not_exists,
             commit_properties,
+        )
+
+    def set_column_metadata(
+        self,
+        column: str,
+        metadata: dict[str, str],
+        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        """
+        Update a field's metadata in a schema. If the metadata key does not exist, the entry is inserted.
+
+        If the column name doesn't exist in the schema - an error is raised.
+
+        :param column: name of the column to update metadata for.
+        :param metadata: the metadata to be added or modified on the column.
+        :param commit_properties: properties of the transaction commit. If None, default values are used.
+        :param post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        :return:
+        """
+        self.table._table.set_column_metadata(
+            column, metadata, commit_properties, post_commithook_properties
         )
 
 

@@ -1,14 +1,13 @@
 //! Delta log store.
 use std::cmp::min;
 use std::io::{BufRead, BufReader, Cursor};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use delta_kernel::AsAny;
 use futures::{StreamExt, TryStreamExt};
-use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
@@ -92,9 +91,7 @@ pub fn logstores() -> FactoryRegistry {
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
 
-lazy_static! {
-    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-}
+static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Return the [LogStoreRef] for the provided [Url] location
 ///
@@ -417,9 +414,8 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
     }
 }
 
-lazy_static! {
-    static ref DELTA_LOG_REGEX: Regex = Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap();
-}
+static DELTA_LOG_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
 
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
@@ -435,13 +431,8 @@ pub async fn get_latest_version(
 ) -> DeltaResult<i64> {
     let version_start = match get_last_checkpoint(log_store).await {
         Ok(last_check_point) => last_check_point.version,
-        Err(ProtocolError::CheckpointNotFound) => {
-            // no checkpoint
-            -1
-        }
-        Err(e) => {
-            return Err(DeltaTableError::from(e));
-        }
+        Err(ProtocolError::CheckpointNotFound) => -1, // no checkpoint
+        Err(e) => return Err(DeltaTableError::from(e)),
     };
 
     debug!("latest checkpoint version: {version_start}");
@@ -455,6 +446,7 @@ pub async fn get_latest_version(
         let offset_path = commit_uri_from_version(max_version);
         let object_store = log_store.object_store(None);
         let mut files = object_store.list_with_offset(prefix, &offset_path);
+        let mut empty_stream = true;
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
@@ -465,15 +457,28 @@ pub async fn get_latest_version(
                 // self.version_timestamp
                 //     .insert(log_version, obj_meta.last_modified.timestamp());
             }
+            empty_stream = false;
         }
 
         if max_version < 0 {
             return Err(DeltaTableError::not_a_table(log_store.root_uri()));
         }
 
+        // This implies no files were fetched during list_offset so either the starting_version is the latest
+        // or starting_version is invalid, so we use current_version -1, and do one more try.
+        if empty_stream {
+            let obj_meta = object_store
+                .head(&commit_uri_from_version(max_version))
+                .await;
+            if obj_meta.is_err() {
+                return Box::pin(get_latest_version(log_store, -1)).await;
+            }
+        }
+
         Ok::<i64, DeltaTableError>(max_version)
     }
     .await?;
+
     Ok(version)
 }
 

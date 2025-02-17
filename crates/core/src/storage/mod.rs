@@ -1,6 +1,6 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use crate::{DeltaResult, DeltaTableError};
 use dashmap::DashMap;
@@ -8,7 +8,6 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
 use humantime::parse_duration;
-use lazy_static::lazy_static;
 use object_store::limit::LimitStore;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
@@ -35,9 +34,7 @@ pub mod file;
 pub mod retry_ext;
 pub mod utils;
 
-lazy_static! {
-    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-}
+static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Creates static IO Runtime with optional configuration
 fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {

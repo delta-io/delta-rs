@@ -6,6 +6,8 @@ mod query;
 mod schema;
 mod utils;
 
+use core::num;
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::future::IntoFuture;
@@ -18,7 +20,7 @@ use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::schema::StructField;
+use delta_kernel::schema::{MetadataValue, StructField};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
@@ -63,13 +65,6 @@ use error::DeltaError;
 use futures::future::join_all;
 use tracing::log::*;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
-use serde_json::{Map, Value};
-use uuid::Uuid;
-
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::features::TableFeatures;
@@ -78,6 +73,28 @@ use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
+use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
+use deltalake::protocol::DeltaOperation::UpdateFieldMetadata;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
+use serde_json::{Map, Value};
+use uuid::Uuid;
+
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+use jemallocator::Jemalloc;
+
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+static ALLOC: Jemalloc = Jemalloc;
+
+#[global_allocator]
+#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+static ALLOC: MiMalloc = MiMalloc;
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
@@ -894,7 +911,9 @@ impl RawDeltaTable {
         predicate,
         source_alias = None,
         target_alias = None,
+        merge_schema = false,
         safe_cast = false,
+        streaming = false,
         writer_properties = None,
         post_commithook_properties = None,
         commit_properties = None,
@@ -906,7 +925,9 @@ impl RawDeltaTable {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        merge_schema: bool,
         safe_cast: bool,
+        streaming: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -926,7 +947,9 @@ impl RawDeltaTable {
                 predicate,
                 source_alias,
                 target_alias,
+                merge_schema,
                 safe_cast,
+                streaming,
                 writer_properties,
                 post_commithook_properties,
                 commit_properties,
@@ -1037,6 +1060,31 @@ impl RawDeltaTable {
             )),
             None => None,
         };
+        let stats_cols = self.get_stats_columns()?;
+        let num_index_cols = self.get_num_index_cols()?;
+
+        let inclusion_stats_cols = if let Some(stats_cols) = stats_cols {
+            stats_cols
+        } else if num_index_cols == -1 {
+            schema
+                .0
+                .fields()
+                .iter()
+                .map(|v| v.name().clone())
+                .collect::<Vec<_>>()
+        } else if num_index_cols >= 0 {
+            let mut fields = vec![];
+            for idx in 0..(min(num_index_cols as usize, schema.0.fields.len())) {
+                fields.push(schema.0.field(idx).name().clone())
+            }
+            fields
+        } else {
+            return Err(DeltaTableError::generic(
+                "Couldn't construct list of fields for file stats expression gatherings",
+            ))
+            .map_err(PythonError::from)?;
+        };
+
         self.cloned_state()?
             .log_data()
             .into_iter()
@@ -1048,7 +1096,8 @@ impl RawDeltaTable {
                 }
             })
             .map(|(path, f)| {
-                let expression = filestats_to_expression_next(py, &schema, f)?;
+                let expression =
+                    filestats_to_expression_next(py, &schema, &inclusion_stats_cols, f)?;
                 Ok((path, expression))
             })
             .collect()
@@ -1501,14 +1550,53 @@ impl RawDeltaTable {
         }
     }
 
+    #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
+    pub fn set_column_metadata(
+        &self,
+        py: Python,
+        field_name: &str,
+        metadata: HashMap<String, String>,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = UpdateFieldMetadataBuilder::new(self.log_store()?, self.cloned_state()?);
+
+            cmd = cmd.with_field_name(field_name).with_metadata(
+                metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
+                    .collect(),
+            );
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties)
+            }
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(cmd.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
+        // tokio runtime handle?
+        let handle = None;
         let name = CString::new("datafusion_table_provider").unwrap();
 
         let table = self.with_table(|t| Ok(Arc::new(t.clone())))?;
-        let provider = FFI_TableProvider::new(table, false);
+        let provider = FFI_TableProvider::new(table, false, handle);
 
         PyCapsule::new_bound(py, provider, Some(name.clone()))
     }
@@ -1746,12 +1834,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
+    stats_columns: &Vec<String>,
     file_info: LogicalFile<'_>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let ds = PyModule::import_bound(py, "pyarrow.dataset")?;
+    let ds = PyModule::import(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
-    let pa = PyModule::import_bound(py, "pyarrow")?;
-    let py_date = Python::import_bound(py, "datetime")?.getattr("date")?;
+    let pa = PyModule::import(py, "pyarrow")?;
+    let py_date = Python::import(py, "datetime")?.getattr("date")?;
     let mut expressions = Vec::new();
 
     let cast_to_type = |column_name: &String, value: &Bound<'py, PyAny>, schema: &ArrowSchema| {
@@ -1762,7 +1851,7 @@ fn filestats_to_expression_next<'py>(
             })?
             .data_type()
             .clone();
-        let column_type = PyArrowType(column_type).into_py(py);
+        let column_type = PyArrowType(column_type).into_pyobject(py)?;
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };
@@ -1790,13 +1879,15 @@ fn filestats_to_expression_next<'py>(
     // NOTE: null_counts should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.null_counts() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            if let Scalar::Long(val) = value {
-                if *val == 0 {
-                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
-                } else if Some(*val as usize) == file_info.num_records() {
-                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
-                } else {
-                    has_nulls_set.insert(field.name().to_string());
+            if stats_columns.contains(field.name()) {
+                if let Scalar::Long(val) = value {
+                    if *val == 0 {
+                        expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
+                    } else if Some(*val as usize) == file_info.num_records() {
+                        expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
+                    } else {
+                        has_nulls_set.insert(field.name().to_string());
+                    }
                 }
             }
         }
@@ -1805,24 +1896,26 @@ fn filestats_to_expression_next<'py>(
     // NOTE: min_values should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.min_values() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            match value {
-                // TODO: Handle nested field statistics.
-                Scalar::Struct(_) => {}
-                _ => {
-                    let maybe_minimum =
-                        cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
-                    if let Ok(minimum) = maybe_minimum {
-                        let field_expr = py_field.call1((field.name(),))?;
-                        let expr = field_expr.call_method1("__ge__", (minimum,));
-                        let expr = if has_nulls_set.contains(field.name()) {
-                            // col >= min_value OR col is null
-                            let is_null_expr = field_expr.call_method0("is_null");
-                            expr?.call_method1("__or__", (is_null_expr?,))
-                        } else {
-                            // col >= min_value
-                            expr
-                        };
-                        expressions.push(expr);
+            if stats_columns.contains(field.name()) {
+                match value {
+                    // TODO: Handle nested field statistics.
+                    Scalar::Struct(_) => {}
+                    _ => {
+                        let maybe_minimum =
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                        if let Ok(minimum) = maybe_minimum {
+                            let field_expr = py_field.call1((field.name(),))?;
+                            let expr = field_expr.call_method1("__ge__", (minimum,));
+                            let expr = if has_nulls_set.contains(field.name()) {
+                                // col >= min_value OR col is null
+                                let is_null_expr = field_expr.call_method0("is_null");
+                                expr?.call_method1("__or__", (is_null_expr?,))
+                            } else {
+                                // col >= min_value
+                                expr
+                            };
+                            expressions.push(expr);
+                        }
                     }
                 }
             }
@@ -1832,24 +1925,26 @@ fn filestats_to_expression_next<'py>(
     // NOTE: max_values should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.max_values() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            match value {
-                // TODO: Handle nested field statistics.
-                Scalar::Struct(_) => {}
-                _ => {
-                    let maybe_maximum =
-                        cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
-                    if let Ok(maximum) = maybe_maximum {
-                        let field_expr = py_field.call1((field.name(),))?;
-                        let expr = field_expr.call_method1("__le__", (maximum,));
-                        let expr = if has_nulls_set.contains(field.name()) {
-                            // col <= max_value OR col is null
-                            let is_null_expr = field_expr.call_method0("is_null");
-                            expr?.call_method1("__or__", (is_null_expr?,))
-                        } else {
-                            // col <= max_value
-                            expr
-                        };
-                        expressions.push(expr);
+            if stats_columns.contains(field.name()) {
+                match value {
+                    // TODO: Handle nested field statistics.
+                    Scalar::Struct(_) => {}
+                    _ => {
+                        let maybe_maximum =
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                        if let Ok(maximum) = maybe_maximum {
+                            let field_expr = py_field.call1((field.name(),))?;
+                            let expr = field_expr.call_method1("__le__", (maximum,));
+                            let expr = if has_nulls_set.contains(field.name()) {
+                                // col <= max_value OR col is null
+                                let is_null_expr = field_expr.call_method0("is_null");
+                                expr?.call_method1("__or__", (is_null_expr?,))
+                            } else {
+                                // col <= max_value
+                                expr
+                            };
+                            expressions.push(expr);
+                        }
                     }
                 }
             }

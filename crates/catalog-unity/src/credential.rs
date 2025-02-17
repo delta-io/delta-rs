@@ -14,6 +14,7 @@ use crate::client::token::{TemporaryToken, TokenCache};
 // https://learn.microsoft.com/en-us/azure/databricks/dev-tools/api/latest/authentication
 
 const DATABRICKS_RESOURCE_SCOPE: &str = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d";
+const DATABRICKS_WORKSPACE_SCOPE: &str = "all-apis";
 const CONTENT_TYPE_JSON: &str = "application/json";
 const MSI_SECRET_ENV_KEY: &str = "IDENTITY_HEADER";
 const MSI_API_VERSION: &str = "2019-08-01";
@@ -54,6 +55,58 @@ pub enum CredentialProvider {
 struct TokenResponse {
     access_token: String,
     expires_in: u64,
+}
+
+/// The same thing as the azure oauth provider, but uses the databricks api to
+/// get tokens directly from the workspace.
+#[derive(Debug, Clone)]
+pub struct WorkspaceOAuthProvider {
+    token_url: String,
+    client_id: String,
+    client_secret: String,
+}
+
+impl WorkspaceOAuthProvider {
+    pub fn new(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        workspace_host: impl Into<String>,
+    ) -> Self {
+        Self {
+            token_url: format!("{}/oidc/v1/token", workspace_host.into()),
+            client_id: client_id.into(),
+            client_secret: client_secret.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for WorkspaceOAuthProvider {
+    async fn fetch_token(
+        &self,
+        client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError> {
+        let response: TokenResponse = client
+            .request(Method::POST, &self.token_url)
+            .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
+            .form(&[
+                ("client_id", self.client_id.as_str()),
+                ("client_secret", self.client_secret.as_str()),
+                ("scope", DATABRICKS_WORKSPACE_SCOPE),
+                ("grant_type", "client_credentials"),
+            ])
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?
+            .json()
+            .await
+            .map_err(UnityCatalogError::from)?;
+
+        Ok(TemporaryToken {
+            token: response.access_token,
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
+        })
+    }
 }
 
 /// Encapsulates the logic to perform an OAuth token challenge

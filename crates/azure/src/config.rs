@@ -6,14 +6,14 @@
 //! way how we discover valid credentials and some heuristics on how they are prioritized.
 use std::collections::{hash_map::Entry, HashMap};
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use object_store::azure::AzureConfigKey;
 use object_store::Error as ObjectStoreError;
 
 use crate::error::Result;
 
-lazy_static::lazy_static! {
-    static ref CREDENTIAL_KEYS: Vec<AzureConfigKey> =
+static CREDENTIAL_KEYS: LazyLock<Vec<AzureConfigKey>> = LazyLock::new(|| {
     Vec::from_iter([
         AzureConfigKey::ClientId,
         AzureConfigKey::ClientSecret,
@@ -23,8 +23,8 @@ lazy_static::lazy_static! {
         AzureConfigKey::MsiEndpoint,
         AzureConfigKey::ObjectId,
         AzureConfigKey::MsiResourceId,
-    ]);
-}
+    ])
+});
 
 /// Credential
 enum AzureCredential {

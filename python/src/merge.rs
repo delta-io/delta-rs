@@ -4,16 +4,20 @@ use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
 use deltalake::arrow::pyarrow::IntoPyArrow;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
+use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::LazyTableProvider;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{DeltaResult, DeltaTable};
+use parking_lot::RwLock;
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::fmt::{self};
 use std::future::IntoFuture;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::error::PythonError;
 use crate::utils::rt;
@@ -29,7 +33,49 @@ pub(crate) struct PyMergeBuilder {
     source_alias: Option<String>,
     #[pyo3(get)]
     target_alias: Option<String>,
+    #[pyo3(get)]
+    merge_schema: bool,
     arrow_schema: Arc<ArrowSchema>,
+}
+#[derive(Debug)]
+struct ArrowStreamBatchGenerator {
+    pub array_stream: Arc<Mutex<ArrowArrayStreamReader>>,
+}
+
+impl fmt::Display for ArrowStreamBatchGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ArrowStreamBatchGenerator {{ array_stream: {:?} }}",
+            self.array_stream
+        )
+    }
+}
+
+impl ArrowStreamBatchGenerator {
+    fn new(array_stream: Arc<Mutex<ArrowArrayStreamReader>>) -> Self {
+        Self { array_stream }
+    }
+}
+
+impl LazyBatchGenerator for ArrowStreamBatchGenerator {
+    fn generate_next_batch(
+        &mut self,
+    ) -> deltalake::datafusion::error::Result<Option<deltalake::arrow::array::RecordBatch>> {
+        let mut stream_reader = self.array_stream.lock().map_err(|_| {
+            deltalake::datafusion::error::DataFusionError::Execution(
+                "Failed to lock the ArrowArrayStreamReader".to_string(),
+            )
+        })?;
+
+        match stream_reader.next() {
+            Some(Ok(record_batch)) => Ok(Some(record_batch)),
+            Some(Err(err)) => Err(deltalake::datafusion::error::DataFusionError::ArrowError(
+                err, None,
+            )),
+            None => Ok(None), // End of stream
+        }
+    }
 }
 
 impl PyMergeBuilder {
@@ -41,7 +87,9 @@ impl PyMergeBuilder {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        merge_schema: bool,
         safe_cast: bool,
+        streaming: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -49,13 +97,27 @@ impl PyMergeBuilder {
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();
         let schema = source.schema();
-        let batches = vec![source.map(|batch| batch.unwrap()).collect::<Vec<_>>()];
-        let table_provider: Arc<dyn TableProvider> =
-            Arc::new(MemTable::try_new(schema.clone(), batches).unwrap());
-        let source_df = ctx.read_table(table_provider).unwrap();
 
-        let mut cmd =
-            MergeBuilder::new(log_store, snapshot, predicate, source_df).with_safe_cast(safe_cast);
+        let source_df = if streaming {
+            let arrow_stream: Arc<Mutex<ArrowArrayStreamReader>> = Arc::new(Mutex::new(source));
+            let arrow_stream_batch_generator: Arc<RwLock<dyn LazyBatchGenerator>> =
+                Arc::new(RwLock::new(ArrowStreamBatchGenerator::new(arrow_stream)));
+
+            let table_provider: Arc<dyn TableProvider> = Arc::new(LazyTableProvider::try_new(
+                schema.clone(),
+                vec![arrow_stream_batch_generator],
+            )?);
+            ctx.read_table(table_provider).unwrap()
+        } else {
+            let batches = vec![source.map(|batch| batch.unwrap()).collect::<Vec<_>>()];
+            let table_provider: Arc<dyn TableProvider> =
+                Arc::new(MemTable::try_new(schema.clone(), batches).unwrap());
+            ctx.read_table(table_provider).unwrap()
+        };
+
+        let mut cmd = MergeBuilder::new(log_store, snapshot, predicate, source_df)
+            .with_safe_cast(safe_cast)
+            .with_streaming(streaming);
 
         if let Some(src_alias) = &source_alias {
             cmd = cmd.with_source_alias(src_alias);
@@ -64,6 +126,8 @@ impl PyMergeBuilder {
         if let Some(trgt_alias) = &target_alias {
             cmd = cmd.with_target_alias(trgt_alias);
         }
+
+        cmd = cmd.with_merge_schema(merge_schema);
 
         if let Some(writer_props) = writer_properties {
             cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
@@ -83,6 +147,7 @@ impl PyMergeBuilder {
             _builder: Some(cmd),
             source_alias,
             target_alias,
+            merge_schema,
             arrow_schema: schema,
         })
     }

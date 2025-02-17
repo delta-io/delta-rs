@@ -2,7 +2,7 @@
 //! delta-rs
 //!
 
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 /// Custom S3 endpoint.
@@ -150,15 +150,15 @@ pub const STRING_TYPE: &str = "S";
 pub const KEY_TYPE_HASH: &str = "HASH";
 pub const KEY_TYPE_RANGE: &str = "RANGE";
 
-lazy_static! {
-    pub static ref CONDITION_EXPR_CREATE: String = format!(
-        "attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME})"
-    );
+pub static CONDITION_EXPR_CREATE: LazyLock<String> = LazyLock::new(|| {
+    format!("attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME})")
+});
 
-    pub static ref CONDITION_DELETE_INCOMPLETE: String = format!(
-        "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
-    );
-}
+pub static CONDITION_DELETE_INCOMPLETE: LazyLock<String> = LazyLock::new(|| {
+    format!(
+    "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
+)
+});
 
 pub const CONDITION_UPDATE_INCOMPLETE: &str = "complete = :f";
 pub const DEFAULT_COMMIT_ENTRY_EXPIRATION_DELAY: Duration = Duration::from_secs(86_400);

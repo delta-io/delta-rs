@@ -10,7 +10,9 @@ compile_error!(
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use std::str::FromStr;
 
-use crate::credential::{AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider};
+use crate::credential::{
+    AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, WorkspaceOAuthProvider,
+};
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
     ListTableSummariesResponse, TableTempCredentialsResponse, TemporaryTableCredentialsRequest,
@@ -240,9 +242,10 @@ impl FromStr for UnityCatalogConfigKey {
             "use_azure_cli" | "unity_use_azure_cli" | "databricks_use_azure_cli" => {
                 Ok(UnityCatalogConfigKey::UseAzureCli)
             }
-            "workspace_url" | "unity_workspace_url" | "databricks_workspace_url" => {
-                Ok(UnityCatalogConfigKey::WorkspaceUrl)
-            }
+            "workspace_url"
+            | "unity_workspace_url"
+            | "databricks_workspace_url"
+            | "databricks_host" => Ok(UnityCatalogConfigKey::WorkspaceUrl),
             _ => Err(DataCatalogError::UnknownConfigKey {
                 catalog: "unity",
                 key: s.to_string(),
@@ -371,6 +374,7 @@ impl UnityCatalogBuilder {
                     if let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
                     {
+                        tracing::debug!("Trying: {} with {}", key, value);
                         builder = builder.try_with_option(config_key, value).unwrap();
                     }
                 }
@@ -430,6 +434,19 @@ impl UnityCatalogBuilder {
     fn get_credential_provider(&self) -> Option<CredentialProvider> {
         if let Some(token) = self.bearer_token.as_ref() {
             return Some(CredentialProvider::BearerToken(token.clone()));
+        }
+
+        if let (Some(client_id), Some(client_secret), Some(workspace_host)) =
+            (&self.client_id, &self.client_secret, &self.workspace_url)
+        {
+            return Some(CredentialProvider::TokenCredential(
+                Default::default(),
+                Box::new(WorkspaceOAuthProvider::new(
+                    client_id,
+                    client_secret,
+                    workspace_host,
+                )),
+            ));
         }
 
         if let (Some(client_id), Some(client_secret), Some(authority_id)) = (

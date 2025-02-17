@@ -89,7 +89,7 @@ Daft supports multiple write modes. See the [Daft documentation](https://www.get
 
 ## What can I do with a Daft DataFrame?
 
-Daft gives you [full-featured DataFrame functionality](https://www.getdaft.io/projects/docs/en/latest/user_guide/basic_concepts.html), similar to what you might be used to from pandas, Dask or PySpark.
+Daft gives you full-featured DataFrame functionality, similar to what you might be used to from pandas, Dask or PySpark.
 
 On top of this, Daft also gives you:
 
@@ -97,7 +97,7 @@ On top of this, Daft also gives you:
 - **Expressions API** for easy column transformations
 - **UDFs** for multi-column transformation, incl. ML applications
 
-Check out the [Daft User Guide](https://www.getdaft.io/projects/docs/en/latest/user_guide/index.html) for a complete list of DataFrame operations.
+Check out the [Daft User Guide](https://www.getdaft.io/projects/docs/en/stable/index.html) for a complete list of DataFrame operations.
 
 ## Data Skipping Optimizations
 
@@ -198,7 +198,7 @@ Read [High-Performance Querying on Massive Delta Lake Tables with Daft](https://
 
 Daft has a rich multimodal type-system with support for Python objects, Images, URLs, Tensors and more.
 
-The [Expressions API](https://www.getdaft.io/projects/docs/en/latest/api_docs/expressions.html) provides useful tools to work with these data types. By combining multimodal data support with the [User-Defined Functions API](https://www.getdaft.io/projects/docs/en/latest/api_docs/udf.html) you can [run ML workloads](https://www.getdaft.io/projects/docs/en/latest/user_guide/tutorials.html#mnist-digit-classification) right within your DataFrame.
+The [Expressions API](https://www.getdaft.io/projects/docs/en/latest/api_docs/expressions.html) provides useful tools to work with these data types. By combining multimodal data support with the [User-Defined Functions API](https://www.getdaft.io/projects/docs/en/latest/api_docs/udf.html) you can run ML workloads right within your DataFrame.
 
 Take a look at the notebook in the [`delta-examples` Github repository](https://github.com/delta-io/delta-examples) for a closer look at how Daft handles URLs, images and ML applications.
 
@@ -206,4 +206,4 @@ Take a look at the notebook in the [`delta-examples` Github repository](https://
 
 Excited about Daft and want to contribute? Join them on [Github](https://github.com/Eventual-Inc/Daft) 🚀
 
-Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: `DAFT_ANALYTICS_ENABLED=0`. Read more in the [Daft documentation](https://www.getdaft.io/projects/docs/en/latest/faq/telemetry.html).
+Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: `DAFT_ANALYTICS_ENABLED=0`. Read more in the [Daft documentation](https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/).

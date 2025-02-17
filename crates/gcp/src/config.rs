@@ -6,19 +6,19 @@
 //! way how we discover valid credentials and some heuristics on how they are prioritized.
 use std::collections::{hash_map::Entry, HashMap};
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use object_store::gcp::GoogleConfigKey;
 use object_store::Error as ObjectStoreError;
 
 use crate::error::Result;
 
-lazy_static::lazy_static! {
-    static ref CREDENTIAL_KEYS: Vec<GoogleConfigKey> =
+static CREDENTIAL_KEYS: LazyLock<Vec<GoogleConfigKey>> = LazyLock::new(|| {
     Vec::from_iter([
         GoogleConfigKey::ServiceAccountKey,
         GoogleConfigKey::ApplicationCredentials,
-    ]);
-}
+    ])
+});
 
 /// Credential
 enum GcpCredential {

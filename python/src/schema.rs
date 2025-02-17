@@ -437,8 +437,8 @@ impl Field {
         inner = inner.with_metadata(metadata.iter().map(|(k, v)| {
             (
                 k,
-                if let serde_json::Value::Number(n) = v {
-                    n.as_i64().map_or_else(
+                match v {
+                    serde_json::Value::Number(n) => n.as_i64().map_or_else(
                         || MetadataValue::String(v.to_string()),
                         |i| {
                             i32::try_from(i)
@@ -446,9 +446,9 @@ impl Field {
                                 .map(MetadataValue::Number)
                                 .unwrap_or_else(|| MetadataValue::String(v.to_string()))
                         },
-                    )
-                } else {
-                    MetadataValue::String(v.to_string())
+                    ),
+                    serde_json::Value::String(s) => MetadataValue::String(s.to_string()),
+                    other => MetadataValue::String(other.to_string()),
                 },
             )
         }));

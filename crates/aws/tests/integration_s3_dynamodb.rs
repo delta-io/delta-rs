@@ -3,6 +3,7 @@
 #![cfg(feature = "integration_test")]
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aws_sdk_dynamodb::types::BillingMode;
@@ -19,7 +20,6 @@ use deltalake_core::storage::StorageOptions;
 use deltalake_core::table::builder::ensure_table_uri;
 use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
-use lazy_static::lazy_static;
 use object_store::path::Path;
 use serde_json::Value;
 use serial_test::serial;
@@ -35,12 +35,13 @@ use common::*;
 
 pub type TestResult<T> = Result<T, Box<dyn std::error::Error + 'static>>;
 
-lazy_static! {
-    static ref OPTIONS: HashMap<String, String> = maplit::hashmap! {
+static OPTIONS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    hashmap! {
         "allow_http".to_owned() => "true".to_owned(),
-    };
-    static ref S3_OPTIONS: S3StorageOptions = S3StorageOptions::from_map(&OPTIONS).unwrap();
-}
+    }
+});
+static S3_OPTIONS: LazyLock<S3StorageOptions> =
+    LazyLock::new(|| S3StorageOptions::from_map(&OPTIONS).unwrap());
 
 fn make_client() -> TestResult<DynamoDbLockClient> {
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();

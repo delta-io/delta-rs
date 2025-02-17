@@ -1,7 +1,5 @@
 use std::collections::HashSet;
-
-use lazy_static::lazy_static;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use super::{TableReference, TransactionError};
 use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Schema};
@@ -9,32 +7,38 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
-lazy_static! {
-    static ref READER_V2: HashSet<ReaderFeatures> =
-        HashSet::from_iter([ReaderFeatures::ColumnMapping]);
-    static ref WRITER_V2: HashSet<WriterFeatures> =
-        HashSet::from_iter([WriterFeatures::AppendOnly, WriterFeatures::Invariants]);
-    static ref WRITER_V3: HashSet<WriterFeatures> = HashSet::from_iter([
+static READER_V2: LazyLock<HashSet<ReaderFeatures>> =
+    LazyLock::new(|| HashSet::from_iter([ReaderFeatures::ColumnMapping]));
+static WRITER_V2: LazyLock<HashSet<WriterFeatures>> =
+    LazyLock::new(|| HashSet::from_iter([WriterFeatures::AppendOnly, WriterFeatures::Invariants]));
+static WRITER_V3: LazyLock<HashSet<WriterFeatures>> = LazyLock::new(|| {
+    HashSet::from_iter([
         WriterFeatures::AppendOnly,
         WriterFeatures::Invariants,
-        WriterFeatures::CheckConstraints
-    ]);
-    static ref WRITER_V4: HashSet<WriterFeatures> = HashSet::from_iter([
+        WriterFeatures::CheckConstraints,
+    ])
+});
+static WRITER_V4: LazyLock<HashSet<WriterFeatures>> = LazyLock::new(|| {
+    HashSet::from_iter([
         WriterFeatures::AppendOnly,
         WriterFeatures::Invariants,
         WriterFeatures::CheckConstraints,
         WriterFeatures::ChangeDataFeed,
-        WriterFeatures::GeneratedColumns
-    ]);
-    static ref WRITER_V5: HashSet<WriterFeatures> = HashSet::from_iter([
+        WriterFeatures::GeneratedColumns,
+    ])
+});
+static WRITER_V5: LazyLock<HashSet<WriterFeatures>> = LazyLock::new(|| {
+    HashSet::from_iter([
         WriterFeatures::AppendOnly,
         WriterFeatures::Invariants,
         WriterFeatures::CheckConstraints,
         WriterFeatures::ChangeDataFeed,
         WriterFeatures::GeneratedColumns,
         WriterFeatures::ColumnMapping,
-    ]);
-    static ref WRITER_V6: HashSet<WriterFeatures> = HashSet::from_iter([
+    ])
+});
+static WRITER_V6: LazyLock<HashSet<WriterFeatures>> = LazyLock::new(|| {
+    HashSet::from_iter([
         WriterFeatures::AppendOnly,
         WriterFeatures::Invariants,
         WriterFeatures::CheckConstraints,
@@ -42,8 +46,8 @@ lazy_static! {
         WriterFeatures::GeneratedColumns,
         WriterFeatures::ColumnMapping,
         WriterFeatures::IdentityColumns,
-    ]);
-}
+    ])
+});
 
 pub struct ProtocolChecker {
     reader_features: HashSet<ReaderFeatures>,
@@ -202,7 +206,7 @@ impl ProtocolChecker {
 ///
 /// As we implement new features, we need to update this instance accordingly.
 /// resulting version support is determined by the supported table feature set.
-pub static INSTANCE: Lazy<ProtocolChecker> = Lazy::new(|| {
+pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
     reader_features.insert(ReaderFeatures::TimestampWithoutTimezone);
     // reader_features.insert(ReaderFeatures::ColumnMapping);

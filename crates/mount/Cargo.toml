@@ -15,7 +15,6 @@ rust-version.workspace = true
 deltalake-core = { version = "0.24.0", path = "../core", features = [
     "datafusion",
 ] }
-lazy_static = "1"
 errno = "0.3"
 
 # workspace depenndecies

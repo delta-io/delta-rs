@@ -9,11 +9,13 @@ import pytest
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaProtocolError
+from deltalake.schema import ArrowSchemaConversionMode, convert_pyarrow_table
 from deltalake.table import CommitProperties
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_delete_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -25,6 +27,11 @@ def test_merge_when_matched_delete_wo_predicate(
             "weight": pa.array([105], pa.int32()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.merge(
@@ -52,8 +59,9 @@ def test_merge_when_matched_delete_wo_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_delete_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -68,6 +76,11 @@ def test_merge_when_matched_delete_with_predicate(
             "customer": pa.array(["Adam", "Patrick"]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -92,8 +105,9 @@ def test_merge_when_matched_delete_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -106,6 +120,11 @@ def test_merge_when_matched_update_wo_predicate(
             "sold": pa.array([10, 20], pa.int32()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -129,8 +148,52 @@ def test_merge_when_matched_update_wo_predicate(
     assert result == expected
 
 
-def test_merge_when_matched_update_all_wo_predicate(
+def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
     tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["4", "5"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "customer": pa.array(["john", "doe"]),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update(
+        {"price": "s.price", "sold": "s.sold+int'10'", "customer": "s.customer"}
+    ).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5"]),
+            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 20, 30], pa.int32()),
+            "deleted": pa.array([False] * 5),
+            "customer": pa.array([None, None, None, "john", "doe"]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
+    assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_when_matched_update_all_wo_predicate(
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -145,6 +208,11 @@ def test_merge_when_matched_update_all_wo_predicate(
             "weight": pa.array([10, 15], pa.int64()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -168,8 +236,9 @@ def test_merge_when_matched_update_all_wo_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_all_with_exclude(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -184,6 +253,11 @@ def test_merge_when_matched_update_all_with_exclude(
             "weight": pa.array([10, 15], pa.int64()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -207,8 +281,9 @@ def test_merge_when_matched_update_all_with_exclude(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -222,6 +297,11 @@ def test_merge_when_matched_update_with_predicate(
             "deleted": pa.array([False, True]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -248,8 +328,9 @@ def test_merge_when_matched_update_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -263,6 +344,11 @@ def test_merge_when_not_matched_insert_wo_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -293,8 +379,9 @@ def test_merge_when_not_matched_insert_wo_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -308,6 +395,11 @@ def test_merge_when_not_matched_insert_with_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -339,8 +431,60 @@ def test_merge_when_not_matched_insert_with_predicate(
     assert result == expected
 
 
-def test_merge_when_not_matched_insert_all_with_predicate(
+def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
     tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["6", "10"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "customer": pa.array(["john", "doe"]),
+            "deleted": pa.array([False, False]),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        source_alias="source",
+        target_alias="target",
+        merge_schema=True,
+        predicate="target.id = source.id",
+    ).when_not_matched_insert(
+        updates={
+            "id": "source.id",
+            "price": "source.price",
+            "sold": "source.sold",
+            "customer": "source.customer",
+            "deleted": "False",
+        },
+        predicate="source.price < 50",
+    ).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
+            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
+            "deleted": pa.array([False] * 6),
+            "customer": pa.array([None, None, None, None, None, "john"]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
+    assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_when_not_matched_insert_all_with_predicate(
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -354,6 +498,11 @@ def test_merge_when_not_matched_insert_all_with_predicate(
             "deleted": pa.array([None, None], pa.bool_()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -379,8 +528,9 @@ def test_merge_when_not_matched_insert_all_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_exclude(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -394,6 +544,11 @@ def test_merge_when_not_matched_insert_all_with_exclude(
             "deleted": pa.array([None, None], pa.bool_()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -417,8 +572,51 @@ def test_merge_when_not_matched_insert_all_with_exclude(
     assert result == expected
 
 
+def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["6", "9"]),
+            "price": pa.array([10, 100], pa.int64()),
+            "sold": pa.array([10, 20], pa.int32()),
+            "deleted": pa.array([None, None], pa.bool_()),
+            "customer": pa.array(["john", "doe"]),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        source_alias="source",
+        target_alias="target",
+        merge_schema=True,
+        predicate="target.id = source.id",
+    ).when_not_matched_insert_all(except_cols=["sold"]).execute()
+
+    expected = pa.table(
+        {
+            "id": pa.array(["1", "2", "3", "4", "5", "6", "9"]),
+            "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
+            "sold": pa.array([0, 1, 2, 3, 4, None, None], pa.int32()),
+            "deleted": pa.array([False, False, False, False, False, None, None]),
+            "customer": pa.array([None, None, None, None, None, "john", "doe"]),
+        }
+    )
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
+    assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
-    tmp_path: pathlib.Path, sample_table_with_spaces_numbers: pa.Table
+    tmp_path: pathlib.Path, sample_table_with_spaces_numbers: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table_with_spaces_numbers, mode="append")
 
@@ -432,6 +630,11 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
             "deleted": pa.array([None, None], pa.bool_()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -457,8 +660,9 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_update_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -472,6 +676,11 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -499,8 +708,9 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_update_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -514,6 +724,11 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -542,8 +757,9 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_delete_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -557,6 +773,11 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -583,8 +804,9 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_delete_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -593,6 +815,11 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
     source_table = pa.table(
         {"id": pa.array(["4", "5"]), "weight": pa.array([1.5, 1.6], pa.float64())}
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -619,8 +846,9 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_matched_update_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -634,6 +862,11 @@ def test_merge_multiple_when_matched_update_with_predicate(
             "deleted": pa.array([False, True]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -663,8 +896,9 @@ def test_merge_multiple_when_matched_update_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_matched_update_all_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -678,6 +912,11 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
             "deleted": pa.array([False, True]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -705,8 +944,9 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_not_matched_insert_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -720,6 +960,11 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -759,8 +1004,9 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_matched_delete_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -775,6 +1021,11 @@ def test_merge_multiple_when_matched_delete_with_predicate(
             "customer": pa.array(["Adam", "Patrick"]),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -801,8 +1052,9 @@ def test_merge_multiple_when_matched_delete_with_predicate(
     assert result == expected
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
 ):
     """The first match clause that meets the predicate will be executed, so if you do an update
     without an other predicate the first clause will be matched and therefore the other ones are skipped.
@@ -819,6 +1071,10 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
             "deleted": pa.array([False, False]),
         }
     )
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     dt.merge(
         source=source_table,
@@ -850,7 +1106,8 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
     assert result == expected
 
 
-def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     from datetime import date
 
     schema = pa.schema(
@@ -873,6 +1130,11 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
         }
     )
 
+    expected = data
+
+    if streaming:
+        data = convert_pyarrow_table(data, ArrowSchemaConversionMode.PASSTHROUGH)
+
     dt.merge(
         data,
         predicate="s.date = t.date",
@@ -884,11 +1146,15 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path):
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
-    assert result == data
-    assert (
-        last_action["operationParameters"].get("predicate")
-        == "'2022-02-01'::date = date"
-    )
+    assert result == expected
+    if not streaming:
+        assert (
+            last_action["operationParameters"].get("predicate")
+            == "'2022-02-01'::date = date"
+        )
+    else:
+        # In streaming mode we don't use aggregated stats of the source in the predicate
+        assert last_action["operationParameters"].get("predicate") is None
 
 
 @pytest.mark.parametrize(
@@ -944,8 +1210,11 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operationParameters"].get("predicate") == predicate
 
 
+@pytest.mark.parametrize("streaming", (True, False))
 @pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+def test_merge_stats_columns_stats_provided(
+    tmp_path: pathlib.Path, engine, streaming: bool
+):
     data = pa.table(
         {
             "foo": pa.array(["a", "b", None, None]),
@@ -981,6 +1250,9 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
             "baz": pa.array([10]),
         }
     )
+
+    if streaming:
+        data = convert_pyarrow_table(data, ArrowSchemaConversionMode.PASSTHROUGH)
 
     dt.merge(
         data,
@@ -1074,9 +1346,8 @@ def test_struct_casting(tmp_path: pathlib.Path):
     assert result is not None
 
 
-def test_merge_isin_partition_pruning(
-    tmp_path: pathlib.Path,
-):
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
     nrows = 5
     data = pa.table(
         {
@@ -1097,6 +1368,11 @@ def test_merge_isin_partition_pruning(
             "sold": pa.array([10, 20], pa.int32()),
         }
     )
+
+    if streaming:
+        source_table = convert_pyarrow_table(
+            source_table, ArrowSchemaConversionMode.PASSTHROUGH
+        )
 
     metrics = (
         dt.merge(
@@ -1125,7 +1401,8 @@ def test_merge_isin_partition_pruning(
     assert metrics["num_target_files_skipped_during_scan"] == 3
 
 
-def test_cdc_merge_planning_union_2908(tmp_path):
+@pytest.mark.parametrize("streaming", (True, False))
+def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
     """https://github.com/delta-io/delta-rs/issues/2908"""
     cdc_path = f"{tmp_path}/_change_data"
 
@@ -1147,6 +1424,9 @@ def test_cdc_merge_planning_union_2908(tmp_path):
             "delta.enableChangeDataFeed": "true",
         },
     )
+
+    if streaming:
+        table = convert_pyarrow_table(table, ArrowSchemaConversionMode.PASSTHROUGH)
 
     dt.merge(
         source=table,

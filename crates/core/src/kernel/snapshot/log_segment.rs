@@ -1,12 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_array::RecordBatch;
 use chrono::Utc;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -24,14 +23,13 @@ use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
 
-lazy_static! {
-    static ref CHECKPOINT_FILE_PATTERN: Regex =
-        Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap();
-    static ref DELTA_FILE_PATTERN: Regex = Regex::new(r"^\d+\.json$").unwrap();
-    static ref CRC_FILE_PATTERN: Regex = Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap();
-    pub(super) static ref TOMBSTONE_SCHEMA: StructType =
-        StructType::new(vec![ActionType::Remove.schema_field().clone(),]);
-}
+static CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap());
+static DELTA_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.json$").unwrap());
+static CRC_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap());
+pub(super) static TOMBSTONE_SCHEMA: LazyLock<StructType> =
+    LazyLock::new(|| StructType::new(vec![ActionType::Remove.schema_field().clone()]));
 
 /// Trait to extend a file path representation with delta specific functionality
 ///
@@ -306,12 +304,12 @@ impl LogSegment {
         store: Arc<dyn ObjectStore>,
         config: &DeltaTableConfig,
     ) -> DeltaResult<(Option<Protocol>, Option<Metadata>)> {
-        lazy_static::lazy_static! {
-            static ref READ_SCHEMA: StructType = StructType::new(vec![
+        static READ_SCHEMA: LazyLock<StructType> = LazyLock::new(|| {
+            StructType::new(vec![
                 ActionType::Protocol.schema_field().clone(),
                 ActionType::Metadata.schema_field().clone(),
-            ]);
-        }
+            ])
+        });
 
         let mut maybe_protocol = None;
         let mut maybe_metadata = None;
