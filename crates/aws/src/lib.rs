@@ -1,6 +1,6 @@
 //! AWS S3 and similar tooling for delta-rs
 //!
-//! This module also contains the [S3DynamoDbLogStore] implemtnation for concurrent writer support
+//! This module also contains the [S3DynamoDbLogStore] implementation for concurrent writer support
 //! with AWS S3 specifically.
 
 pub mod constants;
