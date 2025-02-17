@@ -503,9 +503,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_buffer_len_includes_unflushed_row_group() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(table_path, &partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
@@ -515,9 +518,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(table_path, &partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
@@ -528,9 +534,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_divide_record_batch_single_partition() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(table_path, &partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
@@ -613,9 +622,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_divide_record_batch_multiple_partitions() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(table_path, &partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
@@ -631,9 +642,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_no_partitions() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(table_path, &partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
@@ -643,9 +656,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_multiple_partitions() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(table_path, &partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
@@ -714,9 +729,12 @@ mod tests {
 
         #[tokio::test]
         async fn test_write_mismatched_schema() {
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path().to_str().unwrap();
+
             let batch = get_record_batch(None, false);
             let partition_cols = vec![];
-            let table = create_initialized_table(&partition_cols).await;
+            let table = create_initialized_table(table_path, &partition_cols).await;
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
             // Write the first batch with the first schema to the table
@@ -895,9 +913,12 @@ mod tests {
 
         #[tokio::test]
         async fn test_schema_evolution_column_type_mismatch() {
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path().to_str().unwrap();
+
             let batch = get_record_batch(None, false);
             let partition_cols = vec![];
-            let mut table = create_initialized_table(&partition_cols).await;
+            let mut table = create_initialized_table(table_path, &partition_cols).await;
 
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
