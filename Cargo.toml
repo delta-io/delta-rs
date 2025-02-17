@@ -59,7 +59,7 @@ datafusion-sql = "45"
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "0.26"}
+strum = { version = "0.27"}
 
 
 # "stdlib"
