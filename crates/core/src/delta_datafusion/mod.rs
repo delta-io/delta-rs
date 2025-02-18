@@ -98,6 +98,8 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 
+pub use cdf::scan::DeltaCdfTableProvider;
+
 mod schema_adapter;
 
 impl From<DeltaTableError> for DataFusionError {

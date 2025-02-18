@@ -69,6 +69,8 @@ MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = 2
 SUPPORTED_READER_FEATURES = {"timestampNtz"}
 
+FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
+
 FilterLiteralType = Tuple[str, str, Any]
 FilterConjunctionType = List[FilterLiteralType]
 FilterDNFType = List[FilterConjunctionType]
@@ -692,10 +694,12 @@ class DeltaTable:
         starting_timestamp: Optional[str] = None,
         ending_timestamp: Optional[str] = None,
         columns: Optional[List[str]] = None,
+        predicate: Optional[str] = None,
         allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader:
         return self._table.load_cdf(
             columns=columns,
+            predicate=predicate,
             starting_version=starting_version,
             ending_version=ending_version,
             starting_timestamp=starting_timestamp,
@@ -1430,7 +1434,11 @@ class DeltaTable:
             commit_properties,
             post_commithook_properties,
         )
-        return json.loads(metrics)
+        deserialized_metrics = json.loads(metrics)
+        deserialized_metrics[FSCK_METRICS_FILES_REMOVED_LABEL] = json.loads(
+            deserialized_metrics[FSCK_METRICS_FILES_REMOVED_LABEL]
+        )
+        return deserialized_metrics
 
     def transaction_versions(self) -> Dict[str, Transaction]:
         return self._table.transaction_versions()

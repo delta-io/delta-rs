@@ -4014,9 +4014,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -4132,9 +4131,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -4221,9 +4219,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 

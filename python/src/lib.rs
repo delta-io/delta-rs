@@ -26,9 +26,9 @@ use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream}
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
-use deltalake::datafusion::physical_plan::ExecutionPlan;
+use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
@@ -837,7 +837,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version = None, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, allow_out_of_range = false))]
+    #[pyo3(signature = (starting_version = None, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, predicate = None, allow_out_of_range = false))]
     #[allow(clippy::too_many_arguments)]
     pub fn load_cdf(
         &self,
@@ -847,6 +847,7 @@ impl RawDeltaTable {
         starting_timestamp: Option<String>,
         ending_timestamp: Option<String>,
         columns: Option<Vec<String>>,
+        predicate: Option<String>,
         allow_out_of_range: bool,
     ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
@@ -875,13 +876,31 @@ impl RawDeltaTable {
             cdf_read = cdf_read.with_allow_out_of_range();
         }
 
-        if let Some(columns) = columns {
-            cdf_read = cdf_read.with_columns(columns);
-        }
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(DeltaCdfTableProvider::try_new(cdf_read).map_err(PythonError::from)?);
 
-        cdf_read = cdf_read.with_session_ctx(ctx.clone());
+        let table_name: String = "source".to_string();
 
-        let plan = rt().block_on(cdf_read.build()).map_err(PythonError::from)?;
+        ctx.register_table(table_name.clone(), table_provider)
+            .map_err(PythonError::from)?;
+        let select_string = if let Some(columns) = columns {
+            columns.join(", ")
+        } else {
+            "*".to_string()
+        };
+
+        let sql = if let Some(predicate) = predicate {
+            format!(
+                "SELECT {} FROM `{}` WHERE ({}) ",
+                select_string, &table_name, predicate
+            )
+        } else {
+            format!("SELECT {} FROM `{}`", select_string, &table_name,)
+        };
+
+        let plan = rt()
+            .block_on(async { ctx.sql(&sql).await?.create_physical_plan().await })
+            .map_err(PythonError::from)?;
 
         py.allow_threads(|| {
             let mut tasks = vec![];

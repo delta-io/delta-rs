@@ -1272,9 +1272,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -1363,9 +1362,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -1380,18 +1378,18 @@ mod tests {
         let _ = arrow::util::pretty::print_batches(&batches);
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
-        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(3)).collect();
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
 
         assert_batches_sorted_eq! {[
-        "+-------+------------------+-----------------+------+",
-        "| value | _change_type     | _commit_version | year |",
-        "+-------+------------------+-----------------+------+",
-        "| 1     | insert           | 1               | 2020 |",
-        "| 2     | insert           | 1               | 2020 |",
-        "| 2     | update_preimage  | 2               | 2020 |",
-        "| 2     | update_postimage | 2               | 2024 |",
-        "| 3     | insert           | 1               | 2024 |",
-        "+-------+------------------+-----------------+------+",
-            ], &batches }
+        "+-------+------+------------------+-----------------+",
+        "| value | year | _change_type     | _commit_version |",
+        "+-------+------+------------------+-----------------+",
+        "| 1     | 2020 | insert           | 1               |",
+        "| 2     | 2020 | insert           | 1               |",
+        "| 2     | 2020 | update_preimage  | 2               |",
+        "| 2     | 2024 | update_postimage | 2               |",
+        "| 3     | 2024 | insert           | 1               |",
+        "+-------+------+------------------+-----------------+",
+        ], &batches }
     }
 }
