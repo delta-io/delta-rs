@@ -53,7 +53,8 @@ use crate::delta_datafusion::{
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
-use crate::operations::write::{write_execution_plan, write_execution_plan_cdc, WriterStatsConfig};
+use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
+use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -258,7 +259,6 @@ async fn execute_non_empty_expr(
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
-            None,
         )
         .await?;
 
@@ -295,7 +295,6 @@ async fn execute_non_empty_expr(
             None,
             writer_properties,
             writer_stats_config,
-            None,
         )
         .await?;
         actions.extend(cdc_actions)

@@ -5,8 +5,8 @@ mod merge;
 mod query;
 mod schema;
 mod utils;
+mod writer;
 
-use core::num;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -51,6 +51,7 @@ use deltalake::operations::transaction::{
 };
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
@@ -65,6 +66,10 @@ use error::DeltaError;
 use futures::future::join_all;
 use tracing::log::*;
 
+use crate::writer::to_lazy_table;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
+
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::features::TableFeatures;
@@ -74,18 +79,17 @@ use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
-use deltalake::protocol::DeltaOperation::UpdateFieldMetadata;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
+use pyo3::{prelude::*, IntoPyObjectExt};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
 use jemallocator::Jemalloc;
 
-#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -93,7 +97,7 @@ use mimalloc::MiMalloc;
 static ALLOC: Jemalloc = Jemalloc;
 
 #[global_allocator]
-#[cfg(all(any(not(target_family = "unix"), target_os = "emscripten")))]
+#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 static ALLOC: MiMalloc = MiMalloc;
 
 #[derive(FromPyObject)]
@@ -1212,9 +1216,9 @@ impl RawDeltaTable {
 
         let active_partitions = active_partitions
             .into_iter()
-            .map(|part| PyFrozenSet::new_bound(py, part.iter()))
+            .map(|part| PyFrozenSet::new(py, part.iter()))
             .collect::<Result<Vec<Bound<'py, _>>, PyErr>>()?;
-        PyFrozenSet::new_bound(py, &active_partitions)
+        PyFrozenSet::new(py, &active_partitions)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1617,7 +1621,7 @@ impl RawDeltaTable {
         let table = self.with_table(|t| Ok(Arc::new(t.clone())))?;
         let provider = FFI_TableProvider::new(table, false, handle);
 
-        PyCapsule::new_bound(py, provider, Some(name.clone()))
+        PyCapsule::new(py, provider, Some(name.clone()))
     }
 }
 
@@ -1799,38 +1803,38 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
     let py = py_date.py();
     let val = match value {
         Null(_) => py.None(),
-        Boolean(val) => val.to_object(py),
-        Binary(val) => val.to_object(py),
-        String(val) => val.to_object(py),
-        Byte(val) => val.to_object(py),
-        Short(val) => val.to_object(py),
-        Integer(val) => val.to_object(py),
-        Long(val) => val.to_object(py),
-        Float(val) => val.to_object(py),
-        Double(val) => val.to_object(py),
+        Boolean(val) => val.into_py_any(py)?,
+        Binary(val) => val.into_py_any(py)?,
+        String(val) => val.into_py_any(py)?,
+        Byte(val) => val.into_py_any(py)?,
+        Short(val) => val.into_py_any(py)?,
+        Integer(val) => val.into_py_any(py)?,
+        Long(val) => val.into_py_any(py)?,
+        Float(val) => val.into_py_any(py)?,
+        Double(val) => val.into_py_any(py)?,
         Timestamp(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
             // scalar value to pa.timestamp("us","UTC")
             let value = value.serialize();
-            format!("{}Z", value).to_object(py)
+            format!("{}Z", value).into_py_any(py)?
         }
         TimestampNtz(_) => {
             let value = value.serialize();
-            value.to_object(py)
+            value.into_py_any(py)?
         }
         // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
         // we have to implement that manually.
         Date(_) => {
             let date = py_date.call_method1("fromisoformat", (value.serialize(),))?;
-            date.to_object(py)
+            date.into_py_any(py)?
         }
-        Decimal(_, _, _) => value.serialize().to_object(py),
+        Decimal(_, _, _) => value.serialize().into_py_any(py)?,
         Struct(data) => {
-            let py_struct = PyDict::new_bound(py);
+            let py_struct = PyDict::new(py);
             for (field, value) in data.fields().iter().zip(data.values().iter()) {
                 py_struct.set_item(field.name(), scalar_to_py(value, py_date)?)?;
             }
-            py_struct.to_object(py)
+            py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
     };
@@ -1853,7 +1857,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
-    stats_columns: &Vec<String>,
+    stats_columns: &[String],
     file_info: LogicalFile<'_>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let ds = PyModule::import(py, "pyarrow.dataset")?;
@@ -2153,7 +2157,6 @@ fn write_to_deltalake(
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
-        let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
         let save_mode = mode.parse().map_err(PythonError::from)?;
 
         let options = storage_options.clone().unwrap_or_default();
@@ -2166,7 +2169,31 @@ fn write_to_deltalake(
             .map_err(PythonError::from)?
         };
 
-        let mut builder = table.write(batches).with_save_mode(save_mode);
+        // let dont_be_so_lazy = match table.0.state.as_ref() {
+        //     Some(state) => state.table_config().enable_change_data_feed() && predicate.is_some(),
+        //     // You don't have state somehow, so I guess it's okay to be lazy.
+        //     _ => false,
+        // };
+
+        let mut builder =
+            WriteBuilder::new(table.0.log_store(), table.0.state).with_save_mode(save_mode);
+
+        // if dont_be_so_lazy {
+        //     debug!(
+        //         "write_to_deltalake() is not able to lazily perform a write, collecting batches"
+        //     );
+        //     builder = builder.with_input_batches(data.0.map(|batch| batch.unwrap()));
+        // } else {
+
+        let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+
+        let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
+            .map_err(PythonError::from)?
+            .build()
+            .map_err(PythonError::from)?;
+        builder = builder.with_input_execution_plan(Arc::new(plan));
+        // }
+
         if let Some(schema_mode) = schema_mode {
             builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
         }
@@ -2463,33 +2490,21 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake::lakefs::register_handlers(None);
 
     let py = m.py();
-    m.add("DeltaError", py.get_type_bound::<DeltaError>())?;
-    m.add(
-        "CommitFailedError",
-        py.get_type_bound::<CommitFailedError>(),
-    )?;
-    m.add(
-        "DeltaProtocolError",
-        py.get_type_bound::<DeltaProtocolError>(),
-    )?;
-    m.add(
-        "TableNotFoundError",
-        py.get_type_bound::<TableNotFoundError>(),
-    )?;
-    m.add(
-        "SchemaMismatchError",
-        py.get_type_bound::<SchemaMismatchError>(),
-    )?;
+    m.add("DeltaError", py.get_type::<DeltaError>())?;
+    m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
+    m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;
+    m.add("TableNotFoundError", py.get_type::<TableNotFoundError>())?;
+    m.add("SchemaMismatchError", py.get_type::<SchemaMismatchError>())?;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(rust_core_version, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(create_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(write_new_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(write_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(convert_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(batch_distinct, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(
+    m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(
         get_num_idx_cols_and_stats_columns,
         m
     )?)?;
