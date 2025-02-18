@@ -66,6 +66,10 @@ use error::DeltaError;
 use futures::future::join_all;
 use tracing::log::*;
 
+use crate::writer::to_lazy_table;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
+
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::features::TableFeatures;
@@ -2146,32 +2150,30 @@ fn write_to_deltalake(
             .map_err(PythonError::from)?
         };
 
-        let dont_be_so_lazy = match table.0.state.as_ref() {
-            Some(state) => state.table_config().enable_change_data_feed(),
-            // You don't have state somehow, so I guess it's okay to be lazy.
-            _ => false,
-        };
+        // let dont_be_so_lazy = match table.0.state.as_ref() {
+        //     Some(state) => state.table_config().enable_change_data_feed() && predicate.is_some(),
+        //     // You don't have state somehow, so I guess it's okay to be lazy.
+        //     _ => false,
+        // };
 
         let mut builder =
             WriteBuilder::new(table.0.log_store(), table.0.state).with_save_mode(save_mode);
 
-        if dont_be_so_lazy {
-            debug!(
-                "write_to_deltalake() is not able to lazily perform a write, collecting batches"
-            );
-            builder = builder.with_input_batches(data.0.map(|batch| batch.unwrap()));
-        } else {
-            use crate::writer::to_lazy_table;
-            use deltalake::datafusion::datasource::provider_as_source;
-            use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
-            let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+        // if dont_be_so_lazy {
+        //     debug!(
+        //         "write_to_deltalake() is not able to lazily perform a write, collecting batches"
+        //     );
+        //     builder = builder.with_input_batches(data.0.map(|batch| batch.unwrap()));
+        // } else {
 
-            let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
-                .map_err(PythonError::from)?
-                .build()
-                .map_err(PythonError::from)?;
-            builder = builder.with_input_execution_plan(Arc::new(plan));
-        }
+        let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+
+        let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
+            .map_err(PythonError::from)?
+            .build()
+            .map_err(PythonError::from)?;
+        builder = builder.with_input_execution_plan(Arc::new(plan));
+        // }
 
         if let Some(schema_mode) = schema_mode {
             builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
