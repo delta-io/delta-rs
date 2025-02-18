@@ -47,13 +47,14 @@ use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::DataFrame;
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
-use execution::{prepare_predicate_actions, write_execution_plan_with_predicate};
+use execution::{prepare_predicate_actions, write_execution_plan_v2};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use schema_evolution::try_cast_schema;
 use serde::{Deserialize, Serialize};
 use tracing::log::*;
 
+use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
 use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
@@ -542,7 +543,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }),
             });
 
-            let source = DataFrame::new(state.clone(), source);
+            let mut source = DataFrame::new(state.clone(), source);
 
             let schema = Arc::new(source.schema().as_arrow().clone());
 
@@ -600,33 +601,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 stats_columns,
             };
 
-            let source_plan = source.clone().create_physical_plan().await?;
-
-            // Here we need to validate if the new data conforms to a predicate if one is provided
-            let add_actions = write_execution_plan_with_predicate(
-                predicate.clone(),
-                this.snapshot.as_ref(),
-                state.clone(),
-                source_plan.clone(),
-                partition_columns.clone(),
-                this.log_store.object_store(Some(operation_id)).clone(),
-                target_file_size,
-                this.write_batch_size,
-                this.writer_properties.clone(),
-                writer_stats_config.clone(),
-            )
-            .await?;
-
-            let source_count =
-                find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
-                    DeltaTableError::Generic("Unable to locate expected metric node".into())
-                })?;
-            let source_count_metrics = source_count.metrics().unwrap();
-            let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
-            metrics.num_added_rows = num_added_rows;
-
-            metrics.num_added_files = add_actions.len();
-            actions.extend(add_actions);
+            let mut contains_cdc = false;
 
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
@@ -658,21 +633,28 @@ impl std::future::IntoFuture for WriteBuilder {
                         .unwrap()
                         .as_millis() as i64;
 
-                    match predicate {
+                    match &predicate {
                         Some(pred) => {
-                            let predicate_actions = prepare_predicate_actions(
-                                pred,
+                            let (predicate_actions, cdf_df) = prepare_predicate_actions(
+                                pred.clone(),
                                 this.log_store.clone(),
                                 snapshot,
-                                state,
+                                state.clone(),
                                 partition_columns.clone(),
-                                this.writer_properties,
+                                this.writer_properties.clone(),
                                 deletion_timestamp,
-                                writer_stats_config,
-                                source,
+                                writer_stats_config.clone(),
                                 operation_id,
                             )
                             .await?;
+
+                            if let Some(cdf_df) = cdf_df {
+                                contains_cdc = true;
+                                source = source
+                                    .with_column(CDC_COLUMN_NAME, lit("insert"))?
+                                    .union(cdf_df)?;
+                            }
+
                             if !predicate_actions.is_empty() {
                                 actions.extend(predicate_actions);
                             }
@@ -691,6 +673,35 @@ impl std::future::IntoFuture for WriteBuilder {
                     .filter(|a| a.action_type() == ActionType::Remove)
                     .count();
             }
+
+            let source_plan = source.clone().create_physical_plan().await?;
+
+            // Here we need to validate if the new data conforms to a predicate if one is provided
+            let add_actions = write_execution_plan_v2(
+                this.snapshot.as_ref(),
+                state.clone(),
+                source_plan.clone(),
+                partition_columns.clone(),
+                this.log_store.object_store(Some(operation_id)).clone(),
+                target_file_size,
+                this.write_batch_size,
+                this.writer_properties,
+                writer_stats_config.clone(),
+                predicate.clone(),
+                contains_cdc,
+            )
+            .await?;
+
+            let source_count =
+                find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
+                    DeltaTableError::Generic("Unable to locate expected metric node".into())
+                })?;
+            let source_count_metrics = source_count.metrics().unwrap();
+            let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+            metrics.num_added_rows = num_added_rows;
+
+            metrics.num_added_files = add_actions.len();
+            actions.extend(add_actions);
 
             metrics.execution_time_ms =
                 Instant::now().duration_since(exec_start).as_millis() as u64;
