@@ -83,6 +83,7 @@ use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schem
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
+use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
     add_generated_columns, add_missing_generated_columns,
 };
@@ -90,11 +91,9 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use writer::write_execution_plan_v2;
 
 mod barrier;
 mod filter;
-mod writer;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
