@@ -105,17 +105,6 @@ impl ListingSchemaProvider {
                     let mut delta_table = delta_table.clone();
                     delta_table.load().await?;
                     *table = Arc::from(delta_table);
-                    //match delta_table.load().await {
-                    //    Ok(()) => {
-                    //        // Add the table back to the DashMap
-                    //    }
-                    //    Err(err) => {
-                    //        return Err(DataFusionError::Internal(format!(
-                    //            "Cannot load delta table. See stacktrace: {}",
-                    //            err.to_string()
-                    //        )))
-                    //    }
-                    //}
                 }
             }
         }
@@ -159,7 +148,9 @@ impl SchemaProvider for ListingSchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        self.tables.insert(name, table.clone());
+        if !self.table_exist(name.as_str()) {
+            self.tables.insert(name, table.clone());
+        }
         Ok(Some(table))
     }
 
