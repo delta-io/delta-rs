@@ -878,14 +878,6 @@ impl TableProvider for LazyTableProvider {
         TableType::Base
     }
 
-    fn get_table_definition(&self) -> Option<&str> {
-        None
-    }
-
-    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
-        None
-    }
-
     async fn scan(
         &self,
         _session: &dyn Session,
@@ -911,7 +903,7 @@ impl TableProvider for LazyTableProvider {
             if projection != &current_projection {
                 let execution_props = &ExecutionProps::new();
                 let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
-                    .into_iter()
+                    .iter()
                     .map(|i| {
                         let (table_ref, field) = df_schema.qualified_field(*i);
                         create_physical_expr(
@@ -942,10 +934,6 @@ impl TableProvider for LazyTableProvider {
             .iter()
             .map(|_| TableProviderFilterPushDown::Inexact)
             .collect())
-    }
-
-    fn statistics(&self) -> Option<Statistics> {
-        None
     }
 }
 
