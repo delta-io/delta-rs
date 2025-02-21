@@ -8,11 +8,6 @@ defaults:
   run:
     working-directory: ./python
 
-env:
-  # For ease of development, we make rustls default. But for release we should
-  # use native TLS.
-  FEATURES_FLAG: --no-default-features --features native-tls
-
 jobs:
   validate-release-tag:
     name: Validate git tag
@@ -46,7 +41,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          args: --skip-existing -m python/Cargo.toml --no-sdist
 
   release-pypi-windows:
     needs: validate-release-tag
@@ -62,7 +57,7 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          args: --skip-existing -m python/Cargo.toml --no-sdist
 
   release-pypi-manylinux:
     needs: validate-release-tag
@@ -79,7 +74,7 @@ jobs:
           maturin-version: v1.6.0 # https://github.com/PyO3/maturin/issues/2154
           target: x86_64-unknown-linux-gnu
           command: publish
-          args: --skip-existing -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
+          args: --skip-existing -m python/Cargo.toml
           # for openssl build
           before-script-linux: yum install -y perl-IPC-Cmd
 
@@ -90,7 +85,7 @@ jobs:
         with:
           target: aarch64-unknown-linux-gnu
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          args: --skip-existing -m python/Cargo.toml --no-sdist
           before-script-linux: |
             # We can remove this once we upgrade to 2_28.
             # https://github.com/briansmith/ring/issues/1728
