@@ -1289,6 +1289,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.set_column_metadata" class="md-nav__link">
+    set_column_metadata
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.table.TableAlterer.set_table_properties" class="md-nav__link">
     set_table_properties
   </a>
@@ -1991,6 +1998,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.table.TableAlterer.set_column_metadata" class="md-nav__link">
+    set_column_metadata
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.table.TableAlterer.set_table_properties" class="md-nav__link">
     set_table_properties
   </a>
@@ -2130,16 +2144,16 @@
 
 <details class="example" open>
   <summary>Example</summary>
-  <p>from deltalake.schema import Field, PrimitiveType, StructType
-dt = DeltaTable("test_table")
-new_fields = [
-    Field("baz", StructType([Field("bar", PrimitiveType("integer"))])),
-    Field("bar", PrimitiveType("integer"))
-]
-dt.alter.add_columns(
-    new_fields
-)
-```</p>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake.schema</span><span class="w"> </span><span class="kn">import</span> <span class="n">Field</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">,</span> <span class="n">StructType</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;test_table&quot;</span><span class="p">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">new_fields</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;baz&quot;</span><span class="p">,</span> <span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">))])),</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">))</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">]</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">dt</span><span class="o">.</span><span class="n">alter</span><span class="o">.</span><span class="n">add_columns</span><span class="p">(</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">new_fields</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span>
+</span></code></pre></div>
 </details>
   </div>
 
@@ -2473,6 +2487,33 @@ dt.alter.add_columns(
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">{}</span>
 </span></code></pre></div></p>
 </details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.table.TableAlterer.set_column_metadata" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">set_column_metadata</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">set_column_metadata</span><span class="p">(</span><span class="n">column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CommitProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PostCommitHookProperties</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Update a field's metadata in a schema. If the metadata key does not exist, the entry is inserted.</p>
+<p>If the column name doesn't exist in the schema - an error is raised.</p>
+<p>:param column: name of the column to update metadata for.
+:param metadata: the metadata to be added or modified on the column.
+:param commit_properties: properties of the transaction commit. If None, default values are used.
+:param post_commithook_properties: properties for the post commit hook. If None, default values are used.
+:return:</p>
+
   </div>
 
 </div>

@@ -2127,14 +2127,14 @@
 </span></code></pre></div>
 <p>Daft supports multiple write modes. See the <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/doc_gen/dataframe_methods/daft.DataFrame.write_deltalake.html#daft.DataFrame.write_deltalake">Daft documentation</a> for more information.</p>
 <h2 id="what-can-i-do-with-a-daft-dataframe">What can I do with a Daft DataFrame?</h2>
-<p>Daft gives you <a href="https://www.getdaft.io/projects/docs/en/latest/user_guide/basic_concepts.html">full-featured DataFrame functionality</a>, similar to what you might be used to from pandas, Dask or PySpark.</p>
+<p>Daft gives you full-featured DataFrame functionality, similar to what you might be used to from pandas, Dask or PySpark.</p>
 <p>On top of this, Daft also gives you:</p>
 <ul>
 <li><strong>Multimodal data type support</strong> to work with Images, URLs, Tensors and more</li>
 <li><strong>Expressions API</strong> for easy column transformations</li>
 <li><strong>UDFs</strong> for multi-column transformation, incl. ML applications</li>
 </ul>
-<p>Check out the <a href="https://www.getdaft.io/projects/docs/en/latest/user_guide/index.html">Daft User Guide</a> for a complete list of DataFrame operations.</p>
+<p>Check out the <a href="https://www.getdaft.io/projects/docs/en/stable/index.html">Daft User Guide</a> for a complete list of DataFrame operations.</p>
 <h2 id="data-skipping-optimizations">Data Skipping Optimizations</h2>
 <p>Delta Lake and Daft work together to give you highly-optimized query performance.</p>
 <p>Delta Lake stores your data in Parquet files. Parquet is a columnar row format that natively supports column pruning. If your query only needs to read data from a specific column or set of columns, you don't need to read in the entire file. This can save you lots of time and compute.</p>
@@ -2210,11 +2210,11 @@
 <p>Read <a href="https://delta.io/blog/daft-delta-lake-integration/">High-Performance Querying on Massive Delta Lake Tables with Daft</a> for an in-depth benchmarking of query optimization with Delta Lake and Daft using partitioning and Z-ordering.</p>
 <h2 id="daft-gives-you-multimodal-data-type-support">Daft gives you Multimodal Data Type Support</h2>
 <p>Daft has a rich multimodal type-system with support for Python objects, Images, URLs, Tensors and more.</p>
-<p>The <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/expressions.html">Expressions API</a> provides useful tools to work with these data types. By combining multimodal data support with the <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/udf.html">User-Defined Functions API</a> you can <a href="https://www.getdaft.io/projects/docs/en/latest/user_guide/tutorials.html#mnist-digit-classification">run ML workloads</a> right within your DataFrame.</p>
+<p>The <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/expressions.html">Expressions API</a> provides useful tools to work with these data types. By combining multimodal data support with the <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/udf.html">User-Defined Functions API</a> you can run ML workloads right within your DataFrame.</p>
 <p>Take a look at the notebook in the <a href="https://github.com/delta-io/delta-examples"><code>delta-examples</code> Github repository</a> for a closer look at how Daft handles URLs, images and ML applications.</p>
 <h2 id="contribute-to-daft">Contribute to <code>daft</code></h2>
 <p>Excited about Daft and want to contribute? Join them on <a href="https://github.com/Eventual-Inc/Daft">Github</a> 🚀</p>
-<p>Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: <code>DAFT_ANALYTICS_ENABLED=0</code>. Read more in the <a href="https://www.getdaft.io/projects/docs/en/latest/faq/telemetry.html">Daft documentation</a>.</p>
+<p>Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: <code>DAFT_ANALYTICS_ENABLED=0</code>. Read more in the <a href="https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/">Daft documentation</a>.</p>
 
 
 
