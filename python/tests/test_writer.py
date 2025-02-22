@@ -2053,3 +2053,32 @@ def test_write_type_coercion_predicate(tmp_path: pathlib.Path):
         mode="overwrite",
         delta_write_options=dict(engine="rust", predicate="C = 'a'"),
     )
+
+@pytest.mark.polars
+def test_write_binary_col(tmp_path: pathlib.Path):
+    import polars as pl
+
+    data_with_bin_col = {"bin_col": [b"12345", b"67890"], "id": [1, 2]}
+
+    df_with_bin_col = pl.DataFrame(data_with_bin_col)
+    df_with_bin_col.write_delta(tmp_path)
+
+    assert len(df_with_bin_col.rows()) == 2
+
+
+# <https://github.com/delta-io/delta-rs/issues/2854>
+@pytest.mark.polars
+def test_write_binary_col_with_dssc(tmp_path: pathlib.Path):
+    import polars as pl
+
+    data_with_bin_col = {"bin_col": [b"12345", b"67890"], "id": [1, 2]}
+
+    df_with_bin_col = pl.DataFrame(data_with_bin_col)
+    df_with_bin_col.write_delta(
+        tmp_path,
+        delta_write_options={
+            "configuration": {"delta.dataSkippingStatsColumns": "bin_col"},
+        },
+    )
+
+    assert len(df_with_bin_col.rows()) == 2
