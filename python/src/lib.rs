@@ -60,7 +60,7 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::storage::{IORuntime, ObjectStoreRef};
 use deltalake::table::state::DeltaTableState;
-use deltalake::DeltaTableBuilder;
+use deltalake::{init_client_version, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use error::DeltaError;
 use futures::future::join_all;
@@ -2489,6 +2489,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake_mount::register_handlers(None);
     deltalake::lakefs::register_handlers(None);
     deltalake::unity_catalog::register_handlers(None);
+
+    init_client_version(format!("py-{}", env!("CARGO_PKG_VERSION")).as_str());
 
     let py = m.py();
     m.add("DeltaError", py.get_type::<DeltaError>())?;
