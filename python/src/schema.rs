@@ -198,8 +198,7 @@ impl ArrayType {
             .call_method0("__repr__")?
             .extract()?;
         Ok(format!(
-            "ArrayType({}, contains_null={})",
-            type_repr,
+            "ArrayType({type_repr}, contains_null={})",
             if self.inner_type.contains_null() {
                 "True"
             } else {
@@ -326,9 +325,7 @@ impl MapType {
             .call_method0("__repr__")?
             .extract()?;
         Ok(format!(
-            "MapType({}, {}, value_contains_null={})",
-            key_repr,
-            value_repr,
+            "MapType({key_repr}, {value_repr}, value_contains_null={})",
             if self.inner_type.value_contains_null() {
                 "True"
             } else {

@@ -656,8 +656,7 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
                 Some(field) => match field.data_type() {
                     DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                         Err(DeltaTableError::Generic(format!(
-                            "Stats column {} has unsupported type {}",
-                            col,
+                            "Stats column {col} has unsupported type {}",
                             field.data_type()
                         )))
                     }

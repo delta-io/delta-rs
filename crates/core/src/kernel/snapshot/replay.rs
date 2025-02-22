@@ -447,11 +447,11 @@ fn seen_key(info: &FileInfo<'_>) -> String {
         }
         if let Some(offset) = &dv.offset {
             format!(
-                "{}::{}{}@{offset}",
-                path, dv.storage_type, dv.path_or_inline_dv
+                "{path}::{}{}@{offset}",
+                dv.storage_type, dv.path_or_inline_dv
             )
         } else {
-            format!("{}::{}{}", path, dv.storage_type, dv.path_or_inline_dv)
+            format!("{path}::{}{}", dv.storage_type, dv.path_or_inline_dv)
         }
     } else {
         path.to_string()
@@ -515,10 +515,7 @@ impl LogReplayScanner {
                     // NOTE: there should always be only one action per row.
                     (None, None) => debug!("WARNING: no action found for row"),
                     (Some(a), Some(r)) => {
-                        debug!(
-                            "WARNING: both add and remove actions found for row: {:?} {:?}",
-                            a, r
-                        )
+                        debug!("WARNING: both add and remove actions found for row: {a:?} {r:?}",)
                     }
                 }
             }

@@ -481,7 +481,7 @@ impl MergePlan {
     where
         F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
     {
-        debug!("Rewriting files in partition: {:?}", partition_values);
+        debug!("Rewriting files in partition: {partition_values:?}");
         // First, initialize metrics
         let mut partial_actions = files
             .iter()
@@ -557,10 +557,7 @@ impl MergePlan {
         });
         partial_actions.extend(add_actions);
 
-        debug!(
-            "Finished rewriting files in partition: {:?}",
-            partition_values
-        );
+        debug!("Finished rewriting files in partition: {partition_values:?}");
 
         Ok((partial_actions, partial_metrics))
     }
@@ -619,7 +616,7 @@ impl MergePlan {
         Ok(
             util::interleave_batches(batches, indices, 10_000, context.use_inner_threads)
                 .await
-                .map_err(|err| ParquetError::General(format!("Failed to reorder data: {:?}", err)))
+                .map_err(|err| ParquetError::General(format!("Failed to reorder data: {err:?}")))
                 .boxed(),
         )
     }

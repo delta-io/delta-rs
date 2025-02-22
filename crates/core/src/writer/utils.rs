@@ -52,9 +52,7 @@ pub(crate) fn next_data_path(
 
     // TODO: what does c000 mean?
     let file_name = format!(
-        "part-{}-{}-c000{}.parquet",
-        part,
-        writer_id,
+        "part-{part}-{writer_id}-c000{}.parquet",
         compression_to_str(&compression)
     );
     prefix.child(file_name)

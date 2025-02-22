@@ -142,10 +142,7 @@ impl LogSegment {
         end_version: Option<i64>,
         log_store: &dyn LogStore,
     ) -> DeltaResult<Self> {
-        debug!(
-            "try_new_slice: start_version: {}, end_version: {:?}",
-            start_version, end_version
-        );
+        debug!("try_new_slice: start_version: {start_version}, end_version: {end_version:?}",);
         log_store.refresh().await?;
         let log_url = table_root.child("_delta_log");
         let (mut commit_files, checkpoint_files) = list_log_files(

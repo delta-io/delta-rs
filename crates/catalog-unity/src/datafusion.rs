@@ -130,7 +130,7 @@ impl Expiry<String, TemporaryTableCredentials> for TokenExpiry {
         _last_modified_at: Instant,
     ) -> Option<Duration> {
         let time_to_expire = value.expiration_time - Utc::now();
-        tracing::info!("Token {} expires in {}", _key, time_to_expire);
+        tracing::info!("Token {_key} expires in {time_to_expire}");
         time_to_expire.to_std().ok()
     }
 }
@@ -182,12 +182,7 @@ impl UnitySchemaProvider {
         schema: &str,
         table: &str,
     ) -> Result<TemporaryTableCredentials, UnityCatalogError> {
-        tracing::debug!(
-            "Fetching new credential for: {}.{}.{}",
-            catalog,
-            schema,
-            table
-        );
+        tracing::debug!("Fetching new credential for: {catalog}.{schema}.{table}",);
         self.client
             .get_temp_table_credentials(catalog, schema, table)
             .map(|resp| match resp {

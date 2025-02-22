@@ -148,10 +148,7 @@ impl LakeFSClient {
             "allow_empty": allow_empty,
         });
 
-        debug!(
-            "Committing to LakeFS Branch: '{}' in repo: '{}'",
-            branch, repo
-        );
+        debug!("Committing to LakeFS Branch: '{branch}' in repo: '{repo}'");
         let response = self
             .http_client
             .post(&request_url)
@@ -198,10 +195,7 @@ impl LakeFSClient {
             "squash_merge": true,
         });
 
-        debug!(
-            "Merging LakeFS, source `{}` into target `{}` in repo: {}",
-            transaction_branch, transaction_branch, repo
-        );
+        debug!("Merging LakeFS, source `{transaction_branch}` into target `{transaction_branch}` in repo: {repo}");
         let response = self
             .http_client
             .post(&request_url)
@@ -231,7 +225,7 @@ impl LakeFSClient {
 
     pub fn set_transaction(&self, id: Uuid, branch: String) {
         self.transactions.insert(id, branch);
-        debug!("{}", format!("LakeFS Transaction `{}` has been set.", id));
+        debug!("{}", format!("LakeFS Transaction `{id}` has been set."));
     }
 
     pub fn get_transaction(&self, id: Uuid) -> Result<String, TransactionError> {
@@ -240,19 +234,13 @@ impl LakeFSClient {
             .get(&id)
             .map(|v| v.to_string())
             .ok_or(LakeFSOperationError::TransactionIdNotFound(id.to_string()))?;
-        debug!(
-            "{}",
-            format!("LakeFS Transaction `{}` has been grabbed.", id)
-        );
+        debug!("{}", format!("LakeFS Transaction `{id}` has been grabbed."));
         Ok(transaction_branch)
     }
 
     pub fn clear_transaction(&self, id: Uuid) {
         self.transactions.remove(&id);
-        debug!(
-            "{}",
-            format!("LakeFS Transaction `{}` has been removed.", id)
-        );
+        debug!("{}", format!("LakeFS Transaction `{id}` has been removed."));
     }
 
     pub fn decompose_url(&self, url: String) -> (String, String, String) {

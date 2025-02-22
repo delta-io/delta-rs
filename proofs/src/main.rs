@@ -148,7 +148,7 @@ impl AtomicRenameState {
 
 #[inline]
 fn source_key_from_wid(wid: WriterId) -> String {
-    format!("writer_{}", wid)
+    format!("writer_{wid}")
 }
 
 impl AtomicRenameSys {
@@ -507,7 +507,7 @@ impl Model for AtomicRenameSys {
         Self::State: std::fmt::Debug,
     {
         self.next_state(last_state, action).map(|next_state| {
-            let mut lines = vec![format!("{:#?}", next_state)];
+            let mut lines = vec![format!("{next_state:#?}")];
             lines.push(format!(
                 "expected_deletes: {:?}",
                 self.derive_expected_deletes()
@@ -594,7 +594,7 @@ impl Model for AtomicRenameSys {
                     && writer_versions.len() >= sys.writer_cnt
                     // all versions have been written into blobl store
                     && blob_store_obj_keys.is_superset(&writer_versions)
-                    && blob_store_obj_values == writer_versions.into_iter().map(|s| format!("writer_{}", s)).collect()
+                    && blob_store_obj_values == writer_versions.into_iter().map(|s| format!("writer_{s}")).collect()
             }),
             Property::<Self>::sometimes("lock expires", |_, state| {
                 state

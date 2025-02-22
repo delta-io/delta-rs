@@ -434,11 +434,11 @@ impl UnityCatalogBuilder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("UNITY_") || key.starts_with("DATABRICKS_") {
-                    tracing::debug!("Found relevant env: {}", key);
+                    tracing::debug!("Found relevant env: {key}");
                     if let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
                     {
-                        tracing::debug!("Trying: {} with {}", key, value);
+                        tracing::debug!("Trying: {key} with {value}");
                         builder = builder.try_with_option(config_key, value).unwrap();
                     }
                 }
@@ -666,7 +666,7 @@ impl UnityCatalog {
     }
 
     fn catalog_url(&self) -> String {
-        format!("{}/api/2.1/unity-catalog", &self.workspace_url)
+        format!("{}/api/2.1/unity-catalog", self.workspace_url)
     }
 
     /// Gets an array of catalogs in the metastore. If the caller is the metastore admin,
@@ -879,7 +879,7 @@ impl LogStoreFactory for UnityCatalogFactory {
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(UnityCatalogFactory::default());
     let scheme = "uc";
-    let url = Url::parse(&format!("{}://", scheme)).unwrap();
+    let url = Url::parse(&format!("{scheme}://")).unwrap();
     factories().insert(url.clone(), factory.clone());
     logstores().insert(url.clone(), factory.clone());
 }

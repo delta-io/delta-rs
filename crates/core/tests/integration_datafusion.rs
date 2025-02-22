@@ -838,7 +838,7 @@ mod local {
         // Logically this should prune. See above
         let e = col("k").eq(lit("A")).and(col("k").is_not_null());
         let metrics = get_scan_metrics(&table, &state, &[e]).await.unwrap();
-        println!("{:?}", metrics);
+        println!("{metrics:?}");
         assert!(metrics.num_scanned_files() == 1);
 
         let e = col("k").eq(lit("B"));

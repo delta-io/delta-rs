@@ -668,9 +668,8 @@ impl DeletionVectorDescriptor {
                 let mut dv_suffix = format!("deletion_vector_{uuid}.bin");
                 if prefix_len > 0 {
                     dv_suffix = format!(
-                        "{}/{}",
+                        "{}/{dv_suffix}",
                         &self.path_or_inline_dv[..(prefix_len as usize)],
-                        dv_suffix
                     );
                 }
                 let dv_path = parent
@@ -724,7 +723,7 @@ impl DeletionVectorDescriptor {
     //                 i32::from_le_bytes(buf.try_into().map_err(|_| {
     //                     Error::DeletionVector("filed to read magic bytes".to_string())
     //                 })?);
-    //             println!("magic  --> : {}", magic);
+    //             println!("magic  --> : {magic}");
     //             // assert!(magic == 1681511377);
     //
     //             let mut buf = vec![0; size_in_bytes as usize];

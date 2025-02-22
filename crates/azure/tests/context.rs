@@ -60,7 +60,7 @@ impl StorageIntegration for MsftIntegration {
     }
 
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
-        let destination = format!("{}/{}", self.bucket_name(), destination);
+        let destination = format!("{}/{destination}", self.bucket_name());
         az_cli::copy_directory(source, destination)
     }
 }
