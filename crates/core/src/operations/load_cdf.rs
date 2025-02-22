@@ -196,11 +196,9 @@ impl CdfLoadBuilder {
         }
 
         log::debug!(
-            "starting timestamp = {:?}, ending timestamp = {:?}",
-            &starting_timestamp,
-            &ending_timestamp
+            "starting timestamp = {starting_timestamp:?}, ending timestamp = {ending_timestamp:?}"
         );
-        log::debug!("starting version = {}, ending version = {:?}", start, end);
+        log::debug!("starting version = {start}, ending version = {end:?}");
 
         for version in start..=end {
             let snapshot_bytes = self
@@ -227,7 +225,7 @@ impl CdfLoadBuilder {
                     if starting_timestamp.timestamp_millis() > *t
                         || *t > ending_timestamp.timestamp_millis()
                     {
-                        log::debug!("Version: {} skipped, due to commit timestamp", version);
+                        log::debug!("Version: {version} skipped, due to commit timestamp");
                         continue;
                     }
                 }
@@ -237,7 +235,7 @@ impl CdfLoadBuilder {
                 match action {
                     Action::Cdc(f) => cdc_actions.push(f.clone()),
                     Action::Metadata(md) => {
-                        log::info!("Metadata: {:?}", &md);
+                        log::info!("Metadata: {md:?}");
                         if let Some(Some(key)) = &md.configuration.get("delta.enableChangeDataFeed")
                         {
                             let key = key.to_lowercase();
@@ -263,9 +261,8 @@ impl CdfLoadBuilder {
 
             if !cdc_actions.is_empty() {
                 log::debug!(
-                    "Located {} cdf actions for version: {}",
+                    "Located {} cdf actions for version: {version}",
                     cdc_actions.len(),
-                    version
                 );
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
@@ -287,18 +284,16 @@ impl CdfLoadBuilder {
 
                 if !add_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {}",
+                        "Located {} cdf actions for version: {version}",
                         add_actions.len(),
-                        version
                     );
                     add_files.push(CdcDataSpec::new(version, ts, add_actions));
                 }
 
                 if !remove_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {}",
+                        "Located {} cdf actions for version: {version}",
                         remove_actions.len(),
-                        version
                     );
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }

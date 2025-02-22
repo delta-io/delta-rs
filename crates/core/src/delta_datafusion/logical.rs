@@ -47,7 +47,7 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
     }
 
     fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "MetricObserver id={}", &self.id)
+        write!(f, "MetricObserver id={}", self.id)
     }
 
     fn from_template(

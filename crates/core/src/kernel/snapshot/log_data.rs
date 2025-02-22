@@ -440,8 +440,8 @@ impl<'a> FileStatsAccessor<'a> {
     pub(crate) fn get(&self, index: usize) -> DeltaResult<LogicalFile<'a>> {
         if index >= self.length {
             return Err(DeltaTableError::Generic(format!(
-                "index out of bounds: {} >= {}",
-                index, self.length
+                "index out of bounds: {index} >= {}",
+                self.length,
             )));
         }
         Ok(LogicalFile {

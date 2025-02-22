@@ -108,10 +108,8 @@ impl LakeFSLogStore {
     ) -> DeltaResult<(String, ObjectStoreRef)> {
         let (repo, _, table) = self.client.decompose_url(self.config.location.to_string());
         let string_url = format!(
-            "lakefs://{}/{}/{}",
-            repo,
+            "lakefs://{repo}/{}/{table}",
             self.client.get_transaction(operation_id)?,
-            table
         );
         let transaction_url = Url::parse(&string_url).unwrap();
         Ok((string_url, self.storage.get_store(&transaction_url)?))

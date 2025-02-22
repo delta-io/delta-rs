@@ -196,7 +196,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         let table_path = table.table_uri();
         let set_file_last_modified = |version: usize, last_modified_millis: u64| {
-            let path = format!("{}_delta_log/{:020}.json", &table_path, version);
+            let path = format!("{table_path}_delta_log/{version:020}.json");
             let file = OpenOptions::new().write(true).open(path).unwrap();
             let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
             let times = FileTimes::new()

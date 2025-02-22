@@ -97,7 +97,7 @@ async fn main() -> Result<(), DeltaTableError> {
 
     // show all active files in the table
     let files: Vec<_> = table.get_file_uris()?.collect();
-    println!("{:?}", files);
+    println!("{files:?}");
 
     Ok(())
 }

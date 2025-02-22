@@ -94,8 +94,7 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
         Ok(_) => Ok(true),
         Err(ParseError::RelativeUrlWithoutBase) => Ok(false),
         Err(_) => Err(DeltaTableError::Generic(format!(
-            "Unable to parse path: {}",
-            &path
+            "Unable to parse path: {path}"
         ))),
     }
 }

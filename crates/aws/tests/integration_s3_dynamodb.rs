@@ -338,7 +338,7 @@ async fn test_concurrent_writers() -> TestResult<()> {
 
     let mut workers = Vec::new();
     for w in 0..WORKERS {
-        workers.push(Worker::new(&table_uri, format!("w{:02}", w)).await);
+        workers.push(Worker::new(&table_uri, format!("w{w:02}")).await);
     }
     let mut futures = Vec::new();
     for mut w in workers {
@@ -384,7 +384,7 @@ impl Worker {
     }
 
     async fn commit_file(&mut self, seq_no: i64) -> (i64, String) {
-        let name = format!("{}-{}", self.name, seq_no);
+        let name = format!("{}-{seq_no}", self.name);
         let metadata = Some(maplit::hashmap! {
             "worker".to_owned() => Value::String(self.name.clone()),
             "current_version".to_owned() => Value::Number( seq_no.into() ),
@@ -431,7 +431,7 @@ fn add_action(name: &str) -> Action {
         .unwrap()
         .as_millis();
     Add {
-        path: format!("{}.parquet", name),
+        path: format!("{name}.parquet"),
         size: 396,
         partition_values: HashMap::new(),
         modification_time: ts as i64,
@@ -448,7 +448,7 @@ fn add_action(name: &str) -> Action {
 }
 
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {
-    let table_name = format!("{}_{}", table_name, Uuid::new_v4());
+    let table_name = format!("{table_name}_{}", Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
     let schema = StructType::new(vec![StructField::new(
         "Id".to_string(),

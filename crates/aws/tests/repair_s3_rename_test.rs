@@ -39,7 +39,7 @@ async fn repair_when_worker_pauses_after_rename_test() {
     // here worker is paused after copy but before delete,
     // so when it wakes up the delete operation will succeed since the file is already deleted,
     // but it'll fail on releasing a lock, since it's expired
-    assert!(format!("{:?}", err).contains("ReleaseLock"));
+    assert!(format!("{err:?}").contains("ReleaseLock"));
 }
 
 async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), ObjectStoreError> {
@@ -102,9 +102,9 @@ fn rename(
     let lsrc = src.clone();
     let ldst = dst.clone();
     tokio::spawn(async move {
-        println!("rename({}, {}) started", &lsrc, &ldst);
+        println!("rename({lsrc}, {ldst}) started");
         let result = s3.rename_if_not_exists(&lsrc, &ldst).await;
-        println!("rename({}, {}) finished", &lsrc, &ldst);
+        println!("rename({lsrc}, {ldst}) finished");
         result
     })
 }
