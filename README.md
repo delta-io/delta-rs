@@ -180,7 +180,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |              ![done]              |
 | Version 3      | CHECK constraints                             | [![done]][check-constraints]      |
 | Version 4      | Change Data Feed                              |              ![done]              |
-| Version 4      | Generated Columns                             |                                   |
+| Version 4      | Generated Columns                             |              ![done]              |
 | Version 5      | Column Mapping                                |                                   |
 | Version 6      | Identity Columns                              |                                   |
 | Version 7      | Table Features                                |              ![done]              |
