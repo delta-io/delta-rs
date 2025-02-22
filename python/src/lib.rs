@@ -1816,7 +1816,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             // We need to manually append 'Z' add to end so that pyarrow can cast the
             // scalar value to pa.timestamp("us","UTC")
             let value = value.serialize();
-            format!("{}Z", value).into_py_any(py)?
+            format!("{value}Z").into_py_any(py)?
         }
         TimestampNtz(_) => {
             let value = value.serialize();

@@ -949,7 +949,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 0);
-        println!("{:?}", count);
+        println!("{count:?}");
 
         let path = Path::from("_delta_log/00000000000000000000.json");
         let res = table.log_store().object_store(None).get(&path).await;

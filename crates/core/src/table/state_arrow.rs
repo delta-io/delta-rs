@@ -153,8 +153,7 @@ impl DeltaTableState {
                         schema
                             .field(name)
                             .ok_or(DeltaTableError::MetadataError(format!(
-                                "Invalid partition column {0}",
-                                name
+                                "Invalid partition column {name}"
                             )))?;
                     Ok(field.data_type().try_into()?)
                 },
@@ -183,8 +182,7 @@ impl DeltaTableState {
                         .schema()
                         .field(name)
                         .ok_or(DeltaTableError::MetadataError(format!(
-                            "Invalid partition column {0}",
-                            name
+                            "Invalid partition column {name}"
                         )))?
                         .physical_name()
                         .to_string();
@@ -201,8 +199,7 @@ impl DeltaTableState {
                     ColumnMappingMode::Id | ColumnMappingMode::Name => {
                         physical_name_to_logical_name.get(name.as_str()).ok_or(
                             DeltaTableError::MetadataError(format!(
-                                "Invalid partition column {0}",
-                                name
+                                "Invalid partition column {name}"
                             )),
                         )?
                     }
@@ -770,8 +767,7 @@ fn json_value_to_array_general<'a>(
                 .with_timezone("UTC"),
             )),
             _ => Err(DeltaTableError::Generic(format!(
-                "Invalid datatype {}",
-                datatype
+                "Invalid datatype {datatype}"
             ))),
         },
         DataType::Date32 => Ok(Arc::new(Date32Array::from(
@@ -780,8 +776,7 @@ fn json_value_to_array_general<'a>(
                 .collect_vec(),
         ))),
         _ => Err(DeltaTableError::Generic(format!(
-            "Invalid datatype {}",
-            datatype
+            "Invalid datatype {datatype}"
         ))),
     }
 }

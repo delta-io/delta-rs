@@ -14,7 +14,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
-    println!("{:?}", data);
+    println!("{data:?}");
 
     Ok(())
 }

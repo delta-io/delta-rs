@@ -285,7 +285,7 @@ fn create_escaped_binary_string(data: &[u8]) -> String {
     let mut escaped_string = String::new();
     for &byte in data {
         // Convert each byte to its two-digit hexadecimal representation
-        let hex_representation = format!("{:04X}", byte);
+        let hex_representation = format!("{byte:04X}");
         // Append the hexadecimal representation with an escape sequence
         escaped_string.push_str("\\u");
         escaped_string.push_str(&hex_representation);

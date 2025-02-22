@@ -593,10 +593,7 @@ impl FromStr for SaveMode {
             "overwrite" => Ok(SaveMode::Overwrite),
             "error" => Ok(SaveMode::ErrorIfExists),
             "ignore" => Ok(SaveMode::Ignore),
-            _ => Err(DeltaTableError::Generic(format!(
-                "Invalid save mode provided: {}, only these are supported: ['append', 'overwrite', 'error', 'ignore']",
-                s
-            ))),
+            _ => Err(DeltaTableError::Generic(format!("Invalid save mode provided: {s}, only these are supported: ['append', 'overwrite', 'error', 'ignore']"))),
         }
     }
 }
