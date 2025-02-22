@@ -106,9 +106,8 @@ fn cast_field(
                 .downcast_ref::<GenericListArray<i32>>()
                 .ok_or_else(|| {
                     ArrowError::CastError(format!(
-                        "Expected a list for {} but got {}",
+                        "Expected a list for {} but got {col_type}",
                         field.name(),
-                        col_type
                     ))
                 })?,
             child_fields,
@@ -120,9 +119,8 @@ fn cast_field(
                 .downcast_ref::<GenericListArray<i64>>()
                 .ok_or_else(|| {
                     ArrowError::CastError(format!(
-                        "Expected a list for {} but got {}",
+                        "Expected a list for {} but got {col_type}",
                         field.name(),
-                        col_type
                     ))
                 })?,
             child_fields,
@@ -133,9 +131,8 @@ fn cast_field(
         (DataType::Map(_, _), DataType::Map(child_fields, sorted)) => Ok(Arc::new(cast_map(
             col.as_map_opt().ok_or_else(|| {
                 ArrowError::CastError(format!(
-                    "Expected a map for {} but got {}",
+                    "Expected a map for {} but got {col_type}",
                     field.name(),
-                    col_type
                 ))
             })?,
             child_fields,
@@ -147,11 +144,8 @@ fn cast_field(
             cast_with_options(col, field_type, cast_options).map_err(|err| {
                 if let ArrowError::CastError(err) = err {
                     ArrowError::CastError(format!(
-                        "Failed to cast {} from {} to {}: {}",
+                        "Failed to cast {} from {field_type} to {col_type}: {err}",
                         field.name(),
-                        field_type,
-                        col_type,
-                        err
                     ))
                 } else {
                     err

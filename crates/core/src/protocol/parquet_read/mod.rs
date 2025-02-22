@@ -90,10 +90,7 @@ impl DeletionVectorDescriptor {
                     })?;
                 }
                 _ => {
-                    debug!(
-                        "Unexpected field name `{}` for deletion vector: {:?}",
-                        name, record
-                    );
+                    debug!("Unexpected field name `{name}` for deletion vector: {record:?}");
                 }
             }
         }
@@ -209,10 +206,7 @@ impl Add {
                     }
                 },
                 _ => {
-                    debug!(
-                        "Unexpected field name `{}` for add action: {:?}",
-                        name, record
-                    );
+                    debug!("Unexpected field name `{name}` for add action: {record:?}");
                 }
             }
         }
@@ -231,7 +225,7 @@ impl Add {
                         "numRecords" => if let Ok(v) = record.get_long(i) {
                                 stats.num_records = v;
                             } else {
-                                error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
+                                error!("Expect type of stats_parsed field numRecords to be long, got: {record}");
                             }
                         "minValues" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
@@ -242,7 +236,7 @@ impl Add {
                                 }
                             }
                         } else {
-                            error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
+                            error!("Expect type of stats_parsed field minRecords to be struct, got: {record}");
                         }
                         "maxValues" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
@@ -253,7 +247,7 @@ impl Add {
                                 }
                             }
                         } else {
-                            error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                            error!("Expect type of stats_parsed field maxRecords to be struct, got: {record}");
                         }
                         "nullCount" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
@@ -264,14 +258,10 @@ impl Add {
                                 }
                             }
                         } else {
-                            error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
+                            error!("Expect type of stats_parsed field nullCount to be struct, got: {record}");
                         }
                         _ => {
-                            debug!(
-                                "Unexpected field name `{}` for stats_parsed: {:?}",
-                                name,
-                                record,
-                            );
+                            debug!("Unexpected field name `{name}` for stats_parsed: {record:?}");
                         }
                     }
                 }
@@ -294,8 +284,7 @@ fn field_to_value_stat(field: &Field, field_name: &str) -> Option<ColumnValueSta
                 Some(ColumnValueStat::Value(val))
             } else {
                 warn!(
-                    "Unexpected type when parsing min/max values for {}. Found {}",
-                    field_name, field
+                    "Unexpected type when parsing min/max values for {field_name}. Found {field}"
                 );
                 None
             }
@@ -313,10 +302,7 @@ fn field_to_count_stat(field: &Field, field_name: &str) -> Option<ColumnCountSta
         }
         Field::Long(value) => Some(ColumnCountStat::Value(*value)),
         _ => {
-            warn!(
-                "Unexpected type when parsing nullCounts for {}. Found {}",
-                field_name, field
-            );
+            warn!("Unexpected type when parsing nullCounts for {field_name}. Found {field}");
             None
         }
     }
@@ -484,10 +470,7 @@ impl Metadata {
                     }
                 }
                 _ => {
-                    debug!(
-                        "Unexpected field name `{}` for metaData action: {:?}",
-                        name, record
-                    );
+                    debug!("Unexpected field name `{name}` for metaData action: {record:?}");
                 }
             }
         }
@@ -574,10 +557,7 @@ impl Remove {
                 }
                 "numRecords" => {}
                 _ => {
-                    debug!(
-                        "Unexpected field name `{}` for remove action: {:?}",
-                        name, record
-                    );
+                    debug!("Unexpected field name `{name}` for remove action: {record:?}");
                 }
             }
         }
@@ -609,10 +589,7 @@ impl Transaction {
                     re.last_updated = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
-                    debug!(
-                        "Unexpected field name `{}` for txn action: {:?}",
-                        name, record
-                    );
+                    debug!("Unexpected field name `{name}` for txn action: {record:?}");
                 }
             }
         }
@@ -675,10 +652,7 @@ impl Protocol {
                         .ok()
                 }
                 _ => {
-                    debug!(
-                        "Unexpected field name `{}` for protocol action: {:?}",
-                        name, record
-                    );
+                    debug!("Unexpected field name `{name}` for protocol action: {record:?}");
                 }
             }
         }

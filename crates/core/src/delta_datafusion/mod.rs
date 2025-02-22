@@ -1416,9 +1416,8 @@ impl DeltaDataChecker {
             }
 
             let sql = format!(
-                "SELECT {} FROM `{}` WHERE NOT ({}) LIMIT 1",
+                "SELECT {} FROM `{table_name}` WHERE NOT ({}) LIMIT 1",
                 check.get_name(),
-                table_name,
                 check.get_expression()
             );
 
@@ -1431,9 +1430,8 @@ impl DeltaDataChecker {
                     .join(", ");
 
                 let msg = format!(
-                    "Check or Invariant ({}) violated by value in row: [{}]",
+                    "Check or Invariant ({}) violated by value in row: [{value}]",
                     check.get_expression(),
-                    value
                 );
                 violations.push(msg);
             }

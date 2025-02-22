@@ -530,7 +530,7 @@ async fn main() {
 
             for bench in benches {
                 for sample in 0..num_samples {
-                    println!("Test: {} Sample: {}", bench.name, sample);
+                    println!("Test: {} Sample: {sample}", bench.name);
                     let res =
                         benchmark_merge_tpcds(delta_path.clone(), bench.params.clone(), bench.op)
                             .await

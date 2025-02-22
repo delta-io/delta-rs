@@ -523,7 +523,7 @@ mod tests {
             .to_str()
             .expect("Failed to convert Path to string slice");
         // Copy all files to a temp directory to perform testing. Skip Delta log
-        copy_files(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path), temp_dir);
+        copy_files(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")), temp_dir);
         let builder = if from_path {
             ConvertToDeltaBuilder::new().with_location(
                 ensure_table_uri(temp_dir).expect("Failed to turn temp dir into a URL"),
@@ -549,7 +549,7 @@ mod tests {
             .to_str()
             .expect("Failed to convert to string slice");
         // Copy all files to a temp directory to perform testing. Skip Delta log
-        copy_files(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path), temp_dir);
+        copy_files(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")), temp_dir);
         ConvertToDeltaBuilder::new()
             .with_log_store(log_store(temp_dir))
             .with_partition_schema(partition_schema)

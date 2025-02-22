@@ -39,10 +39,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
                     return Err(err);
                 }
                 Err(Error::Generic { store, source }) => {
-                    debug!(
-                        "put_with_retries attempt {} failed: {} {}",
-                        attempt_number, store, source
-                    );
+                    debug!("put_with_retries attempt {attempt_number} failed: {store} {source}");
                     attempt_number += 1;
                 }
                 Err(err) => {
@@ -63,10 +60,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
                     return Err(err);
                 }
                 Err(Error::Generic { store, source }) => {
-                    debug!(
-                        "delete_with_retries attempt {} failed: {} {}",
-                        attempt_number, store, source
-                    );
+                    debug!("delete_with_retries attempt {attempt_number} failed: {store} {source}");
                     attempt_number += 1;
                 }
                 Err(err) => {

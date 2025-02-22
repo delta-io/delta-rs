@@ -144,7 +144,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 
     if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table, operation_id).await?;
-        debug!("Deleted {:?} log files.", deleted_log_num);
+        debug!("Deleted {deleted_log_num:?} log files.");
     }
 
     Ok(())
@@ -188,7 +188,7 @@ pub async fn create_checkpoint_for(
     let checkpoint_path = log_store.log_path().child(file_name);
 
     let object_store = log_store.object_store(operation_id);
-    debug!("Writing checkpoint to {:?}.", checkpoint_path);
+    debug!("Writing checkpoint to {checkpoint_path:?}.");
     object_store
         .put(&checkpoint_path, parquet_bytes.into())
         .await?;
@@ -196,7 +196,7 @@ pub async fn create_checkpoint_for(
     let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
-    debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
+    debug!("Writing _last_checkpoint to {last_checkpoint_path:?}.");
     object_store
         .put(&last_checkpoint_path, last_checkpoint_content.into())
         .await?;
@@ -241,7 +241,7 @@ pub async fn cleanup_expired_logs_for(
                 // match the given timestamp range
                 .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
                     if meta.is_err() {
-                        error!("Error received while cleaning up expired logs: {:?}", meta);
+                        error!("Error received while cleaning up expired logs: {meta:?}");
                         return None;
                     }
                     let meta = meta.unwrap();
@@ -512,15 +512,9 @@ fn typed_partition_value_from_string(
                 })?;
                 Ok((ts.and_utc().timestamp_millis() * 1000).into())
             }
-            s => unimplemented!(
-                "Primitive type {} is not supported for partition column values.",
-                s
-            ),
+            s => unimplemented!("Primitive type {s} is not supported for partition column values."),
         },
-        d => unimplemented!(
-            "Data type {:?} is not supported for partition column values.",
-            d
-        ),
+        d => unimplemented!("Data type {d:?} is not supported for partition column values."),
     }
 }
 

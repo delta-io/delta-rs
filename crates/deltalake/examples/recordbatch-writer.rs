@@ -32,7 +32,7 @@ async fn main() -> Result<(), DeltaTableError> {
     let table_uri = std::env::var("TABLE_URI").map_err(|e| DeltaTableError::GenericError {
         source: Box::new(e),
     })?;
-    info!("Using the location of: {:?}", table_uri);
+    info!("Using the location of: {table_uri:?}");
 
     let table_path = Path::parse(&table_uri)?;
 
@@ -63,7 +63,7 @@ async fn main() -> Result<(), DeltaTableError> {
         .flush_and_commit(&mut table)
         .await
         .expect("Failed to flush write");
-    info!("{} adds written", adds);
+    info!("{adds} adds written");
 
     Ok(())
 }

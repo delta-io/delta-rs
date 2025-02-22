@@ -36,7 +36,7 @@ impl StorageIntegration for S3Integration {
     }
 
     fn root_uri(&self) -> String {
-        format!("s3://{}", &self.bucket_name())
+        format!("s3://{}", self.bucket_name())
     }
 
     /// prepare_env

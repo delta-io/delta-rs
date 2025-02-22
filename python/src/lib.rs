@@ -894,12 +894,9 @@ impl RawDeltaTable {
         };
 
         let sql = if let Some(predicate) = predicate {
-            format!(
-                "SELECT {} FROM `{}` WHERE ({}) ",
-                select_string, &table_name, predicate
-            )
+            format!("SELECT {select_string} FROM `{table_name}` WHERE ({predicate}) ")
         } else {
-            format!("SELECT {} FROM `{}`", select_string, &table_name,)
+            format!("SELECT {select_string} FROM `{table_name}`")
         };
 
         let plan = rt()

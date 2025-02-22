@@ -416,10 +416,7 @@ impl PartitionWriter {
             // flush currently buffered data to disk once we meet or exceed the target file size.
             let estimated_size = self.buffer.len() + self.arrow_writer.in_progress_size();
             if estimated_size >= self.config.target_file_size {
-                debug!(
-                    "Writing file with estimated size {:?} to disk.",
-                    estimated_size
-                );
+                debug!("Writing file with estimated size {estimated_size:?} to disk.");
                 self.flush_arrow_writer().await?;
             }
         }

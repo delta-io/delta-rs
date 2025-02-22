@@ -13,7 +13,7 @@ pub async fn setup_s3_context() -> TestContext {
     let cli = S3Cli::default();
     let endpoint = "http://localhost:4566".to_string();
     let bucket_name = "delta-rs-tests";
-    let uri = format!("s3://{}/{}/{}/", bucket_name, Utc::now().timestamp(), rand);
+    let uri = format!("s3://{bucket_name}/{}/{rand}/", Utc::now().timestamp());
     let lock_table = format!("delta_rs_lock_table_{rand}");
 
     let region = "us-east-1".to_string();

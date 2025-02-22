@@ -21,10 +21,7 @@ pub fn add_missing_generated_columns(
             .is_err()
         // implies it doesn't exist
         {
-            debug!(
-                "Adding missing generated column {} in source as placeholder",
-                col_name
-            );
+            debug!("Adding missing generated column {col_name} in source as placeholder");
             // If column doesn't exist, we add a null column, later we will generate the values after
             // all the merge is projected.
             // Other generated columns that were provided upon the start we only validate during write

@@ -364,7 +364,7 @@ impl Display for SqlFormat<'_> {
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
             Expr::ScalarFunction(func) => fmt_function(f, func.func.name(), false, &func.args),
             Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "arrow_cast({}, '{}')", SqlFormat { expr }, data_type)
+                write!(f, "arrow_cast({}, '{data_type}')", SqlFormat { expr })
             }
             Expr::Between(Between {
                 expr,
@@ -464,7 +464,7 @@ fn fmt_function(f: &mut fmt::Formatter, fun: &str, distinct: bool, args: &[Expr]
         true => "DISTINCT ",
         false => "",
     };
-    write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
+    write!(f, "{fun}({distinct_str}{})", args.join(", "))
 }
 
 macro_rules! format_option {

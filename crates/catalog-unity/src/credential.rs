@@ -131,8 +131,7 @@ impl ClientSecretOAuthProvider {
 
         Self {
             token_url: format!(
-                "{}/{}/oauth2/v2.0/token",
-                authority_host,
+                "{authority_host}/{}/oauth2/v2.0/token",
                 authority_id.as_ref()
             ),
             client_id: client_id.into(),
@@ -312,11 +311,7 @@ impl WorkloadIdentityOAuthProvider {
             authority_host.unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
-            token_url: format!(
-                "{}/{}/oauth2/v2.0/token",
-                authority_host,
-                tenant_id.as_ref()
-            ),
+            token_url: format!("{authority_host}/{}/oauth2/v2.0/token", tenant_id.as_ref()),
             client_id: client_id.into(),
             federated_token_file: federated_token_file.into(),
         }

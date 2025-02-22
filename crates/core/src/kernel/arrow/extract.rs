@@ -76,8 +76,7 @@ pub(crate) fn extract_column<'a>(
                     Ok(child)
                     // if maparr.entries().num_columns() != 2 {
                     //     return Err(ArrowError::SchemaError(format!(
-                    //         "Map {} has {} columns, expected 2",
-                    //         path_step,
+                    //         "Map {path_step} has {} columns, expected 2",
                     //         maparr.entries().num_columns()
                     //     )));
                     // }
