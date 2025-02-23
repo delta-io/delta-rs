@@ -637,15 +637,7 @@ impl MergePlan {
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
-        let original_columns = df
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(Column::from_qualified_name_ignore_case(f.name())))
-            .collect_vec();
 
-        // Add a temporary z-order column we will sort by, and then drop.
-        const ZORDER_KEY_COLUMN: &str = "__zorder_key";
         let cols = context
             .columns
             .iter()
@@ -655,10 +647,7 @@ impl MergePlan {
             Arc::new(ScalarUDF::from(zorder::datafusion::ZOrderUDF)),
             cols,
         ));
-        let df = df.with_column(ZORDER_KEY_COLUMN, expr)?;
-
-        let df = df.sort(vec![col(ZORDER_KEY_COLUMN).sort(true, true)])?;
-        let df = df.select(original_columns)?;
+        let df = df.sort(vec![expr.sort(true, true)])?;
 
         let stream = df
             .execute_stream()
