@@ -497,15 +497,13 @@ impl Field {
             format!(", metadata={metadata_repr}")
         };
         Ok(format!(
-            "Field({}, {}, nullable={}{})",
+            "Field({}, {type_repr}, nullable={}{maybe_metadata})",
             self.inner.name(),
-            type_repr,
             if self.inner.is_nullable() {
                 "True"
             } else {
                 "False"
             },
-            maybe_metadata,
         ))
     }
 

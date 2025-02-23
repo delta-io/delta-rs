@@ -55,7 +55,7 @@ impl LakeFSClient {
     ) -> DeltaResult<(Url, String)> {
         let (repo, source_branch, table) = self.decompose_url(source_url.to_string());
 
-        let request_url = format!("{}/api/v1/repositories/{}/branches", self.config.host, repo);
+        let request_url = format!("{}/api/v1/repositories/{repo}/branches", self.config.host);
 
         let transaction_branch = format!("delta-tx-{operation_id}");
         let body = json!({
@@ -102,8 +102,8 @@ impl LakeFSClient {
         branch: String,
     ) -> Result<(), TransactionError> {
         let request_url = format!(
-            "{}/api/v1/repositories/{}/branches/{}",
-            self.config.host, repo, branch
+            "{}/api/v1/repositories/{repo}/branches/{branch}",
+            self.config.host,
         );
         let response = self
             .http_client
@@ -139,8 +139,8 @@ impl LakeFSClient {
         allow_empty: bool,
     ) -> DeltaResult<()> {
         let request_url = format!(
-            "{}/api/v1/repositories/{}/branches/{}/commits",
-            self.config.host, repo, branch
+            "{}/api/v1/repositories/{repo}/branches/{branch}/commits",
+            self.config.host,
         );
 
         let body = json!({
@@ -185,8 +185,8 @@ impl LakeFSClient {
         allow_empty: bool,
     ) -> Result<(), TransactionError> {
         let request_url = format!(
-            "{}/api/v1/repositories/{}/refs/{}/merge/{}",
-            self.config.host, repo, transaction_branch, target_branch
+            "{}/api/v1/repositories/{repo}/refs/{transaction_branch}/merge/{target_branch}",
+            self.config.host,
         );
 
         let body = json!({

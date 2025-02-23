@@ -74,9 +74,8 @@ impl StorageIntegration for DbfsIntegration {
         let mut options = CopyOptions::new();
         options.content_only = true;
         let dest_path = format!(
-            "/dbfs{}/{}",
+            "/dbfs{}/{destination}",
             self.tmp_dir.as_ref().to_str().unwrap(),
-            destination
         );
         std::fs::create_dir_all(&dest_path)?;
         copy(source, &dest_path, &options).expect("Failed to copy");
