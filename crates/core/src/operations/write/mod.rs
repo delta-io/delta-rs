@@ -23,6 +23,7 @@
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
+pub(crate) mod async_utils;
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
