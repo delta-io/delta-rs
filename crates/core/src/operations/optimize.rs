@@ -802,6 +802,7 @@ impl MergePlan {
 
         let mut last_commit = Instant::now();
         let mut commits_made = 0;
+        let mut snapshot = snapshot.clone();
         loop {
             let next = stream.next().await.transpose()?;
 
@@ -841,18 +842,18 @@ impl MergePlan {
 
                 debug!("committing {} actions", actions.len());
 
-                CommitBuilder::from(properties)
+                let commit = CommitBuilder::from(properties)
                     .with_actions(actions)
                     .with_operation_id(operation_id)
                     .with_post_commit_hook_handler(handle.cloned())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
-                        Some(snapshot),
+                        Some(&snapshot),
                         log_store.clone(),
                         self.task_parameters.input_parameters.clone().into(),
                     )
                     .await?;
-
+                snapshot = commit.snapshot();
                 commits_made += 1;
             }
 
@@ -869,7 +870,7 @@ impl MergePlan {
             total_metrics.files_removed.min = 0;
         }
 
-        table.update().await?;
+        table.state = Some(snapshot);
 
         Ok(total_metrics)
     }
