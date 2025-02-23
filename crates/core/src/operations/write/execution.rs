@@ -69,7 +69,7 @@ pub(crate) async fn write_execution_plan_cdc(
             Action::Add(add) => {
                 Action::Cdc(AddCDCFile {
                     // This is a gnarly hack, but the action needs the nested path, not the
-                    // path isnide the prefixed store
+                    // path inside the prefixed store
                     path: format!("_change_data/{}", add.path),
                     size: add.size,
                     partition_values: add.partition_values,
@@ -421,7 +421,7 @@ pub(crate) async fn write_execution_plan_v2(
                                 {
                                     Action::Cdc(AddCDCFile {
                                         // This is a gnarly hack, but the action needs the nested path, not the
-                                        // path isnide the prefixed store
+                                        // path inside the prefixed store
                                         path: format!("_change_data/{}", add.path),
                                         size: add.size,
                                         partition_values: add.partition_values,

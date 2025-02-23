@@ -170,12 +170,12 @@ impl Serialize for PartitionFilter {
         S: Serializer,
     {
         let s = match &self.value {
-            PartitionValue::Equal(value) => format!("{} = '{}'", self.key, value),
-            PartitionValue::NotEqual(value) => format!("{} != '{}'", self.key, value),
-            PartitionValue::GreaterThan(value) => format!("{} > '{}'", self.key, value),
-            PartitionValue::GreaterThanOrEqual(value) => format!("{} >= '{}'", self.key, value),
-            PartitionValue::LessThan(value) => format!("{} < '{}'", self.key, value),
-            PartitionValue::LessThanOrEqual(value) => format!("{} <= '{}'", self.key, value),
+            PartitionValue::Equal(value) => format!("{} = '{value}'", self.key),
+            PartitionValue::NotEqual(value) => format!("{} != '{value}'", self.key),
+            PartitionValue::GreaterThan(value) => format!("{} > '{value}'", self.key),
+            PartitionValue::GreaterThanOrEqual(value) => format!("{} >= '{value}'", self.key),
+            PartitionValue::LessThan(value) => format!("{} < '{value}'", self.key),
+            PartitionValue::LessThanOrEqual(value) => format!("{} <= '{value}'", self.key),
             // used upper case for IN and NOT similar to SQL
             PartitionValue::In(values) => {
                 let quoted_values: Vec<String> = values.iter().map(|v| format!("'{v}'")).collect();
