@@ -28,6 +28,7 @@ pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
+pub mod writer;
 
 use arrow_schema::Schema;
 pub use configs::WriterStatsConfig;
