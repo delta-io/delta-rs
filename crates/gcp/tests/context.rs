@@ -95,7 +95,7 @@ impl StorageIntegration for GcpIntegration {
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
         use futures::executor::block_on;
 
-        let to = format!("{}/{}", self.root_uri(), destination);
+        let to = format!("{}/{destination}", self.root_uri());
         let _ = block_on(copy_table(source.to_owned(), None, to, None, true));
         Ok(ExitStatus::default())
     }

@@ -52,7 +52,7 @@ impl StorageIntegration for HdfsIntegration {
                 "-copyFromLocal",
                 "-p",
                 source,
-                &format!("{}/{}", self.root_uri(), destination),
+                &format!("{}/{destination}", self.root_uri()),
             ])
             .status()
             .unwrap())

@@ -137,7 +137,7 @@ pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
 }
 
 async fn verify_store(integration: &IntegrationContext, root_path: &str) -> TestResult {
-    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+    let table_uri = format!("{}/{root_path}", integration.root_uri());
 
     let storage = DeltaTableBuilder::from_uri(table_uri.clone())
         .with_allow_http(true)
@@ -158,7 +158,7 @@ async fn verify_store(integration: &IntegrationContext, root_path: &str) -> Test
 }
 
 async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
-    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+    let table_uri = format!("{}/{root_path}", integration.root_uri());
 
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)

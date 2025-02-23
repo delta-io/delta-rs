@@ -108,7 +108,7 @@ impl Worker {
     async fn commit_sequence(&mut self, n: i64) -> HashMap<i64, String> {
         let mut result = HashMap::new();
         for i in 0..n {
-            let name = format!("{}-{}", self.name, i);
+            let name = format!("{}-{i}", self.name);
             let v = self.commit_file(&name).await;
             result.insert(v, name);
             tokio::time::sleep(Duration::from_millis(100)).await;

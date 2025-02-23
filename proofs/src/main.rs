@@ -519,16 +519,14 @@ impl Model for AtomicRenameSys {
 
             let writer_versions = next_state.writer_versions();
             lines.push(format!(
-                "writer_versions({}): {:?}",
+                "writer_versions({}): {writer_versions:?}",
                 writer_versions.len(),
-                writer_versions,
             ));
 
             let blob_store_obj_keys = next_state.blob_store_obj_keys();
             lines.push(format!(
-                "blob_store_obj_keys({}): {:?}",
+                "blob_store_obj_keys({}): {blob_store_obj_keys:?}",
                 blob_store_obj_keys.len(),
-                blob_store_obj_keys,
             ));
 
             lines.join("\n")

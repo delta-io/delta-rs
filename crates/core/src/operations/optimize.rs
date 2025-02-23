@@ -680,9 +680,8 @@ impl MergePlan {
                 })
                 .map(|(partition, files)| {
                     debug!(
-                        "merging a group of {} files in partition {:?}",
+                        "merging a group of {} files in partition {partition:?}",
                         files.len(),
-                        partition,
                     );
                     for file in files.iter() {
                         debug!("  file {}", file.path);
