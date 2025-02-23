@@ -46,6 +46,7 @@ use super::transaction::PROTOCOL;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::Add;
 use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
@@ -55,6 +56,8 @@ use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
+#[cfg(feature = "datafusion")]
+use crate::delta_datafusion::DeltaTableProvider;
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -484,7 +487,7 @@ impl MergePlan {
             .iter()
             .map(|file_meta| {
                 create_remove(
-                    file_meta.location.as_ref(),
+                    file_meta.path.as_ref(),
                     &partition_values,
                     file_meta.size as i64,
                 )
@@ -626,35 +629,14 @@ impl MergePlan {
     async fn read_zorder(
         files: MergeBin,
         context: Arc<zorder::ZOrderExecContext>,
+        table_provider: DeltaTableProvider,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_common::Column;
         use datafusion_expr::expr::ScalarFunction;
-        use datafusion_expr::{Expr, ScalarUDF};
+        use datafusion_expr::{col, Expr, ScalarUDF};
 
-        // This code is ... not ideal. Essentially `read_parquet` expects Strings that it will then
-        // parse as URLs and then pass back to the object store (x_x). This can cause problems when
-        // paths in object storage have special characters like spaces, etc.
-        //
-        // This [str::replace] i kind of a hack to address
-        // <https://github.com/delta-io/delta-rs/issues/2834 >
-        let locations: Vec<String> = files
-            .iter()
-            .map(|om| {
-                format!(
-                    "delta-rs:///{}",
-                    str::replace(om.location.as_ref(), "%", "%25")
-                )
-            })
-            .collect();
-        debug!("Reading z-order with locations are: {locations:?}");
-
-        let df = context
-            .ctx
-            // TODO: should read options have the partition columns
-            .read_parquet(locations, ParquetReadOptions::default())
-            .await?;
-
+        let provider = table_provider.with_files(files.files);
+        let df = context.ctx.read_table(Arc::new(provider))?;
         let original_columns = df
             .schema()
             .fields()
@@ -717,14 +699,17 @@ impl MergePlan {
                         partition,
                     );
                     for file in files.iter() {
-                        debug!("  file {}", file.location);
+                        debug!("  file {}", file.path);
                     }
                     let object_store_ref = log_store.object_store(Some(operation_id));
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
                             async move {
-                                let file_reader = ParquetObjectReader::new(object_store_ref, file);
+                                let file_reader = ParquetObjectReader::new(
+                                    object_store_ref,
+                                    ObjectMeta::try_from(file).unwrap(),
+                                );
                                 ParquetRecordBatchStreamBuilder::new(file_reader)
                                     .await?
                                     .build()
@@ -765,10 +750,30 @@ impl MergePlan {
                 )?);
                 let task_parameters = self.task_parameters.clone();
 
+                use crate::delta_datafusion::DataFusionMixins;
+                use crate::delta_datafusion::DeltaScanConfigBuilder;
+                use crate::delta_datafusion::DeltaTableProvider;
+
+                let scan_config = DeltaScanConfigBuilder::default()
+                    .with_file_column(false)
+                    .with_schema(snapshot.input_schema()?)
+                    .build(&snapshot)?;
+
+                // For each rewrite evaluate the predicate and then modify each expression
+                // to either compute the new value or obtain the old one then write these batches
                 let log_store = log_store.clone();
                 futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
-                        let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
+                        let batch_stream = Self::read_zorder(
+                            files.clone(),
+                            exec_context.clone(),
+                            DeltaTableProvider::try_new(
+                                snapshot.clone(),
+                                log_store.clone(),
+                                scan_config.clone(),
+                            )
+                            .unwrap(),
+                        );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
                             partition,
@@ -915,7 +920,7 @@ pub fn create_merge_plan(
 /// A collection of bins for a particular partition
 #[derive(Debug, Clone)]
 struct MergeBin {
-    files: Vec<ObjectMeta>,
+    files: Vec<Add>,
     size_bytes: i64,
 }
 
@@ -935,18 +940,18 @@ impl MergeBin {
         self.files.len()
     }
 
-    fn add(&mut self, meta: ObjectMeta) {
-        self.size_bytes += meta.size as i64;
-        self.files.push(meta);
+    fn add(&mut self, add: Add) {
+        self.size_bytes += add.size as i64;
+        self.files.push(add);
     }
 
-    fn iter(&self) -> impl Iterator<Item = &ObjectMeta> {
+    fn iter(&self) -> impl Iterator<Item = &Add> {
         self.files.iter()
     }
 }
 
 impl IntoIterator for MergeBin {
-    type Item = ObjectMeta;
+    type Item = Add;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -961,8 +966,7 @@ fn build_compaction_plan(
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<ObjectMeta>)> =
-        HashMap::new();
+    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
         metrics.total_considered_files += 1;
@@ -981,7 +985,7 @@ fn build_compaction_plan(
             .entry(add.partition_values()?.hive_partition_path())
             .or_insert_with(|| (partition_values, vec![]))
             .1
-            .push(object_meta);
+            .push(add.add_action());
     }
 
     for (_, file) in partition_files.values_mut() {
@@ -1075,13 +1079,11 @@ fn build_zorder_plan(
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(&add)?;
-
         partition_files
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
-            .add(object_meta);
+            .add(add.add_action());
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 

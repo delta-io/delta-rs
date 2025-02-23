@@ -13,7 +13,7 @@ use percent_encoding::percent_decode_str;
 use super::super::scalars::ScalarExt;
 use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
-    DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
+    Add, DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
 };
 use crate::{DeltaResult, DeltaTableError};
 
@@ -282,6 +282,40 @@ impl LogicalFile<'_> {
         self.stats
             .column_by_name(COL_MAX_VALUES)
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+    }
+
+    pub fn add_action(&self) -> Add {
+        Add {
+            path: self.path().to_string(),
+            partition_values: self
+                .partition_values()
+                .ok()
+                .map(|pv| {
+                    pv.iter()
+                        .map(|(k, v)| {
+                            (
+                                k.to_string(),
+                                if v.is_null() {
+                                    None
+                                } else {
+                                    Some(v.serialize())
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            size: self.size(),
+            modification_time: self.modification_time(),
+            data_change: true,
+            stats: Scalar::from_array(self.stats as &dyn Array, self.index).map(|s| s.serialize()),
+            tags: None,
+            deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            stats_parsed: None,
+        }
     }
 
     /// Create a remove action for this logical file.
