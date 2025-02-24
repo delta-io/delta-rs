@@ -27,7 +27,6 @@
 //!     })?
 //!     .await?
 //! ````
-
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -543,18 +542,22 @@ impl MergeOperation {
                         Column {
                             relation: None,
                             name,
+                            spans,
                         } => Column {
                             relation: Some(r),
                             name,
+                            spans,
                         },
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            spans,
                         } => {
                             if table.as_ref() == alias {
                                 Column {
                                     relation: Some(r),
                                     name,
+                                    spans,
                                 }
                             } else {
                                 return Err(DeltaTableError::Generic(
