@@ -22,7 +22,7 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 pub use object_store::path::Path;
 use object_store::ObjectStore;
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 use url::{ParseError, Url};
 use uuid::Uuid;
 
@@ -77,15 +77,6 @@ where
 {
     let json_string = serde_json::to_string(value).map_err(serde::ser::Error::custom)?;
     serializer.serialize_str(&json_string)
-}
-
-// Custom deserialization that parses a JSON string into MetricDetails
-fn deserialize_vec_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s: String = Deserialize::deserialize(deserializer)?;
-    serde_json::from_str(&s).map_err(DeError::custom)
 }
 
 fn is_absolute_path(path: &str) -> DeltaResult<bool> {
