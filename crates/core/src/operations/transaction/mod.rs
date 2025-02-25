@@ -74,7 +74,6 @@
 //!       └───────────────────────────────┘
 //!</pre>
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -766,7 +765,7 @@ impl PostCommit {
             } else {
                 snapshot.advance(vec![&self.data])?;
             }
-            let state = DeltaTableState { snapshot };
+            let mut state = DeltaTableState { snapshot };
 
             let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
                 cleanup_logs
@@ -809,6 +808,15 @@ impl PostCommit {
                     Some(post_commit_operation_id),
                 )
                 .await? as u64;
+                if num_log_files_cleaned_up > 0 {
+                    state = DeltaTableState::try_new(
+                        &state.snapshot().table_root(),
+                        self.log_store.object_store(None),
+                        state.load_config().clone(),
+                        Some(self.version),
+                    )
+                    .await?;
+                }
             }
 
             // Run arbitrary after_post_commit_hook code

@@ -539,3 +539,39 @@ def test_checkpoint_with_multiple_writes(tmp_path: pathlib.Path):
     new_df = dt.to_pandas()
     print(dt.to_pandas())
     assert len(new_df) == 1, "We overwrote! there should only be one row"
+
+
+@pytest.mark.polars
+def test_refresh_snapshot_after_log_cleanup_3057(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/3057"""
+    import polars as pl
+
+    configuration = {
+        "delta.deletedFileRetentionDuration": "interval 0 days",
+        "delta.logRetentionDuration": "interval 0 days",
+        "delta.targetFileSize": str(128 * 1024 * 1024),
+    }
+
+    for i in range(2):
+        df = pl.DataFrame({"foo": [i]})
+        df.write_delta(
+            str(tmp_path),
+            delta_write_options={"configuration": configuration},
+            mode="append",
+        )
+
+    # create checkpoint so that logs before checkpoint can get removed
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+
+    # Write to table again, snapshot should be correctly refreshed so that clean_up metadata can run after this
+    df = pl.DataFrame({"foo": [1]})
+    df.write_delta(dt, mode="append")
+
+    # Vacuum is noop, since we already removed logs before and snapshot doesn't reference them anymore
+
+    vacuum_log = dt.vacuum(
+        retention_hours=0, enforce_retention_duration=False, dry_run=False
+    )
+
+    assert vacuum_log == []

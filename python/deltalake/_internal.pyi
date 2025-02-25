@@ -234,6 +234,21 @@ class RawDeltaTable:
         post_commithook_properties: Optional[PostCommitHookProperties],
     ) -> None: ...
     def __datafusion_table_provider__(self) -> Any: ...
+    def write(
+        self,
+        data: pyarrow.RecordBatchReader,
+        partition_by: Optional[List[str]],
+        mode: str,
+        schema_mode: Optional[str],
+        predicate: Optional[str],
+        target_file_size: Optional[int],
+        name: Optional[str],
+        description: Optional[str],
+        configuration: Optional[Mapping[str, Optional[str]]],
+        writer_properties: Optional[WriterProperties],
+        commit_properties: Optional[CommitProperties],
+        post_commithook_properties: Optional[PostCommitHookProperties],
+    ) -> None: ...
 
 def rust_core_version() -> str: ...
 def write_new_deltalake(
@@ -253,7 +268,6 @@ def write_to_deltalake(
     data: pyarrow.RecordBatchReader,
     partition_by: Optional[List[str]],
     mode: str,
-    table: Optional[RawDeltaTable],
     schema_mode: Optional[str],
     predicate: Optional[str],
     target_file_size: Optional[int],
