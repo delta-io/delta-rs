@@ -145,6 +145,19 @@ static REMOVE_FIELD: LazyLock<StructField> = LazyLock::new(|| {
         true,
     )
 });
+// TODO implement support for this checkpoint
+#[expect(dead_code)]
+static REMOVE_FIELD_CHECKPOINT: LazyLock<StructField> = LazyLock::new(|| {
+    StructField::new(
+        "remove",
+        StructType::new(vec![
+            StructField::new("path", DataType::STRING, false),
+            StructField::new("deletionTimestamp", DataType::LONG, true),
+            StructField::new("dataChange", DataType::BOOLEAN, false),
+        ]),
+        true,
+    )
+});
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-cdc-file
 static CDC_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
