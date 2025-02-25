@@ -1402,7 +1402,7 @@ impl RawDeltaTable {
     }
 
     pub fn cleanup_metadata(&self, py: Python) -> PyResult<()> {
-        py.allow_threads(|| {
+        let (_result, new_state) = py.allow_threads(|| {
             let operation_id = Uuid::new_v4();
             let handle = Arc::new(LakeFSCustomExecuteHandler {});
             let store = &self.log_store()?;
@@ -1419,10 +1419,29 @@ impl RawDeltaTable {
 
             let result = rt().block_on(async {
                 match self._table.lock() {
-                    Ok(table) => cleanup_metadata(&table, Some(operation_id))
-                        .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from),
+                    Ok(table) => {
+                        let result = cleanup_metadata(&table, Some(operation_id))
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)?;
+
+                        let new_state = if result > 0 {
+                            Some(
+                                DeltaTableState::try_new(
+                                    &table.state.clone().unwrap().snapshot().table_root(),
+                                    table.object_store(),
+                                    table.config.clone(),
+                                    Some(table.version()),
+                                )
+                                .await
+                                .map_err(PythonError::from)?,
+                            )
+                        } else {
+                            None
+                        };
+
+                        Ok((result, new_state))
+                    }
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
                 }
             });
@@ -1438,6 +1457,10 @@ impl RawDeltaTable {
             }
             result
         })?;
+
+        if new_state.is_some() {
+            self.set_state(new_state)?;
+        }
 
         Ok(())
     }
@@ -1606,6 +1629,97 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)
         })?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    fn write(
+        &mut self,
+        py: Python,
+        data: PyArrowType<ArrowArrayStreamReader>,
+        mode: String,
+        schema_mode: Option<String>,
+        partition_by: Option<Vec<String>>,
+        predicate: Option<String>,
+        target_file_size: Option<usize>,
+        name: Option<String>,
+        description: Option<String>,
+        configuration: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let save_mode = mode.parse().map_err(PythonError::from)?;
+
+            let mut builder = WriteBuilder::new(
+                self.log_store()?,
+                self.with_table(|t| Ok(t.state.clone()))?,
+                // Take the Option<state> since it might be the first write,
+                // triggered through `write_to_deltalake`
+            )
+            .with_save_mode(save_mode);
+
+            let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+
+            let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
+                .map_err(PythonError::from)?
+                .build()
+                .map_err(PythonError::from)?;
+
+            builder = builder.with_input_execution_plan(Arc::new(plan));
+
+            if let Some(schema_mode) = schema_mode {
+                builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
+            }
+            if let Some(partition_columns) = partition_by {
+                builder = builder.with_partition_columns(partition_columns);
+            }
+
+            if let Some(writer_props) = writer_properties {
+                builder = builder.with_writer_properties(
+                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                );
+            }
+
+            if let Some(name) = &name {
+                builder = builder.with_table_name(name);
+            };
+
+            if let Some(description) = &description {
+                builder = builder.with_description(description);
+            };
+
+            if let Some(predicate) = predicate {
+                builder = builder.with_replace_where(predicate);
+            };
+
+            if let Some(target_file_size) = target_file_size {
+                builder = builder.with_target_file_size(target_file_size)
+            };
+
+            if let Some(config) = configuration {
+                builder = builder.with_configuration(config);
+            };
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                builder = builder.with_commit_properties(commit_properties);
+            };
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                builder =
+                    builder.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(builder.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+
         self.set_state(table.state)?;
         Ok(())
     }
@@ -2137,13 +2251,12 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, data, mode, table=None, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (table_uri, data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
-    table: Option<&RawDeltaTable>,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
@@ -2156,92 +2269,40 @@ fn write_to_deltalake(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
-    py.allow_threads(|| {
-        let save_mode = mode.parse().map_err(PythonError::from)?;
-
+    let raw_table: DeltaResult<RawDeltaTable> = py.allow_threads(|| {
         let options = storage_options.clone().unwrap_or_default();
-        let table = if let Some(table) = table {
-            table.with_table(|t| Ok(DeltaOps::from(t.clone())))?
-        } else {
-            rt().block_on(DeltaOps::try_from_uri_with_storage_options(
-                &table_uri, options,
-            ))
-            .map_err(PythonError::from)?
+        let table = rt()
+            .block_on(DeltaOps::try_from_uri_with_storage_options(
+                &table_uri,
+                options.clone(),
+            ))?
+            .0;
+
+        let raw_table = RawDeltaTable {
+            _table: Arc::new(Mutex::new(table)),
+            _config: FsConfig {
+                root_url: table_uri,
+                options: options,
+            },
         };
+        Ok(raw_table)
+    });
 
-        // let dont_be_so_lazy = match table.0.state.as_ref() {
-        //     Some(state) => state.table_config().enable_change_data_feed() && predicate.is_some(),
-        //     // You don't have state somehow, so I guess it's okay to be lazy.
-        //     _ => false,
-        // };
-
-        let mut builder =
-            WriteBuilder::new(table.0.log_store(), table.0.state).with_save_mode(save_mode);
-
-        // if dont_be_so_lazy {
-        //     debug!(
-        //         "write_to_deltalake() is not able to lazily perform a write, collecting batches"
-        //     );
-        //     builder = builder.with_input_batches(data.0.map(|batch| batch.unwrap()));
-        // } else {
-
-        let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
-
-        let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
-            .map_err(PythonError::from)?
-            .build()
-            .map_err(PythonError::from)?;
-        builder = builder.with_input_execution_plan(Arc::new(plan));
-        // }
-
-        if let Some(schema_mode) = schema_mode {
-            builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
-        }
-        if let Some(partition_columns) = partition_by {
-            builder = builder.with_partition_columns(partition_columns);
-        }
-
-        if let Some(writer_props) = writer_properties {
-            builder = builder.with_writer_properties(
-                set_writer_properties(writer_props).map_err(PythonError::from)?,
-            );
-        }
-
-        if let Some(name) = &name {
-            builder = builder.with_table_name(name);
-        };
-
-        if let Some(description) = &description {
-            builder = builder.with_description(description);
-        };
-
-        if let Some(predicate) = predicate {
-            builder = builder.with_replace_where(predicate);
-        };
-
-        if let Some(target_file_size) = target_file_size {
-            builder = builder.with_target_file_size(target_file_size)
-        };
-
-        if let Some(config) = configuration {
-            builder = builder.with_configuration(config);
-        };
-
-        if let Some(commit_properties) =
-            maybe_create_commit_properties(commit_properties, post_commithook_properties)
-        {
-            builder = builder.with_commit_properties(commit_properties);
-        };
-
-        if table_uri.starts_with("lakefs://") {
-            builder = builder.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
-        }
-
-        rt().block_on(builder.into_future())
-            .map_err(PythonError::from)?;
-
-        Ok(())
-    })
+    raw_table.map_err(PythonError::from)?.write(
+        py,
+        data,
+        mode,
+        schema_mode,
+        partition_by,
+        predicate,
+        target_file_size,
+        name,
+        description,
+        configuration,
+        writer_properties,
+        commit_properties,
+        post_commithook_properties,
+    )
 }
 
 #[pyfunction]

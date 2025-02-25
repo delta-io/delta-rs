@@ -167,3 +167,74 @@ def test_zorder_with_space_partition(tmp_path: pathlib.Path):
     print(partitioned_df)
 
     test_table.optimize.z_order(columns=["user"])
+
+
+def test_optimize_schema_evolved_3185(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/3185"""
+
+    # Define the data for the first write
+    data_first_write = pa.array(
+        [
+            {"name": "Alice", "age": 30, "details": {"email": "alice@example.com"}},
+            {"name": "Bob", "age": 25, "details": {"email": "bob@example.com"}},
+        ]
+    )
+
+    data_second_write = pa.array(
+        [
+            {
+                "name": "Charlie",
+                "age": 35,
+                "details": {"address": "123 Main St", "email": "charlie@example.com"},
+            },
+            {
+                "name": "Diana",
+                "age": 28,
+                "details": {"address": "456 Elm St", "email": "diana@example.com"},
+            },
+        ]
+    )
+
+    schema_first_write = pa.schema(
+        [
+            ("name", pa.string()),
+            ("age", pa.int64()),
+            ("details", pa.struct([("email", pa.string())])),
+        ]
+    )
+
+    schema_second_write = pa.schema(
+        [
+            ("name", pa.string()),
+            ("age", pa.int64()),
+            (
+                "details",
+                pa.struct(
+                    [
+                        ("address", pa.string()),
+                        ("email", pa.string()),
+                    ]
+                ),
+            ),
+        ]
+    )
+    table_first_write = pa.Table.from_pylist(
+        data_first_write, schema=schema_first_write
+    )
+    table_second_write = pa.Table.from_pylist(
+        data_second_write, schema=schema_second_write
+    )
+
+    write_deltalake(tmp_path, table_first_write, mode="append", engine="rust")
+
+    write_deltalake(
+        tmp_path, table_second_write, mode="append", engine="rust", schema_mode="merge"
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    dt.optimize.z_order(columns=["name"])
+
+    assert dt.version() == 2
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"

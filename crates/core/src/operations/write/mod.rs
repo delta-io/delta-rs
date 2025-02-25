@@ -757,7 +757,6 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-    use datafusion_physical_plan::ExecutionPlan;
     use itertools::Itertools;
     use serde_json::{json, Value};
 

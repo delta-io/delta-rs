@@ -80,6 +80,7 @@ where
 }
 
 // Custom deserialization that parses a JSON string into MetricDetails
+#[expect(dead_code)]
 fn deserialize_vec_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,

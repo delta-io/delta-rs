@@ -121,14 +121,11 @@ mod tests {
     use maplit::hashmap;
     use serial_test::serial;
 
-    struct ScopedEnv {
-        vars: HashMap<std::ffi::OsString, std::ffi::OsString>,
-    }
+    struct ScopedEnv {}
 
     impl ScopedEnv {
         pub fn new() -> Self {
-            let vars = std::env::vars_os().collect();
-            Self { vars }
+            Self {}
         }
 
         pub fn run<T>(mut f: impl FnMut() -> T) -> T {

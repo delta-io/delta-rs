@@ -553,7 +553,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
     use serde_json::json;
     use std::sync::Arc;
