@@ -1573,7 +1573,6 @@ mod tests {
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
     use datafusion_common::Column;
     use datafusion_common::TableReference;

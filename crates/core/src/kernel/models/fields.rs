@@ -145,6 +145,8 @@ static REMOVE_FIELD: LazyLock<StructField> = LazyLock::new(|| {
         true,
     )
 });
+// TODO implement support for this checkpoint
+#[expect(dead_code)]
 static REMOVE_FIELD_CHECKPOINT: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "remove",

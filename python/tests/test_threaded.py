@@ -47,7 +47,7 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
 
 
 @pytest.mark.polars
-def test_multithreaded_write(sample_data: pa.Table, tmp_path: pathlib.Path):
+def test_multithreaded_write_using_table(sample_data: pa.Table, tmp_path: pathlib.Path):
     import polars as pl
 
     table = pl.DataFrame({"a": [1, 2, 3]}).to_arrow()
@@ -55,5 +55,19 @@ def test_multithreaded_write(sample_data: pa.Table, tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
 
+    with pytest.raises(RuntimeError, match="borrowed"):
+        with ThreadPoolExecutor() as exe:
+            list(exe.map(lambda _: write_deltalake(dt, table, mode="append"), range(5)))
+
+
+@pytest.mark.polars
+def test_multithreaded_write_using_path(sample_data: pa.Table, tmp_path: pathlib.Path):
+    import polars as pl
+
+    table = pl.DataFrame({"a": [1, 2, 3]}).to_arrow()
+    write_deltalake(tmp_path, table, mode="overwrite")
+
     with ThreadPoolExecutor() as exe:
-        list(exe.map(lambda _: write_deltalake(dt, table, mode="append"), range(5)))
+        list(
+            exe.map(lambda _: write_deltalake(tmp_path, table, mode="append"), range(5))
+        )
