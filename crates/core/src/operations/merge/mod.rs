@@ -1462,7 +1462,7 @@ fn modify_schema(
             return Err(DeltaTableError::Arrow { source: error });
         }
 
-        if let Some(target_field) = target_schema.field_from_column(columns).ok() {
+        if let Ok(target_field) = target_schema.field_from_column(columns) {
             // for nested data types we need to first merge then see if there a change then replace the pre-existing field
             let new_field = merge_arrow_field(target_field, source_field, true)?;
             if &new_field == target_field {

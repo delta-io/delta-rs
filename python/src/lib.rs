@@ -327,6 +327,7 @@ impl RawDeltaTable {
     /// This will acquire the internal lock since it is a mutating operation!
     pub fn load_version(&self, py: Python, version: i64) -> PyResult<()> {
         py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 let mut table = self
                     ._table
@@ -344,6 +345,7 @@ impl RawDeltaTable {
     /// Retrieve the latest version from the internally loaded table state
     pub fn get_latest_version(&self, py: Python) -> PyResult<i64> {
         py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => table
@@ -359,6 +361,7 @@ impl RawDeltaTable {
 
     pub fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
         py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => table
@@ -397,6 +400,7 @@ impl RawDeltaTable {
                 DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
                     |err| PyValueError::new_err(format!("Failed to parse datetime string: {err}")),
                 )?);
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 let mut table = self
                     ._table
@@ -1041,6 +1045,7 @@ impl RawDeltaTable {
     /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
     #[pyo3(signature = (limit=None))]
     pub fn history(&self, limit: Option<usize>) -> PyResult<Vec<String>> {
+        #[allow(clippy::await_holding_lock)]
         let history = rt().block_on(async {
             match self._table.lock() {
                 Ok(table) => table
@@ -1058,6 +1063,7 @@ impl RawDeltaTable {
     }
 
     pub fn update_incremental(&self) -> PyResult<()> {
+        #[allow(clippy::await_holding_lock)]
         #[allow(deprecated)]
         Ok(rt()
             .block_on(async {
@@ -1102,10 +1108,9 @@ impl RawDeltaTable {
             }
             fields
         } else {
-            return Err(DeltaTableError::generic(
+            return Err(PythonError::from(DeltaTableError::generic(
                 "Couldn't construct list of fields for file stats expression gatherings",
-            ))
-            .map_err(PythonError::from)?;
+            )))?;
         };
 
         self.cloned_state()?
@@ -1368,6 +1373,7 @@ impl RawDeltaTable {
 
             // Runs lakefs pre-execution
             if store.name() == "LakeFSLogStore" {
+                #[allow(clippy::await_holding_lock)]
                 rt().block_on(async {
                     handle
                         .before_post_commit_hook(store, true, operation_id)
@@ -1376,6 +1382,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
             }
 
+            #[allow(clippy::await_holding_lock)]
             let result = rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => create_checkpoint(&table, Some(operation_id))
@@ -1409,6 +1416,7 @@ impl RawDeltaTable {
 
             // Runs lakefs pre-execution
             if store.name() == "LakeFSLogStore" {
+                #[allow(clippy::await_holding_lock)]
                 rt().block_on(async {
                     handle
                         .before_post_commit_hook(store, true, operation_id)
@@ -1417,6 +1425,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
             }
 
+            #[allow(clippy::await_holding_lock)]
             let result = rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => cleanup_metadata(&table, Some(operation_id))
