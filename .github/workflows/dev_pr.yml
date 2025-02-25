@@ -41,10 +41,8 @@ jobs:
           node-version: "18"
       - run: npm install -g @commitlint/cli @commitlint/config-conventional
       # Checkout to get the commitlint configuration.
-      - uses: actions/checkout@v3
-      - run: >
-          npx commitlint \
-            --verbose <<< $COMMIT_MSG
+      - uses: actions/checkout@v4
+      - run: commitlint --verbose <<< $COMMIT_MSG
         env:
           COMMIT_MSG: >
             ${{ github.event.pull_request.title }}
