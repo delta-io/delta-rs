@@ -43,11 +43,14 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
+# catalog-unity
+deltalake-catalog-unity = { path = "../crates/catalog-unity", features = ["aws", "azure", "gcp", "r2"] }
+
 # Non-unix or emscripten os
 [target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
-# Unix (excluding macOS & emscripten) → jemalloc 
+# Unix (excluding macOS & emscripten) → jemalloc
 [target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten")))'.dependencies]
 jemallocator = { version = "0.5", features = ["disable_initial_exec_tls", "background_threads"] }
 

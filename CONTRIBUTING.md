@@ -15,13 +15,9 @@ If you want to claim an issue to work on, you can write the word `take` as a com
 ## Quick start
 
 - Install Rust, e.g. as described [here](https://doc.rust-lang.org/cargo/getting-started/installation.html)
-- Have a compatible Python version installed (check `python/pyproject.toml` for current requirement)
-- Create a Python virtual environment (required for development builds), e.g. as described [here](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/)
-    ```sh
-    python -m venv .venv
-    ```
+- Install the [uv Python package manager](https://docs.astral.sh/uv/getting-started/installation/).
 
-- Build the project for development (this requires an active virtual environment and will also install `deltalake` in that virtual environment. [Uv](https://github.com/astral-sh/uv) packet manager needs to be installed)
+- Build the project for development. This will install `deltalake` into the Python virtual environment managed by uv.
     ```sh
     cd python
     make develop
@@ -29,12 +25,12 @@ If you want to claim an issue to work on, you can write the word `take` as a com
 
 - Run some Python code, e.g. to run a specific test
     ```sh
-    python -m pytest tests/test_writer.py -s -k "test_with_deltalake_schema"
+    uv run pytest tests/test_writer.py -s -k "test_with_deltalake_schema"
     ```
 
 - Run some Rust code, e.g. run an example
     ```sh
-    cd crates/deltalake
+    cd ../crates/deltalake
     cargo run --example basic_operations --features="datafusion"
     ```
 

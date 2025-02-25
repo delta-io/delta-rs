@@ -1,7 +1,5 @@
 .DEFAULT_GOAL := help
 
-VENV := venv
-MATURIN_VERSION := $(shell grep 'requires =' pyproject.toml | cut -d= -f2- | tr -d '[ "]')
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
 DAT_VERSION := 0.0.2
 
@@ -96,7 +94,8 @@ build-docs: ## Build documentation with mkdocs
 clean: ## Run clean
 	$(warning --- Clean virtualenv and target directory ---)
 	cargo clean
-	rm -rf $(VENV)
+	# Remove uv's venv
+	rm -rf .venv
 	find . -type f -name '*.pyc' -delete
 
 .PHONY: help

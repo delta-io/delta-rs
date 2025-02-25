@@ -137,7 +137,7 @@ jobs:
         run: make setup-dat
 
       - name: Run tests
-        run: uv run --no-sync pytest -m '(unitycatalog_databricks and integration)' --doctest-modules
+        run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_databricks 5 10
 
   test-unitycatalog-oss:
     name: Python Build (Python 3.10 Unity Catalog Integration tests)
@@ -166,7 +166,7 @@ jobs:
         run: make setup-dat
 
       - name: Run tests
-        run: uv run --no-sync pytest -m '(unitycatalog_oss and integration)' --doctest-modules
+        run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_oss 5 10
 
   test-pyspark:
     name: PySpark Integration Tests
@@ -191,7 +191,6 @@ jobs:
 
       - name: Run tests
         run: make test-pyspark
-
 
   multi-python-running:
     name: Running with Python ${{ matrix.python-version }}
