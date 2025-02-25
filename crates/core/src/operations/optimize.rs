@@ -43,7 +43,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use super::transaction::PROTOCOL;
-use super::writer::{PartitionWriter, PartitionWriterConfig};
+use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;

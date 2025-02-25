@@ -13,6 +13,7 @@ use parquet::file::properties::WriterProperties;
 use tracing::log::*;
 use uuid::Uuid;
 
+use super::writer::{DeltaWriter, WriterConfig};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, DeltaScanConfigBuilder, DeltaTableProvider};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
@@ -20,7 +21,6 @@ use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, Remove, StructType, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::should_write_cdc;
-use crate::operations::writer::{DeltaWriter, WriterConfig};
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
