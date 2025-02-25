@@ -910,7 +910,7 @@ impl TableProvider for LazyTableProvider {
             if projection != &current_projection {
                 let execution_props = &ExecutionProps::new();
                 let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
-                    .into_iter()
+                    .iter()
                     .map(|i| {
                         let (table_ref, field) = df_schema.qualified_field(*i);
                         create_physical_expr(
@@ -2865,6 +2865,7 @@ mod tests {
         let expected = vec![
             ObjectStoreOperation::GetRange(LocationType::Data, 4920..4928),
             ObjectStoreOperation::GetRange(LocationType::Data, 2399..4920),
+            #[expect(clippy::single_range_in_vec_init)]
             ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..58]),
         ];
         let mut actual = Vec::new();

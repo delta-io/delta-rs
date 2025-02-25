@@ -101,11 +101,7 @@ impl StorageIntegration for GcpIntegration {
     }
 }
 
-impl GcpIntegration {
-    fn delete_bucket(&self) -> std::io::Result<ExitStatus> {
-        gs_cli::delete_bucket(self.bucket_name.clone())
-    }
-}
+impl GcpIntegration {}
 
 /// small wrapper around google api
 pub mod gs_cli {

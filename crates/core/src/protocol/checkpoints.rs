@@ -698,8 +698,8 @@ mod tests {
             0, finalized_commit.metrics.num_log_files_cleaned_up,
             "Expected no log files cleaned up"
         );
-        assert_eq!(
-            false, finalized_commit.metrics.new_checkpoint_created,
+        assert!(
+            !finalized_commit.metrics.new_checkpoint_created,
             "Expected checkpoint created."
         );
         table.load().await.expect("Failed to reload table");

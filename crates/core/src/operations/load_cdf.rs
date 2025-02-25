@@ -104,11 +104,10 @@ impl CdfLoadBuilder {
         for v in 0..self.snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
                 if let Ok(actions) = get_actions(v, bytes).await {
-                    if actions.iter().any(|action| match action {
-                        Action::CommitInfo(CommitInfo {
+                    if actions.iter().any(|action| {
+                        matches!(action, Action::CommitInfo(CommitInfo {
                             timestamp: Some(t), ..
-                        }) if ts.timestamp_millis() < *t => true,
-                        _ => false,
+                        }) if ts.timestamp_millis() < *t)
                     }) {
                         return Ok(v);
                     }
