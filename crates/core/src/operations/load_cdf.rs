@@ -21,7 +21,7 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::SessionState;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{Constraints, ScalarValue, Statistics};
+use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{expressions, PhysicalExpr};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::union::UnionExec;
@@ -377,17 +377,9 @@ impl CdfLoadBuilder {
         let cdc_scan = ParquetFormat::new()
             .create_physical_plan(
                 session_sate,
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema: cdc_file_schema.clone(),
-                    file_groups: cdc_file_groups.into_values().collect(),
-                    constraints: Constraints::default(),
-                    statistics: Statistics::new_unknown(&cdc_file_schema),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: cdc_partition_cols,
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(self.log_store.object_store_url(), cdc_file_schema)
+                    .with_file_groups(cdc_file_groups.into_values().collect())
+                    .with_table_partition_cols(cdc_partition_cols),
                 filters,
             )
             .await?;
@@ -395,17 +387,12 @@ impl CdfLoadBuilder {
         let add_scan = ParquetFormat::new()
             .create_physical_plan(
                 session_sate,
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema: add_remove_file_schema.clone(),
-                    file_groups: add_file_groups.into_values().collect(),
-                    constraints: Constraints::default(),
-                    statistics: Statistics::new_unknown(&add_remove_file_schema.clone()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: add_remove_partition_cols.clone(),
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(
+                    self.log_store.object_store_url(),
+                    add_remove_file_schema.clone(),
+                )
+                .with_file_groups(add_file_groups.into_values().collect())
+                .with_table_partition_cols(add_remove_partition_cols.clone()),
                 filters,
             )
             .await?;
@@ -413,17 +400,9 @@ impl CdfLoadBuilder {
         let remove_scan = ParquetFormat::new()
             .create_physical_plan(
                 session_sate,
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema: add_remove_file_schema.clone(),
-                    file_groups: remove_file_groups.into_values().collect(),
-                    constraints: Constraints::default(),
-                    statistics: Statistics::new_unknown(&add_remove_file_schema),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: add_remove_partition_cols,
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(self.log_store.object_store_url(), add_remove_file_schema)
+                    .with_file_groups(remove_file_groups.into_values().collect())
+                    .with_table_partition_cols(add_remove_partition_cols),
                 filters,
             )
             .await?;
@@ -434,7 +413,7 @@ impl CdfLoadBuilder {
             Arc::new(UnionExec::new(vec![cdc_scan, add_scan, remove_scan]));
 
         // We project the union in the order of the input_schema + cdc cols at the end
-        // This is to ensure the DeltaCdfTableProvider uses the correct schema consturction.
+        // This is to ensure the DeltaCdfTableProvider uses the correct schema construction.
         let mut fields = schema.fields().to_vec();
         for f in ADD_PARTITION_SCHEMA.clone() {
             fields.push(f.into());
