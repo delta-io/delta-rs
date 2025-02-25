@@ -51,8 +51,8 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
-    config::ConfigOptions, Column, Constraints, DFSchema, DataFusionError,
-    Result as DataFusionResult, TableReference, ToDFSchema,
+    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
@@ -648,25 +648,24 @@ impl<'a> DeltaScanBuilder<'a> {
             ..Default::default()
         };
 
-        let mut exec_plan_builder = ParquetExecBuilder::new(FileScanConfig {
-            object_store_url: self.log_store.object_store_url(),
-            file_schema,
-            // If all files were filtered out, we still need to emit at least one partition to
-            // pass datafusion sanity checks.
-            //
-            // See https://github.com/apache/datafusion/issues/11322
-            file_groups: if file_groups.is_empty() {
-                vec![vec![]]
-            } else {
-                file_groups.into_values().collect()
-            },
-            constraints: Constraints::default(),
-            statistics: stats,
-            projection: self.projection.cloned(),
-            limit: self.limit,
-            table_partition_cols,
-            output_ordering: vec![],
-        })
+        let mut exec_plan_builder = ParquetExecBuilder::new(
+            FileScanConfig::new(self.log_store.object_store_url(), file_schema)
+                .with_file_groups(
+                    // If all files were filtered out, we still need to emit at least one partition to
+                    // pass datafusion sanity checks.
+                    //
+                    // See https://github.com/apache/datafusion/issues/11322
+                    if file_groups.is_empty() {
+                        vec![vec![]]
+                    } else {
+                        file_groups.into_values().collect()
+                    },
+                )
+                .with_statistics(stats)
+                .with_projection(self.projection.cloned())
+                .with_limit(self.limit)
+                .with_table_partition_cols(table_partition_cols),
+        )
         .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
         .with_table_parquet_options(parquet_options);
 
