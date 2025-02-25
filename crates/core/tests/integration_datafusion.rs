@@ -194,8 +194,6 @@ mod local {
         // We want to emulate that this occurs on another node, so that all we have access to is the
         // plan byte serialization.
         let source_scan_bytes = {
-            let ctx = SessionContext::new();
-            let state = ctx.state();
             let source_table = open_table("../test/tests/data/delta-0.8.0-date").await?;
 
             let target_provider = provider_as_source(Arc::new(source_table));
@@ -1185,8 +1183,6 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 }
 
 mod date_partitions {
-    use tempfile::TempDir;
-
     use super::*;
 
     async fn setup_test(table_uri: &str) -> Result<DeltaTable, Box<dyn Error>> {

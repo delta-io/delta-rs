@@ -831,7 +831,7 @@ pub(super) mod tests {
 
         assert_eq!(commit.metrics.num_retries, 0);
         assert_eq!(commit.metrics.num_log_files_cleaned_up, 0);
-        assert_eq!(commit.metrics.new_checkpoint_created, false);
+        assert!(!commit.metrics.new_checkpoint_created);
 
         let batches = LogSegment::try_new(
             &Path::default(),

@@ -193,7 +193,7 @@ impl UnitySchemaProvider {
             .map(|resp| match resp {
                 Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
                 Ok(TableTempCredentialsResponse::Error(err)) => Err(err.into()),
-                Err(err) => Err(err.into()),
+                Err(err) => Err(err),
             })
             .await
     }
