@@ -1415,9 +1415,14 @@ impl DeltaDataChecker {
                 ));
             }
 
+            let field_to_select = if check.as_any().is::<Constraint>() {
+                "*"
+            } else {
+                check.get_name()
+            };
             let sql = format!(
                 "SELECT {} FROM `{table_name}` WHERE NOT ({}) LIMIT 1",
-                check.get_name(),
+                field_to_select,
                 check.get_expression()
             );
 
@@ -2158,6 +2163,59 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_enforce_constraints() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", ArrowDataType::Utf8, false),
+            Field::new("b", ArrowDataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+            ],
+        )
+        .unwrap();
+        // Empty constraints is okay
+        let constraints: Vec<Constraint> = vec![];
+        assert!(DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await
+            .is_ok());
+
+        // Valid invariants return Ok(())
+        let constraints = vec![
+            Constraint::new("custom_a", "a is not null"),
+            Constraint::new("custom_b", "b < 1000"),
+        ];
+        assert!(DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await
+            .is_ok());
+
+        // Violated invariants returns an error with list of violations
+        let constraints = vec![
+            Constraint::new("custom_a", "a is null"),
+            Constraint::new("custom_B", "b < 100"),
+        ];
+        let result = DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
+        if let Err(DeltaTableError::InvalidData { violations }) = result {
+            assert_eq!(violations.len(), 2);
+        }
+
+        // Irrelevant constraints return a different error
+        let constraints = vec![Constraint::new("custom_c", "c > 2000")];
+        let result = DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await;
+        assert!(result.is_err());
     }
 
     #[test]

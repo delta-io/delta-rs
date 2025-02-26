@@ -1,5 +1,6 @@
 //! Delta Table read and write implementation
 
+use std::any::Any;
 use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
@@ -155,6 +156,10 @@ impl DataCheck for Constraint {
     fn get_expression(&self) -> &str {
         &self.expr
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// A generated column
@@ -194,6 +199,10 @@ impl DataCheck for GeneratedColumn {
 
     fn get_expression(&self) -> &str {
         &self.validation_expr
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
