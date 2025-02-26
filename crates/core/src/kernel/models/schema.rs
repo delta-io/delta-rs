@@ -1,5 +1,6 @@
 //! Delta table schema
 
+use std::any::Any;
 use std::sync::Arc;
 
 pub use delta_kernel::schema::{
@@ -43,6 +44,10 @@ impl DataCheck for Invariant {
 
     fn get_expression(&self) -> &str {
         &self.invariant_sql
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

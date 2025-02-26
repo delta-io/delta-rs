@@ -363,7 +363,8 @@ impl TableConfig<'_> {
             .iter()
             .filter_map(|(field, value)| {
                 if field.starts_with("delta.constraints") {
-                    value.as_ref().map(|f| Constraint::new("*", f))
+                    let constraint_name = field.replace("delta.constraints.", "");
+                    value.as_ref().map(|f| Constraint::new(&constraint_name, f))
                 } else {
                     None
                 }

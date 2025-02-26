@@ -273,6 +273,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_constraints_with_correct_names() -> DeltaResult<()> {
+        // The key of a constraint is allowed to be custom
+        // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#check-constraints
+        let batch = get_record_batch(None, false);
+        let write = DeltaOps(create_bare_table())
+            .write(vec![batch.clone()])
+            .await?;
+        let table = DeltaOps(write);
+
+        let constraint = table
+            .add_constraint()
+            .with_constraint("my_custom_constraint", "value < 100")
+            .await;
+        assert!(constraint.is_ok());
+        let constraints = constraint
+            .unwrap()
+            .state
+            .unwrap()
+            .table_config()
+            .get_constraints();
+        assert!(constraints.len() == 1);
+        assert_eq!(constraints[0].name, "my_custom_constraint");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn add_constraint_with_invalid_data() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let write = DeltaOps(create_bare_table())
