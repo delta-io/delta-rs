@@ -47,3 +47,21 @@ def assert_spark_read_equal(
         .sort_values(sort_by, ignore_index=True)
         .drop(incompatible_types, axis="columns", errors="ignore"),
     )
+
+
+def run_stream_with_checkpoint(source_table: str):
+    spark = get_spark()
+
+    stream_path = source_table + "/stream"
+    checkpoint_path = stream_path + "streaming_checkpoints/"
+
+    streaming_df = spark.readStream.format("delta").load(source_table)
+    query = (
+        streaming_df.writeStream.format("delta")
+        .outputMode("append")
+        .option("checkpointLocation", checkpoint_path)
+        .option("mergeSchema", "true")
+        .start(stream_path)
+    )
+    query.processAllAvailable()
+    query.stop()
