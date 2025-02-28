@@ -555,11 +555,14 @@ impl std::future::IntoFuture for WriteBuilder {
                         .apply_column_metadata_to_protocol(&schema_struct)?
                         .move_table_properties_into_features(&configuration);
 
-                    let schema_action = Action::Metadata(Metadata::try_new(
-                        schema_struct,
-                        partition_columns.clone(),
-                        configuration,
-                    )?);
+                    let mut metadata =
+                        Metadata::try_new(schema_struct, partition_columns.clone(), configuration)?;
+                    let existing_metadata_id = snapshot.metadata().id.clone();
+
+                    if !existing_metadata_id.is_empty() {
+                        metadata = metadata.with_table_id(existing_metadata_id);
+                    }
+                    let schema_action = Action::Metadata(metadata);
                     actions.push(schema_action);
                     if current_protocol != &new_protocol {
                         actions.push(new_protocol.into())

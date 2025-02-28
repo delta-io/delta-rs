@@ -2053,3 +2053,71 @@ def test_write_type_coercion_predicate(tmp_path: pathlib.Path):
         mode="overwrite",
         delta_write_options=dict(engine="rust", predicate="C = 'a'"),
     )
+
+
+def test_write_schema_evolved_same_metadata_id(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/3274"""
+
+    data_first_write = pa.array(
+        [
+            {"name": "Alice", "age": 30, "details": {"email": "alice@example.com"}},
+            {"name": "Bob", "age": 25, "details": {"email": "bob@example.com"}},
+        ]
+    )
+
+    data_second_write = pa.array(
+        [
+            {
+                "name": "Charlie",
+                "age": 35,
+                "details": {"address": "123 Main St", "email": "charlie@example.com"},
+            },
+            {
+                "name": "Diana",
+                "age": 28,
+                "details": {"address": "456 Elm St", "email": "diana@example.com"},
+            },
+        ]
+    )
+
+    schema_first_write = pa.schema(
+        [
+            ("name", pa.string()),
+            ("age", pa.int64()),
+            ("details", pa.struct([("email", pa.string())])),
+        ]
+    )
+
+    schema_second_write = pa.schema(
+        [
+            ("name", pa.string()),
+            ("age", pa.int64()),
+            (
+                "details",
+                pa.struct(
+                    [
+                        ("address", pa.string()),
+                        ("email", pa.string()),
+                    ]
+                ),
+            ),
+        ]
+    )
+    table_first_write = pa.Table.from_pylist(
+        data_first_write, schema=schema_first_write
+    )
+    table_second_write = pa.Table.from_pylist(
+        data_second_write, schema=schema_second_write
+    )
+
+    write_deltalake(tmp_path, table_first_write, mode="append", engine="rust")
+
+    first_metadata_id = DeltaTable(tmp_path).metadata().id
+
+    write_deltalake(
+        tmp_path, table_second_write, mode="append", engine="rust", schema_mode="merge"
+    )
+
+    second_metadata_id = DeltaTable(tmp_path).metadata().id
+
+    assert first_metadata_id == second_metadata_id

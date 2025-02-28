@@ -111,6 +111,12 @@ impl Metadata {
         self
     }
 
+    /// set the table ID in the metadata action
+    pub fn with_table_id(mut self, id: String) -> Self {
+        self.id = id;
+        self
+    }
+
     /// get the table schema
     pub fn schema(&self) -> DeltaResult<StructType> {
         Ok(serde_json::from_str(&self.schema_string)?)
