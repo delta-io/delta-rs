@@ -10,3 +10,4 @@ search:
 ::: deltalake.exceptions.DeltaProtocolError
 ::: deltalake.exceptions.TableNotFoundError
 ::: deltalake.exceptions.CommitFailedError
+::: deltalake.exceptions.SchemaMismatchError

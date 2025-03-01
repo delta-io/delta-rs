@@ -705,7 +705,6 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer
             streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
                 implicitly disables source table stats to derive an early_pruning_predicate
-            arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties for the commit. If None, default values are used.
 
