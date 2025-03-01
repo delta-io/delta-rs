@@ -256,7 +256,6 @@ def test_add_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_opti
         write_deltalake(
             lakefs_path,
             data,
-            engine="rust",
             mode="append",
             storage_options=lakefs_storage_options,
         )
@@ -285,7 +284,6 @@ def test_set_table_properties(
         lakefs_path,
         sample_table,
         mode="append",
-        engine="rust",
         storage_options=lakefs_storage_options,
     )
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)

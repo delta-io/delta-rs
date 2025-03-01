@@ -1128,10 +1128,7 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
 
 
 @pytest.mark.parametrize("streaming", (True, False))
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_merge_stats_columns_stats_provided(
-    tmp_path: pathlib.Path, engine, streaming: bool
-):
+def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
     data = pa.table(
         {
             "foo": pa.array(["a", "b", None, None]),
@@ -1143,7 +1140,6 @@ def test_merge_stats_columns_stats_provided(
         tmp_path,
         data,
         mode="append",
-        engine=engine,
         configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
     )
     dt = DeltaTable(tmp_path)

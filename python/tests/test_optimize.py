@@ -15,16 +15,12 @@ from deltalake import DeltaTable, write_deltalake
 from deltalake.table import CommitProperties
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 @pytest.mark.parametrize("use_relative", [True, False])
-@pytest.mark.parametrize("large_dtypes", [True, False])
 def test_optimize_run_table(
     tmp_path: pathlib.Path,
     sample_data: pa.Table,
     monkeypatch,
     use_relative: bool,
-    large_dtypes: bool,
-    engine,
 ):
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
@@ -33,15 +29,9 @@ def test_optimize_run_table(
     else:
         table_path = str(tmp_path)
 
-    write_deltalake(
-        table_path, sample_data, mode="append", engine=engine, large_dtypes=large_dtypes
-    )
-    write_deltalake(
-        table_path, sample_data, mode="append", engine=engine, large_dtypes=large_dtypes
-    )
-    write_deltalake(
-        table_path, sample_data, mode="append", engine=engine, large_dtypes=large_dtypes
-    )
+    write_deltalake(table_path, sample_data, mode="append")
+    write_deltalake(table_path, sample_data, mode="append")
+    write_deltalake(table_path, sample_data, mode="append")
 
     dt = DeltaTable(table_path)
     old_data = dt.to_pyarrow_table()
@@ -58,22 +48,24 @@ def test_optimize_run_table(
     assert old_data == new_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-# @pytest.mark.parametrize("large_dtypes", [True, False])
 def test_z_order_optimize(
     tmp_path: pathlib.Path,
     sample_data: pa.Table,
-    # large_dtypes: bool,
-    engine,
 ):
     write_deltalake(
-        tmp_path, sample_data, mode="append", large_dtypes=False, engine=engine
+        tmp_path,
+        sample_data,
+        mode="append",
     )
     write_deltalake(
-        tmp_path, sample_data, mode="append", large_dtypes=False, engine=engine
+        tmp_path,
+        sample_data,
+        mode="append",
     )
     write_deltalake(
-        tmp_path, sample_data, mode="append", large_dtypes=False, engine=engine
+        tmp_path,
+        sample_data,
+        mode="append",
     )
 
     dt = DeltaTable(tmp_path)
@@ -115,10 +107,10 @@ def test_optimize_schema_evolved_table(
 ):
     data = pa.table({"foo": pa.array(["1"])})
 
-    write_deltalake(tmp_path, data, engine="rust", mode="append", schema_mode="merge")
+    write_deltalake(tmp_path, data, mode="append", schema_mode="merge")
 
     data = pa.table({"bar": pa.array(["1"])})
-    write_deltalake(tmp_path, data, engine="rust", mode="append", schema_mode="merge")
+    write_deltalake(tmp_path, data, mode="append", schema_mode="merge")
 
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
@@ -225,11 +217,13 @@ def test_optimize_schema_evolved_3185(tmp_path):
         data_second_write, schema=schema_second_write
     )
 
-    write_deltalake(tmp_path, table_first_write, mode="append", engine="rust")
-
     write_deltalake(
-        tmp_path, table_second_write, mode="append", engine="rust", schema_mode="merge"
+        tmp_path,
+        table_first_write,
+        mode="append",
     )
+
+    write_deltalake(tmp_path, table_second_write, mode="append", schema_mode="merge")
 
     dt = DeltaTable(tmp_path)
 
