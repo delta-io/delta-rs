@@ -28,35 +28,36 @@ import pyarrow.fs as pa_fs
 from pyarrow import RecordBatchReader
 
 from deltalake import Schema as DeltaSchema
-from deltalake.fs import DeltaStorageHandler
-from deltalake.transaction import AddAction
-
-from ._internal import DeltaDataChecker as _DeltaDataChecker
-from ._internal import batch_distinct
-from ._internal import convert_to_deltalake as _convert_to_deltalake
-from ._internal import (
+from deltalake._internal import DeltaDataChecker as _DeltaDataChecker
+from deltalake._internal import batch_distinct
+from deltalake._internal import convert_to_deltalake as _convert_to_deltalake
+from deltalake._internal import (
     get_num_idx_cols_and_stats_columns as get_num_idx_cols_and_stats_columns,
 )
-from ._internal import write_new_deltalake as write_deltalake_pyarrow
-from ._internal import write_to_deltalake as write_deltalake_rust
-from ._util import encode_partition_value
-from .exceptions import DeltaProtocolError, TableNotFoundError
-from .schema import (
+from deltalake._internal import write_to_deltalake as write_deltalake_rust
+from deltalake._util import encode_partition_value
+from deltalake.exceptions import DeltaProtocolError, TableNotFoundError
+from deltalake.fs import DeltaStorageHandler
+from deltalake.schema import (
     ArrowSchemaConversionMode,
     convert_pyarrow_dataset,
     convert_pyarrow_recordbatch,
     convert_pyarrow_recordbatchreader,
     convert_pyarrow_table,
 )
-from .table import (
+from deltalake.table import (
     MAX_SUPPORTED_PYARROW_WRITER_VERSION,
     NOT_SUPPORTED_PYARROW_WRITER_VERSIONS,
     SUPPORTED_WRITER_FEATURES,
-    CommitProperties,
     DeltaTable,
-    PostCommitHookProperties,
     WriterProperties,
     _commit_properties_from_custom_metadata,
+)
+from deltalake.transaction import (
+    AddAction,
+    CommitProperties,
+    PostCommitHookProperties,
+    create_table_with_add_actions,
 )
 
 try:
@@ -556,19 +557,18 @@ def write_deltalake(
         )
 
         if table is None:
-            write_deltalake_pyarrow(
-                table_uri,
-                schema,
-                add_actions,
-                mode,
-                partition_by or [],
-                name,
-                description,
-                configuration,
-                storage_options,
-                commit_properties.custom_metadata
-                if commit_properties
-                else custom_metadata,
+            create_table_with_add_actions(
+                table_uri=table_uri,
+                schema=schema,
+                add_actions=add_actions,
+                mode=mode,
+                partition_by=partition_by or [],
+                name=name,
+                description=description,
+                configuration=configuration,
+                storage_options=storage_options,
+                commit_properties=commit_properties,
+                post_commithook_properties=post_commithook_properties,
             )
         else:
             table.create_write_transaction(
@@ -594,7 +594,8 @@ def convert_to_deltalake(
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     storage_options: Optional[Dict[str, str]] = None,
-    custom_metadata: Optional[Dict[str, str]] = None,
+    commit_properties: Optional[CommitProperties] = None,
+    post_commithook_properties: Optional[PostCommitHookProperties] = None,
 ) -> None:
     """
     `Convert` parquet tables `to delta` tables.
@@ -613,7 +614,8 @@ def convert_to_deltalake(
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
-        custom_metadata: custom metadata that will be added to the transaction commit
+        commit_properties: properties of the transaction commit. If None, default values are used.
+        post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
     if partition_by is not None and partition_strategy is None:
         raise ValueError("Partition strategy has to be provided with partition_by.")
@@ -627,14 +629,15 @@ def convert_to_deltalake(
         return
 
     _convert_to_deltalake(
-        str(uri),
-        partition_by,
-        partition_strategy,
-        name,
-        description,
-        configuration,
-        storage_options,
-        custom_metadata,
+        uri=str(uri),
+        partition_schema=partition_by,
+        partition_strategy=partition_strategy,
+        name=name,
+        description=description,
+        configuration=configuration,
+        storage_options=storage_options,
+        commit_properties=commit_properties,
+        post_commithook_properties=post_commithook_properties,
     )
     return
 

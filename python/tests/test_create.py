@@ -5,6 +5,7 @@ import pytest
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError
+from deltalake.transaction import CommitProperties
 
 
 def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -17,7 +18,7 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
             "delta.appendOnly": "true",
             "delta.logRetentionDuration": "interval 2 days",
         },
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=CommitProperties(custom_metadata={"userName": "John Doe"}),
     )
 
     metadata = dt.metadata()
@@ -77,7 +78,7 @@ def test_create_with_deletion_vectors_enabled(
             "delta.appendOnly": "false",
             "delta.enableDeletionVectors": "true",
         },
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=CommitProperties(custom_metadata={"userName": "John Doe"}),
     )
 
     metadata = dt.metadata()
@@ -108,7 +109,7 @@ def test_create_higher_protocol_versions(
             "delta.minReaderVersion": "2",
             "delta.minWriterVersion": "5",
         },
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=CommitProperties(custom_metadata={"userName": "John Doe"}),
     )
 
     metadata = dt.metadata()

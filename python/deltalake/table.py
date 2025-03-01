@@ -30,7 +30,7 @@ from pyarrow.dataset import (
     ParquetReadOptions,
 )
 
-from deltalake.transaction import AddAction
+from deltalake.transaction import AddAction, CommitProperties, PostCommitHookProperties
 
 try:
     from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
@@ -131,49 +131,6 @@ class Compression(Enum):
             )
         else:
             return True
-
-
-@dataclass(init=True)
-class PostCommitHookProperties:
-    """The post commit hook properties, only required for advanced usecases where you need to control this."""
-
-    def __init__(
-        self,
-        create_checkpoint: bool = True,
-        cleanup_expired_logs: Optional[bool] = None,
-    ):
-        """Checkpoints are by default created based on the delta.checkpointInterval config setting.
-        cleanup_expired_logs can be set to override the delta.enableExpiredLogCleanup, otherwise the
-        config setting will be used to decide whether to clean up logs automatically by taking also
-        the delta.logRetentionDuration into account.
-
-        Args:
-            create_checkpoint (bool, optional): to create checkpoints based on checkpoint interval. Defaults to True.
-            cleanup_expired_logs (Optional[bool], optional): to clean up logs based on interval. Defaults to None.
-        """
-        self.create_checkpoint = create_checkpoint
-        self.cleanup_expired_logs = cleanup_expired_logs
-
-
-@dataclass(init=True)
-class CommitProperties:
-    """The commit properties. Controls the behaviour of the commit."""
-
-    def __init__(
-        self,
-        custom_metadata: Optional[Dict[str, str]] = None,
-        max_commit_retries: Optional[int] = None,
-        app_transactions: Optional[List[Transaction]] = None,
-    ):
-        """Custom metadata to be stored in the commit. Controls the number of retries for the commit.
-
-        Args:
-            custom_metadata: custom metadata that will be added to the transaction commit.
-            max_commit_retries: maximum number of times to retry the transaction commit.
-        """
-        self.custom_metadata = custom_metadata
-        self.max_commit_retries = max_commit_retries
-        self.app_transactions = app_transactions
 
 
 def _commit_properties_from_custom_metadata(
@@ -482,7 +439,8 @@ class DeltaTable:
         description: Optional[str] = None,
         configuration: Optional[Mapping[str, Optional[str]]] = None,
         storage_options: Optional[Dict[str, str]] = None,
-        custom_metadata: Optional[Dict[str, str]] = None,
+        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
         raise_if_key_not_exists: bool = True,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
@@ -499,7 +457,8 @@ class DeltaTable:
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
             storage_options: Options passed to the object store crate.
-            custom_metadata: Custom metadata that will be added to the transaction commit.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
             raise_if_key_not_exists: Whether to raise an error if the configuration uses keys that are not Delta keys
 
         Returns:
@@ -539,7 +498,8 @@ class DeltaTable:
             description,
             configuration,
             storage_options,
-            custom_metadata,
+            commit_properties,
+            post_commithook_properties,
         )
 
         return cls(table_uri=table_uri, storage_options=storage_options)

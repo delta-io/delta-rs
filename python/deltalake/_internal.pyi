@@ -251,17 +251,18 @@ class RawDeltaTable:
     ) -> None: ...
 
 def rust_core_version() -> str: ...
-def write_new_deltalake(
+def create_table_with_add_actions(
     table_uri: str,
     schema: pyarrow.Schema,
     add_actions: List[AddAction],
-    _mode: str,
+    mode: Literal["error", "append", "overwrite", "ignore"],
     partition_by: List[str],
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    custom_metadata: Optional[Dict[str, str]],
+    commit_properties: Optional[CommitProperties],
+    post_commithook_properties: Optional[PostCommitHookProperties],
 ) -> None: ...
 def write_to_deltalake(
     table_uri: str,
@@ -281,13 +282,14 @@ def write_to_deltalake(
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
-    partition_by: Optional[pyarrow.Schema],
+    partition_schema: Optional[pyarrow.Schema],
     partition_strategy: Optional[Literal["hive"]],
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    custom_metadata: Optional[Dict[str, str]],
+    commit_properties: Optional[CommitProperties],
+    post_commithook_properties: Optional[PostCommitHookProperties],
 ) -> None: ...
 def create_deltalake(
     table_uri: str,
@@ -299,7 +301,8 @@ def create_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    custom_metadata: Optional[Dict[str, str]],
+    commit_properties: Optional[CommitProperties],
+    post_commithook_properties: Optional[PostCommitHookProperties],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 def get_num_idx_cols_and_stats_columns(
