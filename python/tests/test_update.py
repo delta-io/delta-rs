@@ -4,8 +4,11 @@ import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
-from deltalake.schema import ArrowSchemaConversionMode, convert_pyarrow_table
 from deltalake.table import CommitProperties
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
+    convert_pyarrow_table,
+)
 
 
 @pytest.fixture()

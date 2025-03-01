@@ -1,4 +1,3 @@
-import itertools
 import json
 import os
 import pathlib
@@ -19,13 +18,13 @@ from deltalake.exceptions import (
     DeltaProtocolError,
     SchemaMismatchError,
 )
-from deltalake.schema import (
+from deltalake.table import CommitProperties, Transaction
+from deltalake.writer._conversion import (
     ArrowSchemaConversionMode,
     convert_pyarrow_recordbatchreader,
     convert_pyarrow_table,
 )
-from deltalake.table import CommitProperties, Transaction
-from deltalake.writer import try_get_table_and_table_uri
+from deltalake.writer._utils import try_get_table_and_table_uri
 
 try:
     from pandas.testing import assert_frame_equal
@@ -487,23 +486,17 @@ def test_append_only_should_append_only_with_the_overwrite_mode(  # Create rust 
         sample_data,
         mode="append",
     )
+    from deltalake.exceptions import CommitFailedError
 
-    data_store_types = [tmp_path, table]
-    fail_modes = ["overwrite", "ignore", "error"]
-
-    for data_store_type, mode in itertools.product(data_store_types, fail_modes):
-        with pytest.raises(
-            ValueError,
-            match=(
-                "If configuration has delta.appendOnly = 'true', mode must be"
-                f" 'append'. Mode is currently {mode}"
-            ),
-        ):
-            write_deltalake(
-                data_store_type,
-                sample_data,
-                mode=mode,
-            )
+    with pytest.raises(
+        CommitFailedError,
+        match="The transaction includes Remove action with data change but Delta table is append-only",
+    ):
+        write_deltalake(
+            table,
+            sample_data,
+            mode="overwrite",
+        )
 
     expected = pa.concat_tables([sample_data, sample_data])
 
@@ -1778,7 +1771,6 @@ def test_write_transactions(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert transaction_2.last_updated == 123456
 
 
-# <https://github.com/delta-io/delta-rs/issues/3063>
 @pytest.mark.polars
 def test_write_structs(tmp_path: pathlib.Path):
     import polars as pl
@@ -1810,7 +1802,6 @@ def test_write_structs(tmp_path: pathlib.Path):
         predicate=" AND ".join([f"target.{x} = source.{x}" for x in ["a"]]),
         source_alias="source",
         target_alias="target",
-        large_dtypes=False,
     ).when_not_matched_insert_all().execute()
 
     arrow_dt = dt.to_pyarrow_dataset()
