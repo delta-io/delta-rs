@@ -1,7 +1,6 @@
 import json
 import uuid
 import warnings
-from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from math import inf
@@ -30,6 +29,7 @@ from pyarrow import RecordBatchReader
 
 from deltalake import Schema as DeltaSchema
 from deltalake.fs import DeltaStorageHandler
+from deltalake.transaction import AddAction
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import batch_distinct
@@ -82,16 +82,6 @@ class ArrowStreamExportable(Protocol):
     def __arrow_c_stream__(
         self, requested_schema: Optional[object] = None
     ) -> object: ...
-
-
-@dataclass
-class AddAction:
-    path: str
-    size: int
-    partition_values: Mapping[str, Optional[str]]
-    modification_time: int
-    data_change: bool
-    stats: str
 
 
 @overload
@@ -581,12 +571,12 @@ def write_deltalake(
                 else custom_metadata,
             )
         else:
-            table._table.create_write_transaction(
-                add_actions,
-                mode,
-                partition_by or [],
-                schema,
-                partition_filters,
+            table.create_write_transaction(
+                actions=add_actions,
+                mode=mode,
+                partition_by=partition_by,
+                schema=schema,
+                partition_filters=partition_filters,
                 commit_properties=commit_properties,
                 post_commithook_properties=post_commithook_properties,
             )
