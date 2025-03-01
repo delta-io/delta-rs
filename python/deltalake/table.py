@@ -30,6 +30,8 @@ from pyarrow.dataset import (
     ParquetReadOptions,
 )
 
+from deltalake.transaction import AddAction
+
 try:
     from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
 except ImportError:
@@ -1442,6 +1444,29 @@ class DeltaTable:
 
     def transaction_versions(self) -> Dict[str, Transaction]:
         return self._table.transaction_versions()
+
+    def create_write_transaction(
+        self,
+        actions: List[AddAction],
+        mode: str,
+        schema: pyarrow.Schema,
+        partition_by: Optional[Union[List[str], str]] = None,
+        partition_filters: Optional[FilterType] = None,
+        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+    ) -> None:
+        if isinstance(partition_by, str):
+            partition_by = [partition_by]
+
+        self._table.create_write_transaction(
+            actions,
+            mode,
+            partition_by or [],
+            schema,
+            partition_filters,
+            commit_properties=commit_properties,
+            post_commithook_properties=post_commithook_properties,
+        )
 
     def __datafusion_table_provider__(self) -> Any:
         """Return the DataFusion table provider PyCapsule interface.
