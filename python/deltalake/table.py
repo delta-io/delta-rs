@@ -748,7 +748,6 @@ class DeltaTable:
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> List[str]:
@@ -759,22 +758,11 @@ class DeltaTable:
             retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
@@ -796,7 +784,6 @@ class DeltaTable:
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
         error_on_type_mismatch: bool = True,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> Dict[str, Any]:
@@ -809,7 +796,6 @@ class DeltaTable:
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
         Returns:
@@ -853,16 +839,6 @@ class DeltaTable:
             {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if updates is None and new_values is not None:
             updates = {}
             for key, value in new_values.items():
@@ -943,7 +919,6 @@ class DeltaTable:
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: Optional[bool] = None,
         streamed_exec: bool = True,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> "TableMerger":
@@ -963,23 +938,12 @@ class DeltaTable:
             streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
                 implicitly disables source table stats to derive an early_pruning_predicate
             arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties for the commit. If None, default values are used.
 
         Returns:
             TableMerger: TableMerger Object
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if large_dtypes is not None:
             warnings.warn(
                 "large_dtypes is deprecated",
@@ -1041,7 +1005,6 @@ class DeltaTable:
         *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
-        custom_metadata: Optional[Dict[str, str]] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> Dict[str, Any]:
         """
@@ -1051,22 +1014,11 @@ class DeltaTable:
             target: the expected version will restore, which represented by int, date str or datetime.
             ignore_missing_files: whether the operation carry on when some data files missing.
             protocol_downgrade_allowed: whether the operation when protocol version upgraded.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
         Returns:
             the metrics from restore.
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if isinstance(target, datetime):
             metrics = self._table.restore(
                 target.isoformat(),
@@ -1308,7 +1260,6 @@ class DeltaTable:
         self,
         predicate: Optional[str] = None,
         writer_properties: Optional[WriterProperties] = None,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> Dict[str, Any]:
@@ -1322,23 +1273,12 @@ class DeltaTable:
         Args:
             predicate: a SQL where clause. If not passed, will delete all rows.
             writer_properties: Pass writer properties to the Rust parquet writer.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
         Returns:
             the metrics from delete.
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         metrics = self._table.delete(
             predicate,
             writer_properties,
@@ -1350,7 +1290,6 @@ class DeltaTable:
     def repair(
         self,
         dry_run: bool = False,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> Dict[str, Any]:
@@ -1363,7 +1302,6 @@ class DeltaTable:
 
         Args:
             dry_run: when activated, list only the files, otherwise add remove actions to transaction log. Defaults to False.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
@@ -1381,16 +1319,6 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         metrics = self._table.repair(
             dry_run,
             commit_properties,
@@ -1963,7 +1891,6 @@ class TableAlterer:
     def add_columns(
         self,
         fields: Union[DeltaField, List[DeltaField]],
-        custom_metadata: Optional[Dict[str, str]] = None,
         commit_properties: Optional[CommitProperties] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
     ) -> None:
@@ -1987,16 +1914,6 @@ class TableAlterer:
             )
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if isinstance(fields, DeltaField):
             fields = [fields]
 
@@ -2009,7 +1926,6 @@ class TableAlterer:
     def add_constraint(
         self,
         constraints: Dict[str, str],
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> None:
@@ -2018,7 +1934,6 @@ class TableAlterer:
 
         Args:
             constraints: mapping of constraint name to SQL-expression to evaluate on write
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
@@ -2037,16 +1952,6 @@ class TableAlterer:
             {'delta.constraints.value_gt_5': 'value > 5'}
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if len(constraints.keys()) > 1:
             raise ValueError(
                 """add_constraints is limited to a single constraint addition at once for now. 
@@ -2063,7 +1968,6 @@ class TableAlterer:
         self,
         name: str,
         raise_if_not_exists: bool = True,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> None:
@@ -2073,7 +1977,6 @@ class TableAlterer:
         Args:
             name: constraint name which to drop.
             raise_if_not_exists: set if should raise if not exists.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
@@ -2096,16 +1999,6 @@ class TableAlterer:
             {}
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         self.table._table.drop_constraints(
             name,
             raise_if_not_exists,
@@ -2117,7 +2010,6 @@ class TableAlterer:
         self,
         properties: Dict[str, str],
         raise_if_not_exists: bool = True,
-        custom_metadata: Optional[Dict[str, str]] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> None:
         """
@@ -2126,7 +2018,6 @@ class TableAlterer:
         Args:
             properties: properties which set
             raise_if_not_exists: set if should raise if not exists.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
         Example:
@@ -2144,16 +2035,6 @@ class TableAlterer:
             dt.alter.set_table_properties({"delta.enableChangeDataFeed": "true"})
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         self.table._table.set_table_properties(
             properties,
             raise_if_not_exists,
@@ -2196,7 +2077,6 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> Dict[str, Any]:
@@ -2221,7 +2101,6 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
@@ -2244,16 +2123,6 @@ class TableOptimizer:
             {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 1, 'numBatches': 2, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
 
@@ -2278,7 +2147,6 @@ class TableOptimizer:
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
         writer_properties: Optional[WriterProperties] = None,
-        custom_metadata: Optional[Dict[str, str]] = None,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
     ) -> Dict[str, Any]:
@@ -2301,7 +2169,6 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
-            custom_metadata: Deprecated and will be removed in future versions. Use commit_properties instead.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
 
@@ -2324,16 +2191,6 @@ class TableOptimizer:
             {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
             ```
         """
-        if custom_metadata:
-            warnings.warn(
-                "custom_metadata is deprecated, please use commit_properties instead.",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            commit_properties = _commit_properties_from_custom_metadata(
-                commit_properties, custom_metadata
-            )
-
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
 
