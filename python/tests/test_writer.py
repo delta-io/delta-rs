@@ -2,26 +2,29 @@ import itertools
 import json
 import os
 import pathlib
-import random
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from math import inf
-from typing import Any, Dict, Iterable, List, Literal
-from unittest.mock import Mock
+from typing import Any, List
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
-from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions, dataset
+from pyarrow.dataset import dataset
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, Schema, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import (
     DeltaError,
     DeltaProtocolError,
     SchemaMismatchError,
 )
-from deltalake.table import CommitProperties, ProtocolVersions, Transaction
+from deltalake.schema import (
+    ArrowSchemaConversionMode,
+    convert_pyarrow_recordbatchreader,
+    convert_pyarrow_table,
+)
+from deltalake.table import CommitProperties, Transaction
 from deltalake.writer import try_get_table_and_table_uri
 
 try:
@@ -32,10 +35,10 @@ else:
     _has_pandas = True
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 @pytest.mark.skip(reason="Waiting on #570")
 def test_handle_existing(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine: Literal["pyarrow", "rust"]
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
 ):
     # if uri points to a non-empty directory that isn't a delta table, error
     tmp_path
@@ -43,19 +46,19 @@ def test_handle_existing(
     p.write_text("hello")
 
     with pytest.raises(OSError) as exception:
-        write_deltalake(tmp_path, sample_data, mode="overwrite", engine=engine)
+        write_deltalake(tmp_path, sample_data, mode="overwrite")
 
     assert "directory is not empty" in str(exception)
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_roundtrip_basic(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine: Literal["pyarrow", "rust"]
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
 ):
     # Check we can create the subdirectory
     tmp_path = tmp_path / "path" / "to" / "table"
     start_time = datetime.now().timestamp()
-    write_deltalake(tmp_path, sample_data, engine=engine)
+    write_deltalake(tmp_path, sample_data)
     end_time = datetime.now().timestamp()
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
@@ -80,49 +83,6 @@ def test_roundtrip_basic(
         assert modification_time < end_time
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_roundtrip_nulls(tmp_path: pathlib.Path, engine: Literal["pyarrow", "rust"]):
-    data = pa.table({"x": pa.array([None, None, 1, 2], type=pa.int64())})
-    # One row group will have values, one will be all nulls.
-    # The first will have None in min and max stats, so we need to handle that.
-    write_deltalake(tmp_path, data, min_rows_per_group=2, max_rows_per_group=2)
-
-    delta_table = DeltaTable(tmp_path)
-    assert delta_table.schema().to_pyarrow() == data.schema
-
-    table = delta_table.to_pyarrow_table()
-    assert table == data
-
-    data = pa.table({"x": pa.array([None, None, None, None], type=pa.int64())})
-    # Will be all null, with two row groups
-    write_deltalake(
-        tmp_path,
-        data,
-        min_rows_per_group=2,
-        max_rows_per_group=2,
-        mode="overwrite",
-        engine=engine,
-    )
-
-    delta_table = DeltaTable(tmp_path)
-    assert delta_table.schema().to_pyarrow() == data.schema
-
-    table = delta_table.to_pyarrow_table()
-    assert table == data
-
-
-@pytest.mark.parametrize("mode", ["append", "overwrite"])
-def test_enforce_schema(existing_table: DeltaTable, mode: str):
-    bad_data = pa.table({"x": pa.array([1, 2, 3])})
-
-    with pytest.raises(ValueError):
-        write_deltalake(existing_table, bad_data, mode=mode, engine="pyarrow")
-
-    table_uri = existing_table._table.table_uri()
-    with pytest.raises(ValueError):
-        write_deltalake(table_uri, bad_data, mode=mode, engine="pyarrow")
-
-
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
 def test_enforce_schema_rust_writer(existing_table: DeltaTable, mode: str):
     bad_data = pa.table({"x": pa.array([1, 2, 3])})
@@ -131,14 +91,22 @@ def test_enforce_schema_rust_writer(existing_table: DeltaTable, mode: str):
         SchemaMismatchError,
         match=".*Cannot cast schema, number of fields does not match.*",
     ):
-        write_deltalake(existing_table, bad_data, mode=mode, engine="rust")
+        write_deltalake(
+            existing_table,
+            bad_data,
+            mode=mode,
+        )
 
     table_uri = existing_table._table.table_uri()
     with pytest.raises(
         SchemaMismatchError,
         match=".*Cannot cast schema, number of fields does not match.*",
     ):
-        write_deltalake(table_uri, bad_data, mode=mode, engine="rust")
+        write_deltalake(
+            table_uri,
+            bad_data,
+            mode=mode,
+        )
 
 
 def test_update_schema(existing_table: DeltaTable):
@@ -167,7 +135,10 @@ def test_merge_schema(existing_table: DeltaTable):
     )
 
     write_deltalake(
-        existing_table, new_data, mode="append", schema_mode="merge", engine="rust"
+        existing_table,
+        new_data,
+        mode="append",
+        schema_mode="merge",
     )
     # adjust schema of old_table_data and new_data to match each other
 
@@ -211,7 +182,6 @@ def test_overwrite_schema(existing_table: DeltaTable):
             new_data_invalid,
             mode="append",
             schema_mode="overwrite",
-            engine="rust",
         )
 
     new_data = pa.table(
@@ -227,7 +197,6 @@ def test_overwrite_schema(existing_table: DeltaTable):
             new_data,
             mode="append",
             schema_mode="overwrite",
-            engine="rust",
         )
 
     write_deltalake(existing_table, new_data, mode="overwrite", schema_mode="overwrite")
@@ -243,7 +212,6 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
             pa.table({"x4": pa.array([1, 2, 3])}),
             mode="append",
             schema_mode=None,
-            engine="rust",
         )
     with pytest.raises(DeltaError):
         write_deltalake(  # schema_mode overwrite is illegal with append
@@ -251,14 +219,12 @@ def test_update_schema_rust_writer_append(existing_table: DeltaTable):
             pa.table({"x1": pa.array([1, 2, 3])}),
             mode="append",
             schema_mode="overwrite",
-            engine="rust",
         )
     write_deltalake(
         existing_table,
         pa.table({"x2": pa.array([1, 2, 3])}),
         mode="append",
         schema_mode="merge",
-        engine="rust",
     )
 
 
@@ -268,7 +234,6 @@ def test_write_type_castable_types(existing_table: DeltaTable):
         pa.table({"utf8": pa.array([1, 2, 3])}),
         mode="append",
         schema_mode="merge",
-        engine="rust",
     )
     with pytest.raises(
         Exception,
@@ -279,7 +244,6 @@ def test_write_type_castable_types(existing_table: DeltaTable):
             pa.table({"int8": pa.array(["hello", "2", "3"])}),
             mode="append",
             schema_mode="merge",
-            engine="rust",
         )
 
     with pytest.raises(
@@ -291,7 +255,6 @@ def test_write_type_castable_types(existing_table: DeltaTable):
             pa.table({"int8": pa.array([1000, 100, 10])}),
             mode="append",
             schema_mode="merge",
-            engine="rust",
         )
 
 
@@ -305,7 +268,6 @@ def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
             new_data,
             mode="overwrite",
             schema_mode=None,
-            engine="rust",
         )
 
     write_deltalake(
@@ -313,7 +275,6 @@ def test_update_schema_rust_writer_invalid(existing_table: DeltaTable):
         new_data,
         mode="overwrite",
         schema_mode="overwrite",
-        engine="rust",
     )
 
     read_data = existing_table.to_pyarrow_table()
@@ -332,7 +293,6 @@ def test_merge_schema_rust_writer_with_overwrite(tmp_path: pathlib.Path):
     write_deltalake(
         tmp_path,
         data,
-        engine="rust",
     )
 
     new_data = pa.table({"a": pa.array([100, 200, 300]), "b": pa.array([1, 1, 1])})
@@ -342,25 +302,22 @@ def test_merge_schema_rust_writer_with_overwrite(tmp_path: pathlib.Path):
         new_data,
         mode="overwrite",
         schema_mode="merge",
-        engine="rust",
     )
     assert set(DeltaTable(tmp_path).to_pyarrow_table().column_names) == set(
         ["a", "b", "c"]
     )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_local_path(
     tmp_path: pathlib.Path,
     sample_data: pa.Table,
     monkeypatch,
-    engine: Literal["pyarrow", "rust"],
 ):
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
     (tmp_path / "path/to/table").mkdir(parents=True)
 
     local_path = "./path/to/table"
-    write_deltalake(local_path, sample_data, engine=engine)
+    write_deltalake(local_path, sample_data)
     delta_table = DeltaTable(local_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
@@ -368,12 +325,10 @@ def test_local_path(
     assert table == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_local_path_with_unsafe_rename(
     tmp_path: pathlib.Path,
     sample_data: pa.Table,
     monkeypatch,
-    engine: Literal["pyarrow", "rust"],
 ):
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
     (tmp_path / "path/to/table").mkdir(parents=True)
@@ -382,9 +337,7 @@ def test_local_path_with_unsafe_rename(
     storage_opts = {
         "allow_unsafe_rename": "true",
     }
-    write_deltalake(
-        local_path, sample_data, storage_options=storage_opts, engine=engine
-    )
+    write_deltalake(local_path, sample_data, storage_options=storage_opts)
     delta_table = DeltaTable(local_path, storage_options=storage_opts)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
@@ -392,15 +345,13 @@ def test_local_path_with_unsafe_rename(
     assert table == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table, engine):
+def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(
         tmp_path,
         sample_data,
         name="test_name",
         description="test_desc",
         configuration={"delta.appendOnly": "false"},
-        engine=engine,
     )
 
     delta_table = DeltaTable(tmp_path)
@@ -412,7 +363,6 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table, engin
     assert metadata.configuration == {"delta.appendOnly": "false"}
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 @pytest.mark.parametrize(
     "column",
     [
@@ -430,9 +380,9 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table, engin
     ],
 )
 def test_roundtrip_partitioned(
-    tmp_path: pathlib.Path, sample_data: pa.Table, column: str, engine
+    tmp_path: pathlib.Path, sample_data: pa.Table, column: str
 ):
-    write_deltalake(tmp_path, sample_data, partition_by=column, engine=engine)
+    write_deltalake(tmp_path, sample_data, partition_by=column)
 
     delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
@@ -446,15 +396,17 @@ def test_roundtrip_partitioned(
         assert add_path.count("/") == 1
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_roundtrip_null_partition(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
 ):
     sample_data = sample_data.add_column(
         0, "utf8_with_nulls", pa.array(["a"] * 4 + [None])
     )
     write_deltalake(
-        tmp_path, sample_data, partition_by=["utf8_with_nulls"], engine=engine
+        tmp_path,
+        sample_data,
+        partition_by=["utf8_with_nulls"],
     )
 
     delta_table = DeltaTable(tmp_path)
@@ -465,13 +417,11 @@ def test_roundtrip_null_partition(
     assert table == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_roundtrip_multi_partitioned(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
 ):
-    write_deltalake(
-        tmp_path, sample_data, partition_by=["int32", "bool"], engine=engine
-    )
+    write_deltalake(tmp_path, sample_data, partition_by=["int32", "bool"])
 
     delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
@@ -485,41 +435,58 @@ def test_roundtrip_multi_partitioned(
         assert add_path.count("/") == 2
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table, engine):
-    write_deltalake(tmp_path, sample_data, engine=engine)
+def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
+    write_deltalake(
+        tmp_path,
+        sample_data,
+    )
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
-    if engine == "pyarrow":
-        with pytest.raises(FileExistsError):
-            write_deltalake(tmp_path, sample_data, mode="error", engine=engine)
-    elif engine == "rust":
-        with pytest.raises(DeltaError):
-            write_deltalake(tmp_path, sample_data, mode="error", engine=engine)
+    with pytest.raises(DeltaError):
+        write_deltalake(tmp_path, sample_data, mode="error")
 
-    write_deltalake(tmp_path, sample_data, mode="ignore", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="ignore",
+    )
     assert ("0" * 19 + "1.json") not in os.listdir(tmp_path / "_delta_log")
 
-    write_deltalake(tmp_path, sample_data, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="append",
+    )
     expected = pa.concat_tables([sample_data, sample_data])
     assert DeltaTable(tmp_path).to_pyarrow_table() == expected
 
-    write_deltalake(tmp_path, sample_data, mode="overwrite", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+    )
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_append_only_should_append_only_with_the_overwrite_mode(  # Create rust equivalent rust
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
 ):
     config = {"delta.appendOnly": "true"}
 
     write_deltalake(
-        tmp_path, sample_data, mode="append", configuration=config, engine=engine
+        tmp_path,
+        sample_data,
+        mode="append",
+        configuration=config,
     )
 
     table = DeltaTable(tmp_path)
-    write_deltalake(table, sample_data, mode="append", engine=engine)
+    write_deltalake(
+        table,
+        sample_data,
+        mode="append",
+    )
 
     data_store_types = [tmp_path, table]
     fail_modes = ["overwrite", "ignore", "error"]
@@ -532,7 +499,11 @@ def test_append_only_should_append_only_with_the_overwrite_mode(  # Create rust 
                 f" 'append'. Mode is currently {mode}"
             ),
         ):
-            write_deltalake(data_store_type, sample_data, mode=mode, engine=engine)
+            write_deltalake(
+                data_store_type,
+                sample_data,
+                mode=mode,
+            )
 
     expected = pa.concat_tables([sample_data, sample_data])
 
@@ -540,45 +511,30 @@ def test_append_only_should_append_only_with_the_overwrite_mode(  # Create rust 
     assert table.version() == 1
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table, engine):
-    write_deltalake(existing_table, sample_data, mode="overwrite", engine=engine)
+def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
+    write_deltalake(existing_table, sample_data, mode="overwrite")
     assert existing_table.to_pyarrow_table() == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_fails_wrong_partitioning(
-    existing_table: DeltaTable, sample_data: pa.Table, engine
+    existing_table: DeltaTable,
+    sample_data: pa.Table,
 ):
-    if engine == "pyarrow":
-        with pytest.raises(ValueError):
-            write_deltalake(
-                existing_table,
-                sample_data,
-                mode="append",
-                partition_by="int32",
-                engine=engine,
-            )
-    elif engine == "rust":
-        with pytest.raises(
-            DeltaError,
-            match='Generic error: Specified table partitioning does not match table partitioning: expected: [], got: ["int32"]',
-        ):
-            write_deltalake(
-                existing_table,
-                sample_data,
-                mode="append",
-                partition_by="int32",
-                engine=engine,
-            )
+    with pytest.raises(
+        DeltaError,
+        match='Generic error: Specified table partitioning does not match table partitioning: expected: [], got: ["int32"]',
+    ):
+        write_deltalake(
+            existing_table,
+            sample_data,
+            mode="append",
+            partition_by="int32",
+        )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 @pytest.mark.pandas
 @pytest.mark.parametrize("schema_provided", [True, False])
-def test_write_pandas(
-    tmp_path: pathlib.Path, sample_data: pa.Table, schema_provided, engine
-):
+def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table, schema_provided):
     # When timestamp is converted to Pandas, it gets casted to ns resolution,
     # but Delta Lake schemas only support us resolution.
     sample_pandas = sample_data.to_pandas()
@@ -586,27 +542,23 @@ def test_write_pandas(
         schema = sample_data.schema
     else:
         schema = None
-    write_deltalake(tmp_path, sample_pandas, schema=schema, engine=engine)
+    write_deltalake(tmp_path, sample_pandas, schema=schema)
     delta_table = DeltaTable(tmp_path)
     df = delta_table.to_pandas()
     assert_frame_equal(df, sample_pandas)
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_write_iterator(
-    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
     batches = existing_table.to_pyarrow_dataset().to_batches()
     with pytest.raises(ValueError):
-        write_deltalake(tmp_path, batches, mode="overwrite", engine=engine)
+        write_deltalake(tmp_path, batches, mode="overwrite")
 
-    write_deltalake(
-        tmp_path, batches, schema=sample_data.schema, mode="overwrite", engine=engine
-    )
+    write_deltalake(tmp_path, batches, schema=sample_data.schema, mode="overwrite")
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 @pytest.mark.parametrize("large_dtypes", [True, False])
 @pytest.mark.parametrize(
     "constructor",
@@ -620,49 +572,47 @@ def test_write_dataset_table_recordbatch(
     tmp_path: pathlib.Path,
     existing_table: DeltaTable,
     sample_data: pa.Table,
-    engine: str,
     large_dtypes: bool,
     constructor,
 ):
     dataset = constructor(existing_table)
-
-    write_deltalake(
-        tmp_path, dataset, mode="overwrite", large_dtypes=large_dtypes, engine=engine
-    )
+    if large_dtypes:
+        dataset = convert_pyarrow_table(
+            sample_data, schema_conversion_mode=ArrowSchemaConversionMode.LARGE
+        )
+    write_deltalake(tmp_path, dataset, mode="overwrite")
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
 @pytest.mark.parametrize("large_dtypes", [True, False])
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_write_recordbatchreader(
     tmp_path: pathlib.Path,
     existing_table: DeltaTable,
     sample_data: pa.Table,
     large_dtypes: bool,
-    engine: Literal["pyarrow", "rust"],
 ):
     batches = existing_table.to_pyarrow_dataset().to_batches()
     reader = RecordBatchReader.from_batches(
         existing_table.to_pyarrow_dataset().schema, batches
     )
 
+    if large_dtypes:
+        reader = convert_pyarrow_recordbatchreader(
+            reader, schema_conversion_mode=ArrowSchemaConversionMode.LARGE
+        )
+
     print("writing second time")
-    write_deltalake(
-        tmp_path, reader, mode="overwrite", large_dtypes=large_dtypes, engine=engine
-    )
+    write_deltalake(tmp_path, reader, mode="overwrite")
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_writer_partitioning(
-    tmp_path: pathlib.Path, engine: Literal["pyarrow", "rust"]
-):
+def test_writer_partitioning(tmp_path: pathlib.Path):
     test_strings = ["a=b", "hello world", "hello%20world"]
     data = pa.table(
         {"p": pa.array(test_strings), "x": pa.array(range(len(test_strings)))}
     )
 
-    write_deltalake(tmp_path, data, engine=engine)
+    write_deltalake(tmp_path, data)
 
     assert DeltaTable(tmp_path).to_pyarrow_table() == data
 
@@ -754,8 +704,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
     assert stats["maxValues"] == expected_maxs
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_writer_null_stats(tmp_path: pathlib.Path, engine: Literal["pyarrow", "rust"]):
+def test_writer_null_stats(tmp_path: pathlib.Path):
     data = pa.table(
         {
             "int32": pa.array([1, None, 2, None], pa.int32()),
@@ -763,93 +712,13 @@ def test_writer_null_stats(tmp_path: pathlib.Path, engine: Literal["pyarrow", "r
             "str": pa.array([None] * 4, pa.string()),
         }
     )
-    write_deltalake(tmp_path, data, engine=engine)
+    write_deltalake(tmp_path, data)
 
     table = DeltaTable(tmp_path)
     stats = get_stats(table)
 
     expected_nulls = {"int32": 2, "float64": 3, "str": 4}
     assert stats["nullCount"] == expected_nulls
-
-
-@pytest.mark.parametrize("engine", ["pyarrow"])
-def test_writer_fails_on_protocol(
-    existing_table: DeltaTable,
-    sample_data: pa.Table,
-    engine: Literal["pyarrow", "rust"],
-):
-    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 3, None, None))
-    with pytest.raises(DeltaProtocolError):
-        write_deltalake(existing_table, sample_data, mode="overwrite", engine=engine)
-
-
-@pytest.mark.parametrize(
-    "row_count,rows_per_file,expected_files",
-    [
-        (1000, 100, 10),  # even distribution
-        (100, 1, 100),  # single row per file
-        (1000, 3, 334),  # uneven distribution, num files = rows/rows_per_file + 1
-    ],
-)
-def test_writer_with_max_rows(
-    tmp_path: pathlib.Path, row_count: int, rows_per_file: int, expected_files: int
-):
-    def get_multifile_stats(table: DeltaTable) -> Iterable[Dict]:
-        log_path = get_log_path(table)
-
-        # Should only have single add entry
-        for line in open(log_path, "r").readlines():
-            log_entry = json.loads(line)
-
-            if "add" in log_entry:
-                yield json.loads(log_entry["add"]["stats"])
-
-    data = pa.table(
-        {
-            "colA": pa.array(range(0, row_count), pa.int32()),
-            "colB": pa.array(
-                [i * random.random() for i in range(0, row_count)], pa.float64()
-            ),
-        }
-    )
-    write_deltalake(
-        tmp_path,
-        data,
-        engine="pyarrow",
-        file_options=ParquetFileFormat().make_write_options(),
-        max_rows_per_file=rows_per_file,
-        min_rows_per_group=rows_per_file,
-        max_rows_per_group=rows_per_file,
-    )
-
-    table = DeltaTable(tmp_path)
-    stats = get_multifile_stats(table)
-    files_written = [f for f in os.listdir(tmp_path) if f != "_delta_log"]
-
-    assert sum([stat_entry["numRecords"] for stat_entry in stats]) == row_count
-    assert len(files_written) == expected_files
-
-
-def test_writer_with_options(tmp_path: pathlib.Path):
-    column_values = [datetime(year_, 1, 1, 0, 0, 0) for year_ in range(9000, 9010)]
-    data = pa.table({"colA": pa.array(column_values, pa.timestamp("us"))})
-
-    opts = (
-        ParquetFileFormat()
-        .make_write_options()
-        .update(compression="GZIP", coerce_timestamps="us")
-    )
-    write_deltalake(tmp_path, data, file_options=opts)
-
-    table = (
-        DeltaTable(tmp_path)
-        .to_pyarrow_dataset(
-            parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="us")
-        )
-        .to_table()
-    )
-
-    assert table == data
 
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
@@ -1047,24 +916,6 @@ def sample_data_for_partitioning() -> pa.Table:
     )
 
 
-def test_partition_overwrite_unfiltered_data_fails(
-    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
-):
-    write_deltalake(
-        tmp_path,
-        sample_data_for_partitioning,
-        mode="overwrite",
-        partition_by=["p1", "p2"],
-    )
-    with pytest.raises(ValueError):
-        write_deltalake(
-            tmp_path,
-            sample_data_for_partitioning,
-            mode="overwrite",
-            partition_filters=[("p2", "=", "1")],
-        )
-
-
 @pytest.mark.parametrize("large_dtypes", [True, False])
 @pytest.mark.parametrize(
     "value_1,value_2,value_type,filter_string",
@@ -1091,9 +942,11 @@ def test_replace_where_overwrite(
             "val": pa.array([1, 1, 1, 1], pa.int64()),
         }
     )
-    write_deltalake(
-        table_path, sample_data, mode="overwrite", large_dtypes=large_dtypes
-    )
+    write_data = sample_data
+    if large_dtypes:
+        write_data = convert_pyarrow_table(write_data, ArrowSchemaConversionMode.LARGE)
+
+    write_deltalake(table_path, write_data, mode="overwrite")
 
     delta_table = DeltaTable(table_path)
     assert (
@@ -1118,13 +971,16 @@ def test_replace_where_overwrite(
         }
     )
 
+    if large_dtypes:
+        sample_data = convert_pyarrow_table(
+            sample_data, ArrowSchemaConversionMode.LARGE
+        )
+
     write_deltalake(
         table_path,
         sample_data,
         mode="overwrite",
         predicate="p1 = '1'",
-        engine="rust",
-        large_dtypes=large_dtypes,
     )
 
     delta_table.update_incremental()
@@ -1193,7 +1049,6 @@ def test_replace_where_overwrite_partitioned(
         mode="overwrite",
         partition_by=["p1", "p2"],
         predicate="p1 = '1'",
-        engine="rust",
     )
 
     delta_table.update_incremental()
@@ -1301,25 +1156,7 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
     assert table == out
 
 
-def test_max_partitions_exceeding_fragment_should_fail(
-    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
-):
-    with pytest.raises(
-        ValueError,
-        match=r"Fragment would be written into \d+ partitions\. This exceeds the maximum of \d+",
-    ):
-        write_deltalake(
-            tmp_path,
-            sample_data_for_partitioning,
-            mode="overwrite",
-            engine="pyarrow",
-            max_partitions=1,
-            partition_by=["p1", "p2"],
-        )
-
-
-@pytest.mark.parametrize("engine", ["rust", "pyarrow"])
-def test_large_arrow_types(tmp_path: pathlib.Path, engine):
+def test_large_arrow_types(tmp_path: pathlib.Path):
     pylist = [
         {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
         {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
@@ -1335,9 +1172,11 @@ def test_large_arrow_types(tmp_path: pathlib.Path, engine):
     )
     table = pa.Table.from_pylist(pylist, schema=schema)
 
-    write_deltalake(tmp_path, table, mode="append", engine=engine, large_dtypes=True)
-    write_deltalake(tmp_path, table, mode="append", engine=engine, large_dtypes=True)
-    write_deltalake(tmp_path, table, mode="append", engine=engine, large_dtypes=True)
+    table = convert_pyarrow_table(table, ArrowSchemaConversionMode.LARGE)
+
+    write_deltalake(tmp_path, table, mode="append")
+    write_deltalake(tmp_path, table, mode="append")
+    write_deltalake(tmp_path, table, mode="append")
 
     dt = DeltaTable(tmp_path)
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
@@ -1446,8 +1285,7 @@ def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
     assert dataset.count_rows() == 1
 
 
-@pytest.mark.parametrize("engine", ["rust", "pyarrow"])
-def test_invalid_decimals(tmp_path: pathlib.Path, engine):
+def test_invalid_decimals(tmp_path: pathlib.Path):
     import re
 
     data = pa.table(
@@ -1458,11 +1296,10 @@ def test_invalid_decimals(tmp_path: pathlib.Path, engine):
         SchemaMismatchError,
         match=re.escape("Invalid data type for Delta Lake: Decimal256(39, 1)"),
     ):
-        write_deltalake(table_or_uri=tmp_path, mode="append", data=data, engine=engine)
+        write_deltalake(table_or_uri=tmp_path, mode="append", data=data)
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_write_large_decimal(tmp_path: pathlib.Path, engine):
+def test_write_large_decimal(tmp_path: pathlib.Path):
     data = pa.table(
         {
             "decimal_column": pa.array(
@@ -1471,7 +1308,7 @@ def test_write_large_decimal(tmp_path: pathlib.Path, engine):
         }
     )
 
-    write_deltalake(tmp_path, data, engine=engine)
+    write_deltalake(tmp_path, data)
 
 
 def test_float_values(tmp_path: pathlib.Path):
@@ -1497,67 +1334,7 @@ def test_float_values(tmp_path: pathlib.Path):
     assert actions["null_count"].field("x2")[0].as_py() == 1
 
 
-def test_with_deltalake_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
-    write_deltalake(
-        tmp_path,
-        sample_data,
-        engine="pyarrow",
-        schema=Schema.from_pyarrow(sample_data.schema),
-    )
-    delta_table = DeltaTable(tmp_path)
-    assert delta_table.schema().to_pyarrow() == sample_data.schema
-
-
-def test_with_deltalake_json_schema(tmp_path: pathlib.Path):
-    json_schema = '{"type": "struct","fields": [{"name": "campaign", "type": "string", "nullable": true, "metadata": {}},{"name": "account", "type": "string", "nullable": true, "metadata": {}}]}'
-    table_schema = Schema.from_json(json_schema)
-    table = pa.table(
-        {
-            "campaign": pa.array([]),
-            "account": pa.array([]),
-        }
-    )
-    write_deltalake(tmp_path, table, engine="pyarrow", schema=table_schema)
-    table = pa.table(
-        {
-            "campaign": pa.array(["deltaLake"]),
-            "account": pa.array(["admin"]),
-        }
-    )
-
-    write_deltalake(
-        tmp_path, data=table, engine="pyarrow", schema=table_schema, mode="append"
-    )
-
-    delta_table = DeltaTable(tmp_path)
-    assert delta_table.schema() == table_schema
-    assert delta_table.to_pyarrow_table() == table
-
-
-def test_write_stats_empty_rowgroups(tmp_path: pathlib.Path):
-    # https://github.com/delta-io/delta-rs/issues/2169
-    data = pa.table(
-        {
-            "data": pa.array(["B"] * 1024 * 33),
-        }
-    )
-    write_deltalake(
-        tmp_path,
-        data,
-        max_rows_per_file=1024 * 32,
-        max_rows_per_group=1024 * 16,
-        min_rows_per_group=8 * 1024,
-        mode="overwrite",
-    )
-    dt = DeltaTable(tmp_path)
-    assert (
-        dt.to_pyarrow_dataset().to_table(filter=(pc.field("data") == "B")).shape[0]
-        == 33792
-    )
-
-
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
+def test_schema_cols_diff_order(tmp_path: pathlib.Path):
     data = pa.table(
         {
             "foo": pa.array(["B"] * 10),
@@ -1565,7 +1342,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
             "baz": pa.array([2.0] * 10),
         }
     )
-    write_deltalake(tmp_path, data, mode="append", engine=engine)
+    write_deltalake(tmp_path, data, mode="append")
 
     data = pa.table(
         {
@@ -1574,7 +1351,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path, engine):
             "foo": pa.array(["B"] * 10),
         }
     )
-    write_deltalake(tmp_path, data, mode="append", engine=engine)
+    write_deltalake(tmp_path, data, mode="append")
     dt = DeltaTable(tmp_path)
     assert dt.version() == 1
 
@@ -1593,7 +1370,11 @@ def test_empty(existing_table: DeltaTable):
     schema = existing_table.schema().to_pyarrow()
     expected = existing_table.to_pyarrow_table()
     empty_table = pa.Table.from_pylist([], schema=schema)
-    write_deltalake(existing_table, empty_table, mode="append", engine="rust")
+    write_deltalake(
+        existing_table,
+        empty_table,
+        mode="append",
+    )
 
     existing_table.update_incremental()
     assert existing_table.version() == 1
@@ -1605,13 +1386,21 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
 
     data = pa.table({"x": pa.array([Decimal("100.1")])})
 
-    write_deltalake(tmp_path, data, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+    )
 
     assert DeltaTable(tmp_path).to_pyarrow_table()["x"][0].as_py() == Decimal("100.1")
 
     # Write smaller decimal,  works since it's fits in the previous decimal precision, scale
     data = pa.table({"x": pa.array([Decimal("10.1")])})
-    write_deltalake(tmp_path, data, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+    )
 
     data = pa.table({"x": pa.array([Decimal("1000.1")])})
     # write decimal that is larger than target type in table
@@ -1621,16 +1410,22 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
             "Cannot cast field x from Decimal128(5, 1) to Decimal128(4, 1)"
         ),
     ):
-        write_deltalake(tmp_path, data, mode="append", engine="rust")
+        write_deltalake(
+            tmp_path,
+            data,
+            mode="append",
+        )
 
     with pytest.raises(SchemaMismatchError):
         write_deltalake(
-            tmp_path, data, mode="append", schema_mode="merge", engine="rust"
+            tmp_path,
+            data,
+            mode="append",
+            schema_mode="merge",
         )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_write_stats_column_idx(tmp_path: pathlib.Path, engine):
+def test_write_stats_column_idx(tmp_path: pathlib.Path):
     def _check_stats(dt: DeltaTable):
         add_actions_table = dt.get_add_actions(flatten=True)
         stats = add_actions_table.to_pylist()[0]
@@ -1656,7 +1451,6 @@ def test_write_stats_column_idx(tmp_path: pathlib.Path, engine):
         tmp_path,
         data,
         mode="append",
-        engine=engine,
         configuration={"delta.dataSkippingNumIndexedCols": "2"},
     )
 
@@ -1664,7 +1458,7 @@ def test_write_stats_column_idx(tmp_path: pathlib.Path, engine):
     _check_stats(dt)
 
     # Check if it properly takes skippingNumIndexCols from the config in the table
-    write_deltalake(tmp_path, data, mode="overwrite", engine=engine)
+    write_deltalake(tmp_path, data, mode="overwrite")
 
     dt = DeltaTable(tmp_path)
     assert dt.version() == 1
@@ -1722,7 +1516,11 @@ def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path):
 )
 def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array: pa.array):
     data = pa.table({"x": array})
-    write_deltalake(tmp_path, data, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+    )
 
     dt = DeltaTable(tmp_path)
 
@@ -1733,28 +1531,7 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array: pa.array):
     assert protocol.writer_features == ["timestampNtz"]
 
 
-def test_write_timestamp_ntz_on_table_with_features_not_enabled(tmp_path: pathlib.Path):
-    data = pa.table({"x": pa.array(["foo"])})
-    write_deltalake(tmp_path, data, mode="append", engine="pyarrow")
-
-    dt = DeltaTable(tmp_path)
-
-    protocol = dt.protocol()
-    assert protocol.min_reader_version == 1
-    assert protocol.min_writer_version == 2
-
-    data = pa.table({"x": pa.array([datetime(2010, 1, 1)])})
-    with pytest.raises(
-        DeltaError,
-        match="Generic DeltaTable error: Writer features must be specified for writerversion >= 7, please specify: TimestampWithoutTimezone",
-    ):
-        write_deltalake(
-            tmp_path, data, mode="overwrite", engine="pyarrow", schema_mode="overwrite"
-        )
-
-
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_parse_stats_with_new_schema(tmp_path, engine):
+def test_parse_stats_with_new_schema(tmp_path):
     sample_data = pa.table(
         {
             "val": pa.array([1, 1], pa.int8()),
@@ -1767,9 +1544,7 @@ def test_parse_stats_with_new_schema(tmp_path, engine):
             "val": pa.array([1000000000000, 1000000000000], pa.int64()),
         }
     )
-    write_deltalake(
-        tmp_path, sample_data, mode="overwrite", schema_mode="overwrite", engine=engine
-    )
+    write_deltalake(tmp_path, sample_data, mode="overwrite", schema_mode="overwrite")
 
 
 def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
@@ -1804,7 +1579,10 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     )
 
     write_deltalake(
-        tmp_path, sample_data, mode="append", schema_mode="merge", engine="rust"
+        tmp_path,
+        sample_data,
+        mode="append",
+        schema_mode="merge",
     )
     assert ("0" * 19 + "1.json") in os.listdir(tmp_path / "_delta_log")
 
@@ -2051,7 +1829,7 @@ def test_write_type_coercion_predicate(tmp_path: pathlib.Path):
     df.write_delta(
         tmp_path,
         mode="overwrite",
-        delta_write_options=dict(engine="rust", predicate="C = 'a'"),
+        delta_write_options=dict(predicate="C = 'a'"),
     )
 
 
@@ -2110,13 +1888,15 @@ def test_write_schema_evolved_same_metadata_id(tmp_path):
         data_second_write, schema=schema_second_write
     )
 
-    write_deltalake(tmp_path, table_first_write, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        table_first_write,
+        mode="append",
+    )
 
     first_metadata_id = DeltaTable(tmp_path).metadata().id
 
-    write_deltalake(
-        tmp_path, table_second_write, mode="append", engine="rust", schema_mode="merge"
-    )
+    write_deltalake(tmp_path, table_second_write, mode="append", schema_mode="merge")
 
     second_metadata_id = DeltaTable(tmp_path).metadata().id
 

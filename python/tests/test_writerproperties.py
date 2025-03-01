@@ -92,9 +92,7 @@ def test_invalid_fpp_value():
 def test_write_with_writerproperties(
     tmp_path: pathlib.Path, sample_table: pa.Table, writer_properties: WriterProperties
 ):
-    write_deltalake(
-        tmp_path, sample_table, engine="rust", writer_properties=writer_properties
-    )
+    write_deltalake(tmp_path, sample_table, writer_properties=writer_properties)
 
     parquet_path = DeltaTable(tmp_path).file_uris()[0]
     metadata = pq.read_metadata(parquet_path)
