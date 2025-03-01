@@ -140,15 +140,14 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert second_failed_log_path.exists()
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_cleanup_metadata_log_cleanup_hook(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path, sample_data: pa.Table
 ):
     delta_table = setup_cleanup_metadata(tmp_path, sample_data)
     delta_table.create_checkpoint()
 
     sample_data = sample_data.drop(["binary"])
-    write_deltalake(delta_table, sample_data, mode="append", engine=engine)
+    write_deltalake(delta_table, sample_data, mode="append")
 
     tmp_table_path = tmp_path / "path" / "to" / "table"
     first_failed_log_path = (
@@ -168,9 +167,8 @@ def test_cleanup_metadata_log_cleanup_hook(
     assert second_failed_log_path.exists()
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_cleanup_metadata_log_cleanup_hook_disabled(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path, sample_data: pa.Table
 ):
     delta_table = setup_cleanup_metadata(tmp_path, sample_data)
     delta_table.create_checkpoint()
@@ -180,7 +178,6 @@ def test_cleanup_metadata_log_cleanup_hook_disabled(
         delta_table,
         sample_data,
         mode="append",
-        engine=engine,
         post_commithook_properties=PostCommitHookProperties(cleanup_expired_logs=False),
     )
 
@@ -310,22 +307,14 @@ def sample_all_types():
 
 
 @pytest.mark.parametrize(
-    "engine,part_col",
+    "part_col",
     [
-        ("rust", "timestampNtz"),
-        ("rust", "timestamp"),
-        ("pyarrow", "timestampNtz"),
-        pytest.param(
-            "pyarrow",
-            "timestamp",
-            marks=pytest.mark.skip(
-                "Pyarrow serialization of UTC datetimes is incorrect, it appends a 'Z' at the end."
-            ),
-        ),
+        "timestampNtz",
+        "timestamp",
     ],
 )
 def test_checkpoint_partition_timestamp_2380(
-    tmp_path: pathlib.Path, sample_all_types: pa.Table, part_col: str, engine: str
+    tmp_path: pathlib.Path, sample_all_types: pa.Table, part_col: str
 ):
     tmp_table_path = tmp_path / "path" / "to" / "table"
     checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
@@ -339,7 +328,6 @@ def test_checkpoint_partition_timestamp_2380(
         str(tmp_table_path),
         sample_data,
         partition_by=[part_col],
-        engine=engine,  # type: ignore
     )
 
     assert not checkpoint_path.exists()
