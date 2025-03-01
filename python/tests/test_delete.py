@@ -3,9 +3,12 @@ import pathlib
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from deltalake.schema import ArrowSchemaConversionMode, convert_pyarrow_table
 from deltalake.table import CommitProperties, DeltaTable
 from deltalake.writer import write_deltalake
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
+    convert_pyarrow_table,
+)
 
 
 def test_delete_no_predicates(existing_table: DeltaTable):

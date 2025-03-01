@@ -30,16 +30,6 @@ from pyarrow.dataset import (
     ParquetReadOptions,
 )
 
-from deltalake.transaction import AddAction, CommitProperties, PostCommitHookProperties
-
-try:
-    from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
-except ImportError:
-    from pyarrow.parquet import _filters_to_expression as filters_to_expression
-
-if TYPE_CHECKING:
-    import os
-
 from deltalake._internal import (
     DeltaError,
     PyMergeBuilder,
@@ -51,9 +41,23 @@ from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
-from deltalake.schema import ArrowSchemaConversionMode
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
+from deltalake.transaction import AddAction, CommitProperties, PostCommitHookProperties
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
+    ArrowStreamExportable,
+    _convert_data_and_schema,
+)
+
+try:
+    from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
+except ImportError:
+    from pyarrow.parquet import _filters_to_expression as filters_to_expression
+
+if TYPE_CHECKING:
+    import os
+
 
 try:
     import pandas as pd
@@ -879,6 +883,7 @@ class DeltaTable:
             pyarrow.RecordBatch,
             pyarrow.RecordBatchReader,
             ds.Dataset,
+            ArrowStreamExportable,
             "pd.DataFrame",
         ],
         predicate: str,
@@ -887,7 +892,6 @@ class DeltaTable:
         merge_schema: bool = False,
         error_on_type_mismatch: bool = True,
         writer_properties: Optional[WriterProperties] = None,
-        large_dtypes: Optional[bool] = None,
         streamed_exec: bool = True,
         post_commithook_properties: Optional[PostCommitHookProperties] = None,
         commit_properties: Optional[CommitProperties] = None,
@@ -904,7 +908,6 @@ class DeltaTable:
             merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
             error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
-            large_dtypes: Deprecated, will be removed in 1.0
             streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
                 implicitly disables source table stats to derive an early_pruning_predicate
             arrow_schema_conversion_mode: Large converts all types of data schema into Large Arrow types, passthrough keeps string/binary/list types untouched
@@ -914,46 +917,12 @@ class DeltaTable:
         Returns:
             TableMerger: TableMerger Object
         """
-        if large_dtypes is not None:
-            warnings.warn(
-                "large_dtypes is deprecated",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-            if large_dtypes:
-                conversion_mode = ArrowSchemaConversionMode.LARGE
-            else:
-                conversion_mode = ArrowSchemaConversionMode.NORMAL
-        else:
-            conversion_mode = ArrowSchemaConversionMode.PASSTHROUGH
-
-        from .schema import (
-            convert_pyarrow_dataset,
-            convert_pyarrow_recordbatch,
-            convert_pyarrow_recordbatchreader,
-            convert_pyarrow_table,
+        data, schema = _convert_data_and_schema(
+            data=source,
+            schema=None,
+            conversion_mode=ArrowSchemaConversionMode.PASSTHROUGH,
         )
-
-        if isinstance(source, pyarrow.RecordBatchReader):
-            source = convert_pyarrow_recordbatchreader(source, conversion_mode)
-        elif isinstance(source, pyarrow.RecordBatch):
-            source = convert_pyarrow_recordbatch(source, conversion_mode)
-        elif isinstance(source, pyarrow.Table):
-            source = convert_pyarrow_table(source, conversion_mode)
-        elif isinstance(source, ds.Dataset):
-            source = convert_pyarrow_dataset(source, conversion_mode)
-        elif _has_pandas and isinstance(source, pd.DataFrame):
-            source = convert_pyarrow_table(
-                pyarrow.Table.from_pandas(source), conversion_mode
-            )
-        else:
-            raise TypeError(
-                f"{type(source).__name__} is not a valid input. Only PyArrow RecordBatchReader, RecordBatch, Table or Pandas DataFrame are valid inputs for source."
-            )
-
-        source = pyarrow.RecordBatchReader.from_batches(
-            source.schema, (batch for batch in source)
-        )
+        data = pyarrow.RecordBatchReader.from_batches(schema, (batch for batch in data))
 
         py_merge_builder = self._table.create_merge_builder(
             source=source,
