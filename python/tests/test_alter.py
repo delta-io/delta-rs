@@ -4,10 +4,9 @@ from typing import List
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, TableFeatures, write_deltalake
+from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
 from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.schema import Field, PrimitiveType, StructType
-from deltalake.table import CommitProperties
 
 
 def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):

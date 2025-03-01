@@ -12,13 +12,12 @@ import pytest
 from pyarrow.dataset import dataset
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
 from deltalake.exceptions import (
     DeltaError,
     DeltaProtocolError,
     SchemaMismatchError,
 )
-from deltalake.table import CommitProperties, Transaction
 from deltalake.writer._conversion import (
     ArrowSchemaConversionMode,
     convert_pyarrow_recordbatchreader,
