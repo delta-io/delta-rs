@@ -3,8 +3,10 @@ from typing import Dict, List, Literal, Mapping, Optional, Union
 
 import pyarrow as pa
 
-from ._internal import Transaction as Transaction
-from ._internal import create_table_with_add_actions as _create_table_with_add_actions
+from deltalake._internal import Transaction as Transaction
+from deltalake._internal import (
+    create_table_with_add_actions as _create_table_with_add_actions,
+)
 
 
 @dataclass
