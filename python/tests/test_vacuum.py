@@ -4,8 +4,7 @@ import pathlib
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
-from deltalake.table import CommitProperties
+from deltalake import CommitProperties, DeltaTable, write_deltalake
 
 
 def test_vacuum_dry_run_simple_table():

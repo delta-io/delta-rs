@@ -6,10 +6,9 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, TableFeatures
+from deltalake import CommitProperties, DeltaTable, TableFeatures
 from deltalake._internal import Field, PrimitiveType
 from deltalake.exceptions import DeltaError, DeltaProtocolError
-from deltalake.table import CommitProperties
 from deltalake.writer import write_deltalake
 from tests.test_alter import _sort_fields
 
