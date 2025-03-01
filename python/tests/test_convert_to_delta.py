@@ -4,10 +4,9 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from deltalake import convert_to_deltalake
+from deltalake import CommitProperties, convert_to_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.table import DeltaTable
-from deltalake.transaction import CommitProperties
 
 
 def test_local_convert_to_delta(tmp_path: pathlib.Path, sample_data: pa.Table):

@@ -11,8 +11,7 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
-from deltalake import DeltaTable, write_deltalake
-from deltalake.table import CommitProperties
+from deltalake import CommitProperties, DeltaTable, write_deltalake
 
 
 @pytest.mark.parametrize("use_relative", [True, False])

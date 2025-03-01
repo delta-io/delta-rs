@@ -7,9 +7,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaProtocolError
-from deltalake.table import CommitProperties
 
 
 @pytest.mark.parametrize("streaming", (True, False))

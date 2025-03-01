@@ -8,9 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, PostCommitHookProperties, write_deltalake
 from deltalake.exceptions import DeltaError
-from deltalake.table import PostCommitHookProperties
 
 
 def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):

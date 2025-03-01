@@ -3,9 +3,8 @@ import pathlib
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError
-from deltalake.transaction import CommitProperties
 
 
 def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):

@@ -2,7 +2,6 @@ import json
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -43,7 +42,6 @@ from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
-from deltalake.transaction import AddAction, CommitProperties, PostCommitHookProperties
 from deltalake.writer._conversion import (
     ArrowSchemaConversionMode,
     ArrowStreamExportable,
@@ -57,6 +55,13 @@ except ImportError:
 
 if TYPE_CHECKING:
     import os
+
+    from deltalake.transaction import (
+        AddAction,
+        CommitProperties,
+        PostCommitHookProperties,
+    )
+    from deltalake.writer.properties import WriterProperties
 
 
 try:
@@ -81,216 +86,6 @@ FilterConjunctionType = List[FilterLiteralType]
 FilterDNFType = List[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = List[Tuple[str, str, Union[str, List[str]]]]
-
-
-class Compression(Enum):
-    UNCOMPRESSED = "UNCOMPRESSED"
-    SNAPPY = "SNAPPY"
-    GZIP = "GZIP"
-    BROTLI = "BROTLI"
-    LZ4 = "LZ4"
-    ZSTD = "ZSTD"
-    LZ4_RAW = "LZ4_RAW"
-
-    @classmethod
-    def from_str(cls, value: str) -> "Compression":
-        try:
-            return cls(value.upper())
-        except ValueError:
-            raise ValueError(
-                f"{value} is not a valid Compression. Valid values are: {[item.value for item in Compression]}"
-            )
-
-    def get_level_range(self) -> Tuple[int, int]:
-        if self == Compression.GZIP:
-            MIN_LEVEL = 0
-            MAX_LEVEL = 10
-        elif self == Compression.BROTLI:
-            MIN_LEVEL = 0
-            MAX_LEVEL = 11
-        elif self == Compression.ZSTD:
-            MIN_LEVEL = 1
-            MAX_LEVEL = 22
-        else:
-            raise KeyError(f"{self.value} does not have a compression level.")
-        return MIN_LEVEL, MAX_LEVEL
-
-    def get_default_level(self) -> int:
-        if self == Compression.GZIP:
-            DEFAULT = 6
-        elif self == Compression.BROTLI:
-            DEFAULT = 1
-        elif self == Compression.ZSTD:
-            DEFAULT = 1
-        else:
-            raise KeyError(f"{self.value} does not have a compression level.")
-        return DEFAULT
-
-    def check_valid_level(self, level: int) -> bool:
-        MIN_LEVEL, MAX_LEVEL = self.get_level_range()
-        if level < MIN_LEVEL or level > MAX_LEVEL:
-            raise ValueError(
-                f"Compression level for {self.value} should fall between {MIN_LEVEL}-{MAX_LEVEL}"
-            )
-        else:
-            return True
-
-
-def _commit_properties_from_custom_metadata(
-    maybe_properties: Optional[CommitProperties], custom_metadata: Dict[str, str]
-) -> CommitProperties:
-    if maybe_properties is not None:
-        if maybe_properties.custom_metadata is None:
-            maybe_properties.custom_metadata = custom_metadata
-            return maybe_properties
-        return maybe_properties
-    return CommitProperties(custom_metadata=custom_metadata)
-
-
-@dataclass(init=True)
-class BloomFilterProperties:
-    """The Bloom Filter Properties instance for the Rust parquet writer."""
-
-    def __init__(
-        self,
-        set_bloom_filter_enabled: Optional[bool],
-        fpp: Optional[float] = None,
-        ndv: Optional[int] = None,
-    ):
-        """Create a Bloom Filter Properties instance for the Rust parquet writer:
-
-        Args:
-            set_bloom_filter_enabled: If True and no fpp or ndv are provided, the default values will be used.
-            fpp: The false positive probability for the bloom filter. Must be between 0 and 1 exclusive.
-            ndv: The number of distinct values for the bloom filter.
-        """
-        if fpp is not None and (fpp <= 0 or fpp >= 1):
-            raise ValueError("fpp must be between 0 and 1 exclusive")
-        self.set_bloom_filter_enabled = set_bloom_filter_enabled
-        self.fpp = fpp
-        self.ndv = ndv
-
-    def __str__(self) -> str:
-        return f"set_bloom_filter_enabled: {self.set_bloom_filter_enabled}, fpp: {self.fpp}, ndv: {self.ndv}"
-
-
-@dataclass(init=True)
-class ColumnProperties:
-    """The Column Properties instance for the Rust parquet writer."""
-
-    def __init__(
-        self,
-        dictionary_enabled: Optional[bool] = None,
-        statistics_enabled: Optional[Literal["NONE", "CHUNK", "PAGE"]] = None,
-        bloom_filter_properties: Optional[BloomFilterProperties] = None,
-    ):
-        """Create a Column Properties instance for the Rust parquet writer:
-
-        Args:
-            dictionary_enabled: Enable dictionary encoding for the column.
-            statistics_enabled: Statistics level for the column.
-            bloom_filter_properties: Bloom Filter Properties for the column.
-        """
-        self.dictionary_enabled = dictionary_enabled
-        self.statistics_enabled = statistics_enabled
-        self.bloom_filter_properties = bloom_filter_properties
-
-    def __str__(self) -> str:
-        return (
-            f"dictionary_enabled: {self.dictionary_enabled}, statistics_enabled: {self.statistics_enabled}, "
-            f"bloom_filter_properties: {self.bloom_filter_properties}"
-        )
-
-
-@dataclass(init=True)
-class WriterProperties:
-    """A Writer Properties instance for the Rust parquet writer."""
-
-    def __init__(
-        self,
-        data_page_size_limit: Optional[int] = None,
-        dictionary_page_size_limit: Optional[int] = None,
-        data_page_row_count_limit: Optional[int] = None,
-        write_batch_size: Optional[int] = None,
-        max_row_group_size: Optional[int] = None,
-        compression: Optional[
-            Literal[
-                "UNCOMPRESSED",
-                "SNAPPY",
-                "GZIP",
-                "BROTLI",
-                "LZ4",
-                "ZSTD",
-                "LZ4_RAW",
-            ]
-        ] = None,
-        compression_level: Optional[int] = None,
-        statistics_truncate_length: Optional[int] = None,
-        default_column_properties: Optional[ColumnProperties] = None,
-        column_properties: Optional[Dict[str, ColumnProperties]] = None,
-    ):
-        """Create a Writer Properties instance for the Rust parquet writer:
-
-        Args:
-            data_page_size_limit: Limit DataPage size to this in bytes.
-            dictionary_page_size_limit: Limit the size of each DataPage to store dicts to this amount in bytes.
-            data_page_row_count_limit: Limit the number of rows in each DataPage.
-            write_batch_size: Splits internally to smaller batch size.
-            max_row_group_size: Max number of rows in row group.
-            compression: compression type.
-            compression_level: If none and compression has a level, the default level will be used, only relevant for
-                GZIP: levels (1-9),
-                BROTLI: levels (1-11),
-                ZSTD: levels (1-22),
-            statistics_truncate_length: maximum length of truncated min/max values in statistics.
-            default_column_properties: Default Column Properties for the Rust parquet writer.
-            column_properties: Column Properties for the Rust parquet writer.
-        """
-        self.data_page_size_limit = data_page_size_limit
-        self.dictionary_page_size_limit = dictionary_page_size_limit
-        self.data_page_row_count_limit = data_page_row_count_limit
-        self.write_batch_size = write_batch_size
-        self.max_row_group_size = max_row_group_size
-        self.compression = None
-        self.statistics_truncate_length = statistics_truncate_length
-        self.default_column_properties = default_column_properties
-        self.column_properties = column_properties
-
-        if compression_level is not None and compression is None:
-            raise ValueError(
-                """Providing a compression level without the compression type is not possible, 
-                             please provide the compression as well."""
-            )
-        if isinstance(compression, str):
-            compression_enum = Compression.from_str(compression)
-            if compression_enum in [
-                Compression.GZIP,
-                Compression.BROTLI,
-                Compression.ZSTD,
-            ]:
-                if compression_level is not None:
-                    if compression_enum.check_valid_level(compression_level):
-                        parquet_compression = (
-                            f"{compression_enum.value}({compression_level})"
-                        )
-                else:
-                    parquet_compression = f"{compression_enum.value}({compression_enum.get_default_level()})"
-            else:
-                parquet_compression = compression_enum.value
-            self.compression = parquet_compression
-
-    def __str__(self) -> str:
-        column_properties_str = (
-            ", ".join([f"column '{k}': {v}" for k, v in self.column_properties.items()])
-            if self.column_properties
-            else None
-        )
-        return (
-            f"WriterProperties(data_page_size_limit: {self.data_page_size_limit}, dictionary_page_size_limit: {self.dictionary_page_size_limit}, "
-            f"data_page_row_count_limit: {self.data_page_row_count_limit}, write_batch_size: {self.write_batch_size}, "
-            f"max_row_group_size: {self.max_row_group_size}, compression: {self.compression}, statistics_truncate_length: {self.statistics_truncate_length},"
-            f"default_column_properties: {self.default_column_properties}, column_properties: {column_properties_str})"
-        )
 
 
 @dataclass(init=False)
@@ -413,8 +208,8 @@ class DeltaTable:
         description: Optional[str] = None,
         configuration: Optional[Mapping[str, Optional[str]]] = None,
         storage_options: Optional[Dict[str, str]] = None,
-        commit_properties: Optional[CommitProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
         raise_if_key_not_exists: bool = True,
     ) -> "DeltaTable":
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
@@ -722,8 +517,8 @@ class DeltaTable:
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -756,10 +551,10 @@ class DeltaTable:
             Dict[str, Union[int, float, str, datetime, bool, List[Any]]]
         ] = None,
         predicate: Optional[str] = None,
-        writer_properties: Optional[WriterProperties] = None,
+        writer_properties: Optional["WriterProperties"] = None,
         error_on_type_mismatch: bool = True,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> Dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -891,10 +686,10 @@ class DeltaTable:
         target_alias: Optional[str] = None,
         merge_schema: bool = False,
         error_on_type_mismatch: bool = True,
-        writer_properties: Optional[WriterProperties] = None,
+        writer_properties: Optional["WriterProperties"] = None,
         streamed_exec: bool = True,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -944,7 +739,7 @@ class DeltaTable:
         *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
-        commit_properties: Optional[CommitProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> Dict[str, Any]:
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
@@ -1198,9 +993,9 @@ class DeltaTable:
     def delete(
         self,
         predicate: Optional[str] = None,
-        writer_properties: Optional[WriterProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        writer_properties: Optional["WriterProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> Dict[str, Any]:
         """Delete records from a Delta Table that statisfy a predicate.
 
@@ -1229,8 +1024,8 @@ class DeltaTable:
     def repair(
         self,
         dry_run: bool = False,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> Dict[str, Any]:
         """Repair the Delta Table by auditing active files that do not exist in the underlying
         filesystem and removes them. This can be useful when there are accidental deletions or corrupted files.
@@ -1274,13 +1069,13 @@ class DeltaTable:
 
     def create_write_transaction(
         self,
-        actions: List[AddAction],
+        actions: List["AddAction"],
         mode: str,
         schema: pyarrow.Schema,
         partition_by: Optional[Union[List[str], str]] = None,
         partition_filters: Optional[FilterType] = None,
-        commit_properties: Optional[CommitProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
     ) -> None:
         if isinstance(partition_by, str):
             partition_by = [partition_by]
@@ -1793,8 +1588,8 @@ class TableAlterer:
         self,
         feature: Union[TableFeatures, List[TableFeatures]],
         allow_protocol_versions_increase: bool = False,
-        commit_properties: Optional[CommitProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
     ) -> None:
         """
         Enable a table feature.
@@ -1830,8 +1625,8 @@ class TableAlterer:
     def add_columns(
         self,
         fields: Union[DeltaField, List[DeltaField]],
-        commit_properties: Optional[CommitProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
     ) -> None:
         """Add new columns and/or update the fields of a stuctcolumn
 
@@ -1865,8 +1660,8 @@ class TableAlterer:
     def add_constraint(
         self,
         constraints: Dict[str, str],
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> None:
         """
         Add constraints to the table. Limited to `single constraint` at once.
@@ -1907,8 +1702,8 @@ class TableAlterer:
         self,
         name: str,
         raise_if_not_exists: bool = True,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> None:
         """
         Drop constraints from a table. Limited to `single constraint` at once.
@@ -1949,7 +1744,7 @@ class TableAlterer:
         self,
         properties: Dict[str, str],
         raise_if_not_exists: bool = True,
-        commit_properties: Optional[CommitProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> None:
         """
         Set properties from the table.
@@ -1984,8 +1779,8 @@ class TableAlterer:
         self,
         column: str,
         metadata: dict[str, str],
-        commit_properties: Optional[CommitProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
+        commit_properties: Optional["CommitProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
     ) -> None:
         """
         Update a field's metadata in a schema. If the metadata key does not exist, the entry is inserted.
@@ -2015,9 +1810,9 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
-        writer_properties: Optional[WriterProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        writer_properties: Optional["WriterProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -2085,9 +1880,9 @@ class TableOptimizer:
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
         min_commit_interval: Optional[Union[int, timedelta]] = None,
-        writer_properties: Optional[WriterProperties] = None,
-        post_commithook_properties: Optional[PostCommitHookProperties] = None,
-        commit_properties: Optional[CommitProperties] = None,
+        writer_properties: Optional["WriterProperties"] = None,
+        post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+        commit_properties: Optional["CommitProperties"] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.

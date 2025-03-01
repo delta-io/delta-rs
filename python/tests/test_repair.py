@@ -1,7 +1,6 @@
 import os
 
-from deltalake import DeltaTable, write_deltalake
-from deltalake.table import CommitProperties
+from deltalake import CommitProperties, DeltaTable, write_deltalake
 
 
 def test_repair_with_dry_run(tmp_path, sample_data):
