@@ -47,6 +47,7 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
@@ -56,6 +57,7 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
@@ -545,9 +547,19 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let context = SessionContext::new();
         let df_schema = logical_schema.clone().to_dfschema()?;
-        let logical_filter = self
-            .filter
-            .map(|expr| context.create_physical_expr(expr, &df_schema).unwrap());
+
+        let logical_filter = self.filter.map(|expr| {
+            // Simplify the expression first
+            let props = ExecutionProps::new();
+            let simplify_context =
+                SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+            let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+            let simplified = simplifier.simplify(expr).unwrap();
+
+            context
+                .create_physical_expr(simplified, &df_schema)
+                .unwrap()
+        });
 
         // Perform Pruning of files to scan
         let (files, files_scanned, files_pruned) = match self.files {
