@@ -4,12 +4,12 @@ from typing import Generator, Union
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from ._internal import ArrayType as ArrayType
-from ._internal import Field as Field
-from ._internal import MapType as MapType
-from ._internal import PrimitiveType as PrimitiveType
-from ._internal import Schema as Schema
-from ._internal import StructType as StructType
+from deltalake._internal import ArrayType as ArrayType
+from deltalake._internal import Field as Field
+from deltalake._internal import MapType as MapType
+from deltalake._internal import PrimitiveType as PrimitiveType
+from deltalake._internal import Schema as Schema
+from deltalake._internal import StructType as StructType
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
