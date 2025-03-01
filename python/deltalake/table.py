@@ -49,7 +49,6 @@ from deltalake._internal import (
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
-from deltalake.data_catalog import DataCatalog
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import ArrowSchemaConversionMode
@@ -382,35 +381,6 @@ class DeltaTable:
             storage_options=storage_options,
             without_files=without_files,
             log_buffer_size=log_buffer_size,
-        )
-
-    @classmethod
-    def from_data_catalog(
-        cls,
-        data_catalog: DataCatalog,
-        database_name: str,
-        table_name: str,
-        data_catalog_id: Optional[str] = None,
-        version: Optional[int] = None,
-        log_buffer_size: Optional[int] = None,
-    ) -> "DeltaTable":
-        """
-        Create the Delta Table from a Data Catalog.
-
-        Args:
-            data_catalog: the Catalog to use for getting the storage location of the Delta Table
-            database_name: the database name inside the Data Catalog
-            table_name: the table name inside the Data Catalog
-            data_catalog_id: the identifier of the Data Catalog
-            version: version of the DeltaTable
-            log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
-                                Setting a value greater than 1 results in concurrent calls to the storage api.
-                                This can decrease latency if there are many files in the log since the last checkpoint,
-                                but will also increase memory usage. Possible rate limits of the storage backend should
-                                also be considered for optimal performance. Defaults to 4 * number of cpus.
-        """
-        raise NotImplementedError(
-            "Reading from data catalog is not supported at this point in time."
         )
 
     @staticmethod
