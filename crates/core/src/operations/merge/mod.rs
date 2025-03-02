@@ -41,6 +41,7 @@ use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
@@ -50,6 +51,8 @@ use datafusion::{
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
@@ -60,6 +63,7 @@ use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
+use tracing::field::debug;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -844,11 +848,32 @@ async fn execute(
             streaming,
         )
         .await?
+    }
+    .map(|e| {
+        // simplify the expression so we have
+        let props = ExecutionProps::new();
+        let simplify_context = SimplifyContext::new(&props).with_schema(target.schema().clone());
+        let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+        simplifier.simplify(e).unwrap()
+    });
+
+    // Predicate will be used for conflict detection
+    let commit_predicate = match target_subset_filter.clone() {
+        None => None, // No predicate means it's a full table merge
+        Some(some_filter) => {
+            let predict_expr = match &target_alias {
+                None => some_filter,
+                Some(alias) => remove_table_alias(some_filter, alias),
+            };
+            Some(fmt_expr_to_sql(&predict_expr)?)
+        }
     };
+
+    debug!("Using target subset filter: {:?}", commit_predicate);
 
     let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
     // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
-    let target = match target_subset_filter.clone() {
+    let target = match target_subset_filter {
         Some(filter) => {
             let filter = match &target_alias {
                 Some(alias) => remove_table_alias(filter, alias),
@@ -1406,18 +1431,6 @@ async fn execute(
     if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
-
-    // Predicate will be used for conflict detection
-    let commit_predicate = match target_subset_filter {
-        None => None, // No predicate means it's a full table merge
-        Some(some_filter) => {
-            let predict_expr = match &target_alias {
-                None => some_filter,
-                Some(alias) => remove_table_alias(some_filter, alias),
-            };
-            Some(fmt_expr_to_sql(&predict_expr)?)
-        }
-    };
 
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Merge {
@@ -2522,7 +2535,7 @@ mod tests {
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(
             parameters["predicate"],
-            "id BETWEEN 'B' AND 'C' AND modified = '2021-02-02'"
+            "id >= 'B' AND id <= 'C' AND modified = '2021-02-02'"
         );
         assert_eq!(
             parameters["mergePredicate"],
@@ -2773,7 +2786,7 @@ mod tests {
             extra_info["operationMetrics"],
             serde_json::to_value(&metrics).unwrap()
         );
-        assert_eq!(parameters["predicate"], "id BETWEEN 'B' AND 'X'");
+        assert_eq!(parameters["predicate"], "id >= 'B' AND id <= 'X'");
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -3192,7 +3205,7 @@ mod tests {
 
         assert_eq!(
             parameters["predicate"],
-            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+            json!("id >= 'B' AND id <= 'X' AND modified = '2021-02-02'")
         );
 
         let expected = vec![
@@ -3276,7 +3289,7 @@ mod tests {
 
         assert_eq!(
             parameters["predicate"],
-            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+            json!("id >= 'B' AND id <= 'X' AND modified = '2021-02-02'")
         );
 
         let expected = vec![

@@ -1066,7 +1066,7 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     if not streaming:
         assert (
             last_action["operationParameters"].get("predicate")
-            == "'2022-02-01'::date = date"
+            == "date = '2022-02-01'::date"
         )
     else:
         # In streaming mode we don't use aggregated stats of the source in the predicate
@@ -1078,11 +1078,11 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     [
         (
             None,
-            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, None)') = datetime",
+            "datetime = arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, None)')",
         ),
         (
             "UTC",
-            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))') = datetime",
+            "datetime = arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))')",
         ),
     ],
 )
@@ -1457,7 +1457,7 @@ def test_merge_on_decimal_3033(tmp_path):
 
     assert (
         string_predicate
-        == "timestamp BETWEEN arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude BETWEEN '1505'::decimal(4, 1) AND '1505'::decimal(4, 1)"
+        == "timestamp >= arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND timestamp <= arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude >= '1505'::decimal(4, 1) AND altitude <= '1505'::decimal(4, 1)"
     )
 
 

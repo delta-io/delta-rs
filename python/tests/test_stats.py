@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
+import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
@@ -68,3 +69,70 @@ def test_stats_usage_3201(tmp_path):
     data = dt.to_pyarrow_table(filters=[("values", ">=", 0)])
 
     assert_frame_equal(excepted, pl.from_arrow(data), check_row_order=False)
+
+
+@pytest.mark.parametrize("use_stats_struct", (True, False))
+def test_microsecond_truncation_parquet_stats(tmp_path, use_stats_struct):
+    """In checkpoints the min,max value gets truncated to milliseconds precision.
+    For min values this is not an issue, but for max values we need to round upwards.
+
+    This checks whether we can still read tables with truncated timestamp stats.
+    """
+
+    batch1 = pa.Table.from_pydict(
+        {
+            "p": [1],
+            "dt": [datetime(2023, 3, 29, 23, 59, 59, 807126, tzinfo=timezone.utc)],
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        batch1,
+        mode="error",
+        partition_by=["p"],
+        configuration={
+            "delta.checkpoint.writeStatsAsStruct": str(use_stats_struct).lower()
+        },
+    )
+
+    batch2 = pa.Table.from_pydict(
+        {
+            "p": [1],
+            "dt": [datetime(2023, 3, 30, 0, 0, 0, 902, tzinfo=timezone.utc)],
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        batch2,
+        mode="append",
+        partition_by=["p"],
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    result = dt.to_pyarrow_table(
+        filters=[
+            (
+                "dt",
+                "<=",
+                datetime(2023, 3, 30, 0, 0, 0, 0, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+    assert batch1 == result
+
+    dt.optimize.compact()
+    dt.create_checkpoint()
+
+    result = dt.to_pyarrow_table(
+        filters=[
+            (
+                "dt",
+                "<=",
+                datetime(2023, 3, 30, 0, 0, 0, 0, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+    assert batch1 == result
