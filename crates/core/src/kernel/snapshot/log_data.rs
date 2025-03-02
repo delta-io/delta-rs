@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
 use chrono::{DateTime, Utc};
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{Scalar, StructData};
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -276,12 +276,26 @@ impl LogicalFile<'_> {
             .column_by_name(COL_MIN_VALUES)
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
     }
-
     /// Struct containing all available max values for the columns in this file.
     pub fn max_values(&self) -> Option<Scalar> {
+        // With delta.checkpoint.writeStatsAsStruct the microsecond timestamps are truncated to ms as defined by protocol
+        // this basically implies that it's floored when we parse_stats on the fly they are not truncated
+        // to tackle this we always round upwards by 1ms
+        fn ceil_datetime(v: i64) -> i64 {
+            let remainder = v % 1000;
+            if remainder == 0 {
+                // if nanoseconds precision remainder is 0, we assume it was truncated
+                // else we use the exact stats
+                ((v as f64 / 1000.0).floor() as i64 + 1) * 1000
+            } else {
+                v
+            }
+        }
+
         self.stats
             .column_by_name(COL_MAX_VALUES)
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+            .map(|s| round_ms_datetimes(s, &ceil_datetime))
     }
 
     pub fn add_action(&self) -> Add {
@@ -346,6 +360,28 @@ impl LogicalFile<'_> {
             base_row_id: None,
             default_row_commit_version: None,
         }
+    }
+}
+
+fn round_ms_datetimes<F>(value: Scalar, func: &F) -> Scalar
+where
+    F: Fn(i64) -> i64,
+{
+    match value {
+        Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
+        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
+        Scalar::Struct(struct_data) => {
+            let mut fields = Vec::new();
+            let mut scalars = Vec::new();
+
+            for (field, value) in struct_data.fields().iter().zip(struct_data.values().iter()) {
+                fields.push(field.clone());
+                scalars.push(round_ms_datetimes(value.clone(), func));
+            }
+            let data = StructData::try_new(fields, scalars).unwrap();
+            Scalar::Struct(data)
+        }
+        value => value,
     }
 }
 
