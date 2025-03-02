@@ -2,10 +2,13 @@ import pathlib
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pytest
 
-from deltalake.table import CommitProperties, DeltaTable
-from deltalake.writer import write_deltalake
+from deltalake import CommitProperties, write_deltalake
+from deltalake.table import DeltaTable
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
+    convert_pyarrow_table,
+)
 
 
 def test_delete_no_predicates(existing_table: DeltaTable):
@@ -61,11 +64,11 @@ def test_delete_some_rows(existing_table: DeltaTable):
     assert table.equals(expected_table)
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_delete_large_dtypes(
-    tmp_path: pathlib.Path, sample_table: pa.table, engine: str
-):
-    write_deltalake(tmp_path, sample_table, large_dtypes=True, engine=engine)  # type: ignore
+def test_delete_large_dtypes(tmp_path: pathlib.Path, sample_table: pa.table):
+    sample_table = convert_pyarrow_table(
+        sample_table, schema_conversion_mode=ArrowSchemaConversionMode.LARGE
+    )
+    write_deltalake(tmp_path, sample_table)  # type: ignore
 
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
@@ -84,8 +87,7 @@ def test_delete_large_dtypes(
     assert table.equals(expected_table)
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path):
     data = pa.table(
         {
             "foo": pa.array(["a", "b", None, None]),
@@ -97,7 +99,6 @@ def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
         tmp_path,
         data,
         mode="append",
-        engine=engine,
         configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
     )
     dt = DeltaTable(tmp_path)

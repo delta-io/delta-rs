@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Mapping, Optional
 import pyarrow as pa
 from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
 
-from ._internal import DeltaFileSystemHandler, RawDeltaTable
+from deltalake._internal import DeltaFileSystemHandler, RawDeltaTable
 
 
 # NOTE  we need to inherit form FileSystemHandler to pass pyarrow's internal type checks.

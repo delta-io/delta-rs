@@ -79,7 +79,8 @@ nav:
           - api/delta_table/delta_table_alterer.md
       - api/schema.md
       - api/storage.md
-      - api/catalog.md
+      - api/query.md
+      - api/transaction.md
       - api/exceptions.md
   - Integrations:
       - Object Storage:

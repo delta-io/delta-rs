@@ -53,21 +53,6 @@ Note that `delta-rs` does not read credentials from a local `.aws/config` or `.a
 
 > - gs://\<bucket\>/\<path\>
 
-Alternatively, if you have a data catalog you can load it by reference
-to a database and table name. Currently only AWS Glue is supported.
-
-For AWS Glue catalog, use AWS environment variables to authenticate.
-
-```python
->>> from deltalake import DeltaTable
->>> from deltalake import DataCatalog
->>> database_name = "simple_database"
->>> table_name = "simple_table"
->>> data_catalog = DataCatalog.AWS
->>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, database_name=database_name, table_name=table_name)
->>> dt.to_pyarrow_table().to_pydict()
-{'id': [5, 7, 9, 5, 6, 7, 8, 9]}
-```
 
 ## Verify Table Existence
 
