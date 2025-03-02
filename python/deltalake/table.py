@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Generator,
     Iterable,
@@ -1252,6 +1253,7 @@ class DeltaTable:
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         filters: Optional[Union[FilterType, Expression]] = None,
+        types_mapper: Optional[Callable] = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -1261,13 +1263,14 @@ class DeltaTable:
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
+            types_mapper: A function mapping PyArrow types to pandas ExtensionDtypes
         """
         return self.to_pyarrow_table(
             partitions=partitions,
             columns=columns,
             filesystem=filesystem,
             filters=filters,
-        ).to_pandas()
+        ).to_pandas(types_mapper=types_mapper)
 
     def update_incremental(self) -> None:
         """
