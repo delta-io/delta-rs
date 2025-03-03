@@ -1,15 +1,28 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import pyarrow
 import pyarrow.fs as fs
 
-from deltalake.writer import (
-    AddAction,
-    CommitProperties,
-    PostCommitHookProperties,
-    WriterProperties,
-)
+if TYPE_CHECKING:
+    from deltalake.transaction import (
+        AddAction,
+        CommitProperties,
+        PostCommitHookProperties,
+    )
+    from deltalake.writer.properties import (
+        WriterProperties,
+    )
 
 __version__: str
 
@@ -93,8 +106,8 @@ class RawDeltaTable:
         dry_run: bool,
         retention_hours: Optional[int],
         enforce_retention_duration: bool,
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> List[str]: ...
     def compact_optimize(
         self,
@@ -102,9 +115,9 @@ class RawDeltaTable:
         target_size: Optional[int],
         max_concurrent_tasks: Optional[int],
         min_commit_interval: Optional[int],
-        writer_properties: Optional[WriterProperties],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        writer_properties: Optional["WriterProperties"],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -114,48 +127,48 @@ class RawDeltaTable:
         max_concurrent_tasks: Optional[int],
         max_spill_size: Optional[int],
         min_commit_interval: Optional[int],
-        writer_properties: Optional[WriterProperties],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        writer_properties: Optional["WriterProperties"],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> str: ...
     def add_columns(
         self,
         fields: List[Field],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
     def add_feature(
         self,
         feature: List[TableFeatures],
         allow_protocol_versions_increase: bool,
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
     def add_constraints(
         self,
         constraints: Dict[str, str],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
     def drop_constraints(
         self,
         name: str,
         raise_if_not_exists: bool,
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
     def set_table_properties(
         self,
         properties: Dict[str, str],
         raise_if_not_exists: bool,
-        commit_properties: Optional[CommitProperties],
+        commit_properties: Optional["CommitProperties"],
     ) -> None: ...
     def restore(
         self,
         target: Optional[Any],
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
-        commit_properties: Optional[CommitProperties],
+        commit_properties: Optional["CommitProperties"],
     ) -> str: ...
     def history(self, limit: Optional[int]) -> List[str]: ...
     def update_incremental(self) -> None: ...
@@ -167,24 +180,24 @@ class RawDeltaTable:
     def delete(
         self,
         predicate: Optional[str],
-        writer_properties: Optional[WriterProperties],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        writer_properties: Optional["WriterProperties"],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> str: ...
     def repair(
         self,
         dry_run: bool,
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> str: ...
     def update(
         self,
         updates: Dict[str, str],
         predicate: Optional[str],
-        writer_properties: Optional[WriterProperties],
+        writer_properties: Optional["WriterProperties"],
         safe_cast: bool,
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> str: ...
     def create_merge_builder(
         self,
@@ -193,9 +206,9 @@ class RawDeltaTable:
         source_alias: Optional[str],
         target_alias: Optional[str],
         merge_schema: bool,
-        writer_properties: Optional[WriterProperties],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        writer_properties: Optional["WriterProperties"],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
         safe_cast: bool,
         streamed_exec: bool,
     ) -> PyMergeBuilder: ...
@@ -205,13 +218,13 @@ class RawDeltaTable:
     ) -> Any: ...
     def create_write_transaction(
         self,
-        add_actions: List[AddAction],
+        add_actions: List["AddAction"],
         mode: str,
         partition_by: List[str],
         schema: pyarrow.Schema,
         partitions_filters: Optional[FilterType],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
     def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
@@ -230,8 +243,8 @@ class RawDeltaTable:
         self,
         column: str,
         metadata: dict[str, str],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
     def __datafusion_table_provider__(self) -> Any: ...
     def write(
@@ -245,23 +258,24 @@ class RawDeltaTable:
         name: Optional[str],
         description: Optional[str],
         configuration: Optional[Mapping[str, Optional[str]]],
-        writer_properties: Optional[WriterProperties],
-        commit_properties: Optional[CommitProperties],
-        post_commithook_properties: Optional[PostCommitHookProperties],
+        writer_properties: Optional["WriterProperties"],
+        commit_properties: Optional["CommitProperties"],
+        post_commithook_properties: Optional["PostCommitHookProperties"],
     ) -> None: ...
 
 def rust_core_version() -> str: ...
-def write_new_deltalake(
+def create_table_with_add_actions(
     table_uri: str,
     schema: pyarrow.Schema,
-    add_actions: List[AddAction],
-    _mode: str,
+    add_actions: List["AddAction"],
+    mode: Literal["error", "append", "overwrite", "ignore"],
     partition_by: List[str],
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    custom_metadata: Optional[Dict[str, str]],
+    commit_properties: Optional["CommitProperties"],
+    post_commithook_properties: Optional["PostCommitHookProperties"],
 ) -> None: ...
 def write_to_deltalake(
     table_uri: str,
@@ -275,19 +289,20 @@ def write_to_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    writer_properties: Optional[WriterProperties],
-    commit_properties: Optional[CommitProperties],
-    post_commithook_properties: Optional[PostCommitHookProperties],
+    writer_properties: Optional["WriterProperties"],
+    commit_properties: Optional["CommitProperties"],
+    post_commithook_properties: Optional["PostCommitHookProperties"],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
-    partition_by: Optional[pyarrow.Schema],
+    partition_schema: Optional[pyarrow.Schema],
     partition_strategy: Optional[Literal["hive"]],
     name: Optional[str],
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    custom_metadata: Optional[Dict[str, str]],
+    commit_properties: Optional["CommitProperties"],
+    post_commithook_properties: Optional["PostCommitHookProperties"],
 ) -> None: ...
 def create_deltalake(
     table_uri: str,
@@ -299,7 +314,8 @@ def create_deltalake(
     description: Optional[str],
     configuration: Optional[Mapping[str, Optional[str]]],
     storage_options: Optional[Dict[str, str]],
-    custom_metadata: Optional[Dict[str, str]],
+    commit_properties: Optional["CommitProperties"],
+    post_commithook_properties: Optional["PostCommitHookProperties"],
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 def get_num_idx_cols_and_stats_columns(
