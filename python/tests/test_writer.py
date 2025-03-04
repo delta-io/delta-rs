@@ -540,6 +540,45 @@ def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table, schema_prov
     assert_frame_equal(df, sample_pandas)
 
 
+@pytest.mark.pandas
+def test_to_pandas_with_types_mapper(tmp_path: pathlib.Path):
+    """Test that DeltaTable.to_pandas() retains PyArrow Decimal type when using types_mapper."""
+    import pandas as pd
+
+    schema = pa.schema(
+        [
+            ("id", pa.int32()),
+            ("amount", pa.decimal128(18, 0)),
+        ]
+    )
+
+    decimal_values = [Decimal("100"), Decimal("200"), Decimal("300")]
+
+    data = pa.table(
+        [
+            pa.array([1, 2, 3], type=pa.int32()),
+            pa.array(decimal_values, type=pa.decimal128(18, 0)),
+        ],
+        schema=schema,
+    )
+
+    delta_path = str(tmp_path / "delta_table")
+    write_deltalake(delta_path, data)
+
+    dt = DeltaTable(delta_path)
+
+    def types_mapper(pa_type):
+        if pa.types.is_decimal(pa_type):
+            return pd.ArrowDtype(pa_type)
+        return None
+
+    df = dt.to_pandas(types_mapper=types_mapper)
+
+    assert df.dtypes["amount"].pyarrow_dtype == pa.decimal128(
+        18, 0
+    ), "amount column should be Decimal(18, 0)"
+
+
 def test_write_iterator(
     tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
 ):
