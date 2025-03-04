@@ -34,7 +34,9 @@ use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::expr::InList;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource};
+use datafusion_expr::{
+    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, ScalarFunctionArgs, TableSource,
+};
 // Needed for MakeParquetArray
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
@@ -99,13 +101,13 @@ impl ScalarUDFImpl for MakeParquetArray {
         r_type
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let mut data_type = DataType::Null;
-        for arg in args {
+        for arg in &args.args {
             data_type = arg.data_type();
         }
 
-        match self.actual.invoke_batch(args, number_rows)? {
+        match self.actual.invoke_with_args(args)? {
             ColumnarValue::Scalar(ScalarValue::List(df_array)) => {
                 let field = Arc::new(Field::new("element", data_type, true));
                 let result = Ok(ColumnarValue::Scalar(ScalarValue::List(Arc::new(

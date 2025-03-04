@@ -2288,7 +2288,7 @@ fn write_to_deltalake(
             _table: Arc::new(Mutex::new(table)),
             _config: FsConfig {
                 root_url: table_uri,
-                options: options,
+                options,
             },
         };
         Ok(raw_table)
