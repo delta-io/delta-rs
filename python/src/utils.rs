@@ -24,6 +24,23 @@ pub fn rt() -> &'static Runtime {
     TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))
 }
 
+#[inline]
+pub fn io_rt() -> &'static Runtime {
+    static IO_TOKIO_RT: OnceLock<Runtime> = OnceLock::new();
+    static IO_PID: OnceLock<u32> = OnceLock::new();
+    let pid = std::process::id();
+    let runtime_pid = *IO_PID.get_or_init(|| pid);
+    if pid != runtime_pid {
+        panic!(
+            "Forked process detected - current PID is {pid} but the tokio runtime was created by {runtime_pid}. The tokio \
+            runtime does not support forked processes https://github.com/tokio-rs/tokio/issues/4301. If you are \
+            seeing this message while using Python multithreading make sure to use the `spawn` or `forkserver` \
+            mode.", 
+        );
+    }
+    IO_TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create an IO tokio runtime."))
+}
+
 /// walk the "directory" tree along common prefixes in object store
 pub async fn walk_tree(
     storage: Arc<dyn ObjectStore>,
