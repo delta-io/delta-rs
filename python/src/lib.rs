@@ -30,6 +30,7 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::DataType;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
 };
@@ -390,7 +391,22 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?
                 .config()
                 .stats_columns()
-                .map(|v| v.iter().map(|s| s.to_string()).collect::<Vec<String>>()))
+                .map(|v| v.iter().map(|s| s.to_string())
+                .filter(| s | {
+                    let field = match t.schema().unwrap().field(s) {
+                        Some(field) => field,
+                        _ => {
+                            warn!("Column with name '{}' not found in the schema.", s);
+                            return true;
+                        }
+                    };
+                    let is_binary_type = matches!(field.data_type(), &DataType::BINARY);
+                    if is_binary_type {
+                        warn!("Column {} is of binary type and excluded from writing to stats columns.", s);
+                    }
+                    !is_binary_type
+                })
+                .collect::<Vec<String>>()))
         })
     }
 

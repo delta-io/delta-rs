@@ -25,6 +25,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
+use tracing::warn;
 
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
@@ -652,9 +653,20 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
     let stats_fields = if let Some(stats_cols) = config.stats_columns() {
         stats_cols
             .iter()
+            .filter(|col| {
+                if let Some(field) = get_stats_field(schema, col) {
+                    let is_binary_type = matches!(field.data_type(), &DataType::BINARY);
+                    if is_binary_type {
+                        warn!("Column {} is of binary type and excluded from loading in stats columns.", col);
+                    }
+                    !is_binary_type
+                } else {
+                    true
+                }
+            })
             .map(|col| match get_stats_field(schema, col) {
                 Some(field) => match field.data_type() {
-                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
+                    DataType::Map(_) | DataType::Array(_) => {
                         Err(DeltaTableError::Generic(format!(
                             "Stats column {col} has unsupported type {}",
                             field.data_type()
