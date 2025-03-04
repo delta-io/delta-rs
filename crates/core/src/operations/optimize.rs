@@ -569,7 +569,7 @@ impl MergePlan {
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion_common::Column;
         use datafusion_expr::expr::ScalarFunction;
-        use datafusion_expr::{col, Expr, ScalarUDF};
+        use datafusion_expr::{Expr, ScalarUDF};
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
