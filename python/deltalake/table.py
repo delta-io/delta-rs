@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Generator,
     Iterable,
@@ -899,6 +900,7 @@ class DeltaTable:
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
         filters: Optional[Union[FilterType, Expression]] = None,
+        types_mapper: Optional[Callable[[pyarrow.DataType], Any]] = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -914,7 +916,7 @@ class DeltaTable:
             columns=columns,
             filesystem=filesystem,
             filters=filters,
-        ).to_pandas()
+        ).to_pandas(types_mapper=types_mapper)
 
     def update_incremental(self) -> None:
         """
