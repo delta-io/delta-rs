@@ -191,6 +191,9 @@ async fn execute(
             snapshot.version(),
         )));
     }
+
+    let metadata_restored_version = table.metadata()?;
+
     let state_to_restore_files = table.snapshot()?.file_actions()?;
     let latest_state_files = snapshot.file_actions()?;
     let state_to_restore_files_set =
@@ -279,6 +282,8 @@ async fn execute(
     actions.push(Action::Protocol(protocol));
     actions.extend(files_to_add.into_iter().map(Action::Add));
     actions.extend(files_to_remove.into_iter().map(Action::Remove));
+    // Add the metadata from the restored version to undo e.g. constraint or field metadata changes
+    actions.push(Action::Metadata(metadata_restored_version.clone()));
 
     let operation = DeltaOperation::Restore {
         version: version_to_restore,
