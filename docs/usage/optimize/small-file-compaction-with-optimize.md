@@ -331,10 +331,10 @@ We can use `get_add_actions()` to introspect the table state. We can see that `2
     +----------------+----------+
     ```
 
-To optimize a single partition, you can pass in a `partition_filters` argument speficying which partitions to optimize.
+To optimize a single partition, you can pass in a `partition_filters` argument specifying which partitions to optimize.
 === "Python"
     ```python
-    dt.optimize(partition_filters=[("date", "=", "2021-01-05")])
+    dt.optimize.compact(partition_filters=[("date", "=", "2021-01-05")])
     ```
 
 === "Rust"
