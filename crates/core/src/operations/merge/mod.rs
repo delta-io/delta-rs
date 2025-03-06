@@ -63,7 +63,6 @@ use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use tracing::field::debug;
 use tracing::log::*;
 use uuid::Uuid;
 
