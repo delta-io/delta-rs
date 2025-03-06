@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
 use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
-use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{ArrowError, DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow_select::take::take;
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
@@ -77,6 +77,8 @@ impl RecordBatchWriter {
             |metadata| metadata.configuration.clone(),
         );
 
+        let schema_clone = schema.clone();
+
         Ok(Self {
             storage: delta_table.object_store(),
             arrow_schema_ref: schema.clone(),
@@ -93,7 +95,25 @@ impl RecordBatchWriter {
                 .get("delta.dataSkippingStatsColumns")
                 .and_then(|v| {
                     v.as_ref()
-                        .map(|v| v.split(',').map(|s| s.to_string()).collect())
+                        .map(|v| v.split(',').map(|s| s.to_string())
+                        .filter(| s | {
+                            let (_index, field) = match schema_clone.column_with_name(s) {
+                                Some((index, field)) => (index, field),
+                                _ => {
+                                    warn!("Column with name '{}' not found in the schema.", s);
+                                    return true;
+                                }
+                            };
+                            let field_type = field.data_type();
+                            let is_binary_type = field_type.equals_datatype(&DataType::BinaryView) ||
+                                field_type.equals_datatype(&DataType::Binary) ||
+                                field_type.equals_datatype(&DataType::LargeBinary);
+                            if is_binary_type {
+                                warn!("Column {} is of binary type and excluded from writing to stats columns.", s);
+                            }
+                            !is_binary_type
+                        })
+                        .collect())
                 }),
         })
     }
@@ -131,7 +151,25 @@ impl RecordBatchWriter {
                 .get("delta.dataSkippingStatsColumns")
                 .and_then(|v| {
                     v.as_ref()
-                        .map(|v| v.split(',').map(|s| s.to_string()).collect())
+                        .map(|v| v.split(',').map(|s| s.to_string())
+                        .filter(| s | {
+                            let (_index, field) = match arrow_schema_ref.column_with_name(s) {
+                                Some((index, field)) => (index, field),
+                                _ => {
+                                    warn!("Column with name '{}' not found in the schema.", s);
+                                    return true;
+                                }
+                            };
+                            let field_type = field.data_type();
+                            let is_binary_type = field_type.equals_datatype(&DataType::BinaryView) ||
+                                field_type.equals_datatype(&DataType::Binary) ||
+                                field_type.equals_datatype(&DataType::LargeBinary);
+                            if is_binary_type {
+                                warn!("Column {} is of binary type and excluded from writing to stats columns.", s);
+                            }
+                            !is_binary_type
+                        })
+                        .collect())
                 }),
         })
     }
@@ -1067,6 +1105,54 @@ mod tests {
         let add_actions = table.state.unwrap().file_actions().unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
+        assert_eq!(
+            expected_stats.parse::<serde_json::Value>().unwrap(),
+            add_actions
+                .into_iter()
+                .next()
+                .unwrap()
+                .stats
+                .unwrap()
+                .parse::<serde_json::Value>()
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_dssc_with_binary_col() {
+        let batch = get_record_batch_with_binary_col(None, false);
+        let partition_cols: &[String] = &[];
+        let table_schema: StructType = get_delta_schema_with_binary_col();
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path();
+        let config: HashMap<String, Option<String>> = vec![(
+            "delta.dataSkippingStatsColumns".to_string(),
+            Some("id,value".to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let mut table = CreateBuilder::new()
+            .with_location(table_path.to_str().unwrap())
+            .with_table_name("test-table")
+            .with_comment("A table for running tests")
+            .with_columns(table_schema.fields().cloned())
+            .with_configuration(config)
+            .with_partition_columns(partition_cols)
+            .await
+            .unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+
+        assert_eq!(partitions.len(), 1);
+        assert_eq!(partitions[0].record_batch, batch);
+        writer.write(batch).await.unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+        assert_eq!(table.version(), 1);
+        let add_actions = table.state.unwrap().file_actions().unwrap();
+        assert_eq!(add_actions.len(), 1);
+        let expected_stats ="{\"numRecords\":11,\"minValues\":{\"id\":1},\"maxValues\":{\"id\":11},\"nullCount\":{\"id\":0}}";
         assert_eq!(
             expected_stats.parse::<serde_json::Value>().unwrap(),
             add_actions

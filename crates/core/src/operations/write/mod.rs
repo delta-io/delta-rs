@@ -31,7 +31,7 @@ pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
 pub mod writer;
 
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Schema};
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use generated_columns::{add_generated_columns, add_missing_generated_columns};
@@ -601,8 +601,32 @@ impl std::future::IntoFuture for WriteBuilder {
             let target_file_size = this.target_file_size.or_else(|| {
                 Some(super::get_target_file_size(&config, &this.configuration) as usize)
             });
-            let (num_indexed_cols, stats_columns) =
+            let (num_indexed_cols, mut stats_columns) =
                 super::get_num_idx_cols_and_stats_columns(config, this.configuration);
+
+            stats_columns = match stats_columns {
+                Some(columns) => columns.iter().filter(| s | {
+                    let (_index, field) = match schema.column_with_name(s) {
+                        Some((index, field)) => (index, field),
+                        _ => {
+                            warn!("Column with name '{}' not found in the schema.", s);
+                            return true;
+                        }
+                    };
+                    let field_type = field.data_type();
+                    let is_binary_type = field_type.equals_datatype(&DataType::BinaryView) ||
+                        field_type.equals_datatype(&DataType::Binary) ||
+                        field_type.equals_datatype(&DataType::LargeBinary);
+                    if is_binary_type {
+                        warn!("Column {} is of binary type and excluded from writing to stats columns.", s);
+                    }
+                    !is_binary_type
+                }).cloned().collect::<Vec<_>>().into(),
+                _ => {
+                    warn!("Unable to unwrap stats_columns.");
+                    stats_columns
+                }
+            };
 
             let writer_stats_config = WriterStatsConfig {
                 num_indexed_cols,
