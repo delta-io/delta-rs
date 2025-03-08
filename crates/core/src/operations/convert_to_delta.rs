@@ -13,7 +13,6 @@ use itertools::Itertools;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::errors::ParquetError;
 use percent_encoding::percent_decode_str;
-use serde_json::{Map, Value};
 use tracing::debug;
 use uuid::Uuid;
 

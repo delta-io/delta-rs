@@ -462,7 +462,6 @@ mod tests {
 
     use crate::arrow::array::Int32Array;
     use crate::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
-    use crate::kernel::DataType;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::get_delta_schema;
 
