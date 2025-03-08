@@ -238,7 +238,7 @@ pub trait LogStore: Send + Sync + AsAny {
         }?;
 
         let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
-        Ok(PeekCommit::New(next_version, actions.unwrap()))
+        Ok(PeekCommit::New(next_version, actions?))
     }
 
     /// Get object store, can pass operation_id for object stores linked to an operation
@@ -749,6 +749,32 @@ mod tests {
             .is_delta_table_location()
             .await
             .expect("Failed to identify table"));
+    }
+
+    /// <https://github.com/delta-io/delta-rs/issues/3297>:w
+    #[tokio::test]
+    async fn test_peek_with_invalid_json() -> DeltaResult<()> {
+        use crate::storage::object_store::memory::InMemory;
+        let memory_store = Arc::new(InMemory::new());
+        let log_path = Path::from("_delta_log/00000000000000000001.json");
+
+        let log_content = r#"{invalid_json"#;
+
+        memory_store
+            .put(&log_path, log_content.into())
+            .await
+            .expect("Failed to write log file");
+
+        let table_uri = "memory:///delta-table";
+
+        let table = crate::DeltaTableBuilder::from_valid_uri(table_uri)
+            .unwrap()
+            .with_storage_backend(memory_store, Url::parse(table_uri).unwrap())
+            .build()?;
+
+        let result = table.log_store().peek_next_commit(0).await;
+        assert!(result.is_err());
+        Ok(())
     }
 }
 
