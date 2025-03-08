@@ -542,18 +542,13 @@ mod tests {
 
         assert_eq!(
             extract_partition_values(
-                &[
-                    String::from("col1"),
-                    String::from("col2"),
-                    String::from("col3")
-                ],
+                &[String::from("col1"), String::from("col2"),],
                 &record_batch
             )
             .unwrap(),
             IndexMap::from([
                 (String::from("col1"), Scalar::Integer(1)),
                 (String::from("col2"), Scalar::Integer(2)),
-                (String::from("col3"), Scalar::Null(DataType::INTEGER)),
             ])
         );
         assert_eq!(
