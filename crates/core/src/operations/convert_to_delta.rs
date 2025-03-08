@@ -605,16 +605,16 @@ mod tests {
             .collect::<Vec<_>>();
         partition_values.sort_by_key(|(k, v)| (k.clone(), v.serialize()));
 
-        for it in expected_partition_values.iter().zip(partition_values.iter()) {
-            let (expected, found) = it;
+        for (position, expected) in expected_partition_values.iter().enumerate() {
+            let (key, value) = expected;
+            let (found_key, found_value) = partition_values[position].clone();
+            assert_eq!(key, &found_key);
 
-            match (expected, found) {
-                // No-oipping the comparison of null. delta-kernel-rs introduces a regression where
-                // 0.7.0 cannot perform equivalency of typed null Scalars.
-                (Scalar::Null(_), Scalar::Null(_)) => {},
-                _others => {
-                    assert_eq!(expected, found);
-                },
+            match (value, found_value) {
+                // no-op the null comparison due to a breaking change in delta-kernel-rs 0.7.0
+                // which changes null comparables
+                (Scalar::Null(_), Scalar::Null(_)) => {}
+                (v, fv) => assert_eq!(v, &fv),
             }
         }
     }
