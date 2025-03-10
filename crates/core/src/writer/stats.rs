@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::ops::Not;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
@@ -6,6 +7,7 @@ use std::{collections::HashMap, ops::AddAssign};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use parquet::basic::Type;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -14,6 +16,7 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     format::TimeUnit,
 };
+use tracing::warn;
 
 use super::*;
 use crate::kernel::{scalars::ScalarExt, Add};
@@ -187,19 +190,25 @@ fn stats_from_metadata(
 
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
-            .map(|g| {
-                g.column(idx)
-                    .statistics()
-                    .map(|s| AggregatedStats::from((s, &column_descr.logical_type())))
+            .flat_map(|g| {
+                g.column(idx).statistics().into_iter().filter_map(|s| {
+                    let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
+                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                    if is_binary {
+                        warn!(
+                            "Skipping column {} because it's a binary field.",
+                            &column_descr.name().to_string()
+                        );
+                        None
+                    } else {
+                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                    }
+                })
             })
-            .reduce(|left, right| match (left, right) {
-                (Some(mut left), Some(right)) => {
-                    left += right;
-                    Some(left)
-                }
-                _ => None,
-            })
-            .flatten();
+            .reduce(|mut left, right| {
+                left += right;
+                left
+            });
 
         if let Some(stats) = maybe_stats {
             apply_min_max_for_column(
