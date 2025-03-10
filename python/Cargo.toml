@@ -59,7 +59,7 @@ jemallocator = { version = "0.5", features = ["disable_initial_exec_tls", "backg
 jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
-version = "0.23.4"
+version = "0.24.0"
 features = ["extension-module", "abi3", "abi3-py39"]
 
 [dependencies.deltalake]
