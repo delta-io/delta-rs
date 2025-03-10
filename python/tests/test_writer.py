@@ -1930,3 +1930,45 @@ def test_write_schema_evolved_same_metadata_id(tmp_path):
     second_metadata_id = DeltaTable(tmp_path).metadata().id
 
     assert first_metadata_id == second_metadata_id
+
+
+# <https://github.com/delta-io/delta-rs/issues/2854>
+@pytest.mark.polars
+def test_write_binary_col_without_dssc(tmp_path: pathlib.Path):
+    import polars as pl
+
+    data_with_bin_col = {
+        "x": [b"67890", b"abcde", b"xyzw", b"12345"],
+        "y": [1, 2, 3, 4],
+        "z.z": [101, 102, 103, 104],
+    }
+
+    df_with_bin_col = pl.DataFrame(data_with_bin_col)
+    df_with_bin_col.write_delta(tmp_path)
+
+    assert len(df_with_bin_col.rows()) == 4
+
+
+# <https://github.com/delta-io/delta-rs/issues/2854>
+@pytest.mark.polars
+def test_write_binary_col_with_dssc(tmp_path: pathlib.Path):
+    import polars as pl
+
+    data_with_bin_col = {
+        "x": [b"67890", b"abcde", b"xyzw", b"12345"],
+        "y": [1, 2, 3, 4],
+        "z.z": [101, 102, 103, 104],
+    }
+
+    df_with_bin_col = pl.DataFrame(data_with_bin_col)
+    df_with_bin_col.write_delta(
+        tmp_path,
+        delta_write_options={
+            "configuration": {"delta.dataSkippingStatsColumns": "x,y"},
+        },
+    )
+
+    assert len(df_with_bin_col.rows()) == 4
+
+    dt = DeltaTable(tmp_path)
+    assert dt._table.get_stats_columns() == ["y"]

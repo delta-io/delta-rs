@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
+use arrow_array::{
+    BinaryArray, Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array,
+};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use arrow_select::take::take;
 
@@ -48,6 +50,40 @@ pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
     }
 }
 
+pub fn get_record_batch_with_binary_col(part: Option<String>, with_null: bool) -> RecordBatch {
+    let (base_int, base_bin, base_mod) = if with_null {
+        data_with_null_binary()
+    } else {
+        data_without_null_binary()
+    };
+
+    let indices = match &part {
+        Some(key) if key == "modified=2021-02-01" => {
+            UInt32Array::from(vec![3, 4, 5, 6, 7, 8, 9, 10])
+        }
+        Some(key) if key == "modified=2021-02-01/id=1" => UInt32Array::from(vec![4, 5, 6, 9, 10]),
+        Some(key) if key == "modified=2021-02-01/id=2" => UInt32Array::from(vec![3, 7, 8]),
+        Some(key) if key == "modified=2021-02-02" => UInt32Array::from(vec![0, 1, 2]),
+        Some(key) if key == "modified=2021-02-02/id=1" => UInt32Array::from(vec![0, 2]),
+        Some(key) if key == "modified=2021-02-02/id=2" => UInt32Array::from(vec![1]),
+        _ => UInt32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    };
+
+    let int_values = take(&base_int, &indices, None).unwrap();
+    let bin_values = take(&base_bin, &indices, None).unwrap();
+    let mod_values = take(&base_mod, &indices, None).unwrap();
+
+    let schema = get_arrow_schema_with_binary_col(&part);
+
+    match &part {
+        Some(key) if key.contains("/id=") => {
+            RecordBatch::try_new(schema, vec![int_values]).unwrap()
+        }
+        Some(_) => RecordBatch::try_new(schema, vec![int_values, bin_values]).unwrap(),
+        _ => RecordBatch::try_new(schema, vec![int_values, bin_values, mod_values]).unwrap(),
+    }
+}
+
 pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
     match part {
         Some(key) if key.contains("/id=") => Arc::new(ArrowSchema::new(vec![Field::new(
@@ -62,6 +98,25 @@ pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
         _ => Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Utf8, true),
             Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ])),
+    }
+}
+
+pub fn get_arrow_schema_with_binary_col(part: &Option<String>) -> Arc<ArrowSchema> {
+    match part {
+        Some(key) if key.contains("/id=") => Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Binary,
+            true,
+        )])),
+        Some(_) => Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Binary, true),
+        ])),
+        _ => Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Binary, true),
             Field::new("modified", DataType::Utf8, true),
         ])),
     }
@@ -131,6 +186,94 @@ fn data_without_null() -> (Int32Array, StringArray, StringArray) {
     (base_int, base_str, base_mod)
 }
 
+fn data_with_null_binary() -> (Int32Array, BinaryArray, StringArray) {
+    let base_int = Int32Array::from(vec![
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        None,
+        Some(7),
+        Some(8),
+        Some(9),
+        Some(10),
+        Some(11),
+    ]);
+    let base_bin = BinaryArray::from(vec![
+        Some("A".as_bytes()),
+        Some("B".as_bytes()),
+        None,
+        Some("B".as_bytes()),
+        Some("A".as_bytes()),
+        Some("A".as_bytes()),
+        None,
+        None,
+        Some("B".as_bytes()),
+        Some("A".as_bytes()),
+        Some("A".as_bytes()),
+    ]);
+    let base_mod = StringArray::from(vec![
+        Some("2021-02-02"),
+        Some("2021-02-02"),
+        Some("2021-02-02"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+    ]);
+
+    (base_int, base_bin, base_mod)
+}
+
+fn data_without_null_binary() -> (Int32Array, BinaryArray, StringArray) {
+    let base_int = Int32Array::from(vec![
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        Some(5),
+        Some(7),
+        Some(8),
+        Some(9),
+        Some(10),
+        Some(11),
+    ]);
+    let base_bin = BinaryArray::from(vec![
+        Some("A".as_bytes()),
+        Some("B".as_bytes()),
+        Some("B".as_bytes()),
+        Some("B".as_bytes()),
+        Some("A".as_bytes()),
+        Some("A".as_bytes()),
+        Some("B".as_bytes()),
+        Some("B".as_bytes()),
+        Some("B".as_bytes()),
+        Some("A".as_bytes()),
+        Some("A".as_bytes()),
+    ]);
+    let base_mod = StringArray::from(vec![
+        Some("2021-02-02"),
+        Some("2021-02-02"),
+        Some("2021-02-02"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+    ]);
+
+    (base_int, base_bin, base_mod)
+}
+
 pub fn get_delta_schema() -> StructType {
     StructType::new(vec![
         StructField::new(
@@ -141,6 +284,26 @@ pub fn get_delta_schema() -> StructType {
         StructField::new(
             "value".to_string(),
             DeltaDataType::Primitive(PrimitiveType::Integer),
+            true,
+        ),
+        StructField::new(
+            "modified".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            true,
+        ),
+    ])
+}
+
+pub fn get_delta_schema_with_binary_col() -> StructType {
+    StructType::new(vec![
+        StructField::new(
+            "id".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
+            true,
+        ),
+        StructField::new(
+            "value".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Binary),
             true,
         ),
         StructField::new(
