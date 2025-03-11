@@ -1,24 +1,32 @@
-from ._internal import TableFeatures as TableFeatures
-from ._internal import __version__ as __version__
-from ._internal import rust_core_version as rust_core_version
-from .data_catalog import DataCatalog as DataCatalog
-from .query import QueryBuilder as QueryBuilder
-from .schema import DataType as DataType
-from .schema import Field as Field
-from .schema import Schema as Schema
-from .table import (
-    BloomFilterProperties as BloomFilterProperties,
+from deltalake._internal import TableFeatures, __version__, rust_core_version
+from deltalake.query import QueryBuilder
+from deltalake.schema import DataType, Field, Schema
+from deltalake.table import DeltaTable, Metadata, Transaction
+from deltalake.transaction import CommitProperties, PostCommitHookProperties
+from deltalake.writer import (
+    BloomFilterProperties,
+    ColumnProperties,
+    WriterProperties,
+    convert_to_deltalake,
+    write_deltalake,
 )
-from .table import (
-    ColumnProperties as ColumnProperties,
-)
-from .table import CommitProperties as CommitProperties
-from .table import DeltaTable as DeltaTable
-from .table import Metadata as Metadata
-from .table import PostCommitHookProperties as PostCommitHookProperties
-from .table import Transaction as Transaction
-from .table import (
-    WriterProperties as WriterProperties,
-)
-from .writer import convert_to_deltalake as convert_to_deltalake
-from .writer import write_deltalake as write_deltalake
+
+__all__ = [
+    "TableFeatures",
+    "__version__",
+    "rust_core_version",
+    "QueryBuilder",
+    "Field",
+    "Schema",
+    "DataType",
+    "BloomFilterProperties",
+    "ColumnProperties",
+    "WriterProperties",
+    "convert_to_deltalake",
+    "write_deltalake",
+    "DeltaTable",
+    "Metadata",
+    "PostCommitHookProperties",
+    "CommitProperties",
+    "Transaction",
+]

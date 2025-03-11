@@ -463,6 +463,7 @@ pub(crate) fn find_node<T: 'static>(
 
 #[cfg(test)]
 mod tests {
+    use super::BarrierSurvivorSet;
     use crate::operations::merge::MergeBarrierExec;
     use crate::operations::merge::{
         TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN,
@@ -474,15 +475,13 @@ mod tests {
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::execution::TaskContext;
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use datafusion::physical_plan::memory::MemoryExec;
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion_physical_expr::expressions::Column;
     use futures::StreamExt;
     use std::sync::Arc;
-
-    use super::BarrierSurvivorSet;
 
     #[tokio::test]
     async fn test_barrier() {
@@ -662,7 +661,7 @@ mod tests {
     async fn execute(input: Vec<RecordBatch>) -> (Vec<RecordBatch>, BarrierSurvivorSet) {
         let schema = get_schema();
         let repartition = Arc::new(Column::new("__delta_rs_path", 2));
-        let exec = Arc::new(MemoryExec::try_new(&[input], schema.clone(), None).unwrap());
+        let exec = MemorySourceConfig::try_new_exec(&[input], schema.clone(), None).unwrap();
 
         let task_ctx = Arc::new(TaskContext::default());
         let merge =

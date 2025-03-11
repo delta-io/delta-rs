@@ -39,14 +39,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::config::TableParquetOptions;
-use datafusion::datasource::physical_plan::parquet::ParquetExecBuilder;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig, ParquetSource,
 };
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
@@ -56,6 +56,7 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
@@ -545,9 +546,19 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let context = SessionContext::new();
         let df_schema = logical_schema.clone().to_dfschema()?;
-        let logical_filter = self
-            .filter
-            .map(|expr| context.create_physical_expr(expr, &df_schema).unwrap());
+
+        let logical_filter = self.filter.map(|expr| {
+            // Simplify the expression first
+            let props = ExecutionProps::new();
+            let simplify_context =
+                SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+            let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+            let simplified = simplifier.simplify(expr).unwrap();
+
+            context
+                .create_physical_expr(simplified, &df_schema)
+                .unwrap()
+        });
 
         // Perform Pruning of files to scan
         let (files, files_scanned, files_pruned) = match self.files {
@@ -648,35 +659,38 @@ impl<'a> DeltaScanBuilder<'a> {
             ..Default::default()
         };
 
-        let mut exec_plan_builder = ParquetExecBuilder::new(
-            FileScanConfig::new(self.log_store.object_store_url(), file_schema)
-                .with_file_groups(
-                    // If all files were filtered out, we still need to emit at least one partition to
-                    // pass datafusion sanity checks.
-                    //
-                    // See https://github.com/apache/datafusion/issues/11322
-                    if file_groups.is_empty() {
-                        vec![vec![]]
-                    } else {
-                        file_groups.into_values().collect()
-                    },
-                )
-                .with_statistics(stats)
-                .with_projection(self.projection.cloned())
-                .with_limit(self.limit)
-                .with_table_partition_cols(table_partition_cols),
-        )
-        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
-        .with_table_parquet_options(parquet_options);
+        let mut file_source = ParquetSource::new(parquet_options)
+            .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
         // filter
         if let Some(predicate) = logical_filter {
             if config.enable_parquet_pushdown {
-                exec_plan_builder = exec_plan_builder.with_predicate(predicate);
+                file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
             }
         };
+
+        let file_scan_config = FileScanConfig::new(
+            self.log_store.object_store_url(),
+            file_schema,
+            Arc::new(file_source),
+        )
+        .with_file_groups(
+            // If all files were filtered out, we still need to emit at least one partition to
+            // pass datafusion sanity checks.
+            //
+            // See https://github.com/apache/datafusion/issues/11322
+            if file_groups.is_empty() {
+                vec![vec![]]
+            } else {
+                file_groups.into_values().collect()
+            },
+        )
+        .with_statistics(stats)
+        .with_projection(self.projection.cloned())
+        .with_limit(self.limit)
+        .with_table_partition_cols(table_partition_cols);
 
         let metrics = ExecutionPlanMetricsSet::new();
         MetricBuilder::new(&metrics)
@@ -688,7 +702,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         Ok(DeltaScan {
             table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
-            parquet_scan: exec_plan_builder.build_arc(),
+            parquet_scan: file_scan_config.build(),
             config,
             logical_schema,
             metrics,
@@ -1960,7 +1974,7 @@ mod tests {
     use bytes::Bytes;
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::datasource::physical_plan::ParquetExec;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
     use datafusion_expr::lit;
@@ -2713,7 +2727,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut visitor = ParquetPredicateVisitor::default();
+        let mut visitor = ParquetVisitor::default();
         visit_execution_plan(&scan, &mut visitor).unwrap();
 
         assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
@@ -2748,7 +2762,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut visitor = ParquetPredicateVisitor::default();
+        let mut visitor = ParquetVisitor::default();
         visit_execution_plan(&scan, &mut visitor).unwrap();
 
         assert!(visitor.predicate.is_none());
@@ -2777,42 +2791,46 @@ mod tests {
             .await
             .unwrap();
 
-        let mut visitor = ParquetOptionsVisitor::default();
+        let mut visitor = ParquetVisitor::default();
         visit_execution_plan(&scan, &mut visitor).unwrap();
 
         assert_eq!(ctx.copied_table_options().parquet, visitor.options.unwrap());
     }
 
+    /// Extracts fields from the parquet scan
     #[derive(Default)]
-    struct ParquetPredicateVisitor {
+    struct ParquetVisitor {
         predicate: Option<Arc<dyn PhysicalExpr>>,
         pruning_predicate: Option<Arc<PruningPredicate>>,
-    }
-
-    impl ExecutionPlanVisitor for ParquetPredicateVisitor {
-        type Error = DataFusionError;
-
-        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
-                self.predicate = parquet_exec.predicate().cloned();
-                self.pruning_predicate = parquet_exec.pruning_predicate().cloned();
-            }
-            Ok(true)
-        }
-    }
-
-    #[derive(Default)]
-    struct ParquetOptionsVisitor {
         options: Option<TableParquetOptions>,
     }
 
-    impl ExecutionPlanVisitor for ParquetOptionsVisitor {
+    impl ExecutionPlanVisitor for ParquetVisitor {
         type Error = DataFusionError;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
-                self.options = Some(parquet_exec.table_parquet_options().clone())
+            let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
+                return Ok(true);
+            };
+
+            let Some(scan_config) = datasource_exec
+                .data_source()
+                .as_any()
+                .downcast_ref::<FileScanConfig>()
+            else {
+                return Ok(true);
+            };
+
+            if let Some(parquet_source) = scan_config
+                .file_source
+                .as_any()
+                .downcast_ref::<ParquetSource>()
+            {
+                self.options = Some(parquet_source.table_parquet_options().clone());
+                self.predicate = parquet_source.predicate().cloned();
+                self.pruning_predicate = parquet_source.pruning_predicate().cloned();
             }
+
             Ok(true)
         }
     }

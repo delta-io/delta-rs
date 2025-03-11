@@ -23,11 +23,13 @@
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
+pub(crate) mod async_utils;
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
+pub mod writer;
 
 use arrow_schema::Schema;
 pub use configs::WriterStatsConfig;
@@ -548,24 +550,30 @@ impl std::future::IntoFuture for WriteBuilder {
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
                     let schema_struct: StructType = schema.clone().try_into()?;
-                    let current_protocol = snapshot.protocol();
-                    let configuration = snapshot.metadata().configuration.clone();
-                    let new_protocol = current_protocol
-                        .clone()
-                        .apply_column_metadata_to_protocol(&schema_struct)?
-                        .move_table_properties_into_features(&configuration);
+                    // Verify if delta schema changed
+                    if &schema_struct != snapshot.schema() {
+                        let current_protocol = snapshot.protocol();
+                        let configuration = snapshot.metadata().configuration.clone();
+                        let new_protocol = current_protocol
+                            .clone()
+                            .apply_column_metadata_to_protocol(&schema_struct)?
+                            .move_table_properties_into_features(&configuration);
 
-                    let mut metadata =
-                        Metadata::try_new(schema_struct, partition_columns.clone(), configuration)?;
-                    let existing_metadata_id = snapshot.metadata().id.clone();
+                        let mut metadata = Metadata::try_new(
+                            schema_struct,
+                            partition_columns.clone(),
+                            configuration,
+                        )?;
+                        let existing_metadata_id = snapshot.metadata().id.clone();
 
-                    if !existing_metadata_id.is_empty() {
-                        metadata = metadata.with_table_id(existing_metadata_id);
-                    }
-                    let schema_action = Action::Metadata(metadata);
-                    actions.push(schema_action);
-                    if current_protocol != &new_protocol {
-                        actions.push(new_protocol.into())
+                        if !existing_metadata_id.is_empty() {
+                            metadata = metadata.with_table_id(existing_metadata_id);
+                        }
+                        let schema_action = Action::Metadata(metadata);
+                        actions.push(schema_action);
+                        if current_protocol != &new_protocol {
+                            actions.push(new_protocol.into())
+                        }
                     }
                 }
             }
@@ -606,26 +614,24 @@ impl std::future::IntoFuture for WriteBuilder {
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
                 if matches!(this.mode, SaveMode::Overwrite) {
-                    // Update metadata with new schema
-                    let table_schema = snapshot.input_schema()?;
-
                     let delta_schema: StructType = schema.as_ref().try_into()?;
-                    if schema != table_schema {
+                    // Update metadata with new schema if there is a change
+                    if &delta_schema != snapshot.schema() {
                         let mut metadata = snapshot.metadata().clone();
 
                         metadata.schema_string = serde_json::to_string(&delta_schema)?;
                         actions.push(Action::Metadata(metadata));
-                    }
 
-                    let configuration = snapshot.metadata().configuration.clone();
-                    let current_protocol = snapshot.protocol();
-                    let new_protocol = current_protocol
-                        .clone()
-                        .apply_column_metadata_to_protocol(&delta_schema)?
-                        .move_table_properties_into_features(&configuration);
+                        let configuration = snapshot.metadata().configuration.clone();
+                        let current_protocol = snapshot.protocol();
+                        let new_protocol = current_protocol
+                            .clone()
+                            .apply_column_metadata_to_protocol(&delta_schema)?
+                            .move_table_properties_into_features(&configuration);
 
-                    if current_protocol != &new_protocol {
-                        actions.push(new_protocol.into())
+                        if current_protocol != &new_protocol {
+                            actions.push(new_protocol.into())
+                        }
                     }
 
                     let deletion_timestamp = SystemTime::now()

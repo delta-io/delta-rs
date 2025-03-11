@@ -11,7 +11,6 @@ use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion::assert_batches_sorted_eq;
-use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -40,6 +39,7 @@ use serial_test::serial;
 use url::Url;
 
 mod local {
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion::{common::stats::Precision, datasource::provider_as_source};
     use datafusion_expr::LogicalPlanBuilder;
     use deltalake_core::{
@@ -85,7 +85,7 @@ mod local {
             &mut self,
             plan: &dyn ExecutionPlan,
         ) -> std::result::Result<bool, Self::Error> {
-            if let Some(exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+            if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
                 let files = get_scanned_files(exec);
                 self.scanned_files.extend(files);
             } else if let Some(exec) = plan.as_any().downcast_ref::<DeltaScan>() {
