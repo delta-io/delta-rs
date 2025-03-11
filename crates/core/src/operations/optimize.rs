@@ -43,7 +43,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use super::transaction::PROTOCOL;
-use super::writer::{PartitionWriter, PartitionWriterConfig};
+use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
@@ -569,7 +569,7 @@ impl MergePlan {
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion_common::Column;
         use datafusion_expr::expr::ScalarFunction;
-        use datafusion_expr::{col, Expr, ScalarUDF};
+        use datafusion_expr::{Expr, ScalarUDF};
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
