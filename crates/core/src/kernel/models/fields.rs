@@ -19,6 +19,7 @@ impl ActionType {
             Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
             Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
             Self::Sidecar => &SIDECAR_FIELD,
+            Self::TGroup => &TGROUP_FIELD,
         }
     }
 }
@@ -207,6 +208,17 @@ static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
         StructType::new(vec![
             StructField::new("flavor", DataType::STRING, false),
             tags_field(),
+        ]),
+        true,
+    )
+});
+static TGROUP_FIELD: LazyLock<StructField> = LazyLock::new(|| {
+    StructField::new(
+        "tgroup",
+        StructType::new(vec![
+            StructField::new("tgroup_uri", DataType::STRING, false),
+            StructField::new("timestamp", DataType::LONG, false),
+            StructField::new("redirectState", DataType::STRING, false),
         ]),
         true,
     )

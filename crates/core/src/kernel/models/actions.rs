@@ -986,6 +986,45 @@ pub struct CheckpointMetadata {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+/// Defines a t-group action
+pub struct TGroup {
+    /// The T-Group URI for the table
+    pub tgroup_uri: String,
+
+    /// Time this log was added, as milliseconds since the Unix epoch.
+    pub timestamp: i64,
+
+    /// State of T-Group memebrship
+    pub redirect_state: RedirectState,
+}
+
+impl TGroup {
+    pub fn new(tgroup_uri: &str, redirect_state: RedirectState) -> Self {
+        Self {
+            tgroup_uri: String::from(tgroup_uri),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            redirect_state,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+/// The state of redirection for a table in a t-group
+pub enum RedirectState {
+    /// The table is in the process of being added to a t-group and is in a read-only state.
+    /// Writes must block or retry.
+    ReadOnly,
+
+    /// The table is part of a t-group. All reads and wries must redirect to the t-group's logs.
+    Redirect,
+
+    /// The table's addition to a t-group timed out. Reads and writes can proceed from the table's
+    /// logs and t-group addition must be retried.
+    TimedOut,
+}
+
 /// The sidecar action references a sidecar file which provides some of the checkpoint's file actions.
 /// This action is only allowed in checkpoints following V2 spec.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]

@@ -35,6 +35,8 @@ pub enum ActionType {
     Txn,
     /// Checkpoint metadata
     CheckpointMetadata,
+    /// TGroup redirection,
+    TGroup,
     /// Sidecar
     Sidecar,
 }
@@ -52,6 +54,7 @@ pub enum Action {
     Txn(Transaction),
     CommitInfo(CommitInfo),
     DomainMetadata(DomainMetadata),
+    TGroup(TGroup),
 }
 
 impl Action {
@@ -112,6 +115,12 @@ impl From<DomainMetadata> for Action {
     }
 }
 
+impl From<TGroup> for Action {
+    fn from(a: TGroup) -> Self {
+        Self::TGroup(a)
+    }
+}
+
 impl Action {
     /// Get the action type
     pub fn action_type(&self) -> ActionType {
@@ -124,6 +133,7 @@ impl Action {
             Self::Txn(_) => ActionType::Txn,
             Self::CommitInfo(_) => ActionType::CommitInfo,
             Self::DomainMetadata(_) => ActionType::DomainMetadata,
+            Self::TGroup(_) => ActionType::TGroup,
         }
     }
 }
