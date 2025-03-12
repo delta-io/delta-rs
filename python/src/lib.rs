@@ -53,7 +53,7 @@ use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
-use deltalake::parquet::basic::Compression;
+use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
@@ -1852,9 +1852,19 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                         );
                     }
                     if let Some(bloom_filter_ndv) = bloom_filter_properties.ndv {
-                        properties = properties
-                            .set_column_bloom_filter_ndv(column_name.into(), bloom_filter_ndv);
+                        properties = properties.set_column_bloom_filter_ndv(
+                            column_name.clone().into(),
+                            bloom_filter_ndv,
+                        );
                     }
+                }
+                if let Some(encoding) = column_prop.encoding {
+                    properties = properties.set_column_encoding(
+                        column_name.clone().into(),
+                        Encoding::from_str(&encoding).map_err(|err| DeltaTableError::from(err))?,
+                    );
+                    properties =
+                        properties.set_column_dictionary_enabled(column_name.clone().into(), false);
                 }
             }
         }
@@ -2173,6 +2183,7 @@ pub struct ColumnProperties {
     pub dictionary_enabled: Option<bool>,
     pub statistics_enabled: Option<String>,
     pub bloom_filter_properties: Option<BloomFilterProperties>,
+    pub encoding: Option<String>,
 }
 
 #[derive(FromPyObject)]

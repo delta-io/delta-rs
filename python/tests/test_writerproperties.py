@@ -1,4 +1,5 @@
 import pathlib
+from pprint import pprint
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -34,11 +35,12 @@ def test_writer_properties_all_filled():
                 ),
             ),
             "b": ColumnProperties(
-                dictionary_enabled=True,
+                dictionary_enabled=False,
                 statistics_enabled="PAGE",
                 bloom_filter_properties=BloomFilterProperties(
                     set_bloom_filter_enabled=False, fpp=0.2, ndv=30
                 ),
+                encoding="RLE",
             ),
         },
     )
@@ -98,3 +100,43 @@ def test_write_with_writerproperties(
     metadata = pq.read_metadata(parquet_path)
 
     assert metadata.to_dict()["row_groups"][0]["columns"][0]["compression"] == "GZIP"
+
+
+def test_write_with_writerproperties_encoding(
+    tmp_path: pathlib.Path, sample_table: pa.Table
+):
+    writer_properties = WriterProperties(
+        compression="ZSTD",
+        column_properties={"price": ColumnProperties(encoding="DELTA_BINARY_PACKED")}
+    )
+    write_deltalake(tmp_path, sample_table, writer_properties=writer_properties)
+
+    parquet_path = DeltaTable(tmp_path).file_uris()[0]
+    metadata = pq.read_metadata(parquet_path)
+    price_metadata = next(
+        c
+        for c in metadata.to_dict()["row_groups"][0]["columns"]
+        if c["path_in_schema"] == "price"
+    )
+    assert "DELTA_BINARY_PACKED" in price_metadata["encodings"]
+
+    sold_metadata = next(
+        c
+        for c in metadata.to_dict()["row_groups"][0]["columns"]
+        if c["path_in_schema"] == "sold"
+    )
+    assert "RLE_DICTIONARY" in sold_metadata["encodings"]
+
+
+def test_write_invalid_encoding_configuration():
+    with pytest.raises(ValueError):
+        WriterProperties(
+            compression="ZSTD",
+            column_properties={"price": ColumnProperties(encoding="RLE", dictionary_enabled=True)}
+        )
+
+    with pytest.raises(ValueError):
+        WriterProperties(
+            compression="ZSTD",
+            column_properties={"price": ColumnProperties(encoding="RLE_DICTIONARY")}
+        )
