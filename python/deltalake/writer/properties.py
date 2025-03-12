@@ -57,12 +57,13 @@ class Compression(Enum):
 
 
 class Encoding(Enum):
-    """ https://parquet.apache.org/docs/file-format/data-pages/encodings/ """
+    """https://parquet.apache.org/docs/file-format/data-pages/encodings/"""
+
     PLAIN = "PLAIN"
-    PLAIN_DICTIONARY = "PLAIN_DICTIONARY" # Deprecated
+    PLAIN_DICTIONARY = "PLAIN_DICTIONARY"  # Deprecated
     RLE_DICTIONARY = "RLE_DICTIONARY"
     RLE = "RLE"
-    BIT_PACKED = "BIT_PACKED" # Deprecated
+    BIT_PACKED = "BIT_PACKED"  # Deprecated
     DELTA_BINARY_PACKED = "DELTA_BINARY_PACKED"
     DELTA_LENGTH_BYTE_ARRAY = "DELTA_LENGTH_BYTE_ARRAY"
     DELTA_BYTE_ARRAY = "DELTA_BYTE_ARRAY"
@@ -146,7 +147,9 @@ class ColumnProperties:
                 Encoding.PLAIN_DICTIONARY,
                 Encoding.RLE_DICTIONARY,
             ]:
-                raise ValueError(f"Can not specify dictionary encoding {encoding}, use dictionary_enabled=True instead")
+                raise ValueError(
+                    f"Can not specify dictionary encoding {encoding}, use dictionary_enabled=True instead"
+                )
             else:
                 self.encoding = encoding
 

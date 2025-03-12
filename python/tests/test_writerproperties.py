@@ -1,5 +1,4 @@
 import pathlib
-from pprint import pprint
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -107,7 +106,7 @@ def test_write_with_writerproperties_encoding(
 ):
     writer_properties = WriterProperties(
         compression="ZSTD",
-        column_properties={"price": ColumnProperties(encoding="DELTA_BINARY_PACKED")}
+        column_properties={"price": ColumnProperties(encoding="DELTA_BINARY_PACKED")},
     )
     write_deltalake(tmp_path, sample_table, writer_properties=writer_properties)
 
@@ -132,11 +131,13 @@ def test_write_invalid_encoding_configuration():
     with pytest.raises(ValueError):
         WriterProperties(
             compression="ZSTD",
-            column_properties={"price": ColumnProperties(encoding="RLE", dictionary_enabled=True)}
+            column_properties={
+                "price": ColumnProperties(encoding="RLE", dictionary_enabled=True)
+            },
         )
 
     with pytest.raises(ValueError):
         WriterProperties(
             compression="ZSTD",
-            column_properties={"price": ColumnProperties(encoding="RLE_DICTIONARY")}
+            column_properties={"price": ColumnProperties(encoding="RLE_DICTIONARY")},
         )
