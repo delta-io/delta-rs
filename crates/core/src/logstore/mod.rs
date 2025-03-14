@@ -267,11 +267,23 @@ pub trait LogStore: Send + Sync + AsAny {
         while let Some(res) = stream.next().await {
             match res {
                 Ok(meta) => {
-                    // crc files are valid files according to the protocol
-                    if meta.location.is_crc_file() {
+                    // Valid but optional files.
+                    if meta.location.is_crc_file()
+                        || meta.location.is_last_checkpoint_file()
+                        || meta.location.is_last_vacuum_info_file()
+                        || meta.location.is_deletion_vector_file()
+                    {
                         continue;
                     }
-                    return Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file());
+                    let is_valid =
+                        meta.location.is_commit_file() || meta.location.is_checkpoint_file();
+                    if !is_valid {
+                        warn!(
+                            "Expected a valid delta file. Found {}",
+                            meta.location.filename().unwrap_or("<empty>")
+                        )
+                    }
+                    return Ok(is_valid);
                 }
                 Err(ObjectStoreError::NotFound { .. }) => return Ok(false),
                 Err(err) => return Err(err.into()),
