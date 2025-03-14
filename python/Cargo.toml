@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.25.4"
+version = "1.0.0-rc0"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
