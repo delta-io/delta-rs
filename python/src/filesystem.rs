@@ -275,13 +275,14 @@ impl DeltaFileSystemHandler {
         };
 
         let path = Self::parse_path(&path);
-        let file = rt()
-            .block_on(ObjectInputFile::try_new(
+        let file = tokio::task::block_in_place(|| {
+            rt().block_on(ObjectInputFile::try_new(
                 self.inner.clone(),
                 path,
                 size.copied(),
             ))
-            .map_err(PythonError::from)?;
+        })
+        .map_err(PythonError::from)?;
         Ok(file)
     }
 
