@@ -7,6 +7,8 @@ use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
 };
 use pyo3::{create_exception, PyErr};
+use std::error::Error;
+use std::fmt::Display;
 
 create_exception!(_internal, DeltaError, PyException);
 create_exception!(_internal, TableNotFoundError, DeltaError);
@@ -40,15 +42,74 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct DisplaySourceChain<T> {
+    err: T,
+    error_name: String,
+}
+
+impl<T: Error + 'static> Display for DisplaySourceChain<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // walk the source chain and collect error messages
+        let mut err_msgs = Vec::new();
+        let mut current_err = Some(&self.err as &(dyn Error + 'static));
+        while let Some(err) = current_err {
+            let err_msg = err.to_string();
+            err_msgs.push(err_msg);
+            current_err = err.source();
+        }
+        // produce output message parts from source error messages
+        // message parts are delimited by the substring ": "
+        let mut out_parts = Vec::with_capacity(err_msgs.capacity());
+        for err_msg in &err_msgs {
+            // not very clean but std lib doesn't easily support splitting on two substrings
+            for err_part in err_msg.split(": ").flat_map(|s| s.split("\ncaused by\n")) {
+                if !err_part.is_empty()
+                    && !out_parts.contains(&err_part)
+                    && !out_parts.iter().map(|p| p.contains(&err_part)).any(|v| v)
+                {
+                    out_parts.push(err_part);
+                }
+            }
+        }
+        for (i, part) in out_parts.iter().enumerate() {
+            if i == 0 {
+                write!(f, "{}\n", part)?;
+            } else {
+                write!(
+                    f,
+                    "{}\x1b[31m{}\x1b[0m {}\n",
+                    " ".repeat(self.error_name.len() + ": ".len() + i),
+                    "↳",
+                    part
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 fn object_store_to_py(err: ObjectStoreError) -> PyErr {
     match err {
-        ObjectStoreError::NotFound { .. } => PyFileNotFoundError::new_err(err.to_string()),
+        ObjectStoreError::NotFound { .. } => PyFileNotFoundError::new_err(
+            DisplaySourceChain {
+                err,
+                error_name: "FileNotFoundError".to_string(),
+            }
+            .to_string(),
+        ),
         ObjectStoreError::Generic { source, .. }
             if source.to_string().contains("AWS_S3_ALLOW_UNSAFE_RENAME") =>
         {
             DeltaProtocolError::new_err(source.to_string())
         }
-        _ => PyIOError::new_err(err.to_string()),
+        _ => PyIOError::new_err(
+            DisplaySourceChain {
+                err,
+                error_name: "IOError".to_string(),
+            }
+            .to_string(),
+        ),
     }
 }
 
