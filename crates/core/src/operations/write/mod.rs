@@ -31,7 +31,7 @@ pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
 pub mod writer;
 
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Schema};
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use generated_columns::{add_generated_columns, add_missing_generated_columns};

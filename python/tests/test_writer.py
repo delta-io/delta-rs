@@ -702,7 +702,6 @@ def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
         "float32": -0.0,
         "float64": -0.0,
         "bool": False,
-        "binary": "0",
         "timestamp": "2022-01-01T00:00:00Z",
         "struct": {
             "x": 0,
@@ -724,7 +723,6 @@ def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
         "float32": 4.0,
         "float64": 4.0,
         "bool": True,
-        "binary": "4",
         "timestamp": "2022-01-01T04:00:00Z",
         "struct": {"x": 4, "y": "4"},
     }
@@ -741,6 +739,7 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
             "int32": pa.array([1, None, 2, None], pa.int32()),
             "float64": pa.array([1.0, None, None, None], pa.float64()),
             "str": pa.array([None] * 4, pa.string()),
+            "bin": pa.array([b"bindata"] * 4, pa.binary()),
         }
     )
     write_deltalake(tmp_path, data)
@@ -1930,3 +1929,66 @@ def test_write_schema_evolved_same_metadata_id(tmp_path):
     second_metadata_id = DeltaTable(tmp_path).metadata().id
 
     assert first_metadata_id == second_metadata_id
+
+
+# <https://github.com/delta-io/delta-rs/issues/2854>
+@pytest.mark.polars
+def test_write_binary_col_without_dssc(tmp_path: pathlib.Path):
+    import polars as pl
+
+    data_with_bin_col = {
+        "x": [b"67890", b"abcde", b"xyzw", b"12345"],
+        "y": [1, 2, 3, 4],
+        "z": [101, 102, None, 104],
+    }
+
+    df_with_bin_col = pl.DataFrame(data_with_bin_col)
+    df_with_bin_col.write_delta(tmp_path)
+
+    assert len(df_with_bin_col.rows()) == 4
+
+    dt = DeltaTable(tmp_path)
+    stats = dt.get_add_actions(flatten=True)
+    assert stats["null_count.x"].to_pylist() == [None]
+    assert stats["min.x"].to_pylist() == [None]
+    assert stats["max.x"].to_pylist() == [None]
+    assert stats["null_count.y"].to_pylist() == [0]
+    assert stats["min.y"].to_pylist() == [1]
+    assert stats["max.y"].to_pylist() == [4]
+    assert stats["null_count.z"].to_pylist() == [1]
+    assert stats["min.z"].to_pylist() == [101]
+    assert stats["max.z"].to_pylist() == [104]
+
+
+# <https://github.com/delta-io/delta-rs/issues/2854>
+@pytest.mark.polars
+def test_write_binary_col_with_dssc(tmp_path: pathlib.Path):
+    import polars as pl
+
+    data_with_bin_col = {
+        "x": [b"67890", b"abcde", b"xyzw", b"12345"],
+        "y": [1, 2, 3, 4],
+        "z.z": [101, 102, None, 104],
+    }
+
+    df_with_bin_col = pl.DataFrame(data_with_bin_col)
+    df_with_bin_col.write_delta(
+        tmp_path,
+        delta_write_options={
+            "configuration": {"delta.dataSkippingStatsColumns": "x,y,`z.z`"},
+        },
+    )
+
+    assert len(df_with_bin_col.rows()) == 4
+
+    dt = DeltaTable(tmp_path)
+    stats = dt.get_add_actions(flatten=True)
+    assert stats["null_count.x"].to_pylist() == [None]
+    assert stats["min.x"].to_pylist() == [None]
+    assert stats["max.x"].to_pylist() == [None]
+    assert stats["null_count.y"].to_pylist() == [0]
+    assert stats["min.y"].to_pylist() == [1]
+    assert stats["max.y"].to_pylist() == [4]
+    assert stats["null_count.z.z"].to_pylist() == [1]
+    assert stats["min.z.z"].to_pylist() == [101]
+    assert stats["max.z.z"].to_pylist() == [104]
