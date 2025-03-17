@@ -30,7 +30,7 @@ deltalake-catalog-unity = { version = "0.9.0", path = "../catalog-unity", option
 # All of these features are just reflected into the core crate until that
 # functionality is broken apart
 azure = ["deltalake-azure"]
-default = []
+default = ["kernel-rustls"]
 datafusion = ["deltalake-core/datafusion"]
 datafusion-ext = ["datafusion"]
 gcs = ["deltalake-gcp"]
@@ -42,6 +42,8 @@ s3-native-tls = ["deltalake-aws/native-tls"]
 s3 = ["deltalake-aws/rustls"]
 unity-experimental = ["deltalake-catalog-unity"]
 lakefs = ["deltalake-lakefs"]
+kernel-tls = ["deltalake-core/kernel-tls"]
+kernel-rustls = ["deltalake-core/kernel-rustls"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

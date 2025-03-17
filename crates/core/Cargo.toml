@@ -128,3 +128,5 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+kernel-tls = ["delta_kernel/default-engine"]
+kernel-rustls = ["delta_kernel/default-engine-rustls"]
