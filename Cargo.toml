@@ -41,7 +41,7 @@ arrow-ord = { version = "54" }
 arrow-row = { version = "54" }
 arrow-schema = { version = "54" }
 arrow-select = { version = "54" }
-object_store = { version = "0.11.2" , features = ["cloud"]}
+object_store = { version = "0.11.2" }
 parquet = { version = "54" }
 
 # datafusion
