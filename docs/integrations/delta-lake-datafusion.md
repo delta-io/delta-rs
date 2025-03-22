@@ -24,21 +24,21 @@ Suppose you have the following dataset with 1 billion rows and 9 columns.  Here 
 +-------+-------+--------------+-------+-------+--------+------+------+---------+
 ```
 
-Here's how to register a Delta Lake table as a PyArrow dataset:
+Here's how to register a Delta Lake table with DataFusion:
 
 ```python
-from datafusion import SessionContext
+from datafusion import SessionContext, col, functions as f
 from deltalake import DeltaTable
 
 ctx = SessionContext()
 table = DeltaTable("G1_1e9_1e2_0_0")
-ctx.register_dataset("my_delta_table", table.to_pyarrow_dataset())
+ctx.register_table_provider("my_delta_table", table)
 ```
 
 Now query the table:
 
 ```python
-ctx.sql("select id1, sum(v1) as v1 from my_delta_table where id1='id096' group by id1")
+ctx.sql("select id1, sum(v1) as v1 from my_delta_table where id1='id096' group by id1").show()
 ```
 
 That query takes 2.8 seconds to execute.
@@ -58,6 +58,16 @@ This query takes 5.3 seconds to run.
 Parquet stores data in row groups and DataFusion can intelligently skip row groups that don't contain relevant data, so the query is faster than a file format like CSV which doesn't support row group skipping.
 
 Delta Lake stores file-level metadata information in the transaction log, so it can skip entire files when queries are executed.  Delta Lake can skip entire files and then skip row groups within the individual files.  This makes Delta Lake even faster than Parquet files, especially for larger datasets spread across many files.
+
+## Dataframe syntax
+
+You can also use DataFusion's dataframe syntax to run the query above. Please note: unlike Polars or Pandas, all dataframes in DataFusion are lazy.
+
+```python
+ctx.table("my_delta_table").filter(col("id1") == "id096").aggregate(
+    col("id1"), f.sum(col("v1")).alias("v1")
+).show()
+```
 
 ## Delta Lake features for DataFusion users
 
