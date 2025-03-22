@@ -3,6 +3,7 @@ mod features;
 mod filesystem;
 mod merge;
 mod query;
+mod reader;
 mod schema;
 mod utils;
 mod writer;
@@ -23,7 +24,7 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
+use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
@@ -52,7 +53,7 @@ use deltalake::operations::transaction::{
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::write::WriteBuilder;
-use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
+use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -63,7 +64,7 @@ use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use error::DeltaError;
-use futures::future::join_all;
+use reader::convert_stream_to_reader;
 use tracing::log::*;
 
 use crate::writer::to_lazy_table;
@@ -899,31 +900,12 @@ impl RawDeltaTable {
             format!("SELECT {select_string} FROM `{table_name}`")
         };
 
-        let plan = rt()
-            .block_on(async { ctx.sql(&sql).await?.create_physical_plan().await })
+        let stream = rt()
+            .block_on(async { ctx.sql(&sql).await?.execute_stream().await })
             .map_err(PythonError::from)?;
 
         py.allow_threads(|| {
-            let mut tasks = vec![];
-            for p in 0..plan.properties().output_partitioning().partition_count() {
-                let inner_plan = plan.clone();
-                let partition_batch = inner_plan.execute(p, ctx.task_ctx()).unwrap();
-                let handle = rt().spawn(collect_sendable_stream(partition_batch));
-                tasks.push(handle);
-            }
-
-            // This is unfortunate.
-            let batches = rt()
-                .block_on(join_all(tasks))
-                .into_iter()
-                .flatten()
-                .collect::<Result<Vec<Vec<_>>, _>>()
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .map(Ok);
-            let batch_iter = RecordBatchIterator::new(batches, plan.schema());
-            let ffi_stream = FFI_ArrowArrayStream::new(Box::new(batch_iter));
+            let ffi_stream = FFI_ArrowArrayStream::new(convert_stream_to_reader(stream));
             let reader = ArrowArrayStreamReader::try_new(ffi_stream).unwrap();
             Ok(PyArrowType(reader))
         })
