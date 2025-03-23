@@ -13,7 +13,7 @@ from deltalake.writer import write_deltalake
 from tests.test_alter import _sort_fields
 
 if TYPE_CHECKING:
-    import lakefs as lakefs
+    import lakefs
 
 
 @pytest.fixture

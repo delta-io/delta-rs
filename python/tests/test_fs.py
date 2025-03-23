@@ -241,7 +241,7 @@ def test_warning_for_small_max_buffer_size(tmp_path, storage_size):
 
     assert len(warnings) == 1
     assert (
-        f"You specified a `max_buffer_size` of {storage_size} bits less than {5*1024*1024} bits"
+        f"You specified a `max_buffer_size` of {storage_size} bits less than {5 * 1024 * 1024} bits"
         in str(warnings[0].message)
     )
 

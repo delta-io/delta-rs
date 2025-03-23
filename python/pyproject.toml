@@ -36,7 +36,7 @@ devel = [
     "pytest-benchmark",
     # keep ruff and mypy versions in sync with .github/workflows/python_build.yml
     "mypy==1.10.1",
-    "ruff==0.5.2",
+    "ruff==0.11.2",
 ]
 polars = ["polars==1.17.1"]
 lakefs = ["lakefs==0.8.0"]
@@ -81,8 +81,13 @@ select = [
     "I",
     # ruff-specific rules
     "RUF",
+    "ANN",
 ]
-ignore = ["E501"]
+ignore = ["E501", "ANN401", "RUF040"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+"docs/**" = ["ANN"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["deltalake"]

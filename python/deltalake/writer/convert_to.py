@@ -1,11 +1,10 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Dict,
     Literal,
-    Mapping,
-    Optional,
-    Union,
 )
 
 from deltalake._internal import convert_to_deltalake as _convert_to_deltalake
@@ -21,16 +20,16 @@ if TYPE_CHECKING:
 
 
 def convert_to_deltalake(
-    uri: Union[str, Path],
+    uri: str | Path,
     mode: Literal["error", "ignore"] = "error",
-    partition_by: Optional["pa.Schema"] = None,
-    partition_strategy: Optional[Literal["hive"]] = None,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    configuration: Optional[Mapping[str, Optional[str]]] = None,
-    storage_options: Optional[Dict[str, str]] = None,
-    commit_properties: Optional["CommitProperties"] = None,
-    post_commithook_properties: Optional["PostCommitHookProperties"] = None,
+    partition_by: pa.Schema | None = None,
+    partition_strategy: Literal["hive"] | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    configuration: Mapping[str, str | None] | None = None,
+    storage_options: dict[str, str] | None = None,
+    commit_properties: CommitProperties | None = None,
+    post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
     """
     `Convert` parquet tables `to delta` tables.

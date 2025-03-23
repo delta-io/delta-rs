@@ -4,7 +4,7 @@ import pathlib
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from math import inf
-from typing import Any, List
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -574,9 +574,9 @@ def test_to_pandas_with_types_mapper(tmp_path: pathlib.Path):
 
     df = dt.to_pandas(types_mapper=types_mapper)
 
-    assert df.dtypes["amount"].pyarrow_dtype == pa.decimal128(
-        18, 0
-    ), "amount column should be Decimal(18, 0)"
+    assert df.dtypes["amount"].pyarrow_dtype == pa.decimal128(18, 0), (
+        "amount column should be Decimal(18, 0)"
+    )
 
 
 def test_write_iterator(
@@ -653,12 +653,12 @@ def get_log_path(table: DeltaTable) -> str:
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 
-def get_add_actions(table: DeltaTable) -> List[str]:
+def get_add_actions(table: DeltaTable) -> list[str]:
     log_path = get_log_path(table)
 
     actions = []
 
-    for line in open(log_path, "r").readlines():
+    for line in open(log_path).readlines():
         log_entry = json.loads(line)
 
         if "add" in log_entry:
@@ -676,7 +676,7 @@ def get_stats(table: DeltaTable):
         raise AssertionError("No add action found!")
 
 
-def get_add_paths(table: DeltaTable) -> List[str]:
+def get_add_paths(table: DeltaTable) -> list[str]:
     return [action["path"] for action in get_add_actions(table)]
 
 

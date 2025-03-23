@@ -1,4 +1,7 @@
-from typing import Any, Dict, List, Mapping, Optional
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
 
 import pyarrow as pa
 from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
@@ -15,9 +18,9 @@ class DeltaStorageHandler(FileSystemHandler):
     def __init__(
         self,
         table_uri: str,
-        options: Optional[Dict[str, str]] = None,
-        known_sizes: Optional[Dict[str, int]] = None,
-    ):
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
+    ) -> None:
         self._handler = DeltaFileSystemHandler(
             table_uri=table_uri, options=options, known_sizes=known_sizes
         )
@@ -26,9 +29,9 @@ class DeltaStorageHandler(FileSystemHandler):
     def from_table(
         cls,
         table: RawDeltaTable,
-        options: Optional[Dict[str, str]] = None,
-        known_sizes: Optional[Dict[str, int]] = None,
-    ) -> "DeltaStorageHandler":
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
+    ) -> DeltaStorageHandler:
         self = cls.__new__(cls)
         self._handler = DeltaFileSystemHandler.from_table(table, options, known_sizes)
         return self
@@ -76,7 +79,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """Delete the root directory contents, recursively."""
         return self._handler.delete_root_dir_contents()
 
-    def get_file_info(self, paths: List[str]) -> List[FileInfo]:
+    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
         """Get info for the given files.
 
         A non-existing or unreachable file returns a FileStat object and has a FileType of value NotFound.
@@ -122,7 +125,7 @@ class DeltaStorageHandler(FileSystemHandler):
         return pa.PythonFile(self._handler.open_input_file(path))
 
     def open_output_stream(
-        self, path: str, metadata: Optional[Dict[str, str]] = None
+        self, path: str, metadata: dict[str, str] | None = None
     ) -> pa.PythonFile:
         """
         Open an output stream for sequential writing.
@@ -138,7 +141,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """
         return pa.PythonFile(self._handler.open_output_stream(path, metadata))
 
-    def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:
+    def get_file_info_selector(self, selector: FileSelector) -> list[FileInfo]:
         """
         Get info for the files defined by FileSelector.
 

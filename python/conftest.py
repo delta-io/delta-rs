@@ -9,7 +9,7 @@ def doctest_setup(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
-):
+) -> None:
     if isinstance(request.node, pytest.DoctestItem):
         # disable color for doctests so we don't have to include
         # escape codes in docstrings

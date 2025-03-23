@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING
 
 from deltalake.exceptions import TableNotFoundError
 
@@ -8,9 +10,9 @@ if TYPE_CHECKING:
 
 
 def try_get_table_and_table_uri(
-    table_or_uri: Union[str, Path, "DeltaTable"],
-    storage_options: Optional[Dict[str, str]] = None,
-) -> Tuple[Optional["DeltaTable"], str]:
+    table_or_uri: str | Path | DeltaTable,
+    storage_options: dict[str, str] | None = None,
+) -> tuple[DeltaTable | None, str]:
     """Parses the `table_or_uri`.
     Raises [ValueError] If `table_or_uri` is not of type str, Path or DeltaTable.
 
@@ -37,8 +39,8 @@ def try_get_table_and_table_uri(
 
 
 def try_get_deltatable(
-    table_uri: Union[str, Path], storage_options: Optional[Dict[str, str]]
-) -> Optional["DeltaTable"]:
+    table_uri: str | Path, storage_options: dict[str, str] | None
+) -> DeltaTable | None:
     from deltalake.table import DeltaTable
 
     try:
