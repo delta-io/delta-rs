@@ -213,7 +213,7 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          uv sync --no-default-groups
+          make develop
 
       - name: Run deltalake
         run: |
