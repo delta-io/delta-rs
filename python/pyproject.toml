@@ -21,30 +21,6 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
-devel = [
-    "azure-storage-blob==12.20.0",
-    "packaging>=20",
-    "pytest",
-    "pytest-mock",
-    "pytest-cov",
-    "pytest-timeout",
-    "sphinx<=4.5",
-    "sphinx-rtd-theme",
-    "toml",
-    "wheel",
-    "pip>=24.0",
-    "pytest-benchmark",
-    # keep ruff and mypy versions in sync with .github/workflows/python_build.yml
-    "mypy==1.10.1",
-    "ruff==0.11.2",
-]
-polars = ["polars==1.17.1"]
-lakefs = ["lakefs==0.8.0"]
-pyspark = [
-    "pyspark",
-    "delta-spark",
-    "numpy==1.26.4", # pyspark is not compatible with latest numpy
-]
 
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/"
@@ -110,3 +86,35 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["deltalake"]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "pytest-cov",
+    "pytest-timeout",
+    "pytest-benchmark",
+    "mypy==1.10.1",
+    "ruff==0.11.2",
+]
+polars = ["polars==1.17.1"]
+lakefs = ["lakefs==0.8.0"]
+pyspark = [
+    "pyspark",
+    "delta-spark",
+    "numpy==1.26.4", # pyspark is not compatible with latest numpy
+]
+docs = [
+    "sphinx<=4.5",
+    "sphinx-rtd-theme",
+]
+other = [
+    "azure-storage-blob==12.20.0",
+    "packaging>=20",
+    "toml",
+    "wheel",
+    "pip>=24.0",
+]
+
+[tool.uv]
+default-groups = ["dev", "polars", "lakefs", "docs", "other"]
