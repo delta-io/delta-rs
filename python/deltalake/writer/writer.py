@@ -1,13 +1,10 @@
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Dict,
-    Iterable,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Union,
     overload,
 )
 
@@ -36,86 +33,80 @@ if TYPE_CHECKING:
 
 @overload
 def write_deltalake(
-    table_or_uri: Union[str, Path, "DeltaTable"],
-    data: Union[
-        "pd.DataFrame",
-        "ds.Dataset",
-        "pa.Table",
-        "pa.RecordBatch",
-        Iterable["pa.RecordBatch"],
-        "pa.RecordBatchReader",
-        ArrowStreamExportable,
-    ],
+    table_or_uri: str | Path | DeltaTable,
+    data: pd.DataFrame
+    | ds.Dataset
+    | pa.Table
+    | pa.RecordBatch
+    | Iterable[pa.RecordBatch]
+    | pa.RecordBatchReader
+    | ArrowStreamExportable,
     *,
-    schema: Optional[Union["pa.Schema", "DeltaSchema"]] = ...,
-    partition_by: Optional[Union[List[str], str]] = ...,
+    schema: pa.Schema | DeltaSchema | None = ...,
+    partition_by: list[str] | str | None = ...,
     mode: Literal["error", "append", "ignore"] = ...,
-    name: Optional[str] = ...,
-    description: Optional[str] = ...,
-    configuration: Optional[Mapping[str, Optional[str]]] = ...,
-    schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
-    storage_options: Optional[Dict[str, str]] = ...,
-    target_file_size: Optional[int] = ...,
-    writer_properties: "WriterProperties" = ...,
-    post_commithook_properties: Optional["PostCommitHookProperties"] = ...,
-    commit_properties: Optional["CommitProperties"] = ...,
+    name: str | None = ...,
+    description: str | None = ...,
+    configuration: Mapping[str, str | None] | None = ...,
+    schema_mode: Literal["merge", "overwrite"] | None = ...,
+    storage_options: dict[str, str] | None = ...,
+    target_file_size: int | None = ...,
+    writer_properties: WriterProperties = ...,
+    post_commithook_properties: PostCommitHookProperties | None = ...,
+    commit_properties: CommitProperties | None = ...,
 ) -> None: ...
 
 
 @overload
 def write_deltalake(
-    table_or_uri: Union[str, Path, "DeltaTable"],
-    data: Union[
-        "pd.DataFrame",
-        "ds.Dataset",
-        "pa.Table",
-        "pa.RecordBatch",
-        Iterable["pa.RecordBatch"],
-        "pa.RecordBatchReader",
-        ArrowStreamExportable,
-    ],
+    table_or_uri: str | Path | DeltaTable,
+    data: pd.DataFrame
+    | ds.Dataset
+    | pa.Table
+    | pa.RecordBatch
+    | Iterable[pa.RecordBatch]
+    | pa.RecordBatchReader
+    | ArrowStreamExportable,
     *,
-    schema: Optional[Union["pa.Schema", "DeltaSchema"]] = ...,
-    partition_by: Optional[Union[List[str], str]] = ...,
+    schema: pa.Schema | DeltaSchema | None = ...,
+    partition_by: list[str] | str | None = ...,
     mode: Literal["overwrite"],
-    name: Optional[str] = ...,
-    description: Optional[str] = ...,
-    configuration: Optional[Mapping[str, Optional[str]]] = ...,
-    schema_mode: Optional[Literal["merge", "overwrite"]] = ...,
-    storage_options: Optional[Dict[str, str]] = ...,
-    predicate: Optional[str] = ...,
-    target_file_size: Optional[int] = ...,
-    writer_properties: "WriterProperties" = ...,
-    post_commithook_properties: Optional["PostCommitHookProperties"] = ...,
-    commit_properties: Optional["CommitProperties"] = ...,
+    name: str | None = ...,
+    description: str | None = ...,
+    configuration: Mapping[str, str | None] | None = ...,
+    schema_mode: Literal["merge", "overwrite"] | None = ...,
+    storage_options: dict[str, str] | None = ...,
+    predicate: str | None = ...,
+    target_file_size: int | None = ...,
+    writer_properties: WriterProperties = ...,
+    post_commithook_properties: PostCommitHookProperties | None = ...,
+    commit_properties: CommitProperties | None = ...,
 ) -> None: ...
 
 
 def write_deltalake(
-    table_or_uri: Union[str, Path, "DeltaTable"],
-    data: Union[
-        "pd.DataFrame",
-        "ds.Dataset",
-        "pa.Table",
-        "pa.RecordBatch",
-        Iterable["pa.RecordBatch"],
-        "pa.RecordBatchReader",
-        ArrowStreamExportable,
-    ],
+    table_or_uri: str | Path | DeltaTable,
+    data: pd.DataFrame
+    | ds.Dataset
+    | pa.Table
+    | pa.RecordBatch
+    | Iterable[pa.RecordBatch]
+    | pa.RecordBatchReader
+    | ArrowStreamExportable,
     *,
-    schema: Optional[Union["pa.Schema", "DeltaSchema"]] = None,
-    partition_by: Optional[Union[List[str], str]] = None,
+    schema: pa.Schema | DeltaSchema | None = None,
+    partition_by: list[str] | str | None = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    configuration: Optional[Mapping[str, Optional[str]]] = None,
-    schema_mode: Optional[Literal["merge", "overwrite"]] = None,
-    storage_options: Optional[Dict[str, str]] = None,
-    predicate: Optional[str] = None,
-    target_file_size: Optional[int] = None,
-    writer_properties: Optional["WriterProperties"] = None,
-    post_commithook_properties: Optional["PostCommitHookProperties"] = None,
-    commit_properties: Optional["CommitProperties"] = None,
+    name: str | None = None,
+    description: str | None = None,
+    configuration: Mapping[str, str | None] | None = None,
+    schema_mode: Literal["merge", "overwrite"] | None = None,
+    storage_options: dict[str, str] | None = None,
+    predicate: str | None = None,
+    target_file_size: int | None = None,
+    writer_properties: WriterProperties | None = None,
+    post_commithook_properties: PostCommitHookProperties | None = None,
+    commit_properties: CommitProperties | None = None,
 ) -> None:
     """Write to a Delta Lake table
 
