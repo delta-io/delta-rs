@@ -11,6 +11,21 @@ env:
   DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
 
 jobs:
+  default_build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: '1.82'
+          override: true
+
+      - name: Build
+        run: (cd crates/deltalake && cargo build)
+
   format:
     runs-on: ubuntu-latest
     steps:
