@@ -113,7 +113,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 cdf = []
-default = ["cdf"]
+default = ["cdf", "rustls"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
@@ -128,6 +128,6 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+native-tls = ["delta_kernel/default-engine"]
+rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud"]
-kernel-tls = ["delta_kernel/default-engine"]
-kernel-rustls = ["delta_kernel/default-engine-rustls"]
