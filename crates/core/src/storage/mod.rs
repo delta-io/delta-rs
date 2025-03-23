@@ -648,6 +648,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn test_retry_config_from_options() {
         struct TestFactory {}
