@@ -180,3 +180,52 @@ impl From<PythonError> for pyo3::PyErr {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DisplaySourceChain;
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct CustomError {
+        msg: &'static str,
+        source: Option<Box<dyn Error + 'static>>,
+    }
+
+    impl fmt::Display for CustomError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.msg)
+        }
+    }
+
+    impl Error for CustomError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source.as_deref()
+        }
+    }
+
+    #[test]
+    fn test_display_source_chain() {
+        let root_error = CustomError {
+            msg: "Root IO error",
+            source: None,
+        };
+        let middle_error = CustomError {
+            msg: "Middle error",
+            source: Some(Box::new(root_error)),
+        };
+        let generic_error = CustomError {
+            msg: "Generic error",
+            source: Some(Box::new(middle_error)),
+        };
+
+        let display_chain = DisplaySourceChain {
+            err: generic_error,
+            error_name: "IOError".to_string(),
+        };
+
+        let formatted_output = format!("{}", display_chain);
+        assert!(formatted_output.eq("Generic error\n          \u{1b}[31m↳\u{1b}[0m Middle error\n           \u{1b}[31m↳\u{1b}[0m Root IO error\n"));
+    }
+}
