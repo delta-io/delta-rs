@@ -100,7 +100,7 @@ dev = [
 polars = ["polars==1.17.1"]
 lakefs = ["lakefs==0.8.0"]
 pyspark = [
-    "pyspark",
+    "pyspark==3.5.4",
     "delta-spark",
     "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
