@@ -4,7 +4,7 @@ use deltalake_core::DeltaResult;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -209,6 +209,58 @@ impl LakeFSClient {
         match response.status() {
             StatusCode::OK => Ok(()),
             StatusCode::CONFLICT => Err(TransactionError::VersionAlreadyExists(commit_version)),
+            StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
+            _ => {
+                let error: LakeFSErrorResponse =
+                    response
+                        .json()
+                        .await
+                        .unwrap_or_else(|_| LakeFSErrorResponse {
+                            message: "Unknown error occurred.".to_string(),
+                        });
+                Err(LakeFSOperationError::MergeFailed(error.message).into())
+            }
+        }
+    }
+
+    pub async fn has_changes(
+        &self,
+        repo: &str,
+        source_branch: &str,
+        target_branch: &str,
+    ) -> Result<bool, TransactionError> {
+        let request_url = format!(
+            "{}/api/v1/repositories/{repo}/refs/{source_branch}/diff/{target_branch}",
+            self.config.host
+        );
+
+        debug!(
+            "Checking for changes between `{source_branch}` and `{target_branch}` in repo: {repo}"
+        );
+        let response = self
+            .http_client
+            .get(&request_url)
+            .basic_auth(&self.config.username, Some(&self.config.password))
+            .send()
+            .await
+            .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
+
+        match response.status() {
+            StatusCode::OK => {
+                // Parse the response to check if there are any differences
+                #[derive(Deserialize, Debug)]
+                struct DiffResponse {
+                    results: Vec<Value>,
+                }
+
+                let diff: DiffResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
+
+                // If there are any results in the diff, there are changes
+                Ok(!diff.results.is_empty())
+            }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             _ => {
                 let error: LakeFSErrorResponse =
@@ -434,5 +486,52 @@ mod tests {
         client.clear_transaction(transaction_id);
         let result = client.get_transaction(transaction_id);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_has_changes() {
+        // Test cases with different parameters
+        let test_cases = vec![
+            ("with_changes", r#"{"results": [{"some": "change"}]}"#, true),
+            ("without_changes", r#"{"results": []}"#, false),
+        ];
+
+        for (test_name, response_body, expected_has_changes) in test_cases {
+            let mut server = mockito::Server::new();
+            let mock = server
+                .mock(
+                    "GET",
+                    "/api/v1/repositories/test_repo/refs/source_branch/diff/target_branch",
+                )
+                .with_status(StatusCode::OK.as_u16().into())
+                .with_body(response_body)
+                .create();
+
+            let config = LakeFSConfig::new(
+                server.url(),
+                "test_user".to_string(),
+                "test_pass".to_string(),
+            );
+            let client = LakeFSClient::with_config(config);
+
+            let result = rt().block_on(async {
+                client
+                    .has_changes("test_repo", "source_branch", "target_branch")
+                    .await
+            });
+
+            assert!(
+                result.is_ok(),
+                "Test case '{}' failed: API call returned error",
+                test_name
+            );
+            let has_changes = result.unwrap();
+            assert_eq!(
+                has_changes, expected_has_changes,
+                "Test case '{}' failed: expected has_changes to be {}",
+                test_name, expected_has_changes
+            );
+            mock.assert();
+        }
     }
 }

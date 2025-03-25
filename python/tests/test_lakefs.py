@@ -500,6 +500,34 @@ def test_checkpoint(sample_data: pa.Table, lakefs_storage_options, lakefs_client
 
 @pytest.mark.lakefs
 @pytest.mark.integration
+def test_no_empty_commits(
+    lakefs_path, sample_data: pa.Table, lakefs_storage_options, lakefs_client
+):
+    import lakefs
+
+    write_deltalake(
+        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+    )
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+
+    # Get current branch head commit before operation
+    branch = lakefs.Branch(
+        repository_id="bronze", branch_id="main", client=lakefs_client
+    )
+    commits_before = list(branch.commits())
+    before_commit_id = commits_before[0].id if commits_before else None
+
+    # Perform a noop operation
+    dt.repair(dry_run=True)
+
+    commits_after = list(branch.commits())
+    after_commit_id = commits_after[0].id if commits_after else None
+
+    assert before_commit_id == after_commit_id, "Empty commit should be skipped"
+
+
+@pytest.mark.lakefs
+@pytest.mark.integration
 def test_storage_options(sample_data: pa.Table):
     with pytest.raises(
         DeltaError, match="LakeFS endpoint is missing in storage options."
