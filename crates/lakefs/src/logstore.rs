@@ -141,44 +141,62 @@ impl LakeFSLogStore {
         let (repo, transaction_branch, table) = self.client.decompose_url(transaction_url);
         self.client
             .commit(
-                repo,
-                transaction_branch,
+                repo.clone(),
+                transaction_branch.clone(),
                 format!("Delta file operations {{ table: {table}}}"),
                 true, // Needs to be true, it could be a file operation but no logs were deleted.
             )
             .await?;
 
-        // Try LakeFS Branch merge of transaction branch in source branch
+        // Get target branch information
         let (repo, target_branch, table) =
             self.client.decompose_url(self.config.location.to_string());
-        match self
+
+        // Check if there are any changes before attempting to merge
+        let has_changes = self
             .client
-            .merge(
-                repo,
-                target_branch,
-                self.client.get_transaction(operation_id)?,
-                0,
-                format!("Finished delta file operations {{ table: {table}}}"),
-                true, // Needs to be true, it could be a file operation but no logs were deleted.
-            )
+            .has_changes(&repo, &transaction_branch, &target_branch)
             .await
-        {
-            Ok(_) => {
-                let (repo, _, _) = self.client.decompose_url(self.config.location.to_string());
-                self.client
-                    .delete_branch(repo, self.client.get_transaction(operation_id)?)
-                    .await?;
-                Ok(())
-            }
-            // TODO: propagate better LakeFS errors.
-            Err(TransactionError::VersionAlreadyExists(_)) => {
-                Err(TransactionError::LogStoreError {
-                    msg: "Merge Failed".to_string(),
-                    source: Box::new(DeltaTableError::generic("Merge Failed")),
-                })
-            }
-            Err(err) => Err(err),
-        }?;
+            .map_err(|e| DeltaTableError::generic(format!("Failed to check for changes: {}", e)))?;
+
+        // Only perform merge if there are changes
+        if has_changes {
+            debug!("Changes detected, proceeding with merge");
+            match self
+                .client
+                .merge(
+                    repo,
+                    target_branch,
+                    self.client.get_transaction(operation_id)?,
+                    0,
+                    format!("Finished delta file operations {{ table: {table}}}"),
+                    true, // Needs to be true, it could be a file operation but no logs were deleted.
+                )
+                .await
+            {
+                Ok(_) => {
+                    // Merge successful
+                }
+                // TODO: propagate better LakeFS errors.
+                Err(TransactionError::VersionAlreadyExists(_)) => {
+                    return Err(DeltaTableError::Transaction {
+                        source: TransactionError::LogStoreError {
+                            msg: "Merge Failed".to_string(),
+                            source: Box::new(DeltaTableError::generic("Merge Failed")),
+                        },
+                    });
+                }
+                Err(err) => return Err(DeltaTableError::Transaction { source: err }),
+            };
+        } else {
+            debug!("No changes detected, skipping merge");
+        }
+
+        // Always delete the transaction branch when done
+        let (repo, _, _) = self.client.decompose_url(self.config.location.to_string());
+        self.client
+            .delete_branch(repo, self.client.get_transaction(operation_id)?)
+            .await?;
 
         self.client.clear_transaction(operation_id);
         Ok(())
