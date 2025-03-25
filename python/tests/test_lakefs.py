@@ -514,13 +514,13 @@ def test_no_empty_commits(
     branch = lakefs.Branch(
         repository_id="bronze", branch_id="main", client=lakefs_client
     )
-    commits_before = list(branch.commits())
+    commits_before = list(branch.log())
     before_commit_id = commits_before[0].id if commits_before else None
 
-    # Perform a noop operation
-    dt.repair(dry_run=True)
+    # Since there should be no files to vacuum in a fresh table this should be a no-op operation
+    dt.vacuum(dry_run=False)
 
-    commits_after = list(branch.commits())
+    commits_after = list(branch.log())
     after_commit_id = commits_after[0].id if commits_after else None
 
     assert before_commit_id == after_commit_id, "Empty commit should be skipped"
