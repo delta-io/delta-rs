@@ -185,10 +185,9 @@ async fn read_delta_table_with_null_stats_in_notnull_struct() {
 
 #[tokio::test]
 async fn read_delta_table_with_renamed_partitioning_column() {
-    let table =
-        deltalake_core::open_table("../test/tests/data/table_with_partitioning_mapping")
-            .await
-            .unwrap();
-    assert_eq!(table.version(), 1);
+    let table = deltalake_core::open_table("../test/tests/data/table_with_partitioning_mapping")
+        .await
+        .unwrap();
+    assert_eq!(table.version(), 4);
     assert!(table.get_schema().is_ok());
 }
