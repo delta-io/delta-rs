@@ -23,13 +23,15 @@
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
+pub(crate) mod async_utils;
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
+pub mod writer;
 
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Schema};
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use generated_columns::{add_generated_columns, add_missing_generated_columns};

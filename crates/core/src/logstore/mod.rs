@@ -238,7 +238,7 @@ pub trait LogStore: Send + Sync + AsAny {
         }?;
 
         let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
-        Ok(PeekCommit::New(next_version, actions.unwrap()))
+        Ok(PeekCommit::New(next_version, actions?))
     }
 
     /// Get object store, can pass operation_id for object stores linked to an operation
@@ -267,11 +267,23 @@ pub trait LogStore: Send + Sync + AsAny {
         while let Some(res) = stream.next().await {
             match res {
                 Ok(meta) => {
-                    // crc files are valid files according to the protocol
-                    if meta.location.is_crc_file() {
+                    // Valid but optional files.
+                    if meta.location.is_crc_file()
+                        || meta.location.is_last_checkpoint_file()
+                        || meta.location.is_last_vacuum_info_file()
+                        || meta.location.is_deletion_vector_file()
+                    {
                         continue;
                     }
-                    return Ok(meta.location.is_commit_file() || meta.location.is_checkpoint_file());
+                    let is_valid =
+                        meta.location.is_commit_file() || meta.location.is_checkpoint_file();
+                    if !is_valid {
+                        warn!(
+                            "Expected a valid delta file. Found {}",
+                            meta.location.filename().unwrap_or("<empty>")
+                        )
+                    }
+                    return Ok(is_valid);
                 }
                 Err(ObjectStoreError::NotFound { .. }) => return Ok(false),
                 Err(err) => return Err(err.into()),
@@ -818,6 +830,7 @@ mod tests {
             .expect("Failed to identify table"));
     }
 
+
     #[tokio::test]
     async fn test_get_all_version_should_fail() {
         use crate::protocol::SaveMode;
@@ -865,6 +878,31 @@ mod tests {
 
         assert_eq!(versions[0], 0);
         assert_eq!(commit_infos[0].operation, Some("CREATE TABLE".to_string()));
+
+    /// <https://github.com/delta-io/delta-rs/issues/3297>
+    #[tokio::test]
+    async fn test_peek_with_invalid_json() -> DeltaResult<()> {
+        use crate::storage::object_store::memory::InMemory;
+        let memory_store = Arc::new(InMemory::new());
+        let log_path = Path::from("_delta_log/00000000000000000001.json");
+
+        let log_content = r#"{invalid_json"#;
+
+        memory_store
+            .put(&log_path, log_content.into())
+            .await
+            .expect("Failed to write log file");
+
+        let table_uri = "memory:///delta-table";
+
+        let table = crate::DeltaTableBuilder::from_valid_uri(table_uri)
+            .unwrap()
+            .with_storage_backend(memory_store, Url::parse(table_uri).unwrap())
+            .build()?;
+
+        let result = table.log_store().peek_next_commit(0).await;
+        assert!(result.is_err());
+        Ok(())
     }
 }
 

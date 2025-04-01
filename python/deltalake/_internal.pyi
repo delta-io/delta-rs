@@ -1,13 +1,11 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Tuple,
     Union,
 )
 
@@ -58,9 +56,9 @@ class RawDeltaTableMetaData:
     id: int
     name: str
     description: str
-    partition_columns: List[str]
+    partition_columns: list[str]
     created_time: int
-    configuration: Dict[str, str]
+    configuration: dict[str, str]
 
 class RawDeltaTable:
     schema: Any
@@ -68,259 +66,257 @@ class RawDeltaTable:
     def __init__(
         self,
         table_uri: str,
-        version: Optional[int],
-        storage_options: Optional[Dict[str, str]],
+        version: int | None,
+        storage_options: dict[str, str] | None,
         without_files: bool,
-        log_buffer_size: Optional[int],
+        log_buffer_size: int | None,
     ) -> None: ...
     @staticmethod
     def get_table_uri_from_data_catalog(
         data_catalog: str,
         database_name: str,
         table_name: str,
-        data_catalog_id: Optional[str] = None,
-        catalog_options: Optional[Dict[str, str]] = None,
+        data_catalog_id: str | None = None,
+        catalog_options: dict[str, str] | None = None,
     ) -> str: ...
     @staticmethod
     def is_deltatable(
-        table_uri: str, storage_options: Optional[Dict[str, str]]
+        table_uri: str, storage_options: dict[str, str] | None
     ) -> bool: ...
     def table_uri(self) -> str: ...
     def version(self) -> int: ...
     def has_files(self) -> bool: ...
-    def get_add_file_sizes(self) -> Dict[str, int]: ...
+    def get_add_file_sizes(self) -> dict[str, int]: ...
     def get_latest_version(self) -> int: ...
     def get_earliest_version(self) -> int: ...
     def get_num_index_cols(self) -> int: ...
-    def get_stats_columns(self) -> Optional[List[str]]: ...
+    def get_stats_columns(self) -> list[str] | None: ...
     def metadata(self) -> RawDeltaTableMetaData: ...
-    def protocol_versions(self) -> List[Any]: ...
+    def protocol_versions(self) -> list[Any]: ...
     def load_version(self, version: int) -> None: ...
     def load_with_datetime(self, ds: str) -> None: ...
-    def files(self, partition_filters: Optional[PartitionFilterType]) -> List[str]: ...
-    def file_uris(
-        self, partition_filters: Optional[PartitionFilterType]
-    ) -> List[str]: ...
+    def files(self, partition_filters: PartitionFilterType | None) -> list[str]: ...
+    def file_uris(self, partition_filters: PartitionFilterType | None) -> list[str]: ...
     def vacuum(
         self,
         dry_run: bool,
-        retention_hours: Optional[int],
+        retention_hours: int | None,
         enforce_retention_duration: bool,
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
-    ) -> List[str]: ...
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
+    ) -> list[str]: ...
     def compact_optimize(
         self,
-        partition_filters: Optional[PartitionFilterType],
-        target_size: Optional[int],
-        max_concurrent_tasks: Optional[int],
-        min_commit_interval: Optional[int],
-        writer_properties: Optional["WriterProperties"],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        partition_filters: PartitionFilterType | None,
+        target_size: int | None,
+        max_concurrent_tasks: int | None,
+        min_commit_interval: int | None,
+        writer_properties: WriterProperties | None,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def z_order_optimize(
         self,
-        z_order_columns: List[str],
-        partition_filters: Optional[PartitionFilterType],
-        target_size: Optional[int],
-        max_concurrent_tasks: Optional[int],
-        max_spill_size: Optional[int],
-        min_commit_interval: Optional[int],
-        writer_properties: Optional["WriterProperties"],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        z_order_columns: list[str],
+        partition_filters: PartitionFilterType | None,
+        target_size: int | None,
+        max_concurrent_tasks: int | None,
+        max_spill_size: int | None,
+        min_commit_interval: int | None,
+        writer_properties: WriterProperties | None,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def add_columns(
         self,
-        fields: List[Field],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        fields: list[Field],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def add_feature(
         self,
-        feature: List[TableFeatures],
+        feature: list[TableFeatures],
         allow_protocol_versions_increase: bool,
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def add_constraints(
         self,
-        constraints: Dict[str, str],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        constraints: dict[str, str],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def drop_constraints(
         self,
         name: str,
         raise_if_not_exists: bool,
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def set_table_properties(
         self,
-        properties: Dict[str, str],
+        properties: dict[str, str],
         raise_if_not_exists: bool,
-        commit_properties: Optional["CommitProperties"],
+        commit_properties: CommitProperties | None,
     ) -> None: ...
     def restore(
         self,
-        target: Optional[Any],
+        target: Any | None,
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
-        commit_properties: Optional["CommitProperties"],
+        commit_properties: CommitProperties | None,
     ) -> str: ...
-    def history(self, limit: Optional[int]) -> List[str]: ...
+    def history(self, limit: int | None) -> list[str]: ...
     def update_incremental(self) -> None: ...
     def dataset_partitions(
-        self, schema: pyarrow.Schema, partition_filters: Optional[FilterConjunctionType]
-    ) -> List[Any]: ...
+        self, schema: pyarrow.Schema, partition_filters: FilterConjunctionType | None
+    ) -> list[Any]: ...
     def create_checkpoint(self) -> None: ...
     def get_add_actions(self, flatten: bool) -> pyarrow.RecordBatch: ...
     def delete(
         self,
-        predicate: Optional[str],
-        writer_properties: Optional["WriterProperties"],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        predicate: str | None,
+        writer_properties: WriterProperties | None,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def repair(
         self,
         dry_run: bool,
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def update(
         self,
-        updates: Dict[str, str],
-        predicate: Optional[str],
-        writer_properties: Optional["WriterProperties"],
+        updates: dict[str, str],
+        predicate: str | None,
+        writer_properties: WriterProperties | None,
         safe_cast: bool,
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def create_merge_builder(
         self,
         source: pyarrow.RecordBatchReader,
         predicate: str,
-        source_alias: Optional[str],
-        target_alias: Optional[str],
+        source_alias: str | None,
+        target_alias: str | None,
         merge_schema: bool,
-        writer_properties: Optional["WriterProperties"],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        writer_properties: WriterProperties | None,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
         safe_cast: bool,
         streamed_exec: bool,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
-        self, partitions_filters: Optional[FilterType] = None
+        self, partitions_filters: FilterType | None = None
     ) -> Any: ...
     def create_write_transaction(
         self,
-        add_actions: List["AddAction"],
+        add_actions: list[AddAction],
         mode: str,
-        partition_by: List[str],
+        partition_by: list[str],
         schema: pyarrow.Schema,
-        partitions_filters: Optional[FilterType],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        partitions_filters: FilterType | None,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
     def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
     def load_cdf(
         self,
-        columns: Optional[List[str]] = None,
-        predicate: Optional[str] = None,
+        columns: list[str] | None = None,
+        predicate: str | None = None,
         starting_version: int = 0,
-        ending_version: Optional[int] = None,
-        starting_timestamp: Optional[str] = None,
-        ending_timestamp: Optional[str] = None,
+        ending_version: int | None = None,
+        starting_timestamp: str | None = None,
+        ending_timestamp: str | None = None,
         allow_out_of_range: bool = False,
     ) -> pyarrow.RecordBatchReader: ...
-    def transaction_versions(self) -> Dict[str, Transaction]: ...
+    def transaction_versions(self) -> dict[str, Transaction]: ...
     def set_column_metadata(
         self,
         column: str,
         metadata: dict[str, str],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def __datafusion_table_provider__(self) -> Any: ...
     def write(
         self,
         data: pyarrow.RecordBatchReader,
-        partition_by: Optional[List[str]],
+        partition_by: list[str] | None,
         mode: str,
-        schema_mode: Optional[str],
-        predicate: Optional[str],
-        target_file_size: Optional[int],
-        name: Optional[str],
-        description: Optional[str],
-        configuration: Optional[Mapping[str, Optional[str]]],
-        writer_properties: Optional["WriterProperties"],
-        commit_properties: Optional["CommitProperties"],
-        post_commithook_properties: Optional["PostCommitHookProperties"],
+        schema_mode: str | None,
+        predicate: str | None,
+        target_file_size: int | None,
+        name: str | None,
+        description: str | None,
+        configuration: Mapping[str, str | None] | None,
+        writer_properties: WriterProperties | None,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
 
 def rust_core_version() -> str: ...
 def create_table_with_add_actions(
     table_uri: str,
     schema: pyarrow.Schema,
-    add_actions: List["AddAction"],
+    add_actions: list[AddAction],
     mode: Literal["error", "append", "overwrite", "ignore"],
-    partition_by: List[str],
-    name: Optional[str],
-    description: Optional[str],
-    configuration: Optional[Mapping[str, Optional[str]]],
-    storage_options: Optional[Dict[str, str]],
-    commit_properties: Optional["CommitProperties"],
-    post_commithook_properties: Optional["PostCommitHookProperties"],
+    partition_by: list[str],
+    name: str | None,
+    description: str | None,
+    configuration: Mapping[str, str | None] | None,
+    storage_options: dict[str, str] | None,
+    commit_properties: CommitProperties | None,
+    post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
 def write_to_deltalake(
     table_uri: str,
     data: pyarrow.RecordBatchReader,
-    partition_by: Optional[List[str]],
+    partition_by: list[str] | None,
     mode: str,
-    schema_mode: Optional[str],
-    predicate: Optional[str],
-    target_file_size: Optional[int],
-    name: Optional[str],
-    description: Optional[str],
-    configuration: Optional[Mapping[str, Optional[str]]],
-    storage_options: Optional[Dict[str, str]],
-    writer_properties: Optional["WriterProperties"],
-    commit_properties: Optional["CommitProperties"],
-    post_commithook_properties: Optional["PostCommitHookProperties"],
+    schema_mode: str | None,
+    predicate: str | None,
+    target_file_size: int | None,
+    name: str | None,
+    description: str | None,
+    configuration: Mapping[str, str | None] | None,
+    storage_options: dict[str, str] | None,
+    writer_properties: WriterProperties | None,
+    commit_properties: CommitProperties | None,
+    post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
-    partition_schema: Optional[pyarrow.Schema],
-    partition_strategy: Optional[Literal["hive"]],
-    name: Optional[str],
-    description: Optional[str],
-    configuration: Optional[Mapping[str, Optional[str]]],
-    storage_options: Optional[Dict[str, str]],
-    commit_properties: Optional["CommitProperties"],
-    post_commithook_properties: Optional["PostCommitHookProperties"],
+    partition_schema: pyarrow.Schema | None,
+    partition_strategy: Literal["hive"] | None,
+    name: str | None,
+    description: str | None,
+    configuration: Mapping[str, str | None] | None,
+    storage_options: dict[str, str] | None,
+    commit_properties: CommitProperties | None,
+    post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
 def create_deltalake(
     table_uri: str,
     schema: pyarrow.Schema,
-    partition_by: List[str],
+    partition_by: list[str],
     mode: str,
     raise_if_key_not_exists: bool,
-    name: Optional[str],
-    description: Optional[str],
-    configuration: Optional[Mapping[str, Optional[str]]],
-    storage_options: Optional[Dict[str, str]],
-    commit_properties: Optional["CommitProperties"],
-    post_commithook_properties: Optional["PostCommitHookProperties"],
+    name: str | None,
+    description: str | None,
+    configuration: Mapping[str, str | None] | None,
+    storage_options: dict[str, str] | None,
+    commit_properties: CommitProperties | None,
+    post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
 def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 def get_num_idx_cols_and_stats_columns(
-    table: Optional[RawDeltaTable], configuration: Optional[Mapping[str, Optional[str]]]
-) -> Tuple[int, Optional[List[str]]]: ...
+    table: RawDeltaTable | None, configuration: Mapping[str, str | None] | None
+) -> tuple[int, list[str] | None]: ...
 
 class PyMergeBuilder:
     source_alias: str
@@ -329,18 +325,18 @@ class PyMergeBuilder:
     arrow_schema: pyarrow.Schema
 
     def when_matched_update(
-        self, updates: Dict[str, str], predicate: Optional[str]
+        self, updates: dict[str, str], predicate: str | None
     ) -> None: ...
-    def when_matched_delete(self, predicate: Optional[str]) -> None: ...
+    def when_matched_delete(self, predicate: str | None) -> None: ...
     def when_not_matched_insert(
-        self, updates: Dict[str, str], predicate: Optional[str]
+        self, updates: dict[str, str], predicate: str | None
     ) -> None: ...
     def when_not_matched_by_source_update(
-        self, updates: Dict[str, str], predicate: Optional[str]
+        self, updates: dict[str, str], predicate: str | None
     ) -> None: ...
     def when_not_matched_by_source_delete(
         self,
-        predicate: Optional[str],
+        predicate: str | None,
     ) -> None: ...
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
@@ -432,11 +428,11 @@ class ArrayType:
     """
 
     element_type: DataType
-    """ The type of the element, of type: 
+    """ The type of the element, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -448,7 +444,7 @@ class ArrayType:
     def to_json(self) -> str:
         """Get the JSON string representation of the type."""
     @staticmethod
-    def from_json(json: str) -> "ArrayType":
+    def from_json(json: str) -> ArrayType:
         """Create an ArrayType from a JSON string
 
         Args:
@@ -514,21 +510,21 @@ class MapType:
     ) -> None: ...
     type: Literal["map"]
     key_type: DataType
-    """ The type of the keys, of type: 
+    """ The type of the keys, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
 
     value_type: DataType
-    """The type of the values, of type: 
+    """The type of the values, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -609,18 +605,18 @@ class Field:
         type: DataType,
         *,
         nullable: bool = True,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None: ...
     name: str
     """ The name of the field
     """
 
     type: DataType
-    """ The type of the field, of type: 
+    """ The type of the field, of type:
         Union[
-            [PrimitiveType][deltalake.schema.PrimitiveType], 
-            [ArrayType][deltalake.schema.ArrayType], 
-            [MapType][deltalake.schema.MapType], 
+            [PrimitiveType][deltalake.schema.PrimitiveType],
+            [ArrayType][deltalake.schema.ArrayType],
+            [MapType][deltalake.schema.MapType],
             [StructType][deltalake.schema.StructType]
         ]
     """
@@ -629,7 +625,7 @@ class Field:
     """ Whether there may be null values in the field
     """
 
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     """ The metadata of the field
     """
 
@@ -697,9 +693,9 @@ class StructType:
         ```
     """
 
-    def __init__(self, fields: List[Field]) -> None: ...
+    def __init__(self, fields: list[Field]) -> None: ...
     type: Literal["struct"]
-    fields: List[Field]
+    fields: list[Field]
     """ The fields within the struct
     """
 
@@ -756,10 +752,10 @@ class StructType:
         """
 
 class Schema:
-    def __init__(self, fields: List[Field]) -> None: ...
-    fields: List[Field]
+    def __init__(self, fields: list[Field]) -> None: ...
+    fields: list[Field]
 
-    invariants: List[Tuple[str, str]]
+    invariants: list[tuple[str, str]]
     """ The list of invariants on the table. Each invarint is a tuple of strings. The first string is the
         field path and the second is the SQL of the invariant.
     """
@@ -851,16 +847,16 @@ class DeltaFileSystemHandler:
     def __init__(
         self,
         table_uri: str,
-        options: Dict[str, str] | None = None,
-        known_sizes: Dict[str, int] | None = None,
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
     ) -> None: ...
     @classmethod
     def from_table(
         cls,
         table: RawDeltaTable,
-        options: Dict[str, str] | None = None,
-        known_sizes: Dict[str, int] | None = None,
-    ) -> "DeltaFileSystemHandler": ...
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
+    ) -> DeltaFileSystemHandler: ...
     def get_type_name(self) -> str: ...
     def copy_file(self, src: str, dst: str) -> None:
         """Copy a file.
@@ -912,17 +908,17 @@ class DeltaFileSystemHandler:
     def open_input_file(self, path: str) -> ObjectInputFile:
         """Open an input file for random access reading."""
     def open_output_stream(
-        self, path: str, metadata: Dict[str, str] | None = None
+        self, path: str, metadata: dict[str, str] | None = None
     ) -> ObjectOutputStream:
         """Open an output stream for sequential writing."""
 
 class PyQueryBuilder:
     def __init__(self) -> None: ...
     def register(self, table_name: str, delta_table: RawDeltaTable) -> None: ...
-    def execute(self, sql: str) -> List[pyarrow.RecordBatch]: ...
+    def execute(self, sql: str) -> list[pyarrow.RecordBatch]: ...
 
 class DeltaDataChecker:
-    def __init__(self, invariants: List[Tuple[str, str]]) -> None: ...
+    def __init__(self, invariants: list[tuple[str, str]]) -> None: ...
     def check_batch(self, batch: pyarrow.RecordBatch) -> None: ...
 
 class DeltaError(Exception):
@@ -950,17 +946,17 @@ class SchemaMismatchError(DeltaError):
 
     pass
 
-FilterLiteralType = Tuple[str, str, Any]
-FilterConjunctionType = List[FilterLiteralType]
-FilterDNFType = List[FilterConjunctionType]
-FilterType = Union[FilterConjunctionType, FilterDNFType]
-PartitionFilterType = List[Tuple[str, str, Union[str, List[str]]]]
+FilterLiteralType = tuple[str, str, Any]
+FilterConjunctionType = list[FilterLiteralType]
+FilterDNFType = list[FilterConjunctionType]
+FilterType = FilterConjunctionType | FilterDNFType
+PartitionFilterType = list[tuple[str, str, str | list[str]]]
 
 class Transaction:
     app_id: str
     version: int
-    last_updated: Optional[int]
+    last_updated: int | None
 
     def __init__(
-        self, app_id: str, version: int, last_updated: Optional[int] = None
+        self, app_id: str, version: int, last_updated: int | None = None
     ) -> None: ...

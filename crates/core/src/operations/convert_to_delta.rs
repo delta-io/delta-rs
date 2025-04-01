@@ -13,7 +13,6 @@ use itertools::Itertools;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::errors::ParquetError;
 use percent_encoding::percent_decode_str;
-use serde_json::{Map, Value};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -605,7 +604,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
         partition_values.sort_by_key(|(k, v)| (k.clone(), v.serialize()));
-        assert_eq!(partition_values, expected_partition_values);
+
+        for (position, expected) in expected_partition_values.iter().enumerate() {
+            let (key, value) = expected;
+            let (found_key, found_value) = partition_values[position].clone();
+            assert_eq!(key, &found_key);
+
+            match (value, found_value) {
+                // no-op the null comparison due to a breaking change in delta-kernel-rs 0.7.0
+                // which changes null comparables
+                (Scalar::Null(_), Scalar::Null(_)) => {}
+                (v, fv) => assert_eq!(v, &fv),
+            }
+        }
     }
 
     // Test Parquet files in object store location

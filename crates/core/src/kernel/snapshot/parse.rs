@@ -61,7 +61,7 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
 
         for idx in 0..arr.len() {
             if arr.is_valid(idx) {
-                return Ok(Some(Protocol {
+                let mut protocol = Protocol {
                     min_reader_version: ex::read_primitive(min_reader_version, idx)?,
                     min_writer_version: ex::read_primitive(min_writer_version, idx)?,
                     reader_features: collect_string_list(&maybe_reader_features, idx).map(|v| {
@@ -76,7 +76,14 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
                             .filter_map(|v| v.ok())
                             .collect()
                     }),
-                }));
+                };
+                if protocol.min_reader_version < 3 {
+                    protocol.reader_features = None
+                }
+                if protocol.min_writer_version < 7 {
+                    protocol.writer_features = None
+                }
+                return Ok(Some(protocol));
             }
         }
     }

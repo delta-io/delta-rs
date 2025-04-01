@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import List
 
 import pyarrow
 
@@ -84,7 +83,7 @@ class QueryBuilder:
 
 
 class QueryResult:
-    def __init__(self, query_builder: PyQueryBuilder, sql: str):
+    def __init__(self, query_builder: PyQueryBuilder, sql: str) -> None:
         self._query_builder = query_builder
         self._sql_query = sql
 
@@ -107,7 +106,7 @@ class QueryResult:
         else:
             logger.info("The executed query contains no records.")
 
-    def fetchall(self) -> List[pyarrow.RecordBatch]:
+    def fetchall(self) -> list[pyarrow.RecordBatch]:
         """
         Execute the query and return a list of record batches.
 
