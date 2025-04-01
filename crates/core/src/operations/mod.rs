@@ -21,6 +21,7 @@ pub use datafusion_physical_plan::common::collect as collect_sendable_stream;
 use self::add_column::AddColumnBuilder;
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
+#[cfg(feature = "datafusion")]
 use self::optimize::OptimizeBuilder;
 use self::restore::RestoreBuilder;
 use self::set_tbl_properties::SetTablePropertiesBuilder;
@@ -43,7 +44,6 @@ pub mod convert_to_delta;
 pub mod create;
 pub mod drop_constraints;
 pub mod filesystem_check;
-pub mod optimize;
 pub mod restore;
 pub mod transaction;
 pub mod update_field_metadata;
@@ -61,12 +61,13 @@ mod load;
 pub mod load_cdf;
 #[cfg(feature = "datafusion")]
 pub mod merge;
+#[cfg(feature = "datafusion")]
+pub mod optimize;
 pub mod set_tbl_properties;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
-pub mod writer;
 
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
@@ -227,6 +228,7 @@ impl DeltaOps {
     }
 
     /// Audit active files with files present on the filesystem
+    #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())

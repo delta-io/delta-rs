@@ -3,6 +3,7 @@ mod features;
 mod filesystem;
 mod merge;
 mod query;
+mod reader;
 mod schema;
 mod utils;
 mod writer;
@@ -23,7 +24,7 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
+use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
@@ -52,7 +53,7 @@ use deltalake::operations::transaction::{
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::write::WriteBuilder;
-use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
+use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -63,7 +64,7 @@ use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use error::DeltaError;
-use futures::future::join_all;
+use reader::convert_stream_to_reader;
 use tracing::log::*;
 
 use crate::writer::to_lazy_table;
@@ -899,31 +900,12 @@ impl RawDeltaTable {
             format!("SELECT {select_string} FROM `{table_name}`")
         };
 
-        let plan = rt()
-            .block_on(async { ctx.sql(&sql).await?.create_physical_plan().await })
+        let stream = rt()
+            .block_on(async { ctx.sql(&sql).await?.execute_stream().await })
             .map_err(PythonError::from)?;
 
         py.allow_threads(|| {
-            let mut tasks = vec![];
-            for p in 0..plan.properties().output_partitioning().partition_count() {
-                let inner_plan = plan.clone();
-                let partition_batch = inner_plan.execute(p, ctx.task_ctx()).unwrap();
-                let handle = rt().spawn(collect_sendable_stream(partition_batch));
-                tasks.push(handle);
-            }
-
-            // This is unfortunate.
-            let batches = rt()
-                .block_on(join_all(tasks))
-                .into_iter()
-                .flatten()
-                .collect::<Result<Vec<Vec<_>>, _>>()
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .map(Ok);
-            let batch_iter = RecordBatchIterator::new(batches, plan.schema());
-            let ffi_stream = FFI_ArrowArrayStream::new(Box::new(batch_iter));
+            let ffi_stream = FFI_ArrowArrayStream::new(convert_stream_to_reader(stream));
             let reader = ArrowArrayStreamReader::try_new(ffi_stream).unwrap();
             Ok(PyArrowType(reader))
         })
@@ -2288,7 +2270,7 @@ fn write_to_deltalake(
             _table: Arc::new(Mutex::new(table)),
             _config: FsConfig {
                 root_url: table_uri,
-                options: options,
+                options,
             },
         };
         Ok(raw_table)
@@ -2313,7 +2295,7 @@ fn write_to_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
+#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
 fn create_deltalake(
     py: Python,
     table_uri: String,
@@ -2325,7 +2307,8 @@ fn create_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
@@ -2357,10 +2340,10 @@ fn create_deltalake(
             builder = builder.with_configuration(config);
         };
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder.with_metadata(json_metadata);
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
+            builder = builder.with_commit_properties(commit_properties);
         };
 
         if use_lakefs_handler {
@@ -2376,19 +2359,20 @@ fn create_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, schema, add_actions, _mode, partition_by, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
-fn write_new_deltalake(
+#[pyo3(signature = (table_uri, schema, add_actions, mode, partition_by, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
+fn create_table_with_add_actions(
     py: Python,
     table_uri: String,
     schema: PyArrowType<ArrowSchema>,
     add_actions: Vec<PyAddAction>,
-    _mode: &str,
+    mode: &str,
     partition_by: Vec<String>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
@@ -2404,7 +2388,8 @@ fn write_new_deltalake(
             .create()
             .with_columns(schema.fields().cloned())
             .with_partition_columns(partition_by)
-            .with_actions(add_actions.iter().map(|add| Action::Add(add.into())));
+            .with_actions(add_actions.iter().map(|add| Action::Add(add.into())))
+            .with_save_mode(SaveMode::from_str(mode).map_err(PythonError::from)?);
 
         if let Some(name) = &name {
             builder = builder.with_table_name(name);
@@ -2418,10 +2403,10 @@ fn write_new_deltalake(
             builder = builder.with_configuration(config);
         };
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder.with_metadata(json_metadata);
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
+            builder = builder.with_commit_properties(commit_properties);
         };
 
         if use_lakefs_handler {
@@ -2437,7 +2422,7 @@ fn write_new_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
+#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
 fn convert_to_deltalake(
     py: Python,
     uri: String,
@@ -2447,7 +2432,8 @@ fn convert_to_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
@@ -2479,10 +2465,10 @@ fn convert_to_deltalake(
             builder = builder.with_storage_options(strg_options);
         };
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder.with_metadata(json_metadata);
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
+            builder = builder.with_commit_properties(commit_properties);
         };
 
         if uri.starts_with("lakefs://") {
@@ -2570,7 +2556,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;

@@ -4,7 +4,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from deltalake import convert_to_deltalake
+from deltalake import CommitProperties, convert_to_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.table import DeltaTable
 
@@ -24,7 +24,7 @@ def test_local_convert_to_delta(tmp_path: pathlib.Path, sample_data: pa.Table):
         name=name,
         description=description,
         configuration={"delta.appendOnly": "true"},
-        custom_metadata={"userName": "John Doe"},
+        commit_properties=CommitProperties(custom_metadata={"userName": "John Doe"}),
     )
 
     dt = DeltaTable(tmp_path)

@@ -3,8 +3,11 @@ import pathlib
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
-from deltalake.table import CommitProperties
+from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
+    convert_pyarrow_table,
+)
 
 
 @pytest.fixture()
@@ -57,7 +60,10 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
 def test_update_with_predicate_large_dtypes(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", large_dtypes=True)
+    sample_table = convert_pyarrow_table(
+        sample_table, schema_conversion_mode=ArrowSchemaConversionMode.LARGE
+    )
+    write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
@@ -236,8 +242,7 @@ def test_update_with_incorrect_updates_input(
     )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
+def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
     data = pa.table(
         {
             "foo": pa.array(["a", "b", None, None]),
@@ -249,7 +254,6 @@ def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path, engine):
         tmp_path,
         data,
         mode="append",
-        engine=engine,
         configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
     )
     dt = DeltaTable(tmp_path)

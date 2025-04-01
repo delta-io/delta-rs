@@ -16,6 +16,5 @@ def replace_where():
         data,
         mode="overwrite",
         predicate="id = '1'",
-        engine="rust",
     )
     # --8<-- [end:replace_where]

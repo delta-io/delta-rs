@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -12,9 +14,9 @@ from deltalake import DeltaTable
 
 class ReadCase(NamedTuple):
     root: Path
-    version: Optional[int]
-    case_info: Dict[str, Any]
-    version_metadata: Dict[str, Any]
+    version: int | None
+    case_info: dict[str, Any]
+    version_metadata: dict[str, Any]
 
 
 cases = []

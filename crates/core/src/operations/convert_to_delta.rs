@@ -13,7 +13,6 @@ use itertools::Itertools;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::errors::ParquetError;
 use percent_encoding::percent_decode_str;
-use serde_json::{Map, Value};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -29,6 +28,7 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
 
+use super::transaction::CommitProperties;
 use super::{CustomExecuteHandler, Operation};
 
 /// Error converting a Parquet table to a Delta table
@@ -108,7 +108,8 @@ pub struct ConvertToDeltaBuilder {
     name: Option<String>,
     comment: Option<String>,
     configuration: HashMap<String, Option<String>>,
-    metadata: Option<Map<String, Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
@@ -142,7 +143,7 @@ impl ConvertToDeltaBuilder {
             name: None,
             comment: None,
             configuration: Default::default(),
-            metadata: Default::default(),
+            commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
         }
     }
@@ -233,12 +234,9 @@ impl ConvertToDeltaBuilder {
         self
     }
 
-    /// Append custom (application-specific) metadata to the commit.
-    ///
-    /// This might include provenance information such as an id of the
-    /// user that made the commit or the program that created it.
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.metadata = Some(metadata);
+    /// Additional metadata to be added to commit info
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -425,15 +423,13 @@ impl ConvertToDeltaBuilder {
             .with_partition_columns(partition_columns.into_iter())
             .with_actions(actions)
             .with_save_mode(self.mode)
-            .with_configuration(self.configuration);
+            .with_configuration(self.configuration)
+            .with_commit_properties(self.commit_properties);
         if let Some(name) = self.name {
             builder = builder.with_table_name(name);
         }
         if let Some(comment) = self.comment {
             builder = builder.with_comment(comment);
-        }
-        if let Some(metadata) = self.metadata {
-            builder = builder.with_metadata(metadata);
         }
         Ok((builder, operation_id))
     }
@@ -608,7 +604,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
         partition_values.sort_by_key(|(k, v)| (k.clone(), v.serialize()));
-        assert_eq!(partition_values, expected_partition_values);
+
+        for (position, expected) in expected_partition_values.iter().enumerate() {
+            let (key, value) = expected;
+            let (found_key, found_value) = partition_values[position].clone();
+            assert_eq!(key, &found_key);
+
+            match (value, found_value) {
+                // no-op the null comparison due to a breaking change in delta-kernel-rs 0.7.0
+                // which changes null comparables
+                (Scalar::Null(_), Scalar::Null(_)) => {}
+                (v, fv) => assert_eq!(v, &fv),
+            }
+        }
     }
 
     // Test Parquet files in object store location

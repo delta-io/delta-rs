@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.24.0"
+version = "0.25.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -128,3 +128,4 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+cloud = ["object_store/cloud"]

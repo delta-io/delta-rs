@@ -510,7 +510,6 @@ def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 2)),
         mode="overwrite",
         predicate="int64 > 2",
-        engine="rust",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
@@ -555,7 +554,6 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
         data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 3)),
         mode="overwrite",
         predicate="int64 > 3",
-        engine="rust",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
@@ -608,7 +606,6 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         dt,
         data=ds.dataset(sample_data).to_table(),
         mode="overwrite",
-        engine="rust",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
     sort_values = [("_change_type", "ascending"), ("utf8", "ascending")]
@@ -621,9 +618,9 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         )
     ).sort_by(sort_values)
 
-    assert not os.path.exists(
-        cdc_path
-    ), "_change_data shouldn't exist since table was overwritten"
+    assert not os.path.exists(cdc_path), (
+        "_change_data shouldn't exist since table was overwritten"
+    )
 
     ## TODO(ion): check if you see insert and deletes in commit version 1
 
@@ -654,7 +651,6 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
     write_deltalake(
         dt,
         data=batch2,
-        engine="rust",
         mode="overwrite",
         predicate="int64 > 3",
         partition_by=["int64"],
@@ -678,9 +674,9 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
         column=[["delete", "insert"]],
     )
 
-    assert not os.path.exists(
-        cdc_path
-    ), "_change_data shouldn't exist since a specific partition was overwritten"
+    assert not os.path.exists(cdc_path), (
+        "_change_data shouldn't exist since a specific partition was overwritten"
+    )
 
     assert dt.load_cdf().read_all().drop_columns(
         ["_commit_version", "_commit_timestamp"]

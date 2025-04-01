@@ -6,11 +6,13 @@ import pytest
 from deltalake import DeltaTable, Field
 from deltalake.schema import (
     ArrayType,
-    ArrowSchemaConversionMode,
     MapType,
     PrimitiveType,
     Schema,
     StructType,
+)
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
     _convert_pa_schema_to_delta,
 )
 

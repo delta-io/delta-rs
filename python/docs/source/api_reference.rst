@@ -35,11 +35,6 @@ Schemas, fields, and data types are provided in the ``deltalake.schema`` submodu
 .. autoclass:: deltalake.schema.StructType
     :members:
 
-DataCatalog
------------
-
-.. automodule:: deltalake.data_catalog
-    :members:
 
 DeltaStorageHandler
 -------------------

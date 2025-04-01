@@ -12,6 +12,3 @@ will instead throw an error.
 ## Verify the constraint by trying to add some data
 
 {{ code_example('check_constraints', 'add_data', []) }}
-
-Note: ensure you use the `engine='rust'` parameter when writing to the table as this feature is not supported in the
-default pyarrow writer. 
