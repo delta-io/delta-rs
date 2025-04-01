@@ -28,6 +28,12 @@ static CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
 static DELTA_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.json$").unwrap());
 static CRC_FILE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap());
+static LAST_CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^_last_checkpoint$").unwrap());
+static LAST_VACUUM_INFO_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^_last_vacuum_info$").unwrap());
+static DELETION_VECTOR_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r".*\.bin$").unwrap());
 pub(super) static TOMBSTONE_SCHEMA: LazyLock<StructType> =
     LazyLock::new(|| StructType::new(vec![ActionType::Remove.schema_field().clone()]));
 
@@ -65,6 +71,24 @@ pub(crate) trait PathExt {
         self.filename()
             .map(|name| CRC_FILE_PATTERN.captures(name).is_some())
             .unwrap()
+    }
+
+    fn is_last_checkpoint_file(&self) -> bool {
+        self.filename()
+            .map(|name| LAST_CHECKPOINT_FILE_PATTERN.captures(name).is_some())
+            .unwrap_or(false)
+    }
+
+    fn is_last_vacuum_info_file(&self) -> bool {
+        self.filename()
+            .map(|name| LAST_VACUUM_INFO_FILE_PATTERN.captures(name).is_some())
+            .unwrap_or(false)
+    }
+
+    fn is_deletion_vector_file(&self) -> bool {
+        self.filename()
+            .map(|name| DELETION_VECTOR_FILE_PATTERN.captures(name).is_some())
+            .unwrap_or(false)
     }
 }
 

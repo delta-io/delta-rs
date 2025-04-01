@@ -22,7 +22,7 @@ jobs:
 
       - name: Check Python
         run: |
-          uv pip install ruff==0.5.2 mypy==1.10.1 types-dataclasses typing-extensions --system
+          uv sync --only-group dev --no-install-project
           make check-python
 
       - name: Check Rust
@@ -46,7 +46,7 @@ jobs:
       - name: Build and install deltalake
         run: |
           # Install minimum PyArrow version
-          uv sync --extra devel --extra pandas --extra polars
+          make develop
           uv pip install pyarrow==16.0.0
         env:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
@@ -213,7 +213,7 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          uv sync
+          make develop
 
       - name: Run deltalake
         run: |

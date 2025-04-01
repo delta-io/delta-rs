@@ -618,9 +618,9 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         )
     ).sort_by(sort_values)
 
-    assert not os.path.exists(
-        cdc_path
-    ), "_change_data shouldn't exist since table was overwritten"
+    assert not os.path.exists(cdc_path), (
+        "_change_data shouldn't exist since table was overwritten"
+    )
 
     ## TODO(ion): check if you see insert and deletes in commit version 1
 
@@ -674,9 +674,9 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
         column=[["delete", "insert"]],
     )
 
-    assert not os.path.exists(
-        cdc_path
-    ), "_change_data shouldn't exist since a specific partition was overwritten"
+    assert not os.path.exists(cdc_path), (
+        "_change_data shouldn't exist since a specific partition was overwritten"
+    )
 
     assert dt.load_cdf().read_all().drop_columns(
         ["_commit_version", "_commit_timestamp"]

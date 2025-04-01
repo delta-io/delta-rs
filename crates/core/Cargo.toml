@@ -128,3 +128,4 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+cloud = ["object_store/cloud"]

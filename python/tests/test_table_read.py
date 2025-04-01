@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from random import random
 from threading import Barrier, Thread
-from typing import Any, List, Tuple, Type
+from typing import Any
 from unittest.mock import Mock
 
 from deltalake._util import encode_partition_value
@@ -102,7 +102,7 @@ class _SerializableException(BaseException):
     pass
 
 
-def _recursively_read_simple_table(executor_class: Type[Executor], depth):
+def _recursively_read_simple_table(executor_class: type[Executor], depth):
     try:
         test_read_simple_table_to_dict()
     except BaseException as e:  # Ideally this would catch `pyo3_runtime.PanicException` but its seems that is not possible.
@@ -259,7 +259,7 @@ def test_load_as_version_datetime_with_logs_removed(
     sample_table,
     date_value: str,
     expected_version,
-    log_mtime_pairs: List[Tuple[str, int]],
+    log_mtime_pairs: list[tuple[str, int]],
 ):
     log_path = tmp_path / "_delta_log"
     for i in range(6):
@@ -276,7 +276,7 @@ def test_load_as_version_datetime_with_logs_removed(
     assert file.exists()
     dt.cleanup_metadata()
 
-    file = log_path / f"0000000000000000000{expected_version-1}.json"
+    file = log_path / f"0000000000000000000{expected_version - 1}.json"
     assert not file.exists()
     dt = DeltaTable(tmp_path)
     dt.load_as_version(date_value)
@@ -838,7 +838,7 @@ class ExcPassThroughThread(Thread):
         thread before it has been started and attempts to do so raises the same
         exception.
         """
-        super(ExcPassThroughThread, self).join(timeout)
+        super().join(timeout)
         if self.exc:
             raise self.exc
 
@@ -1126,7 +1126,7 @@ def test_is_deltatable_valid_path():
 def test_is_deltatable_invalid_path():
     # Nonce ensures that the table_path always remains an invalid table path.
     nonce = int(random() * 10000)
-    table_path = "../crates/test/tests/data/simple_table_invalid_%s" % nonce
+    table_path = f"../crates/test/tests/data/simple_table_invalid_{nonce}"
     assert not DeltaTable.is_deltatable(table_path)
 
 
