@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
+#[cfg(feature = "cloud")]
 use humantime::parse_duration;
 use object_store::limit::LimitStore;
 use object_store::local::LocalFileSystem;
@@ -612,11 +613,9 @@ pub mod storage_constants {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use maplit::hashmap;
-
     use super::*;
+
+    use std::time::Duration;
 
     #[test]
     fn test_url_prefix_handler() {
@@ -654,7 +653,7 @@ mod tests {
         struct TestFactory {}
         impl RetryConfigParse for TestFactory {}
 
-        let options = hashmap! {
+        let options = maplit::hashmap! {
             "max_retries".to_string() => "100".to_string() ,
             "retry_timeout".to_string()  => "300s".to_string() ,
             "backoff_config.init_backoff".to_string()  => "20s".to_string() ,
