@@ -435,6 +435,7 @@ pub struct CommitBuilder {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    init_version: Option<i64>,
 }
 
 impl Default for CommitBuilder {
@@ -447,6 +448,7 @@ impl Default for CommitBuilder {
             post_commit_hook: None,
             post_commit_hook_handler: None,
             operation_id: Uuid::new_v4(),
+            init_version: None,
         }
     }
 }
@@ -491,6 +493,11 @@ impl<'a> CommitBuilder {
         self
     }
 
+    pub fn with_version(mut self, version: i64) -> Self {
+        self.init_version = Some(version);
+        self
+    }
+
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
@@ -512,6 +519,7 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            init_version: self.init_version,
         }
     }
 }
@@ -525,6 +533,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    init_version: Option<i64>,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -582,6 +591,7 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                init_version: this.init_version,
             })
         })
     }
@@ -597,6 +607,7 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    init_version: Option<i64>,
 }
 
 impl PreparedCommit<'_> {
@@ -689,6 +700,17 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         .await?;
                 }
                 let version: i64 = latest_version + 1;
+
+                match this.init_version {
+                    None => {} //pass,
+                    Some(v) => {
+                        if v != latest_version {
+                            return Err(
+                                TransactionError::VersionAlreadyExists(latest_version).into()
+                            );
+                        }
+                    }
+                }
 
                 match this
                     .log_store

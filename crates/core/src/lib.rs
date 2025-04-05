@@ -105,6 +105,7 @@ pub use arrow;
 pub use datafusion;
 pub use parquet;
 pub use protocol::checkpoints;
+pub use protocol::tgroup;
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.

@@ -204,6 +204,67 @@ pub async fn create_checkpoint_for(
     Ok(())
 }
 
+/// Creates an initial checkpoint for a given table version, table state and object store
+/// in a tgroup as part of addition to the tgroup.
+pub async fn create_checkpoint_for_tgroup_add(
+    version: i64,
+    state: &DeltaTableState,
+    log_store: &dyn LogStore,
+    tgroup_log_store: &dyn LogStore,
+    operation_id: Option<Uuid>,
+) -> Result<(), ProtocolError> {
+    if !state.load_config().require_files {
+        return Err(ProtocolError::Generic(
+            "Table has not yet been initialized with files, therefore creating a checkpoint is not possible.".to_string()
+        ));
+    }
+
+    // Skipping this check since version will be tgroup version but state will be table state
+
+    // if version != state.version() {
+    //     error!(
+    //         "create_checkpoint_for called with version {version} but table state contains: {}. The table state may need to be reloaded",
+    //         state.version()
+    //     );
+    //     return Err(CheckpointError::StaleTableVersion(version, state.version()).into());
+    // }
+
+    // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
+    // an appropriate split point yet though so only writing a single part currently.
+    // See https://github.com/delta-io/delta-rs/issues/288
+    let table_id = &state.metadata().id;
+    let last_checkpoint_path = tgroup_log_store
+        .log_path()
+        .child(format!("_last_checkpoint.{table_id}"));
+
+    debug!("Writing parquet bytes to checkpoint buffer.");
+    let tombstones = state
+        .unexpired_tombstones(log_store.object_store(None).clone())
+        .await
+        .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
+        .collect::<Vec<_>>();
+    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state, tombstones)?;
+
+    let file_name = format!("{version:020}.{table_id}.checkpoint.parquet");
+    let checkpoint_path = tgroup_log_store.log_path().child(file_name);
+
+    let object_store = tgroup_log_store.object_store(operation_id);
+    debug!("Writing checkpoint to {checkpoint_path:?}.");
+    object_store
+        .put(&checkpoint_path, parquet_bytes.into())
+        .await?;
+
+    let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
+    let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
+
+    debug!("Writing _last_checkpoint to {last_checkpoint_path:?}.");
+    object_store
+        .put(&last_checkpoint_path, last_checkpoint_content.into())
+        .await?;
+
+    Ok(())
+}
+
 /// Deletes all delta log commits that are older than the cutoff time
 /// and less than the specified version.
 pub async fn cleanup_expired_logs_for(

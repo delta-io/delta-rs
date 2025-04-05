@@ -216,6 +216,7 @@ static TGROUP_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "tgroup",
         StructType::new(vec![
+            StructField::new("table_id", DataType::STRING, false),
             StructField::new("tgroup_uri", DataType::STRING, false),
             StructField::new("timestamp", DataType::LONG, false),
             StructField::new("redirectState", DataType::STRING, false),

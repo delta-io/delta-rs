@@ -24,6 +24,7 @@ use crate::table::CheckPoint;
 
 pub mod checkpoints;
 mod parquet_read;
+pub mod tgroup;
 mod time_utils;
 
 /// Error returned when an invalid Delta log action is encountered.
@@ -456,6 +457,17 @@ pub enum DeltaOperation {
         /// Fields added to existing schema
         fields: Vec<StructField>,
     },
+
+    /// Represents the start of a T-Group addition operation
+    TGroupStart { tgroup_uri: String },
+
+    TGroupInitCheckpoint {
+        table_id: String,
+        tgroup_uri: String,
+    },
+
+    /// Represents the end of a T-Group addition operation
+    TGroupEnd { tgroup_uri: String },
 }
 
 impl DeltaOperation {
@@ -484,6 +496,9 @@ impl DeltaOperation {
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
             DeltaOperation::AddFeature { .. } => "ADD FEATURE",
             DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
+            DeltaOperation::TGroupStart { .. } => "TGROUP START",
+            DeltaOperation::TGroupInitCheckpoint { .. } => "TGROUP INIT CHECKPOINT",
+            DeltaOperation::TGroupEnd { .. } => "TGROUP END",
         }
     }
 
@@ -527,6 +542,9 @@ impl DeltaOperation {
             | Self::VacuumStart { .. }
             | Self::VacuumEnd { .. }
             | Self::AddConstraint { .. }
+            | Self::TGroupStart { .. }
+            | Self::TGroupInitCheckpoint { .. }
+            | Self::TGroupEnd { .. }
             | Self::DropConstraint { .. } => false,
             Self::Create { .. }
             | Self::FileSystemCheck {}

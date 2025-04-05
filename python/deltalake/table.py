@@ -1279,6 +1279,9 @@ class DeltaTable:
     def create_checkpoint(self) -> None:
         self._table.create_checkpoint()
 
+    def add_to_tgroup(self, tgroup_uri: str) -> None:
+        self._table.add_to_tgroup(tgroup_uri)
+
     def cleanup_metadata(self) -> None:
         """
         Delete expired log files before current version from table. The table log retention is based on

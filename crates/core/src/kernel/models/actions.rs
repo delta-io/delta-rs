@@ -990,6 +990,9 @@ pub struct CheckpointMetadata {
 #[serde(rename_all = "camelCase")]
 /// Defines a t-group action
 pub struct TGroup {
+    /// Table ID
+    pub table_id: String,
+
     /// The T-Group URI for the table
     pub tgroup_uri: String,
 
@@ -1001,8 +1004,9 @@ pub struct TGroup {
 }
 
 impl TGroup {
-    pub fn new(tgroup_uri: &str, redirect_state: RedirectState) -> Self {
+    pub fn new(table_id: &str, tgroup_uri: &str, redirect_state: RedirectState) -> Self {
         Self {
+            table_id: String::from(table_id),
             tgroup_uri: String::from(tgroup_uri),
             timestamp: chrono::Utc::now().timestamp_millis(),
             redirect_state,

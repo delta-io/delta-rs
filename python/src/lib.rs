@@ -60,6 +60,9 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::storage::{IORuntime, ObjectStoreRef};
 use deltalake::table::state::DeltaTableState;
+use deltalake::tgroup::{
+    create_initial_tgroup_checkpoint, finalize_add_to_tgroup, initiate_add_to_tgroup,
+};
 use deltalake::{init_client_version, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use error::DeltaError;
@@ -1399,6 +1402,45 @@ impl RawDeltaTable {
                 })
                 .map_err(PythonError::from)?;
             }
+            result
+        })?;
+
+        Ok(())
+    }
+
+    #[pyo3(signature = (tgroup_uri))]
+    pub fn add_to_tgroup(&self, tgroup_uri: &str, py: Python) -> PyResult<()> {
+        py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
+            let result = rt().block_on(async {
+                match self._table.lock() {
+                    Ok(mut table) => {
+                        table
+                            .init_tgroup(tgroup_uri)
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)
+                            .unwrap();
+                        let init_commit = initiate_add_to_tgroup(&table, tgroup_uri)
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)
+                            .unwrap();
+                        create_initial_tgroup_checkpoint(&table)
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)
+                            .unwrap();
+                        finalize_add_to_tgroup(&table, tgroup_uri, init_commit.version)
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)
+                            .unwrap();
+                        Ok(())
+                    }
+                    Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
+                }
+            });
             result
         })?;
 

@@ -75,10 +75,10 @@ impl PathExt for Path {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct LogSegment {
-    pub(super) version: i64,
-    pub(super) commit_files: VecDeque<ObjectMeta>,
-    pub(super) checkpoint_files: Vec<ObjectMeta>,
+pub struct LogSegment {
+    pub version: i64,
+    pub commit_files: VecDeque<ObjectMeta>,
+    pub checkpoint_files: Vec<ObjectMeta>,
 }
 
 impl LogSegment {
