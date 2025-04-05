@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Literal, Optional, Tuple
+from typing import Literal
 
 
 class Compression(Enum):
@@ -13,7 +15,7 @@ class Compression(Enum):
     LZ4_RAW = "LZ4_RAW"
 
     @classmethod
-    def from_str(cls, value: str) -> "Compression":
+    def from_str(cls, value: str) -> Compression:
         try:
             return cls(value.upper())
         except ValueError:
@@ -21,7 +23,7 @@ class Compression(Enum):
                 f"{value} is not a valid Compression. Valid values are: {[item.value for item in Compression]}"
             )
 
-    def get_level_range(self) -> Tuple[int, int]:
+    def get_level_range(self) -> tuple[int, int]:
         if self == Compression.GZIP:
             MIN_LEVEL = 0
             MAX_LEVEL = 10
@@ -62,10 +64,10 @@ class BloomFilterProperties:
 
     def __init__(
         self,
-        set_bloom_filter_enabled: Optional[bool],
-        fpp: Optional[float] = None,
-        ndv: Optional[int] = None,
-    ):
+        set_bloom_filter_enabled: bool | None,
+        fpp: float | None = None,
+        ndv: int | None = None,
+    ) -> None:
         """Create a Bloom Filter Properties instance for the Rust parquet writer:
 
         Args:
@@ -89,10 +91,10 @@ class ColumnProperties:
 
     def __init__(
         self,
-        dictionary_enabled: Optional[bool] = None,
-        statistics_enabled: Optional[Literal["NONE", "CHUNK", "PAGE"]] = None,
-        bloom_filter_properties: Optional[BloomFilterProperties] = None,
-    ):
+        dictionary_enabled: bool | None = None,
+        statistics_enabled: Literal["NONE", "CHUNK", "PAGE"] | None = None,
+        bloom_filter_properties: BloomFilterProperties | None = None,
+    ) -> None:
         """Create a Column Properties instance for the Rust parquet writer:
 
         Args:
@@ -117,27 +119,20 @@ class WriterProperties:
 
     def __init__(
         self,
-        data_page_size_limit: Optional[int] = None,
-        dictionary_page_size_limit: Optional[int] = None,
-        data_page_row_count_limit: Optional[int] = None,
-        write_batch_size: Optional[int] = None,
-        max_row_group_size: Optional[int] = None,
-        compression: Optional[
-            Literal[
-                "UNCOMPRESSED",
-                "SNAPPY",
-                "GZIP",
-                "BROTLI",
-                "LZ4",
-                "ZSTD",
-                "LZ4_RAW",
-            ]
-        ] = None,
-        compression_level: Optional[int] = None,
-        statistics_truncate_length: Optional[int] = None,
-        default_column_properties: Optional[ColumnProperties] = None,
-        column_properties: Optional[Dict[str, ColumnProperties]] = None,
-    ):
+        data_page_size_limit: int | None = None,
+        dictionary_page_size_limit: int | None = None,
+        data_page_row_count_limit: int | None = None,
+        write_batch_size: int | None = None,
+        max_row_group_size: int | None = None,
+        compression: Literal[
+            "UNCOMPRESSED", "SNAPPY", "GZIP", "BROTLI", "LZ4", "ZSTD", "LZ4_RAW"
+        ]
+        | None = None,
+        compression_level: int | None = None,
+        statistics_truncate_length: int | None = None,
+        default_column_properties: ColumnProperties | None = None,
+        column_properties: dict[str, ColumnProperties] | None = None,
+    ) -> None:
         """Create a Writer Properties instance for the Rust parquet writer:
 
         Args:
@@ -167,7 +162,7 @@ class WriterProperties:
 
         if compression_level is not None and compression is None:
             raise ValueError(
-                """Providing a compression level without the compression type is not possible, 
+                """Providing a compression level without the compression type is not possible,
                              please provide the compression as well."""
             )
         if isinstance(compression, str):

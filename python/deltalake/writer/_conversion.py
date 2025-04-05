@@ -1,5 +1,8 @@
+from __future__ import annotations
+
+from collections.abc import Generator, Iterable
 from enum import Enum
-from typing import Generator, Iterable, Optional, Protocol, Tuple, Union
+from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -20,7 +23,7 @@ class ArrowSchemaConversionMode(Enum):
     PASSTHROUGH = "PASSTHROUGH"
 
     @classmethod
-    def from_str(cls, value: str) -> "ArrowSchemaConversionMode":
+    def from_str(cls, value: str) -> ArrowSchemaConversionMode:
         try:
             return cls(value.upper())
         except ValueError:
@@ -35,9 +38,7 @@ class ArrowStreamExportable(Protocol):
     https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
     """
 
-    def __arrow_c_stream__(
-        self, requested_schema: Optional[object] = None
-    ) -> object: ...
+    def __arrow_c_stream__(self, requested_schema: object | None = None) -> object: ...
 
 
 ### Inspired from Pola-rs repo - licensed with MIT License, see license in python/licenses/polars_license.txt.###
@@ -112,14 +113,12 @@ def _convert_pa_schema_to_delta(
             return dtype
 
     def list_to_delta_dtype(
-        dtype: Union[
-            pa.LargeListType,
-            pa.ListType,
-            pa.ListViewType,
-            pa.LargeListViewType,
-            pa.FixedSizeListType,
-        ],
-    ) -> Union[pa.LargeListType, pa.ListType]:
+        dtype: pa.LargeListType
+        | pa.ListType
+        | pa.ListViewType
+        | pa.LargeListViewType
+        | pa.FixedSizeListType,
+    ) -> pa.LargeListType | pa.ListType:
         nested_dtype = dtype.value_type
         nested_dtype_cast = dtype_to_delta_dtype(nested_dtype)
         if schema_conversion_mode == ArrowSchemaConversionMode.LARGE:
@@ -209,18 +208,16 @@ def convert_pyarrow_dataset(
 
 
 def _convert_data_and_schema(
-    data: Union[
-        "pd.DataFrame",
-        ds.Dataset,
-        pa.Table,
-        pa.RecordBatch,
-        Iterable[pa.RecordBatch],
-        pa.RecordBatchReader,
-        ArrowStreamExportable,
-    ],
-    schema: Optional[Union[pa.Schema, "Schema"]],
+    data: pd.DataFrame
+    | ds.Dataset
+    | pa.Table
+    | pa.RecordBatch
+    | Iterable[pa.RecordBatch]
+    | pa.RecordBatchReader
+    | ArrowStreamExportable,
+    schema: pa.Schema | Schema | None,
     conversion_mode: ArrowSchemaConversionMode,
-) -> Tuple[pa.RecordBatchReader, pa.Schema]:
+) -> tuple[pa.RecordBatchReader, pa.Schema]:
     if isinstance(data, pa.RecordBatchReader):
         data = convert_pyarrow_recordbatchreader(data, conversion_mode)
     elif isinstance(data, pa.RecordBatch):

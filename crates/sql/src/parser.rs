@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use datafusion_sql::parser::{DFParser, Statement as DFStatement};
+use datafusion_sql::parser::{DFParserBuilder, Statement as DFStatement};
 use datafusion_sql::sqlparser::ast::{ObjectName, Value};
 use datafusion_sql::sqlparser::dialect::{keywords::Keyword, Dialect, GenericDialect};
 use datafusion_sql::sqlparser::parser::{Parser, ParserError};
@@ -145,8 +145,7 @@ impl<'a> DeltaParser<'a> {
                     _ => {
                         // use the native parser
                         // TODO fix for multiple statememnts and keeping parsers in sync
-                        let mut df = DFParser::new(self.sql)?;
-                        let stmt = df.parse_statement()?;
+                        let stmt = DFParserBuilder::new(self.sql).build()?.parse_statement()?;
                         self.parser.parse_statement()?;
                         Ok(Statement::Datafusion(stmt))
                     }
@@ -155,8 +154,7 @@ impl<'a> DeltaParser<'a> {
             _ => {
                 // use the native parser
                 // TODO fix for multiple statememnts and keeping parsers in sync
-                let mut df = DFParser::new(self.sql)?;
-                let stmt = df.parse_statement()?;
+                let stmt = DFParserBuilder::new(self.sql).build()?.parse_statement()?;
                 self.parser.parse_statement()?;
                 Ok(Statement::Datafusion(stmt))
             }

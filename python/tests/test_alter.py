@@ -1,5 +1,4 @@
 import pathlib
-from typing import List
 
 import pyarrow as pa
 import pytest
@@ -355,7 +354,7 @@ def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa
     assert protocol.reader_features == ["deletionVectors"]
 
 
-def _sort_fields(fields: List[Field]) -> List[Field]:
+def _sort_fields(fields: list[Field]) -> list[Field]:
     return list(sorted(iter(fields), key=lambda x: (x.name, str(x.type))))
 
 

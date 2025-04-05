@@ -7,9 +7,9 @@ from deltalake.writer.properties import (
 from deltalake.writer.writer import write_deltalake
 
 __all__ = [
-    "write_deltalake",
-    "convert_to_deltalake",
     "BloomFilterProperties",
     "ColumnProperties",
     "WriterProperties",
+    "convert_to_deltalake",
+    "write_deltalake",
 ]
