@@ -112,8 +112,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
-cdf = []
-default = ["cdf", "rustls"]
+default = ["rustls"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
