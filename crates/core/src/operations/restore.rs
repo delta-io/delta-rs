@@ -366,3 +366,48 @@ impl std::future::IntoFuture for RestoreBuilder {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
+    use crate::{DeltaOps, DeltaResult, DeltaTable};
+
+    /// Verify that restore respects constraints that were added/removed in previous version_to_restore
+    /// <https://github.com/delta-io/delta-rs/issues/3352>
+    #[tokio::test]
+    async fn test_simple_restore_constraints() -> DeltaResult<()> {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps(create_bare_table())
+            .write(vec![batch.clone()])
+            .await?;
+        let first_v = table.version();
+
+        let constraint = DeltaOps(table)
+            .add_constraint()
+            .with_constraint("my_custom_constraint", "value < 100")
+            .await;
+        let table = constraint.expect("Failed to add constraint to table");
+
+        let constraints = table
+            .state
+            .as_ref()
+            .unwrap()
+            .table_config()
+            .get_constraints();
+        assert!(constraints.len() == 1);
+        assert_eq!(constraints[0].name, "my_custom_constraint");
+
+        let (table, _metrics) = DeltaOps(table)
+            .restore()
+            .with_version_to_restore(first_v)
+            .await?;
+        assert_ne!(table.version(), first_v);
+
+        let constraints = table.state.unwrap().table_config().get_constraints();
+        assert!(constraints.len() == 0);
+
+        Ok(())
+    }
+}
