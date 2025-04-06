@@ -9,8 +9,28 @@ on:
 
 env:
   DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
+  # Disable full debug symbol generation to speed up CI build and keep memory down
+  RUSTFLAGS: -C debuginfo=line-tables-only
+  # Disable incremental builds by cargo for CI which should save disk space
+  # and hopefully avoid final link "No space left on device"
+  CARGO_INCREMENTAL: 0
 
 jobs:
+  default_build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: '1.82'
+          override: true
+
+      - name: Build
+        run: (cd crates/deltalake && cargo build)
+
   format:
     runs-on: ubuntu-latest
     steps:
@@ -65,13 +85,6 @@ jobs:
           - ubuntu-latest
           - windows-latest
     runs-on: ${{ matrix.os }}
-    env:
-      # Disable full debug symbol generation to speed up CI build and keep memory down
-      RUSTFLAGS: -C debuginfo=line-tables-only
-      # Disable incremental builds by cargo for CI which should save disk space
-      # and hopefully avoid final link "No space left on device"
-      CARGO_INCREMENTAL: 0
-
     steps:
       - uses: actions/checkout@v3
 
@@ -89,14 +102,8 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     env:
-      CARGO_INCREMENTAL: 0
-      # Disable full debug symbol generation to speed up CI build and keep memory down
-      # <https://doc.rust-lang.org/cargo/reference/profiles.html>
-      RUSTFLAGS: "-C debuginfo=line-tables-only"
       # https://github.com/rust-lang/cargo/issues/10280
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      RUST_BACKTRACE: "1"
-      RUST_LOG: debug
       AWS_DEFAULT_REGION: "us-east-1"
       AWS_ACCESS_KEY_ID: deltalake
       AWS_SECRET_ACCESS_KEY: weloverust
@@ -138,20 +145,15 @@ jobs:
 
       - name: Run tests with native-tls
         run: |
+          cargo clean
           cargo test --no-default-features --features integration_test,s3-native-tls,datafusion
 
   integration_test_lakefs:
     name: Integration Tests (LakeFS v1.48)
     runs-on: ubuntu-latest
     env:
-      CARGO_INCREMENTAL: 0
-      # Disable full debug symbol generation to speed up CI build and keep memory down
-      # <https://doc.rust-lang.org/cargo/reference/profiles.html>
-      RUSTFLAGS: "-C debuginfo=line-tables-only"
       # https://github.com/rust-lang/cargo/issues/10280
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      RUST_BACKTRACE: "1"
-      RUST_LOG: debug
 
     steps:
       - uses: actions/checkout@v3

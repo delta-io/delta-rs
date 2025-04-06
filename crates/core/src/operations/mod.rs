@@ -49,7 +49,7 @@ pub mod transaction;
 pub mod update_field_metadata;
 pub mod vacuum;
 
-#[cfg(all(feature = "cdf", feature = "datafusion"))]
+#[cfg(feature = "datafusion")]
 mod cdc;
 #[cfg(feature = "datafusion")]
 pub mod constraints;

@@ -214,12 +214,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeatures::AppendOnly);
     writer_features.insert(WriterFeatures::TimestampWithoutTimezone);
-    #[cfg(feature = "cdf")]
-    {
-        writer_features.insert(WriterFeatures::ChangeDataFeed);
-    }
     #[cfg(feature = "datafusion")]
     {
+        writer_features.insert(WriterFeatures::ChangeDataFeed);
         writer_features.insert(WriterFeatures::Invariants);
         writer_features.insert(WriterFeatures::CheckConstraints);
         writer_features.insert(WriterFeatures::GeneratedColumns);
