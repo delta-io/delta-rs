@@ -516,6 +516,7 @@ class DeltaTable:
         enforce_retention_duration: bool = True,
         post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
+        full: bool = False,
     ) -> list[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -526,6 +527,7 @@ class DeltaTable:
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
+            full: when set to True, will perform a "full" vacuum and remove all files not referenced in the transaction log
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -539,6 +541,7 @@ class DeltaTable:
             enforce_retention_duration,
             commit_properties,
             post_commithook_properties,
+            full,
         )
 
     def update(
