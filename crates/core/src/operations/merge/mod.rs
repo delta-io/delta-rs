@@ -84,7 +84,7 @@ use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
-    add_generated_columns, add_missing_generated_columns,
+    add_generated_columns, add_missing_generated_columns, should_gc,
 };
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
@@ -779,17 +779,27 @@ async fn execute(
         None => TableReference::bare(UNNAMED_TABLE),
     };
 
-    let generated_col_expressions = snapshot
-        .schema()
-        .get_generated_columns()
-        .unwrap_or_default();
+    let mut generated_col_exp = None;
+    let mut missing_generated_col = None;
+    let mut source_with_gc = None;
 
-    let (source, missing_generated_columns) =
-        add_missing_generated_columns(source, &generated_col_expressions)?;
+    if should_gc(&snapshot)? {
+        let generated_col_expressions = snapshot
+            .schema()
+            .get_generated_columns()
+            .unwrap_or_default();
+
+        let (source, missing_generated_columns) =
+            add_missing_generated_columns(source.clone(), &generated_col_expressions)?;
+
+        source_with_gc = Some(source);
+        generated_col_exp = Some(generated_col_expressions);
+        missing_generated_col = Some(missing_generated_columns);
+    }
     // This is only done to provide the source columns with a correct table reference. Just renaming the columns does not work
     let source = LogicalPlanBuilder::scan(
         source_name.clone(),
-        provider_as_source(source.into_view()),
+        provider_as_source(source_with_gc.unwrap_or(source).into_view()),
         None,
     )?
     .build()?;
@@ -1345,12 +1355,16 @@ async fn execute(
             .select(write_projection)?
     };
 
-    projected = add_generated_columns(
-        projected,
-        &generated_col_expressions,
-        &missing_generated_columns,
-        &state,
-    )?;
+    if let Some(generated_col_expressions) = generated_col_exp {
+        if let Some(missing_generated_columns) = missing_generated_col {
+            projected = add_generated_columns(
+                projected,
+                &generated_col_expressions,
+                &missing_generated_columns,
+                &state,
+            )?;
+        }
+    }
 
     let merge_final = &projected.into_unoptimized_plan();
     let write = state.create_physical_plan(merge_final).await?;
