@@ -3,6 +3,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use delta_kernel::schema::{DataType, StructField};
+use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -12,7 +13,6 @@ use super::schema::StructType;
 use super::StructTypeExt;
 use crate::kernel::{error::Error, DeltaResult};
 use crate::TableProperty;
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 /// Defines a file format used in table
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1209,6 +1209,34 @@ mod tests {
     fn test_primitive() {
         let types: PrimitiveType = serde_json::from_str("\"string\"").unwrap();
         println!("{types:?}");
+    }
+
+    #[test]
+    fn test_deserialize_protocol() {
+        // protocol json data
+        let raw = serde_json::json!(
+            {
+              "minReaderVersion": 3,
+              "minWriterVersion": 7,
+              "readerFeatures": ["catalogOwned"],
+              "writerFeatures": ["catalogOwned", "invariants", "appendOnly"]
+            }
+        );
+        let protocol: Protocol = serde_json::from_value(raw).unwrap();
+        assert_eq!(protocol.min_reader_version, 3);
+        assert_eq!(protocol.min_writer_version, 7);
+        assert_eq!(
+            protocol.reader_features,
+            Some(hashset! {ReaderFeatures::Unknown("catalogOwned".to_owned())})
+        );
+        assert_eq!(
+            protocol.writer_features,
+            Some(hashset! {
+                WriterFeatures::Unknown("catalogOwned".to_owned()),
+                WriterFeatures::Invariants,
+                WriterFeatures::AppendOnly
+            })
+        );
     }
 
     // #[test]

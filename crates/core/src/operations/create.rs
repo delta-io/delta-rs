@@ -144,12 +144,7 @@ impl CreateBuilder {
                     if let Value::Number(n) = v {
                         n.as_i64().map_or_else(
                             || MetadataValue::String(v.to_string()),
-                            |i| {
-                                i32::try_from(i)
-                                    .ok()
-                                    .map(MetadataValue::Number)
-                                    .unwrap_or_else(|| MetadataValue::String(v.to_string()))
-                            },
+                            |i| MetadataValue::Number(i),
                         )
                     } else {
                         MetadataValue::String(v.to_string())
