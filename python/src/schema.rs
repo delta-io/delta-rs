@@ -8,7 +8,7 @@ use deltalake::arrow::error::ArrowError;
 use deltalake::arrow::pyarrow::PyArrowType;
 use deltalake::kernel::{
     ArrayType as DeltaArrayType, DataType, MapType as DeltaMapType, MetadataValue,
-    PrimitiveType as DeltaPrimitve, StructField, StructType as DeltaStructType, StructTypeExt,
+    PrimitiveType as DeltaPrimitive, StructField, StructType as DeltaStructType, StructTypeExt,
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::{prelude::*, IntoPyObjectExt};
@@ -67,7 +67,7 @@ fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
 #[pyclass(module = "deltalake._internal")]
 #[derive(Clone)]
 pub struct PrimitiveType {
-    inner_type: DeltaPrimitve,
+    inner_type: DeltaPrimitive,
 }
 
 impl TryFrom<DataType> for PrimitiveType {
@@ -85,7 +85,7 @@ impl PrimitiveType {
     #[new]
     #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
-        let data_type: DeltaPrimitve =
+        let data_type: DeltaPrimitive =
             serde_json::from_str(&format!("\"{data_type}\"")).map_err(|_| {
                 if data_type.starts_with("decimal") {
                     PyValueError::new_err(format!(
@@ -441,12 +441,7 @@ impl Field {
                 match v {
                     serde_json::Value::Number(n) => n.as_i64().map_or_else(
                         || MetadataValue::String(v.to_string()),
-                        |i| {
-                            i32::try_from(i)
-                                .ok()
-                                .map(MetadataValue::Number)
-                                .unwrap_or_else(|| MetadataValue::String(v.to_string()))
-                        },
+                        |i| MetadataValue::Number(i),
                     ),
                     serde_json::Value::String(s) => MetadataValue::String(s.to_string()),
                     other => MetadataValue::String(other.to_string()),

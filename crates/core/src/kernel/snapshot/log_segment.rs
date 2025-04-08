@@ -188,10 +188,30 @@ impl LogSegment {
         segment.version = segment
             .file_version()
             .unwrap_or(end_version.unwrap_or(start_version));
+
+        segment.validate()?;
+
         Ok(segment)
     }
 
     pub fn validate(&self) -> DeltaResult<()> {
+        let is_contiguous = self
+            .commit_files
+            .iter()
+            .collect_vec()
+            .windows(2)
+            .all(|cfs| {
+                cfs[0].location.commit_version().unwrap() - 1
+                    == cfs[1].location.commit_version().unwrap()
+            });
+        if !is_contiguous {
+            println!("commit files: {:?}", self.commit_files);
+            println!("checkpoint files: {:?}", self.checkpoint_files);
+            return Err(DeltaTableError::Generic(
+                "non-contiguous log segment".into(),
+            ));
+        }
+
         let checkpoint_version = self
             .checkpoint_files
             .iter()
