@@ -98,7 +98,7 @@ use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use serde::{Deserialize, Serialize};
 
 use super::CustomExecuteHandler;
@@ -181,19 +181,19 @@ pub enum TransactionError {
 
     /// Error returned when unsupported reader features are required
     #[error("Unsupported reader features required: {0:?}")]
-    UnsupportedReaderFeatures(Vec<ReaderFeatures>),
+    UnsupportedReaderFeatures(Vec<ReaderFeature>),
 
     /// Error returned when unsupported writer features are required
     #[error("Unsupported writer features required: {0:?}")]
-    UnsupportedWriterFeatures(Vec<WriterFeatures>),
+    UnsupportedWriterFeatures(Vec<WriterFeature>),
 
     /// Error returned when writer features are required but not specified
     #[error("Writer features must be specified for writerversion >= 7, please specify: {0:?}")]
-    WriterFeaturesRequired(WriterFeatures),
+    WriterFeaturesRequired(WriterFeature),
 
     /// Error returned when reader features are required but not specified
     #[error("Reader features must be specified for reader version >= 3, please specify: {0:?}")]
-    ReaderFeaturesRequired(ReaderFeatures),
+    ReaderFeaturesRequired(ReaderFeature),
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
     /// Currently used by DynamoDb-backed S3 log store when database operations fail.
@@ -683,7 +683,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         }
                         steps -= 1;
                     }
-                    // Update snapshot to latest version after succesful conflict check
+                    // Update snapshot to latest version after successful conflict check
                     read_snapshot
                         .update(this.log_store.clone(), Some(latest_version))
                         .await?;
