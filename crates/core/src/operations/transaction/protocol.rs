@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Schema};
+use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Protocol, Schema};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
@@ -113,12 +113,17 @@ impl ProtocolChecker {
 
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
-        let required_features: Option<&HashSet<ReaderFeatures>> =
-            match snapshot.protocol().min_reader_version {
-                0 | 1 => None,
-                2 => Some(&READER_V2),
-                _ => snapshot.protocol().reader_features.as_ref(),
-            };
+        self.can_read_from_protocol(snapshot.protocol())
+    }
+
+    pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+        let required_features: Option<&HashSet<ReaderFeatures>> = match protocol.min_reader_version
+        {
+            0 | 1 => None,
+            2 => Some(&READER_V2),
+            _ => protocol.reader_features.as_ref(),
+        };
+        println!("required_features: {:?}", required_features);
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
             if diff.peek().is_some() {
