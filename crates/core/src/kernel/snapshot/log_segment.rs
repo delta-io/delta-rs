@@ -205,8 +205,6 @@ impl LogSegment {
                     == cfs[1].location.commit_version().unwrap()
             });
         if !is_contiguous {
-            println!("commit files: {:?}", self.commit_files);
-            println!("checkpoint files: {:?}", self.checkpoint_files);
             return Err(DeltaTableError::Generic(
                 "non-contiguous log segment".into(),
             ));
@@ -579,7 +577,7 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+    use delta_kernel::table_features::{ReaderFeature, WriterFeature};
     use deltalake_test::utils::*;
     use maplit::hashset;
     use tokio::task::JoinHandle;
@@ -685,8 +683,8 @@ pub(super) mod tests {
         let expected = Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(hashset! {ReaderFeatures::DeletionVectors}),
-            writer_features: Some(hashset! {WriterFeatures::DeletionVectors}),
+            reader_features: Some(hashset! {ReaderFeature::DeletionVectors}),
+            writer_features: Some(hashset! {WriterFeature::DeletionVectors}),
         };
         assert_eq!(protocol, expected);
 
