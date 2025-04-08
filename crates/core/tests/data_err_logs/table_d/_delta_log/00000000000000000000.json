@@ -1,0 +1,3 @@
+{"commitInfo":{"timestamp":1742252106605,"engineInfo":"Kernel-3.4.0-SNAPSHOT/test-engine","operation":"CREATE TABLE","operationParameters":{"partitionBy":"[]"},"isBlindAppend":true,"txnId":"138db460-c7d3-4d13-972e-0f4e35b58b43","operationMetrics":{}}}
+{"metaData":{"id":"ebffcf7b-bf25-427f-a91a-d4a0d27ebbef","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"createdTime":1742252106422,"configuration":{"delta.feature.catalogowned":"supported"}}}
+{"protocol":{"minReaderVersion":3,"minWriterVersion":7,"readerFeatures":["catalogOwned"],"writerFeatures":["catalogOwned","invariants","appendOnly"]}}
