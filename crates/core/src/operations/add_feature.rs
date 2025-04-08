@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
@@ -102,8 +102,8 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             this.pre_execute(operation_id).await?;
 
             let (reader_features, writer_features): (
-                Vec<Option<ReaderFeatures>>,
-                Vec<Option<WriterFeatures>>,
+                Vec<Option<ReaderFeature>>,
+                Vec<Option<WriterFeature>>,
             ) = name.iter().map(|v| v.to_reader_writer_features()).unzip();
             let reader_features = reader_features.into_iter().flatten().collect_vec();
             let writer_features = writer_features.into_iter().flatten().collect_vec();
@@ -157,7 +157,7 @@ mod tests {
         writer::test_utils::{create_bare_table, get_record_batch},
         DeltaOps,
     };
-    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+    use delta_kernel::table_features::{ReaderFeature, WriterFeature};
     use delta_kernel::DeltaResult;
 
     #[tokio::test]
@@ -181,7 +181,7 @@ mod tests {
             .unwrap()
             .writer_features
             .unwrap_or_default()
-            .contains(&WriterFeatures::ChangeDataFeed));
+            .contains(&WriterFeature::ChangeDataFeed));
 
         let result = DeltaOps(result)
             .add_feature()
@@ -195,12 +195,12 @@ mod tests {
             .writer_features
             .clone()
             .unwrap_or_default()
-            .contains(&WriterFeatures::DeletionVectors));
+            .contains(&WriterFeature::DeletionVectors));
         assert!(&current_protocol
             .reader_features
             .clone()
             .unwrap_or_default()
-            .contains(&ReaderFeatures::DeletionVectors));
+            .contains(&ReaderFeature::DeletionVectors));
         assert_eq!(result.version(), 2);
         Ok(())
     }

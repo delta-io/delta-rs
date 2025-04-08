@@ -1,7 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
@@ -627,7 +627,7 @@ impl Protocol {
                                 .iter()
                                 .filter_map(|v| match v {
                                     Field::Str(feature) => {
-                                        ReaderFeatures::try_from(feature.as_str()).ok()
+                                        ReaderFeature::try_from(feature.as_str()).ok()
                                     }
                                     _ => None,
                                 })
@@ -643,7 +643,7 @@ impl Protocol {
                                 .iter()
                                 .filter_map(|v| match v {
                                     Field::Str(feature) => {
-                                        WriterFeatures::try_from(feature.as_str()).ok()
+                                        WriterFeature::try_from(feature.as_str()).ok()
                                     }
                                     _ => None,
                                 })
