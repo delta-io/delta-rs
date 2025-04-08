@@ -2,7 +2,7 @@
 //!
 //! The Kernel module contains all the logic for reading and processing the Delta Lake transaction log.
 
-use delta_kernel::engine::arrow_expression::ArrowExpressionHandler;
+use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
 use std::{any::Any, sync::LazyLock};
 
 pub mod arrow;
@@ -25,5 +25,5 @@ pub trait DataCheck {
     fn as_any(&self) -> &dyn Any;
 }
 
-static ARROW_HANDLER: LazyLock<ArrowExpressionHandler> =
-    LazyLock::new(|| ArrowExpressionHandler {});
+static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
+    LazyLock::new(|| ArrowEvaluationHandler {});

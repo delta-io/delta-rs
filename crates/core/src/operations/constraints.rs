@@ -21,7 +21,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use delta_kernel::table_features::WriterFeatures;
+use delta_kernel::table_features::WriterFeature;
 
 use super::datafusion_utils::into_expr;
 use super::transaction::{CommitBuilder, CommitProperties};
@@ -201,7 +201,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 } else {
                     let current_features = old_protocol.writer_features.clone();
                     if let Some(mut features) = current_features {
-                        features.insert(WriterFeatures::CheckConstraints);
+                        features.insert(WriterFeature::CheckConstraints);
                         Some(features)
                     } else {
                         current_features
