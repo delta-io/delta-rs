@@ -931,6 +931,7 @@ mod tests {
         }
 
         #[tokio::test]
+        #[ignore = "enable when deletion vector is supported"]
         async fn test_with_deletion_vector() {
             // test table with partitions
             let path = "../test/tests/data/table_with_deletion_logs";

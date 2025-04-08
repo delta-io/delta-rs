@@ -26,8 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-# delta_kernel = { version = "0.8.0", features = ["arrow_54", "default-engine-rustls"] }
-delta_kernel = { git = "https://github.com/hntd187/delta-kernel-rs", rev = "00d1d9c8169c5cd7901682be2024687f79e101e3", features = [
+delta_kernel = { version = "0.9.0", features = [
     "arrow_54",
     "developer-visibility",
     "default-engine-rustls",
