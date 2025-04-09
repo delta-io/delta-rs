@@ -55,7 +55,7 @@ where
 {
     let mut workers = Vec::new();
     for w in 0..WORKERS {
-        workers.push(create_worker(format!("w{}", w)).await);
+        workers.push(create_worker(format!("w{w}")).await);
     }
 
     let mut futures = Vec::new();
@@ -83,7 +83,7 @@ where
     let mut expected = Vec::new();
     for w in 0..WORKERS {
         for c in 0..COMMITS {
-            expected.push(format!("w{}-{}", w, c))
+            expected.push(format!("w{w}-{c}"))
         }
     }
     assert_eq!(files, expected);
@@ -108,7 +108,7 @@ impl Worker {
     async fn commit_sequence(&mut self, n: i64) -> HashMap<i64, String> {
         let mut result = HashMap::new();
         for i in 0..n {
-            let name = format!("{}-{}", self.name, i);
+            let name = format!("{}-{i}", self.name);
             let v = self.commit_file(&name).await;
             result.insert(v, name);
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -124,7 +124,7 @@ impl Worker {
             predicate: None,
         };
         let actions = vec![Action::Add(Add {
-            path: format!("{}.parquet", name),
+            path: format!("{name}.parquet"),
             size: 396,
             partition_values: HashMap::new(),
             modification_time: 1564524294000,

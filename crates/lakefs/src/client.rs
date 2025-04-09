@@ -55,9 +55,9 @@ impl LakeFSClient {
     ) -> DeltaResult<(Url, String)> {
         let (repo, source_branch, table) = self.decompose_url(source_url.to_string());
 
-        let request_url = format!("{}/api/v1/repositories/{}/branches", self.config.host, repo);
+        let request_url = format!("{}/api/v1/repositories/{repo}/branches", self.config.host);
 
-        let transaction_branch = format!("delta-tx-{}", operation_id);
+        let transaction_branch = format!("delta-tx-{operation_id}");
         let body = json!({
             "name": transaction_branch,
             "source": source_branch,
@@ -78,11 +78,8 @@ impl LakeFSClient {
         match response.status() {
             StatusCode::CREATED => {
                 // Branch created successfully
-                let new_url = Url::parse(&format!(
-                    "lakefs://{}/{}/{}",
-                    repo, transaction_branch, table
-                ))
-                .unwrap();
+                let new_url =
+                    Url::parse(&format!("lakefs://{repo}/{transaction_branch}/{table}")).unwrap();
                 Ok((new_url, transaction_branch))
             }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
@@ -105,8 +102,8 @@ impl LakeFSClient {
         branch: String,
     ) -> Result<(), TransactionError> {
         let request_url = format!(
-            "{}/api/v1/repositories/{}/branches/{}",
-            self.config.host, repo, branch
+            "{}/api/v1/repositories/{repo}/branches/{branch}",
+            self.config.host,
         );
         let response = self
             .http_client
@@ -142,8 +139,8 @@ impl LakeFSClient {
         allow_empty: bool,
     ) -> DeltaResult<()> {
         let request_url = format!(
-            "{}/api/v1/repositories/{}/branches/{}/commits",
-            self.config.host, repo, branch
+            "{}/api/v1/repositories/{repo}/branches/{branch}/commits",
+            self.config.host,
         );
 
         let body = json!({
@@ -151,10 +148,7 @@ impl LakeFSClient {
             "allow_empty": allow_empty,
         });
 
-        debug!(
-            "Committing to LakeFS Branch: '{}' in repo: '{}'",
-            branch, repo
-        );
+        debug!("Committing to LakeFS Branch: '{branch}' in repo: '{repo}'");
         let response = self
             .http_client
             .post(&request_url)
@@ -191,8 +185,8 @@ impl LakeFSClient {
         allow_empty: bool,
     ) -> Result<(), TransactionError> {
         let request_url = format!(
-            "{}/api/v1/repositories/{}/refs/{}/merge/{}",
-            self.config.host, repo, transaction_branch, target_branch
+            "{}/api/v1/repositories/{repo}/refs/{transaction_branch}/merge/{target_branch}",
+            self.config.host,
         );
 
         let body = json!({
@@ -201,10 +195,7 @@ impl LakeFSClient {
             "squash_merge": true,
         });
 
-        debug!(
-            "Merging LakeFS, source `{}` into target `{}` in repo: {}",
-            transaction_branch, transaction_branch, repo
-        );
+        debug!("Merging LakeFS, source `{transaction_branch}` into target `{transaction_branch}` in repo: {repo}");
         let response = self
             .http_client
             .post(&request_url)
@@ -234,7 +225,7 @@ impl LakeFSClient {
 
     pub fn set_transaction(&self, id: Uuid, branch: String) {
         self.transactions.insert(id, branch);
-        debug!("{}", format!("LakeFS Transaction `{}` has been set.", id));
+        debug!("{}", format!("LakeFS Transaction `{id}` has been set."));
     }
 
     pub fn get_transaction(&self, id: Uuid) -> Result<String, TransactionError> {
@@ -243,19 +234,13 @@ impl LakeFSClient {
             .get(&id)
             .map(|v| v.to_string())
             .ok_or(LakeFSOperationError::TransactionIdNotFound(id.to_string()))?;
-        debug!(
-            "{}",
-            format!("LakeFS Transaction `{}` has been grabbed.", id)
-        );
+        debug!("{}", format!("LakeFS Transaction `{id}` has been grabbed."));
         Ok(transaction_branch)
     }
 
     pub fn clear_transaction(&self, id: Uuid) {
         self.transactions.remove(&id);
-        debug!(
-            "{}",
-            format!("LakeFS Transaction `{}` has been removed.", id)
-        );
+        debug!("{}", format!("LakeFS Transaction `{id}` has been removed."));
     }
 
     pub fn decompose_url(&self, url: String) -> (String, String, String) {
@@ -314,7 +299,7 @@ mod tests {
         let result = rt().block_on(async { client.create_branch(&source_url, operation_id).await });
         assert!(result.is_ok());
         let (new_url, branch_name) = result.unwrap();
-        assert_eq!(branch_name, format!("delta-tx-{}", operation_id));
+        assert_eq!(branch_name, format!("delta-tx-{operation_id}"));
         assert!(new_url.as_str().contains("lakefs://test_repo"));
         mock.assert();
     }

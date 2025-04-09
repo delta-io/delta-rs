@@ -349,6 +349,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                         ParquetError::IndexOutOfBound(u.to_owned(), v.to_owned())
                     }
                     ParquetError::NYI(msg) => ParquetError::NYI(msg.to_owned()),
+                    // ParquetError is non exhaustive, so have a fallback
+                    e => ParquetError::General(e.to_string()),
                 },
                 skipped_values: partial_writes,
             }
@@ -460,7 +462,6 @@ mod tests {
 
     use crate::arrow::array::Int32Array;
     use crate::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
-    use crate::kernel::DataType;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::get_delta_schema;
 
@@ -541,18 +542,13 @@ mod tests {
 
         assert_eq!(
             extract_partition_values(
-                &[
-                    String::from("col1"),
-                    String::from("col2"),
-                    String::from("col3")
-                ],
+                &[String::from("col1"), String::from("col2"),],
                 &record_batch
             )
             .unwrap(),
             IndexMap::from([
                 (String::from("col1"), Scalar::Integer(1)),
                 (String::from("col2"), Scalar::Integer(2)),
-                (String::from("col3"), Scalar::Null(DataType::INTEGER)),
             ])
         );
         assert_eq!(

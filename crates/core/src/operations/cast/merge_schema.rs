@@ -19,8 +19,7 @@ fn try_merge_metadata<T: std::cmp::PartialEq + Clone>(
         if let Some(vl) = left.get(k) {
             if vl != v {
                 return Err(ArrowError::SchemaError(format!(
-                    "Cannot merge metadata with different values for key {}",
-                    k
+                    "Cannot merge metadata with different values for key {k}"
                 )));
             }
         } else {
@@ -30,8 +29,7 @@ fn try_merge_metadata<T: std::cmp::PartialEq + Clone>(
                 left.insert(k.clone(), v.clone());
             } else {
                 return Err(ArrowError::SchemaError(format!(
-                    "Cannot add generated expressions to exists columns {}",
-                    k
+                    "Cannot add generated expressions to exists columns {k}"
                 )));
             }
         }
@@ -68,8 +66,7 @@ pub(crate) fn merge_delta_type(
             Ok(DeltaDataType::Struct(Box::new(merged)))
         }
         (a, b) => Err(ArrowError::SchemaError(format!(
-            "Cannot merge types {} and {}",
-            a, b
+            "Cannot merge types {a} and {b}"
         ))),
     }
 }
@@ -292,7 +289,7 @@ pub(crate) fn merge_arrow_field(
 /// Merges Arrow Table schema and Arrow Batch Schema, by allowing Large/View Types to passthrough.
 // Sometimes fields can't be merged because they are not the same types. So table has int32,
 // but batch int64. We want the preserve the table type. At later stage we will call cast_record_batch
-// which will cast the batch int64->int32. This is desired behaviour so we can have flexibility
+// which will cast the batch int64->int32. This is desired behavior so we can have flexibility
 // in the batch data types. But preserve the correct table and parquet types.
 //
 // Preserve_new_fields can also be disabled if you just want to only use the passthrough functionality

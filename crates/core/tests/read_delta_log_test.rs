@@ -144,6 +144,7 @@ async fn test_log_buffering_fail() {
 }
 
 #[tokio::test]
+#[ignore = "not implemented"]
 async fn test_read_liquid_table() -> DeltaResult<()> {
     let path = "../test/tests/data/table_with_liquid_clustering";
     let _table = deltalake_core::open_table(&path).await?;
@@ -151,6 +152,7 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "not implemented"]
 async fn test_read_table_features() -> DeltaResult<()> {
     let mut _table = deltalake_core::open_table("../test/tests/data/simple_table_features").await?;
     let rf = _table.protocol()?.reader_features.clone();
@@ -165,6 +167,7 @@ async fn test_read_table_features() -> DeltaResult<()> {
 
 // test for: https://github.com/delta-io/delta-rs/issues/1302
 #[tokio::test]
+#[ignore = "not implemented"]
 async fn read_delta_table_from_dlt() {
     let table = deltalake_core::open_table("../test/tests/data/delta-live-table")
         .await
@@ -180,5 +183,15 @@ async fn read_delta_table_with_null_stats_in_notnull_struct() {
             .await
             .unwrap();
     assert_eq!(table.version(), 1);
+    assert!(table.get_schema().is_ok());
+}
+
+#[tokio::test]
+#[ignore = "not implemented"]
+async fn read_delta_table_with_renamed_partitioning_column() {
+    let table = deltalake_core::open_table("../test/tests/data/table_with_partitioning_mapping")
+        .await
+        .unwrap();
+    assert_eq!(table.version(), 4);
     assert!(table.get_schema().is_ok());
 }

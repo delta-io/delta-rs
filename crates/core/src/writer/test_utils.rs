@@ -290,13 +290,10 @@ pub fn create_bare_table() -> DeltaTable {
         .unwrap()
 }
 
-pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
+pub async fn create_initialized_table(table_path: &str, partition_cols: &[String]) -> DeltaTable {
     let table_schema: StructType = get_delta_schema();
-    let table_dir = tempfile::tempdir().unwrap();
-    let table_path = table_dir.path();
-
     CreateBuilder::new()
-        .with_location(table_path.to_str().unwrap())
+        .with_location(table_path)
         .with_table_name("test-table")
         .with_comment("A table for running tests")
         .with_columns(table_schema.fields().cloned())
@@ -334,15 +331,12 @@ pub mod datafusion {
         );
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx.sql(&format!(
-            "select {} from test order by {}",
-            columns, columns
-        ))
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap()
+        ctx.sql(&format!("select {columns} from test order by {columns}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
     }
 
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {

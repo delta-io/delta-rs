@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.24.0"
+version = "0.25.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -51,7 +51,6 @@ strum = { workspace = true }
 # "stdlib"
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
-hashbrown = "0.15.2"
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -114,8 +113,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
-cdf = []
-default = ["cdf"]
+default = ["rustls"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
@@ -130,7 +128,11 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+native-tls = ["delta_kernel/default-engine"]
+rustls = ["delta_kernel/default-engine-rustls"]
+cloud = ["object_store/cloud"]
 
 [[test]]
 name = "dat"
 harness = false
+

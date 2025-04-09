@@ -30,7 +30,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
         .build_storage()?;
     let object_store = log_store.object_store(None);
 
-    let log_path = |version| log_store.log_path().child(format!("{:020}.json", version));
+    let log_path = |version| log_store.log_path().child(format!("{version:020}.json"));
 
     // we don't need to actually populate files with content as cleanup works only with file's metadata
     object_store

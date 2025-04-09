@@ -247,9 +247,9 @@ async fn benchmark_merge_tpcds(
 
     let duration = end.duration_since(start);
 
-    println!("Total File count: {}", file_count);
-    println!("File sample count: {}", file_sample_count);
-    println!("{:?}", metrics);
+    println!("Total File count: {file_count}");
+    println!("File sample count: {file_sample_count}");
+    println!("{metrics:?}");
     println!("Seconds: {}", duration.as_secs_f32());
 
     // Clean up and restore to original state.
@@ -530,7 +530,7 @@ async fn main() {
 
             for bench in benches {
                 for sample in 0..num_samples {
-                    println!("Test: {} Sample: {}", bench.name, sample);
+                    println!("Test: {} Sample: {sample}", bench.name);
                     let res =
                         benchmark_merge_tpcds(delta_path.clone(), bench.params.clone(), bench.op)
                             .await
@@ -597,10 +597,9 @@ async fn main() {
                     "
                 select name as before_name,
                  avg(cast(duration_ms as float)) as before_duration_avg 
-                from before where group_id = {} 
+                from before where group_id = {before_group_id}
                 group by name
             ",
-                    before_group_id
                 ))
                 .await
                 .unwrap();
@@ -610,10 +609,9 @@ async fn main() {
                     "
                 select name as after_name,
                  avg(cast(duration_ms as float)) as after_duration_avg 
-                from after where group_id = {} 
+                from after where group_id = {after_group_id}
                 group by name
             ",
-                    after_group_id
                 ))
                 .await
                 .unwrap();

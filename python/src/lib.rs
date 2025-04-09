@@ -3,9 +3,12 @@ mod features;
 mod filesystem;
 mod merge;
 mod query;
+mod reader;
 mod schema;
 mod utils;
+mod writer;
 
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::future::IntoFuture;
@@ -18,15 +21,15 @@ use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::schema::StructField;
+use delta_kernel::schema::{MetadataValue, StructField};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
+use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
-use deltalake::datafusion::physical_plan::ExecutionPlan;
+use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
@@ -49,7 +52,8 @@ use deltalake::operations::transaction::{
 };
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
-use deltalake::operations::{collect_sendable_stream, CustomExecuteHandler};
+use deltalake::operations::write::WriteBuilder;
+use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::Compression;
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -57,18 +61,15 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::storage::{IORuntime, ObjectStoreRef};
 use deltalake::table::state::DeltaTableState;
-use deltalake::DeltaTableBuilder;
+use deltalake::{init_client_version, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};
 use error::DeltaError;
-use futures::future::join_all;
+use reader::convert_stream_to_reader;
 use tracing::log::*;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
-use serde_json::{Map, Value};
-use uuid::Uuid;
+use crate::writer::to_lazy_table;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 
 use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
@@ -78,6 +79,27 @@ use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
+use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
+use pyo3::{prelude::*, IntoPyObjectExt};
+use serde_json::{Map, Value};
+use uuid::Uuid;
+
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+use jemallocator::Jemalloc;
+
+#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+static ALLOC: Jemalloc = Jemalloc;
+
+#[global_allocator]
+#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
+static ALLOC: MiMalloc = MiMalloc;
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
@@ -306,6 +328,7 @@ impl RawDeltaTable {
     /// This will acquire the internal lock since it is a mutating operation!
     pub fn load_version(&self, py: Python, version: i64) -> PyResult<()> {
         py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 let mut table = self
                     ._table
@@ -323,6 +346,7 @@ impl RawDeltaTable {
     /// Retrieve the latest version from the internally loaded table state
     pub fn get_latest_version(&self, py: Python) -> PyResult<i64> {
         py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => table
@@ -338,6 +362,7 @@ impl RawDeltaTable {
 
     pub fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
         py.allow_threads(|| {
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => table
@@ -376,6 +401,7 @@ impl RawDeltaTable {
                 DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
                     |err| PyValueError::new_err(format!("Failed to parse datetime string: {err}")),
                 )?);
+            #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
                 let mut table = self
                     ._table
@@ -816,7 +842,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version = None, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, allow_out_of_range = false))]
+    #[pyo3(signature = (starting_version = None, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, predicate = None, allow_out_of_range = false))]
     #[allow(clippy::too_many_arguments)]
     pub fn load_cdf(
         &self,
@@ -826,6 +852,7 @@ impl RawDeltaTable {
         starting_timestamp: Option<String>,
         ending_timestamp: Option<String>,
         columns: Option<Vec<String>>,
+        predicate: Option<String>,
         allow_out_of_range: bool,
     ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
@@ -854,35 +881,31 @@ impl RawDeltaTable {
             cdf_read = cdf_read.with_allow_out_of_range();
         }
 
-        if let Some(columns) = columns {
-            cdf_read = cdf_read.with_columns(columns);
-        }
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(DeltaCdfTableProvider::try_new(cdf_read).map_err(PythonError::from)?);
 
-        cdf_read = cdf_read.with_session_ctx(ctx.clone());
+        let table_name: String = "source".to_string();
 
-        let plan = rt().block_on(cdf_read.build()).map_err(PythonError::from)?;
+        ctx.register_table(table_name.clone(), table_provider)
+            .map_err(PythonError::from)?;
+        let select_string = if let Some(columns) = columns {
+            columns.join(", ")
+        } else {
+            "*".to_string()
+        };
+
+        let sql = if let Some(predicate) = predicate {
+            format!("SELECT {select_string} FROM `{table_name}` WHERE ({predicate}) ")
+        } else {
+            format!("SELECT {select_string} FROM `{table_name}`")
+        };
+
+        let stream = rt()
+            .block_on(async { ctx.sql(&sql).await?.execute_stream().await })
+            .map_err(PythonError::from)?;
 
         py.allow_threads(|| {
-            let mut tasks = vec![];
-            for p in 0..plan.properties().output_partitioning().partition_count() {
-                let inner_plan = plan.clone();
-                let partition_batch = inner_plan.execute(p, ctx.task_ctx()).unwrap();
-                let handle = rt().spawn(collect_sendable_stream(partition_batch));
-                tasks.push(handle);
-            }
-
-            // This is unfortunate.
-            let batches = rt()
-                .block_on(join_all(tasks))
-                .into_iter()
-                .flatten()
-                .collect::<Result<Vec<Vec<_>>, _>>()
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .map(Ok);
-            let batch_iter = RecordBatchIterator::new(batches, plan.schema());
-            let ffi_stream = FFI_ArrowArrayStream::new(Box::new(batch_iter));
+            let ffi_stream = FFI_ArrowArrayStream::new(convert_stream_to_reader(stream));
             let reader = ArrowArrayStreamReader::try_new(ffi_stream).unwrap();
             Ok(PyArrowType(reader))
         })
@@ -894,8 +917,9 @@ impl RawDeltaTable {
         predicate,
         source_alias = None,
         target_alias = None,
+        merge_schema = false,
         safe_cast = false,
-        streaming = false,
+        streamed_exec = false,
         writer_properties = None,
         post_commithook_properties = None,
         commit_properties = None,
@@ -907,8 +931,9 @@ impl RawDeltaTable {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        merge_schema: bool,
         safe_cast: bool,
-        streaming: bool,
+        streamed_exec: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -928,8 +953,9 @@ impl RawDeltaTable {
                 predicate,
                 source_alias,
                 target_alias,
+                merge_schema,
                 safe_cast,
-                streaming,
+                streamed_exec,
                 writer_properties,
                 post_commithook_properties,
                 commit_properties,
@@ -998,6 +1024,7 @@ impl RawDeltaTable {
     /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
     #[pyo3(signature = (limit=None))]
     pub fn history(&self, limit: Option<usize>) -> PyResult<Vec<String>> {
+        #[allow(clippy::await_holding_lock)]
         let history = rt().block_on(async {
             match self._table.lock() {
                 Ok(table) => table
@@ -1015,6 +1042,7 @@ impl RawDeltaTable {
     }
 
     pub fn update_incremental(&self) -> PyResult<()> {
+        #[allow(clippy::await_holding_lock)]
         #[allow(deprecated)]
         Ok(rt()
             .block_on(async {
@@ -1040,6 +1068,30 @@ impl RawDeltaTable {
             )),
             None => None,
         };
+        let stats_cols = self.get_stats_columns()?;
+        let num_index_cols = self.get_num_index_cols()?;
+
+        let inclusion_stats_cols = if let Some(stats_cols) = stats_cols {
+            stats_cols
+        } else if num_index_cols == -1 {
+            schema
+                .0
+                .fields()
+                .iter()
+                .map(|v| v.name().clone())
+                .collect::<Vec<_>>()
+        } else if num_index_cols >= 0 {
+            let mut fields = vec![];
+            for idx in 0..(min(num_index_cols as usize, schema.0.fields.len())) {
+                fields.push(schema.0.field(idx).name().clone())
+            }
+            fields
+        } else {
+            return Err(PythonError::from(DeltaTableError::generic(
+                "Couldn't construct list of fields for file stats expression gatherings",
+            )))?;
+        };
+
         self.cloned_state()?
             .log_data()
             .into_iter()
@@ -1051,7 +1103,8 @@ impl RawDeltaTable {
                 }
             })
             .map(|(path, f)| {
-                let expression = filestats_to_expression_next(py, &schema, f)?;
+                let expression =
+                    filestats_to_expression_next(py, &schema, &inclusion_stats_cols, f)?;
                 Ok((path, expression))
             })
             .collect()
@@ -1147,9 +1200,9 @@ impl RawDeltaTable {
 
         let active_partitions = active_partitions
             .into_iter()
-            .map(|part| PyFrozenSet::new_bound(py, part.iter()))
+            .map(|part| PyFrozenSet::new(py, part.iter()))
             .collect::<Result<Vec<Bound<'py, _>>, PyErr>>()?;
-        PyFrozenSet::new_bound(py, &active_partitions)
+        PyFrozenSet::new(py, &active_partitions)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1299,6 +1352,7 @@ impl RawDeltaTable {
 
             // Runs lakefs pre-execution
             if store.name() == "LakeFSLogStore" {
+                #[allow(clippy::await_holding_lock)]
                 rt().block_on(async {
                     handle
                         .before_post_commit_hook(store, true, operation_id)
@@ -1307,6 +1361,7 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
             }
 
+            #[allow(clippy::await_holding_lock)]
             let result = rt().block_on(async {
                 match self._table.lock() {
                     Ok(table) => create_checkpoint(&table, Some(operation_id))
@@ -1333,13 +1388,14 @@ impl RawDeltaTable {
     }
 
     pub fn cleanup_metadata(&self, py: Python) -> PyResult<()> {
-        py.allow_threads(|| {
+        let (_result, new_state) = py.allow_threads(|| {
             let operation_id = Uuid::new_v4();
             let handle = Arc::new(LakeFSCustomExecuteHandler {});
             let store = &self.log_store()?;
 
             // Runs lakefs pre-execution
             if store.name() == "LakeFSLogStore" {
+                #[allow(clippy::await_holding_lock)]
                 rt().block_on(async {
                     handle
                         .before_post_commit_hook(store, true, operation_id)
@@ -1348,12 +1404,32 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
             }
 
+            #[allow(clippy::await_holding_lock)]
             let result = rt().block_on(async {
                 match self._table.lock() {
-                    Ok(table) => cleanup_metadata(&table, Some(operation_id))
-                        .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from),
+                    Ok(table) => {
+                        let result = cleanup_metadata(&table, Some(operation_id))
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)?;
+
+                        let new_state = if result > 0 {
+                            Some(
+                                DeltaTableState::try_new(
+                                    &table.state.clone().unwrap().snapshot().table_root(),
+                                    table.object_store(),
+                                    table.config.clone(),
+                                    Some(table.version()),
+                                )
+                                .await
+                                .map_err(PythonError::from)?,
+                            )
+                        } else {
+                            None
+                        };
+
+                        Ok((result, new_state))
+                    }
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
                 }
             });
@@ -1369,6 +1445,10 @@ impl RawDeltaTable {
             }
             result
         })?;
+
+        if new_state.is_some() {
+            self.set_state(new_state)?;
+        }
 
         Ok(())
     }
@@ -1504,16 +1584,146 @@ impl RawDeltaTable {
         }
     }
 
+    #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
+    pub fn set_column_metadata(
+        &self,
+        py: Python,
+        field_name: &str,
+        metadata: HashMap<String, String>,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let mut cmd = UpdateFieldMetadataBuilder::new(self.log_store()?, self.cloned_state()?);
+
+            cmd = cmd.with_field_name(field_name).with_metadata(
+                metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
+                    .collect(),
+            );
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties)
+            }
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(cmd.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    fn write(
+        &mut self,
+        py: Python,
+        data: PyArrowType<ArrowArrayStreamReader>,
+        mode: String,
+        schema_mode: Option<String>,
+        partition_by: Option<Vec<String>>,
+        predicate: Option<String>,
+        target_file_size: Option<usize>,
+        name: Option<String>,
+        description: Option<String>,
+        configuration: Option<HashMap<String, Option<String>>>,
+        writer_properties: Option<PyWriterProperties>,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.allow_threads(|| {
+            let save_mode = mode.parse().map_err(PythonError::from)?;
+
+            let mut builder = WriteBuilder::new(
+                self.log_store()?,
+                self.with_table(|t| Ok(t.state.clone()))?,
+                // Take the Option<state> since it might be the first write,
+                // triggered through `write_to_deltalake`
+            )
+            .with_save_mode(save_mode);
+
+            let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+
+            let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
+                .map_err(PythonError::from)?
+                .build()
+                .map_err(PythonError::from)?;
+
+            builder = builder.with_input_execution_plan(Arc::new(plan));
+
+            if let Some(schema_mode) = schema_mode {
+                builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
+            }
+            if let Some(partition_columns) = partition_by {
+                builder = builder.with_partition_columns(partition_columns);
+            }
+
+            if let Some(writer_props) = writer_properties {
+                builder = builder.with_writer_properties(
+                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                );
+            }
+
+            if let Some(name) = &name {
+                builder = builder.with_table_name(name);
+            };
+
+            if let Some(description) = &description {
+                builder = builder.with_description(description);
+            };
+
+            if let Some(predicate) = predicate {
+                builder = builder.with_replace_where(predicate);
+            };
+
+            if let Some(target_file_size) = target_file_size {
+                builder = builder.with_target_file_size(target_file_size)
+            };
+
+            if let Some(config) = configuration {
+                builder = builder.with_configuration(config);
+            };
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                builder = builder.with_commit_properties(commit_properties);
+            };
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                builder =
+                    builder.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(builder.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
+        // tokio runtime handle?
+        let handle = None;
         let name = CString::new("datafusion_table_provider").unwrap();
 
         let table = self.with_table(|t| Ok(Arc::new(t.clone())))?;
-        let provider = FFI_TableProvider::new(table, false);
+        let provider = FFI_TableProvider::new(table, false, handle);
 
-        PyCapsule::new_bound(py, provider, Some(name.clone()))
+        PyCapsule::new(py, provider, Some(name.clone()))
     }
 }
 
@@ -1695,38 +1905,38 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
     let py = py_date.py();
     let val = match value {
         Null(_) => py.None(),
-        Boolean(val) => val.to_object(py),
-        Binary(val) => val.to_object(py),
-        String(val) => val.to_object(py),
-        Byte(val) => val.to_object(py),
-        Short(val) => val.to_object(py),
-        Integer(val) => val.to_object(py),
-        Long(val) => val.to_object(py),
-        Float(val) => val.to_object(py),
-        Double(val) => val.to_object(py),
+        Boolean(val) => val.into_py_any(py)?,
+        Binary(val) => val.into_py_any(py)?,
+        String(val) => val.into_py_any(py)?,
+        Byte(val) => val.into_py_any(py)?,
+        Short(val) => val.into_py_any(py)?,
+        Integer(val) => val.into_py_any(py)?,
+        Long(val) => val.into_py_any(py)?,
+        Float(val) => val.into_py_any(py)?,
+        Double(val) => val.into_py_any(py)?,
         Timestamp(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
             // scalar value to pa.timestamp("us","UTC")
             let value = value.serialize();
-            format!("{}Z", value).to_object(py)
+            format!("{value}Z").into_py_any(py)?
         }
         TimestampNtz(_) => {
             let value = value.serialize();
-            value.to_object(py)
+            value.into_py_any(py)?
         }
         // NOTE: PyArrow 13.0.0 lost the ability to cast from string to date32, so
         // we have to implement that manually.
         Date(_) => {
             let date = py_date.call_method1("fromisoformat", (value.serialize(),))?;
-            date.to_object(py)
+            date.into_py_any(py)?
         }
-        Decimal(_, _, _) => value.serialize().to_object(py),
+        Decimal(_, _, _) => value.serialize().into_py_any(py)?,
         Struct(data) => {
-            let py_struct = PyDict::new_bound(py);
+            let py_struct = PyDict::new(py);
             for (field, value) in data.fields().iter().zip(data.values().iter()) {
                 py_struct.set_item(field.name(), scalar_to_py(value, py_date)?)?;
             }
-            py_struct.to_object(py)
+            py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
     };
@@ -1749,12 +1959,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
+    stats_columns: &[String],
     file_info: LogicalFile<'_>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let ds = PyModule::import_bound(py, "pyarrow.dataset")?;
+    let ds = PyModule::import(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
-    let pa = PyModule::import_bound(py, "pyarrow")?;
-    let py_date = Python::import_bound(py, "datetime")?.getattr("date")?;
+    let pa = PyModule::import(py, "pyarrow")?;
+    let py_date = Python::import(py, "datetime")?.getattr("date")?;
     let mut expressions = Vec::new();
 
     let cast_to_type = |column_name: &String, value: &Bound<'py, PyAny>, schema: &ArrowSchema| {
@@ -1765,7 +1976,7 @@ fn filestats_to_expression_next<'py>(
             })?
             .data_type()
             .clone();
-        let column_type = PyArrowType(column_type).into_py(py);
+        let column_type = PyArrowType(column_type).into_pyobject(py)?;
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };
@@ -1793,13 +2004,15 @@ fn filestats_to_expression_next<'py>(
     // NOTE: null_counts should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.null_counts() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            if let Scalar::Long(val) = value {
-                if *val == 0 {
-                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
-                } else if Some(*val as usize) == file_info.num_records() {
-                    expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
-                } else {
-                    has_nulls_set.insert(field.name().to_string());
+            if stats_columns.contains(field.name()) {
+                if let Scalar::Long(val) = value {
+                    if *val == 0 {
+                        expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
+                    } else if Some(*val as usize) == file_info.num_records() {
+                        expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
+                    } else {
+                        has_nulls_set.insert(field.name().to_string());
+                    }
                 }
             }
         }
@@ -1808,24 +2021,26 @@ fn filestats_to_expression_next<'py>(
     // NOTE: min_values should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.min_values() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            match value {
-                // TODO: Handle nested field statistics.
-                Scalar::Struct(_) => {}
-                _ => {
-                    let maybe_minimum =
-                        cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
-                    if let Ok(minimum) = maybe_minimum {
-                        let field_expr = py_field.call1((field.name(),))?;
-                        let expr = field_expr.call_method1("__ge__", (minimum,));
-                        let expr = if has_nulls_set.contains(field.name()) {
-                            // col >= min_value OR col is null
-                            let is_null_expr = field_expr.call_method0("is_null");
-                            expr?.call_method1("__or__", (is_null_expr?,))
-                        } else {
-                            // col >= min_value
-                            expr
-                        };
-                        expressions.push(expr);
+            if stats_columns.contains(field.name()) {
+                match value {
+                    // TODO: Handle nested field statistics.
+                    Scalar::Struct(_) => {}
+                    _ => {
+                        let maybe_minimum =
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                        if let Ok(minimum) = maybe_minimum {
+                            let field_expr = py_field.call1((field.name(),))?;
+                            let expr = field_expr.call_method1("__ge__", (minimum,));
+                            let expr = if has_nulls_set.contains(field.name()) {
+                                // col >= min_value OR col is null
+                                let is_null_expr = field_expr.call_method0("is_null");
+                                expr?.call_method1("__or__", (is_null_expr?,))
+                            } else {
+                                // col >= min_value
+                                expr
+                            };
+                            expressions.push(expr);
+                        }
                     }
                 }
             }
@@ -1835,24 +2050,26 @@ fn filestats_to_expression_next<'py>(
     // NOTE: max_values should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.max_values() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            match value {
-                // TODO: Handle nested field statistics.
-                Scalar::Struct(_) => {}
-                _ => {
-                    let maybe_maximum =
-                        cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
-                    if let Ok(maximum) = maybe_maximum {
-                        let field_expr = py_field.call1((field.name(),))?;
-                        let expr = field_expr.call_method1("__le__", (maximum,));
-                        let expr = if has_nulls_set.contains(field.name()) {
-                            // col <= max_value OR col is null
-                            let is_null_expr = field_expr.call_method0("is_null");
-                            expr?.call_method1("__or__", (is_null_expr?,))
-                        } else {
-                            // col <= max_value
-                            expr
-                        };
-                        expressions.push(expr);
+            if stats_columns.contains(field.name()) {
+                match value {
+                    // TODO: Handle nested field statistics.
+                    Scalar::Struct(_) => {}
+                    _ => {
+                        let maybe_maximum =
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                        if let Ok(maximum) = maybe_maximum {
+                            let field_expr = py_field.call1((field.name(),))?;
+                            let expr = field_expr.call_method1("__le__", (maximum,));
+                            let expr = if has_nulls_set.contains(field.name()) {
+                                // col <= max_value OR col is null
+                                let is_null_expr = field_expr.call_method0("is_null");
+                                expr?.call_method1("__or__", (is_null_expr?,))
+                            } else {
+                                // col <= max_value
+                                expr
+                            };
+                            expressions.push(expr);
+                        }
                     }
                 }
             }
@@ -2022,13 +2239,12 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, data, mode, table=None, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (table_uri, data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
     data: PyArrowType<ArrowArrayStreamReader>,
     mode: String,
-    table: Option<&RawDeltaTable>,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
@@ -2041,74 +2257,45 @@ fn write_to_deltalake(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
-    py.allow_threads(|| {
-        let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
-        let save_mode = mode.parse().map_err(PythonError::from)?;
-
+    let raw_table: DeltaResult<RawDeltaTable> = py.allow_threads(|| {
         let options = storage_options.clone().unwrap_or_default();
-        let table = if let Some(table) = table {
-            table.with_table(|t| Ok(DeltaOps::from(t.clone())))?
-        } else {
-            rt().block_on(DeltaOps::try_from_uri_with_storage_options(
-                &table_uri, options,
-            ))
-            .map_err(PythonError::from)?
+        let table = rt()
+            .block_on(DeltaOps::try_from_uri_with_storage_options(
+                &table_uri,
+                options.clone(),
+            ))?
+            .0;
+
+        let raw_table = RawDeltaTable {
+            _table: Arc::new(Mutex::new(table)),
+            _config: FsConfig {
+                root_url: table_uri,
+                options,
+            },
         };
+        Ok(raw_table)
+    });
 
-        let mut builder = table.write(batches).with_save_mode(save_mode);
-        if let Some(schema_mode) = schema_mode {
-            builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
-        }
-        if let Some(partition_columns) = partition_by {
-            builder = builder.with_partition_columns(partition_columns);
-        }
-
-        if let Some(writer_props) = writer_properties {
-            builder = builder.with_writer_properties(
-                set_writer_properties(writer_props).map_err(PythonError::from)?,
-            );
-        }
-
-        if let Some(name) = &name {
-            builder = builder.with_table_name(name);
-        };
-
-        if let Some(description) = &description {
-            builder = builder.with_description(description);
-        };
-
-        if let Some(predicate) = predicate {
-            builder = builder.with_replace_where(predicate);
-        };
-
-        if let Some(target_file_size) = target_file_size {
-            builder = builder.with_target_file_size(target_file_size)
-        };
-
-        if let Some(config) = configuration {
-            builder = builder.with_configuration(config);
-        };
-
-        if let Some(commit_properties) =
-            maybe_create_commit_properties(commit_properties, post_commithook_properties)
-        {
-            builder = builder.with_commit_properties(commit_properties);
-        };
-
-        if table_uri.starts_with("lakefs://") {
-            builder = builder.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
-        }
-
-        rt().block_on(builder.into_future())
-            .map_err(PythonError::from)?;
-
-        Ok(())
-    })
+    raw_table.map_err(PythonError::from)?.write(
+        py,
+        data,
+        mode,
+        schema_mode,
+        partition_by,
+        predicate,
+        target_file_size,
+        name,
+        description,
+        configuration,
+        writer_properties,
+        commit_properties,
+        post_commithook_properties,
+    )
 }
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
+#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
 fn create_deltalake(
     py: Python,
     table_uri: String,
@@ -2120,7 +2307,8 @@ fn create_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
@@ -2152,10 +2340,10 @@ fn create_deltalake(
             builder = builder.with_configuration(config);
         };
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder.with_metadata(json_metadata);
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
+            builder = builder.with_commit_properties(commit_properties);
         };
 
         if use_lakefs_handler {
@@ -2171,19 +2359,20 @@ fn create_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, schema, add_actions, _mode, partition_by, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
-fn write_new_deltalake(
+#[pyo3(signature = (table_uri, schema, add_actions, mode, partition_by, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
+fn create_table_with_add_actions(
     py: Python,
     table_uri: String,
     schema: PyArrowType<ArrowSchema>,
     add_actions: Vec<PyAddAction>,
-    _mode: &str,
+    mode: &str,
     partition_by: Vec<String>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
@@ -2199,7 +2388,8 @@ fn write_new_deltalake(
             .create()
             .with_columns(schema.fields().cloned())
             .with_partition_columns(partition_by)
-            .with_actions(add_actions.iter().map(|add| Action::Add(add.into())));
+            .with_actions(add_actions.iter().map(|add| Action::Add(add.into())))
+            .with_save_mode(SaveMode::from_str(mode).map_err(PythonError::from)?);
 
         if let Some(name) = &name {
             builder = builder.with_table_name(name);
@@ -2213,10 +2403,10 @@ fn write_new_deltalake(
             builder = builder.with_configuration(config);
         };
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder.with_metadata(json_metadata);
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
+            builder = builder.with_commit_properties(commit_properties);
         };
 
         if use_lakefs_handler {
@@ -2232,7 +2422,7 @@ fn write_new_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, custom_metadata=None))]
+#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
 fn convert_to_deltalake(
     py: Python,
     uri: String,
@@ -2242,7 +2432,8 @@ fn convert_to_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    custom_metadata: Option<HashMap<String, String>>,
+    commit_properties: Option<PyCommitProperties>,
+    post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
@@ -2274,10 +2465,10 @@ fn convert_to_deltalake(
             builder = builder.with_storage_options(strg_options);
         };
 
-        if let Some(metadata) = custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder.with_metadata(json_metadata);
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
+            builder = builder.with_commit_properties(commit_properties);
         };
 
         if uri.starts_with("lakefs://") {
@@ -2350,35 +2541,26 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake::hdfs::register_handlers(None);
     deltalake_mount::register_handlers(None);
     deltalake::lakefs::register_handlers(None);
+    deltalake::unity_catalog::register_handlers(None);
+
+    init_client_version(format!("py-{}", env!("CARGO_PKG_VERSION")).as_str());
 
     let py = m.py();
-    m.add("DeltaError", py.get_type_bound::<DeltaError>())?;
-    m.add(
-        "CommitFailedError",
-        py.get_type_bound::<CommitFailedError>(),
-    )?;
-    m.add(
-        "DeltaProtocolError",
-        py.get_type_bound::<DeltaProtocolError>(),
-    )?;
-    m.add(
-        "TableNotFoundError",
-        py.get_type_bound::<TableNotFoundError>(),
-    )?;
-    m.add(
-        "SchemaMismatchError",
-        py.get_type_bound::<SchemaMismatchError>(),
-    )?;
+    m.add("DeltaError", py.get_type::<DeltaError>())?;
+    m.add("CommitFailedError", py.get_type::<CommitFailedError>())?;
+    m.add("DeltaProtocolError", py.get_type::<DeltaProtocolError>())?;
+    m.add("TableNotFoundError", py.get_type::<TableNotFoundError>())?;
+    m.add("SchemaMismatchError", py.get_type::<SchemaMismatchError>())?;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(rust_core_version, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(create_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(write_new_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(write_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(convert_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(batch_distinct, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction_bound!(
+    m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(
         get_num_idx_cols_and_stats_columns,
         m
     )?)?;

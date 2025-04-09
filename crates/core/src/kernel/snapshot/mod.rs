@@ -25,6 +25,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
+use tracing::warn;
 
 use self::log_segment::{LogSegment, PathExt};
 use self::parse::{read_adds, read_removes};
@@ -38,6 +39,7 @@ use crate::kernel::parse::read_cdf_adds;
 use crate::kernel::{ActionType, StructType};
 use crate::logstore::LogStore;
 use crate::operations::transaction::CommitData;
+use crate::operations::transaction::PROTOCOL;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -80,6 +82,9 @@ impl Snapshot {
         };
         let (metadata, protocol) = (metadata.unwrap(), protocol.unwrap());
         let schema = serde_json::from_str(&metadata.schema_string)?;
+
+        PROTOCOL.can_read_from_protocol(&protocol)?;
+
         Ok(Self {
             log_segment,
             config,
@@ -652,25 +657,32 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
     let stats_fields = if let Some(stats_cols) = config.stats_columns() {
         stats_cols
             .iter()
-            .map(|col| match get_stats_field(schema, col) {
-                Some(field) => match field.data_type() {
-                    DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
-                        Err(DeltaTableError::Generic(format!(
-                            "Stats column {} has unsupported type {}",
-                            col,
-                            field.data_type()
-                        )))
+            .filter_map(|col| match get_stats_field(schema, col) {
+                Some(field) => {
+                    let is_binary_type = matches!(field.data_type(), &DataType::BINARY);
+                    if is_binary_type {
+                        warn!("Column {} is of binary type and excluded from loading in stats columns.", col);
+                        return None
                     }
-                    _ => Ok(StructField::new(
-                        field.name(),
-                        field.data_type().clone(),
-                        true,
-                    )),
-                },
-                _ => Err(DeltaTableError::Generic(format!(
-                    "Stats column {} not found in schema",
-                    col
-                ))),
+                    Some(match field.data_type() {
+                        DataType::Map(_) | DataType::Array(_) => {
+                            Err(DeltaTableError::Generic(format!(
+                                "Stats column {col} has unsupported type {}",
+                                field.data_type()
+                            )))
+                        }
+                        _ => Ok(StructField::new(
+                            field.name(),
+                            field.data_type().clone(),
+                            true,
+                        )),
+                    })
+                }
+                _ => {
+                    Some(Err(DeltaTableError::Generic(format!(
+                        "Stats column {col} not found in schema"
+                    ))))
+                }
             })
             .collect::<Result<Vec<_>, _>>()?
     } else {
@@ -706,10 +718,7 @@ pub(crate) fn partitions_schema(
             .iter()
             .map(|col| {
                 schema.field(col).cloned().ok_or_else(|| {
-                    DeltaTableError::Generic(format!(
-                        "Partition column {} not found in schema",
-                        col
-                    ))
+                    DeltaTableError::Generic(format!("Partition column {col} not found in schema"))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,

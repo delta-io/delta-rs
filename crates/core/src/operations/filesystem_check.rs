@@ -22,7 +22,7 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 pub use object_store::path::Path;
 use object_store::ObjectStore;
-use serde::Serialize;
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use url::{ParseError, Url};
 use uuid::Uuid;
 
@@ -56,6 +56,10 @@ pub struct FileSystemCheckMetrics {
     /// Was this a dry run
     pub dry_run: bool,
     /// Files that wrere removed successfully
+    #[serde(
+        serialize_with = "serialize_vec_string",
+        deserialize_with = "deserialize_vec_string"
+    )]
     pub files_removed: Vec<String>,
 }
 
@@ -66,13 +70,31 @@ struct FileSystemCheckPlan {
     pub files_to_remove: Vec<Add>,
 }
 
+// Custom serialization function that serializes metric details as a string
+fn serialize_vec_string<S>(value: &Vec<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let json_string = serde_json::to_string(value).map_err(serde::ser::Error::custom)?;
+    serializer.serialize_str(&json_string)
+}
+
+// Custom deserialization that parses a JSON string into MetricDetails
+#[expect(dead_code)]
+fn deserialize_vec_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(DeError::custom)
+}
+
 fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     match Url::parse(path) {
         Ok(_) => Ok(true),
         Err(ParseError::RelativeUrlWithoutBase) => Ok(false),
         Err(_) => Err(DeltaTableError::Generic(format!(
-            "Unable to parse path: {}",
-            &path
+            "Unable to parse path: {path}"
         ))),
     }
 }

@@ -8,9 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, PostCommitHookProperties, write_deltalake
 from deltalake.exceptions import DeltaError
-from deltalake.table import PostCommitHookProperties
 
 
 def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -140,15 +139,14 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert second_failed_log_path.exists()
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_cleanup_metadata_log_cleanup_hook(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path, sample_data: pa.Table
 ):
     delta_table = setup_cleanup_metadata(tmp_path, sample_data)
     delta_table.create_checkpoint()
 
     sample_data = sample_data.drop(["binary"])
-    write_deltalake(delta_table, sample_data, mode="append", engine=engine)
+    write_deltalake(delta_table, sample_data, mode="append")
 
     tmp_table_path = tmp_path / "path" / "to" / "table"
     first_failed_log_path = (
@@ -168,9 +166,8 @@ def test_cleanup_metadata_log_cleanup_hook(
     assert second_failed_log_path.exists()
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_cleanup_metadata_log_cleanup_hook_disabled(
-    tmp_path: pathlib.Path, sample_data: pa.Table, engine
+    tmp_path: pathlib.Path, sample_data: pa.Table
 ):
     delta_table = setup_cleanup_metadata(tmp_path, sample_data)
     delta_table.create_checkpoint()
@@ -180,7 +177,6 @@ def test_cleanup_metadata_log_cleanup_hook_disabled(
         delta_table,
         sample_data,
         mode="append",
-        engine=engine,
         post_commithook_properties=PostCommitHookProperties(cleanup_expired_logs=False),
     )
 
@@ -310,22 +306,14 @@ def sample_all_types():
 
 
 @pytest.mark.parametrize(
-    "engine,part_col",
+    "part_col",
     [
-        ("rust", "timestampNtz"),
-        ("rust", "timestamp"),
-        ("pyarrow", "timestampNtz"),
-        pytest.param(
-            "pyarrow",
-            "timestamp",
-            marks=pytest.mark.skip(
-                "Pyarrow serialization of UTC datetimes is incorrect, it appends a 'Z' at the end."
-            ),
-        ),
+        "timestampNtz",
+        "timestamp",
     ],
 )
 def test_checkpoint_partition_timestamp_2380(
-    tmp_path: pathlib.Path, sample_all_types: pa.Table, part_col: str, engine: str
+    tmp_path: pathlib.Path, sample_all_types: pa.Table, part_col: str
 ):
     tmp_table_path = tmp_path / "path" / "to" / "table"
     checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
@@ -339,7 +327,6 @@ def test_checkpoint_partition_timestamp_2380(
         str(tmp_table_path),
         sample_data,
         partition_by=[part_col],
-        engine=engine,  # type: ignore
     )
 
     assert not checkpoint_path.exists()
@@ -539,3 +526,39 @@ def test_checkpoint_with_multiple_writes(tmp_path: pathlib.Path):
     new_df = dt.to_pandas()
     print(dt.to_pandas())
     assert len(new_df) == 1, "We overwrote! there should only be one row"
+
+
+@pytest.mark.polars
+def test_refresh_snapshot_after_log_cleanup_3057(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/3057"""
+    import polars as pl
+
+    configuration = {
+        "delta.deletedFileRetentionDuration": "interval 0 days",
+        "delta.logRetentionDuration": "interval 0 days",
+        "delta.targetFileSize": str(128 * 1024 * 1024),
+    }
+
+    for i in range(2):
+        df = pl.DataFrame({"foo": [i]})
+        df.write_delta(
+            str(tmp_path),
+            delta_write_options={"configuration": configuration},
+            mode="append",
+        )
+
+    # create checkpoint so that logs before checkpoint can get removed
+    dt = DeltaTable(tmp_path)
+    dt.create_checkpoint()
+
+    # Write to table again, snapshot should be correctly refreshed so that clean_up metadata can run after this
+    df = pl.DataFrame({"foo": [1]})
+    df.write_delta(dt, mode="append")
+
+    # Vacuum is noop, since we already removed logs before and snapshot doesn't reference them anymore
+
+    vacuum_log = dt.vacuum(
+        retention_hours=0, enforce_retention_duration=False, dry_run=False
+    )
+
+    assert vacuum_log == []

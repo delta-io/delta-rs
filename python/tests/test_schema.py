@@ -6,11 +6,13 @@ import pytest
 from deltalake import DeltaTable, Field
 from deltalake.schema import (
     ArrayType,
-    ArrowSchemaConversionMode,
     MapType,
     PrimitiveType,
     Schema,
     StructType,
+)
+from deltalake.writer._conversion import (
+    ArrowSchemaConversionMode,
     _convert_pa_schema_to_delta,
 )
 
@@ -553,3 +555,12 @@ def test_schema_conversions(schema, expected_schema, conversion_mode):
     result_schema = _convert_pa_schema_to_delta(schema, conversion_mode)
 
     assert result_schema == expected_schema
+
+
+# <https://github.com/delta-io/delta-rs/issues/3174>
+def test_field_serialization():
+    from deltalake import Field
+
+    f = Field("fieldname", "binary", metadata={"key": "value"})
+    assert f.name == "fieldname"
+    assert f.metadata == {"key": "value"}

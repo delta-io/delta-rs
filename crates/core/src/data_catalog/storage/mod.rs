@@ -80,7 +80,7 @@ impl ListingSchemaProvider {
                 .ok_or_else(|| DataFusionError::Internal("Cannot parse file name!".to_string()))?
                 .to_string();
             if !self.table_exist(&table_name) {
-                let table_url = format!("{}/{}", self.authority, table_path);
+                let table_url = format!("{}/{table_path}", self.authority);
                 self.tables.insert(table_name.to_string(), table_url);
             }
         }
@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::catalog::CatalogProvider;
-    use datafusion::catalog_common::MemoryCatalogProvider;
+    use datafusion::catalog::MemoryCatalogProvider;
     use datafusion::execution::context::SessionContext;
 
     #[test]

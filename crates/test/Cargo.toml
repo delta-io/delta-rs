@@ -1,12 +1,12 @@
 [package]
 name = "deltalake-test"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 publish = false
 
 [dependencies]
 delta_kernel = { workspace = true }
-deltalake-core = { version = "0.24.0", path = "../core" }
+deltalake-core = { version = "0.25.0", path = "../core" }
 
 arrow-array = { workspace = true, features = ["chrono-tz"] }
 arrow-cast = { workspace = true }

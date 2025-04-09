@@ -44,7 +44,7 @@ impl StorageIntegration for HdfsIntegration {
     }
 
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
-        println!("Copy directory called with {} {}", source, destination);
+        println!("Copy directory called with {source} {destination}");
         let hadoop_exc = which("hadoop").expect("Failed to find hadoop executable");
         Ok(Command::new(hadoop_exc)
             .args([
@@ -52,7 +52,7 @@ impl StorageIntegration for HdfsIntegration {
                 "-copyFromLocal",
                 "-p",
                 source,
-                &format!("{}/{}", self.root_uri(), destination),
+                &format!("{}/{destination}", self.root_uri()),
             ])
             .status()
             .unwrap())

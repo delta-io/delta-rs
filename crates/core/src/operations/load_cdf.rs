@@ -1,18 +1,27 @@
 //! Module for reading the change datafeed of delta tables
+//!
+//! # Example
+//! ```rust ignore
+//! let table = open_table("../path/to/table")?;
+//! let builder = CdfLoadBuilder::new(table.log_store(), table.snapshot())
+//!     .with_starting_version(3);
+//!
+//! let ctx = SessionContext::new();
+//! let provider = DeltaCdfTableProvider::try_new(builder)?;
+//! let df = ctx.read_table(provider).await?;
 
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use arrow_array::RecordBatch;
-use arrow_schema::{ArrowError, Field};
+use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::physical_plan::{FileScanConfig, FileSource, ParquetSource};
+use datafusion::execution::SessionState;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{ScalarValue, Statistics};
-use datafusion_physical_expr::expressions;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_common::config::TableParquetOptions;
+use datafusion_common::ScalarValue;
+use datafusion_physical_expr::{expressions, PhysicalExpr};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::ExecutionPlan;
@@ -27,14 +36,12 @@ use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
 /// Builder for create a read of change data feeds for delta tables
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CdfLoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: DeltaTableState,
+    pub snapshot: DeltaTableState,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Columns to project
-    columns: Option<Vec<String>>,
     /// Version to read from
     starting_version: Option<i64>,
     /// Version to stop reading at
@@ -45,8 +52,6 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
-    /// Provided Datafusion context
-    ctx: SessionContext,
 }
 
 impl CdfLoadBuilder {
@@ -55,13 +60,11 @@ impl CdfLoadBuilder {
         Self {
             snapshot,
             log_store,
-            columns: None,
             starting_version: None,
             ending_version: None,
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
-            ctx: SessionContext::new(),
         }
     }
 
@@ -74,12 +77,6 @@ impl CdfLoadBuilder {
     /// Version (inclusive) to end at
     pub fn with_ending_version(mut self, ending_version: i64) -> Self {
         self.ending_version = Some(ending_version);
-        self
-    }
-
-    /// Provide a datafusion session context
-    pub fn with_session_ctx(mut self, ctx: SessionContext) -> Self {
-        self.ctx = ctx;
         self
     }
 
@@ -101,22 +98,15 @@ impl CdfLoadBuilder {
         self
     }
 
-    /// Columns to select
-    pub fn with_columns(mut self, columns: Vec<String>) -> Self {
-        self.columns = Some(columns);
-        self
-    }
-
     async fn calculate_earliest_version(&self) -> DeltaResult<i64> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..self.snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
                 if let Ok(actions) = get_actions(v, bytes).await {
-                    if actions.iter().any(|action| match action {
-                        Action::CommitInfo(CommitInfo {
+                    if actions.iter().any(|action| {
+                        matches!(action, Action::CommitInfo(CommitInfo {
                             timestamp: Some(t), ..
-                        }) if ts.timestamp_millis() < *t => true,
-                        _ => false,
+                        }) if ts.timestamp_millis() < *t)
                     }) {
                         return Ok(v);
                     }
@@ -164,7 +154,7 @@ impl CdfLoadBuilder {
                 Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
             };
         }
-        if start >= latest_version {
+        if start > latest_version {
             return if self.allow_out_of_range {
                 Ok((change_files, add_files, remove_files))
             } else {
@@ -205,11 +195,9 @@ impl CdfLoadBuilder {
         }
 
         log::debug!(
-            "starting timestamp = {:?}, ending timestamp = {:?}",
-            &starting_timestamp,
-            &ending_timestamp
+            "starting timestamp = {starting_timestamp:?}, ending timestamp = {ending_timestamp:?}"
         );
-        log::debug!("starting version = {}, ending version = {:?}", start, end);
+        log::debug!("starting version = {start}, ending version = {end:?}");
 
         for version in start..=end {
             let snapshot_bytes = self
@@ -236,7 +224,7 @@ impl CdfLoadBuilder {
                     if starting_timestamp.timestamp_millis() > *t
                         || *t > ending_timestamp.timestamp_millis()
                     {
-                        log::debug!("Version: {} skipped, due to commit timestamp", version);
+                        log::debug!("Version: {version} skipped, due to commit timestamp");
                         continue;
                     }
                 }
@@ -246,7 +234,7 @@ impl CdfLoadBuilder {
                 match action {
                     Action::Cdc(f) => cdc_actions.push(f.clone()),
                     Action::Metadata(md) => {
-                        log::info!("Metadata: {:?}", &md);
+                        log::info!("Metadata: {md:?}");
                         if let Some(Some(key)) = &md.configuration.get("delta.enableChangeDataFeed")
                         {
                             let key = key.to_lowercase();
@@ -272,9 +260,8 @@ impl CdfLoadBuilder {
 
             if !cdc_actions.is_empty() {
                 log::debug!(
-                    "Located {} cdf actions for version: {}",
+                    "Located {} cdf actions for version: {version}",
                     cdc_actions.len(),
-                    version
                 );
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
@@ -296,18 +283,16 @@ impl CdfLoadBuilder {
 
                 if !add_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {}",
+                        "Located {} cdf actions for version: {version}",
                         add_actions.len(),
-                        version
                     );
                     add_files.push(CdcDataSpec::new(version, ts, add_actions));
                 }
 
                 if !remove_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {}",
+                        "Located {} cdf actions for version: {version}",
                         remove_actions.len(),
-                        version
                     );
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
@@ -328,12 +313,13 @@ impl CdfLoadBuilder {
     }
 
     /// Executes the scan
-    pub async fn build(&self) -> DeltaResult<DeltaCdfScan> {
+    pub(crate) async fn build(
+        &self,
+        session_sate: &SessionState,
+        filters: Option<&Arc<dyn PhysicalExpr>>,
+    ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let (cdc, add, remove) = self.determine_files_to_read().await?;
-        register_store(
-            self.log_store.clone(),
-            self.ctx.state().runtime_env().clone(),
-        );
+        register_store(self.log_store.clone(), session_sate.runtime_env().clone());
 
         let partition_values = self.snapshot.metadata().partition_columns.clone();
         let schema = self.snapshot.input_schema()?;
@@ -382,78 +368,70 @@ impl CdfLoadBuilder {
         )?;
 
         // Create the parquet scans for each associated type of file.
-        let cdc_scan = ParquetFormat::new()
-            .create_physical_plan(
-                &self.ctx.state(),
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema: cdc_file_schema.clone(),
-                    file_groups: cdc_file_groups.into_values().collect(),
-                    statistics: Statistics::new_unknown(&cdc_file_schema),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: cdc_partition_cols,
-                    output_ordering: vec![],
-                },
-                None,
-            )
-            .await?;
+        let mut parquet_source = ParquetSource::new(TableParquetOptions::new());
+        if let Some(filters) = filters {
+            parquet_source =
+                parquet_source.with_predicate(Arc::clone(&cdc_file_schema), Arc::clone(filters));
+        }
+        let parquet_source: Arc<dyn FileSource> = Arc::new(parquet_source);
+        let cdc_scan: Arc<dyn ExecutionPlan> = FileScanConfig::new(
+            self.log_store.object_store_url(),
+            Arc::clone(&cdc_file_schema),
+            Arc::clone(&parquet_source),
+        )
+        .with_file_groups(cdc_file_groups.into_values().collect())
+        .with_table_partition_cols(cdc_partition_cols)
+        .build();
 
-        let add_scan = ParquetFormat::new()
-            .create_physical_plan(
-                &self.ctx.state(),
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema: add_remove_file_schema.clone(),
-                    file_groups: add_file_groups.into_values().collect(),
-                    statistics: Statistics::new_unknown(&add_remove_file_schema.clone()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: add_remove_partition_cols.clone(),
-                    output_ordering: vec![],
-                },
-                None,
-            )
-            .await?;
+        let add_scan: Arc<dyn ExecutionPlan> = FileScanConfig::new(
+            self.log_store.object_store_url(),
+            Arc::clone(&add_remove_file_schema),
+            Arc::clone(&parquet_source),
+        )
+        .with_file_groups(add_file_groups.into_values().collect())
+        .with_table_partition_cols(add_remove_partition_cols.clone())
+        .build();
 
-        let remove_scan = ParquetFormat::new()
-            .create_physical_plan(
-                &self.ctx.state(),
-                FileScanConfig {
-                    object_store_url: self.log_store.object_store_url(),
-                    file_schema: add_remove_file_schema.clone(),
-                    file_groups: remove_file_groups.into_values().collect(),
-                    statistics: Statistics::new_unknown(&add_remove_file_schema),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: add_remove_partition_cols,
-                    output_ordering: vec![],
-                },
-                None,
-            )
-            .await?;
+        let remove_scan: Arc<dyn ExecutionPlan> = FileScanConfig::new(
+            self.log_store.object_store_url(),
+            Arc::clone(&add_remove_file_schema),
+            parquet_source,
+        )
+        .with_file_groups(remove_file_groups.into_values().collect())
+        .with_table_partition_cols(add_remove_partition_cols)
+        .build();
 
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
         // being for development. I plan to parallelize the reads once the base idea is correct.
-        let mut union_scan: Arc<dyn ExecutionPlan> =
+        let union_scan: Arc<dyn ExecutionPlan> =
             Arc::new(UnionExec::new(vec![cdc_scan, add_scan, remove_scan]));
 
-        if let Some(columns) = &self.columns {
-            let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = union_scan
-                .schema()
-                .fields()
-                .into_iter()
-                .enumerate()
-                .map(|(idx, field)| -> (Arc<dyn PhysicalExpr>, String) {
-                    let field_name = field.name();
-                    let expr = Arc::new(expressions::Column::new(field_name, idx));
-                    (expr, field_name.to_owned())
-                })
-                .filter(|(_, field_name)| columns.contains(field_name))
-                .collect();
-            union_scan = Arc::new(ProjectionExec::try_new(expressions, union_scan)?);
+        // We project the union in the order of the input_schema + cdc cols at the end
+        // This is to ensure the DeltaCdfTableProvider uses the correct schema construction.
+        let mut fields = schema.fields().to_vec();
+        for f in ADD_PARTITION_SCHEMA.clone() {
+            fields.push(f.into());
         }
-        Ok(DeltaCdfScan::new(union_scan))
+        let project_schema = Schema::new(fields);
+
+        let union_schema = union_scan.schema();
+
+        let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = project_schema
+            .fields()
+            .into_iter()
+            .map(|f| -> (Arc<dyn PhysicalExpr>, String) {
+                let field_name = f.name();
+                let expr = Arc::new(expressions::Column::new(
+                    field_name,
+                    union_schema.index_of(field_name).unwrap(),
+                ));
+                (expr, field_name.to_owned())
+            })
+            .collect();
+
+        let scan = Arc::new(ProjectionExec::try_new(expressions, union_scan)?);
+
+        Ok(scan)
     }
 }
 
@@ -461,7 +439,7 @@ impl CdfLoadBuilder {
 /// Helper function to collect batches associated with reading CDF data
 pub(crate) async fn collect_batches(
     num_partitions: usize,
-    stream: DeltaCdfScan,
+    stream: Arc<dyn ExecutionPlan>,
     ctx: SessionContext,
 ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
     let mut batches = vec![];
@@ -481,7 +459,6 @@ pub(crate) mod tests {
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::Schema;
     use chrono::NaiveDateTime;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_batches_sorted_eq;
     use itertools::Itertools;
@@ -492,13 +469,12 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
-        let ctx = SessionContext::new();
+        let ctx: SessionContext = SessionContext::new();
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table")
             .await?
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -508,33 +484,34 @@ pub(crate) mod tests {
         )
         .await?;
         assert_batches_sorted_eq! {
-            ["+----+--------+------------------+-----------------+-------------------------+------------+",
-             "| id | name   | _change_type     | _commit_version | _commit_timestamp       | birthday   |",
-             "+----+--------+------------------+-----------------+-------------------------+------------+",
-             "| 7  | Dennis | delete           | 3               | 2024-01-06T16:44:59.570 | 2023-12-29 |",
-             "| 3  | Dave   | update_preimage  | 1               | 2023-12-22T17:10:21.675 | 2023-12-23 |",
-             "| 4  | Kate   | update_preimage  | 1               | 2023-12-22T17:10:21.675 | 2023-12-23 |",
-             "| 2  | Bob    | update_preimage  | 1               | 2023-12-22T17:10:21.675 | 2023-12-23 |",
-             "| 7  | Dennis | update_preimage  | 2               | 2023-12-29T21:41:33.785 | 2023-12-24 |",
-             "| 5  | Emily  | update_preimage  | 2               | 2023-12-29T21:41:33.785 | 2023-12-24 |",
-             "| 6  | Carl   | update_preimage  | 2               | 2023-12-29T21:41:33.785 | 2023-12-24 |",
-             "| 7  | Dennis | update_postimage | 2               | 2023-12-29T21:41:33.785 | 2023-12-29 |",
-             "| 5  | Emily  | update_postimage | 2               | 2023-12-29T21:41:33.785 | 2023-12-29 |",
-             "| 6  | Carl   | update_postimage | 2               | 2023-12-29T21:41:33.785 | 2023-12-29 |",
-             "| 3  | Dave   | update_postimage | 1               | 2023-12-22T17:10:21.675 | 2023-12-22 |",
-             "| 4  | Kate   | update_postimage | 1               | 2023-12-22T17:10:21.675 | 2023-12-22 |",
-             "| 2  | Bob    | update_postimage | 1               | 2023-12-22T17:10:21.675 | 2023-12-22 |",
-             "| 2  | Bob    | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-23 |",
-             "| 3  | Dave   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-23 |",
-             "| 4  | Kate   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-23 |",
-             "| 5  | Emily  | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-24 |",
-             "| 6  | Carl   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-24 |",
-             "| 7  | Dennis | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-24 |",
-             "| 1  | Steve  | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-22 |",
-             "| 8  | Claire | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-25 |",
-             "| 9  | Ada    | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-25 |",
-             "| 10 | Borb   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-25 |",
-             "+----+--------+------------------+-----------------+-------------------------+------------+"
+            [
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+                "| id | name   | birthday   | _change_type     | _commit_version | _commit_timestamp       |",
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+                "| 1  | Steve  | 2023-12-22 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 10 | Borb   | 2023-12-25 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 2  | Bob    | 2023-12-22 | update_postimage | 1               | 2023-12-22T17:10:21.675 |",
+                "| 2  | Bob    | 2023-12-23 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 2  | Bob    | 2023-12-23 | update_preimage  | 1               | 2023-12-22T17:10:21.675 |",
+                "| 3  | Dave   | 2023-12-22 | update_postimage | 1               | 2023-12-22T17:10:21.675 |",
+                "| 3  | Dave   | 2023-12-23 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 3  | Dave   | 2023-12-23 | update_preimage  | 1               | 2023-12-22T17:10:21.675 |",
+                "| 4  | Kate   | 2023-12-22 | update_postimage | 1               | 2023-12-22T17:10:21.675 |",
+                "| 4  | Kate   | 2023-12-23 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 4  | Kate   | 2023-12-23 | update_preimage  | 1               | 2023-12-22T17:10:21.675 |",
+                "| 5  | Emily  | 2023-12-24 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 5  | Emily  | 2023-12-24 | update_preimage  | 2               | 2023-12-29T21:41:33.785 |",
+                "| 5  | Emily  | 2023-12-29 | update_postimage | 2               | 2023-12-29T21:41:33.785 |",
+                "| 6  | Carl   | 2023-12-24 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 6  | Carl   | 2023-12-24 | update_preimage  | 2               | 2023-12-29T21:41:33.785 |",
+                "| 6  | Carl   | 2023-12-29 | update_postimage | 2               | 2023-12-29T21:41:33.785 |",
+                "| 7  | Dennis | 2023-12-24 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 7  | Dennis | 2023-12-24 | update_preimage  | 2               | 2023-12-29T21:41:33.785 |",
+                "| 7  | Dennis | 2023-12-29 | delete           | 3               | 2024-01-06T16:44:59.570 |",
+                "| 7  | Dennis | 2023-12-29 | update_postimage | 2               | 2023-12-29T21:41:33.785 |",
+                "| 8  | Claire | 2023-12-25 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 9  | Ada    | 2023-12-25 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
         ], &batches }
         Ok(())
     }
@@ -546,11 +523,11 @@ pub(crate) mod tests {
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table")
             .await?
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
-            .build()
-            .await?;
+            .build(&ctx.state(), None)
+            .await
+            .unwrap();
 
         let batches = collect_batches(
             table.properties().output_partitioning().partition_count(),
@@ -560,26 +537,27 @@ pub(crate) mod tests {
         .await?;
 
         assert_batches_sorted_eq! {
-            ["+----+--------+------------------+-----------------+-------------------------+------------+",
-             "| id | name   | _change_type     | _commit_version | _commit_timestamp       | birthday   |",
-             "+----+--------+------------------+-----------------+-------------------------+------------+",
-             "| 3  | Dave   | update_preimage  | 1               | 2023-12-22T17:10:21.675 | 2023-12-23 |",
-             "| 4  | Kate   | update_preimage  | 1               | 2023-12-22T17:10:21.675 | 2023-12-23 |",
-             "| 2  | Bob    | update_preimage  | 1               | 2023-12-22T17:10:21.675 | 2023-12-23 |",
-             "| 3  | Dave   | update_postimage | 1               | 2023-12-22T17:10:21.675 | 2023-12-22 |",
-             "| 4  | Kate   | update_postimage | 1               | 2023-12-22T17:10:21.675 | 2023-12-22 |",
-             "| 2  | Bob    | update_postimage | 1               | 2023-12-22T17:10:21.675 | 2023-12-22 |",
-             "| 2  | Bob    | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-23 |",
-             "| 3  | Dave   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-23 |",
-             "| 4  | Kate   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-23 |",
-             "| 8  | Claire | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-25 |",
-             "| 9  | Ada    | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-25 |",
-             "| 10 | Borb   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-25 |",
-             "| 1  | Steve  | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-22 |",
-             "| 5  | Emily  | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-24 |",
-             "| 6  | Carl   | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-24 |",
-             "| 7  | Dennis | insert           | 0               | 2023-12-22T17:10:18.828 | 2023-12-24 |",
-             "+----+--------+------------------+-----------------+-------------------------+------------+"
+            [
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+                "| id | name   | birthday   | _change_type     | _commit_version | _commit_timestamp       |",
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+                "| 1  | Steve  | 2023-12-22 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 10 | Borb   | 2023-12-25 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 2  | Bob    | 2023-12-22 | update_postimage | 1               | 2023-12-22T17:10:21.675 |",
+                "| 2  | Bob    | 2023-12-23 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 2  | Bob    | 2023-12-23 | update_preimage  | 1               | 2023-12-22T17:10:21.675 |",
+                "| 3  | Dave   | 2023-12-22 | update_postimage | 1               | 2023-12-22T17:10:21.675 |",
+                "| 3  | Dave   | 2023-12-23 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 3  | Dave   | 2023-12-23 | update_preimage  | 1               | 2023-12-22T17:10:21.675 |",
+                "| 4  | Kate   | 2023-12-22 | update_postimage | 1               | 2023-12-22T17:10:21.675 |",
+                "| 4  | Kate   | 2023-12-23 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 4  | Kate   | 2023-12-23 | update_preimage  | 1               | 2023-12-22T17:10:21.675 |",
+                "| 5  | Emily  | 2023-12-24 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 6  | Carl   | 2023-12-24 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 7  | Dennis | 2023-12-24 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 8  | Claire | 2023-12-25 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "| 9  | Ada    | 2023-12-25 | insert           | 0               | 2023-12-22T17:10:18.828 |",
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
             ],
             &batches
         }
@@ -592,9 +570,8 @@ pub(crate) mod tests {
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
             .await?
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -641,12 +618,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_bad_version_range() -> TestResult {
+        let ctx = SessionContext::new();
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
             .await?
             .load_cdf()
             .with_starting_version(4)
             .with_ending_version(1)
-            .build()
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -660,33 +638,34 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_version_out_of_range() -> TestResult {
+        let ctx = SessionContext::new();
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
             .await?
             .load_cdf()
             .with_starting_version(5)
-            .build()
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
-        assert!(matches!(
-            table.unwrap_err(),
-            DeltaTableError::InvalidVersion { .. }
-        ));
+        assert!(table
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid version. Start version 5 is greater than end version 4"));
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_load_version_out_of_range_with_flag() -> TestResult {
+        let ctx = SessionContext::new();
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
             .await?
             .load_cdf()
             .with_starting_version(5)
             .with_allow_out_of_range()
-            .build()
+            .build(&ctx.state(), None)
             .await?;
 
-        let ctx = SessionContext::new();
         let batches = collect_batches(
             table.properties().output_partitioning().partition_count(),
             table.clone(),
@@ -702,11 +681,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_timestamp_out_of_range() -> TestResult {
         let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let ctx = SessionContext::new();
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
-            .build()
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -720,16 +700,16 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_timestamp_out_of_range_with_flag() -> TestResult {
+        let ctx = SessionContext::new();
         let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
         let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .with_allow_out_of_range()
-            .build()
+            .build(&ctx.state(), None)
             .await?;
 
-        let ctx = SessionContext::new();
         let batches = collect_batches(
             table.properties().output_partitioning().partition_count(),
             table.clone(),
@@ -744,11 +724,12 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_non_cdf() -> TestResult {
+        let ctx = SessionContext::new();
         let table = DeltaOps::try_from_uri("../test/tests/data/simple_table")
             .await?
             .load_cdf()
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await;
 
         assert!(table.is_err());
@@ -767,9 +748,8 @@ pub(crate) mod tests {
         let table = DeltaOps::try_from_uri("../test/tests/data/checkpoint-cdf-table")
             .await?
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_timestamp(ending_timestamp.and_utc())
-            .build()
+            .build(&ctx.state(), None)
             .await?;
 
         let batches = collect_batches(
@@ -780,23 +760,25 @@ pub(crate) mod tests {
         .await?;
 
         assert_batches_sorted_eq! {
-            ["+----+--------+------------------+-----------------+-------------------------+------------+",
-             "| id | name   | _change_type     | _commit_version | _commit_timestamp       | birthday   |",
-             "+----+--------+------------------+-----------------+-------------------------+------------+",
-             "| 11 | Ossama | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2024-12-30 |",
-             "| 12 | Ossama | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2024-12-30 |",
-             "| 7  | Dennis | delete           | 3               | 2024-01-06T16:44:59.570 | 2023-12-29 |",
-             "| 14 | Zach   | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2023-12-25 |",
-             "| 15 | Zach   | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2023-12-25 |",
-             "| 13 | Ryan   | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2023-12-22 |",
-             "| 14 | Ryan   | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2023-12-22 |",
-             "| 12 | Nick   | update_preimage  | 5               | 2025-01-06T16:38:19.623 | 2023-12-29 |",
-             "| 13 | Nick   | update_postimage | 5               | 2025-01-06T16:38:19.623 | 2023-12-29 |",
-             "| 11 | Ossama | insert           | 4               | 2025-01-06T16:33:18.167 | 2024-12-30 |",
-             "| 12 | Nick   | insert           | 4               | 2025-01-06T16:33:18.167 | 2023-12-29 |",
-             "| 13 | Ryan   | insert           | 4               | 2025-01-06T16:33:18.167 | 2023-12-22 |",
-             "| 14 | Zach   | insert           | 4               | 2025-01-06T16:33:18.167 | 2023-12-25 |",
-             "+----+--------+------------------+-----------------+-------------------------+------------+"],
+            [
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+                "| id | name   | birthday   | _change_type     | _commit_version | _commit_timestamp       |",
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+                "| 11 | Ossama | 2024-12-30 | insert           | 4               | 2025-01-06T16:33:18.167 |",
+                "| 11 | Ossama | 2024-12-30 | update_preimage  | 5               | 2025-01-06T16:38:19.623 |",
+                "| 12 | Nick   | 2023-12-29 | insert           | 4               | 2025-01-06T16:33:18.167 |",
+                "| 12 | Nick   | 2023-12-29 | update_preimage  | 5               | 2025-01-06T16:38:19.623 |",
+                "| 12 | Ossama | 2024-12-30 | update_postimage | 5               | 2025-01-06T16:38:19.623 |",
+                "| 13 | Nick   | 2023-12-29 | update_postimage | 5               | 2025-01-06T16:38:19.623 |",
+                "| 13 | Ryan   | 2023-12-22 | insert           | 4               | 2025-01-06T16:33:18.167 |",
+                "| 13 | Ryan   | 2023-12-22 | update_preimage  | 5               | 2025-01-06T16:38:19.623 |",
+                "| 14 | Ryan   | 2023-12-22 | update_postimage | 5               | 2025-01-06T16:38:19.623 |",
+                "| 14 | Zach   | 2023-12-25 | insert           | 4               | 2025-01-06T16:33:18.167 |",
+                "| 14 | Zach   | 2023-12-25 | update_preimage  | 5               | 2025-01-06T16:38:19.623 |",
+                "| 15 | Zach   | 2023-12-25 | update_postimage | 5               | 2025-01-06T16:38:19.623 |",
+                "| 7  | Dennis | 2023-12-29 | delete           | 3               | 2024-01-06T16:44:59.570 |",
+                "+----+--------+------------+------------------+-----------------+-------------------------+",
+             ],
             &batches
         }
 
@@ -857,9 +839,8 @@ pub(crate) mod tests {
         let ctx = SessionContext::new();
         let cdf_scan = DeltaOps(table.clone())
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -875,20 +856,20 @@ pub(crate) mod tests {
         .expect("Failed to collect batches");
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
-        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
 
         assert_batches_sorted_eq! {[
-        "+-------+----------+--------------+-----------------+----+",
-        "| value | modified | _change_type | _commit_version | id |",
-        "+-------+----------+--------------+-----------------+----+",
-        "| 1     | yes      | delete       | 2               | 1  |",
-        "| 1     | yes      | insert       | 1               | 1  |",
-        "| 10    | yes      | insert       | 2               | 3  |",
-        "| 2     | yes      | delete       | 2               | 2  |",
-        "| 2     | yes      | insert       | 1               | 2  |",
-        "| 3     | no       | delete       | 2               | 3  |",
-        "| 3     | no       | insert       | 1               | 3  |",
-        "+-------+----------+--------------+-----------------+----+",
+            "+-------+----------+----+--------------+-----------------+",
+            "| value | modified | id | _change_type | _commit_version |",
+            "+-------+----------+----+--------------+-----------------+",
+            "| 1     | yes      | 1  | delete       | 2               |",
+            "| 1     | yes      | 1  | insert       | 1               |",
+            "| 10    | yes      | 3  | insert       | 2               |",
+            "| 2     | yes      | 2  | delete       | 2               |",
+            "| 2     | yes      | 2  | insert       | 1               |",
+            "| 3     | no       | 3  | delete       | 2               |",
+            "| 3     | no       | 3  | insert       | 1               |",
+            "+-------+----------+----+--------------+-----------------+",
         ], &batches }
 
         let snapshot_bytes = table

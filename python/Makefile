@@ -1,21 +1,19 @@
 .DEFAULT_GOAL := help
 
-VENV := venv
-MATURIN_VERSION := $(shell grep 'requires =' pyproject.toml | cut -d= -f2- | tr -d '[ "]')
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
 DAT_VERSION := 0.0.2
 
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	uv sync --extra devel --extra pandas --extra polars --extra lakefs --no-install-project
+	uv sync --no-install-project --all-extras
 
 .PHONY: setup-dat
 setup-dat: ## Download DAT test files
 	mkdir -p dat-data
 	rm -rf dat-data/v$(DAT_VERSION)
 	curl -L --silent --output dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz \
-		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz 
+		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz
 	tar --no-same-permissions -xzf dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
 	mv out dat-data/v$(DAT_VERSION)
 	rm dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
@@ -28,7 +26,7 @@ build: setup ## Build Python binding of delta-rs
 .PHONY: develop
 develop: setup ## Install Python binding of delta-rs
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars,lakefs $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
@@ -36,13 +34,13 @@ install: build ## Install Python binding of delta-rs
 	uv pip uninstall deltalake
 	$(info --- Install Python binding ---)
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
-	uv pip install $(TARGET_WHEEL)[devel,pandas,polars,lakefs]
+	uv pip install $(TARGET_WHEEL)[pandas]
 
 .PHONY: develop-pyspark
 develop-pyspark:
-	uv sync --all-extras --no-install-project
+	uv sync --all-extras --group pyspark --no-install-project
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=devel,pandas,polars,pyspark,lakefs $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --extras=pandas $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
@@ -71,7 +69,7 @@ check-python: ## Run check on Python
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	uv run --no-sync pytest --doctest-modules 
+	uv run --no-sync pytest --doctest-modules
 
 .PHONY: test-cov
 test-cov: ## Create coverage report
@@ -96,7 +94,8 @@ build-docs: ## Build documentation with mkdocs
 clean: ## Run clean
 	$(warning --- Clean virtualenv and target directory ---)
 	cargo clean
-	rm -rf $(VENV)
+	# Remove uv's venv
+	rm -rf .venv
 	find . -type f -name '*.pyc' -delete
 
 .PHONY: help

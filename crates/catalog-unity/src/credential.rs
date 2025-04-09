@@ -131,8 +131,7 @@ impl ClientSecretOAuthProvider {
 
         Self {
             token_url: format!(
-                "{}/{}/oauth2/v2.0/token",
-                authority_host,
+                "{authority_host}/{}/oauth2/v2.0/token",
                 authority_id.as_ref()
             ),
             client_id: client_id.into(),
@@ -154,7 +153,7 @@ impl TokenCredential for ClientSecretOAuthProvider {
             .form(&[
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
-                ("scope", &format!("{}/.default", DATABRICKS_RESOURCE_SCOPE)),
+                ("scope", &format!("{DATABRICKS_RESOURCE_SCOPE}/.default")),
                 ("grant_type", "client_credentials"),
             ])
             .send()
@@ -250,7 +249,7 @@ impl TokenCredential for AzureCliCredential {
 
                 let token_response = serde_json::from_str::<AzureCliTokenResponse>(output)
                     .map_err(|err| UnityCatalogError::AzureCli {
-                        message: format!("failed seserializing token response: {:?}", err),
+                        message: format!("failed seserializing token response: {err:?}"),
                     })?;
                 if !token_response.token_type.eq_ignore_ascii_case("bearer") {
                     return Err(UnityCatalogError::AzureCli {
@@ -312,11 +311,7 @@ impl WorkloadIdentityOAuthProvider {
             authority_host.unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
-            token_url: format!(
-                "{}/{}/oauth2/v2.0/token",
-                authority_host,
-                tenant_id.as_ref()
-            ),
+            token_url: format!("{authority_host}/{}/oauth2/v2.0/token", tenant_id.as_ref()),
             client_id: client_id.into(),
             federated_token_file: federated_token_file.into(),
         }
@@ -344,7 +339,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
                     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                 ),
                 ("client_assertion", token_str.as_str()),
-                ("scope", &format!("{}/.default", DATABRICKS_RESOURCE_SCOPE)),
+                ("scope", &format!("{DATABRICKS_RESOURCE_SCOPE}/.default")),
                 ("grant_type", "client_credentials"),
             ])
             .send()
@@ -420,7 +415,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
         &self,
         _client: &ClientWithMiddleware,
     ) -> Result<TemporaryToken<String>, UnityCatalogError> {
-        let resource_scope = format!("{}/.default", DATABRICKS_RESOURCE_SCOPE);
+        let resource_scope = format!("{DATABRICKS_RESOURCE_SCOPE}/.default");
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
             ("resource", &resource_scope),

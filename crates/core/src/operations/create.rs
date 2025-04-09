@@ -10,7 +10,7 @@ use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::transaction::{CommitBuilder, TableReference, PROTOCOL};
+use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
@@ -59,7 +59,8 @@ pub struct CreateBuilder {
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
     configuration: HashMap<String, Option<String>>,
-    metadata: Option<HashMap<String, Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -95,7 +96,7 @@ impl CreateBuilder {
             actions: Default::default(),
             log_store: None,
             configuration: Default::default(),
-            metadata: Default::default(),
+            commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
             custom_execute_handler: None,
         }
@@ -143,12 +144,7 @@ impl CreateBuilder {
                     if let Value::Number(n) = v {
                         n.as_i64().map_or_else(
                             || MetadataValue::String(v.to_string()),
-                            |i| {
-                                i32::try_from(i)
-                                    .ok()
-                                    .map(MetadataValue::Number)
-                                    .unwrap_or_else(|| MetadataValue::String(v.to_string()))
-                            },
+                            |i| MetadataValue::Number(i),
                         )
                     } else {
                         MetadataValue::String(v.to_string())
@@ -212,15 +208,9 @@ impl CreateBuilder {
         self
     }
 
-    /// Append custom (application-specific) metadata to the commit.
-    ///
-    /// This might include provenance information such as an id of the
-    /// user that made the commit or the program that created it.
-    pub fn with_metadata(
-        mut self,
-        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.metadata = Some(HashMap::from_iter(metadata));
+    /// Additional metadata to be added to commit info
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -358,10 +348,9 @@ impl std::future::IntoFuture for CreateBuilder {
         let this = self;
         Box::pin(async move {
             let handler = this.custom_execute_handler.clone();
-            let mode = this.mode;
-            let app_metadata = this.metadata.clone().unwrap_or_default();
+            let mode = &this.mode;
             let (mut table, mut actions, operation, operation_id) =
-                this.into_table_and_actions().await?;
+                this.clone().into_table_and_actions().await?;
 
             let table_state = if table.log_store.is_delta_table_location().await? {
                 match mode {
@@ -386,11 +375,10 @@ impl std::future::IntoFuture for CreateBuilder {
                 None
             };
 
-            let version = CommitBuilder::default()
+            let version = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions)
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(handler.clone())
-                .with_app_metadata(app_metadata)
                 .build(
                     table_state.map(|f| f as &dyn TableReference),
                     table.log_store.clone(),

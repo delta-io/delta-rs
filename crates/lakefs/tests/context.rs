@@ -44,9 +44,8 @@ impl StorageIntegration for LakeFSIntegration {
 
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
         println!(
-            "Copy directory called with {} {}",
-            source,
-            &format!("{}/{}", self.root_uri(), destination)
+            "Copy directory called with {source} {}",
+            format!("{}/{destination}", self.root_uri())
         );
         let lakectl = which("lakectl").expect("Failed to find lakectl executable");
 
@@ -57,8 +56,8 @@ impl StorageIntegration for LakeFSIntegration {
                 "upload",
                 "-r",
                 "--source",
-                &format!("{}/", source),
-                &format!("{}/{}/", self.root_uri(), destination),
+                &format!("{source}/"),
+                &format!("{}/{destination}/", self.root_uri()),
             ])
             .status()?;
 

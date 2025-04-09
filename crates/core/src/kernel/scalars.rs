@@ -72,8 +72,8 @@ impl ScalarExt for Scalar {
             },
             Self::Binary(val) => create_escaped_binary_string(val.as_slice()),
             Self::Null(_) => "null".to_string(),
-            Self::Struct(_) => unimplemented!(),
-            Self::Array(_) => unimplemented!(),
+            Self::Struct(_) => self.to_string(),
+            Self::Array(_) => self.to_string(),
         }
     }
 
@@ -85,7 +85,7 @@ impl ScalarExt for Scalar {
         encode(Path::from(self.serialize()).as_ref()).to_string()
     }
 
-    /// Create a [`Scalar`] form a row in an arrow array.
+    /// Create a [`Scalar`] from a row in an arrow array.
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self> {
         use arrow_array::*;
         use arrow_schema::DataType::*;
@@ -285,7 +285,7 @@ fn create_escaped_binary_string(data: &[u8]) -> String {
     let mut escaped_string = String::new();
     for &byte in data {
         // Convert each byte to its two-digit hexadecimal representation
-        let hex_representation = format!("{:04X}", byte);
+        let hex_representation = format!("{byte:04X}");
         // Append the hexadecimal representation with an escape sequence
         escaped_string.push_str("\\u");
         escaped_string.push_str(&hex_representation);

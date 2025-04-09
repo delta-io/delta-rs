@@ -1,6 +1,6 @@
 //! AWS S3 and similar tooling for delta-rs
 //!
-//! This module also contains the [S3DynamoDbLogStore] implemtnation for concurrent writer support
+//! This module also contains the [S3DynamoDbLogStore] implementation for concurrent writer support
 //! with AWS S3 specifically.
 
 pub mod constants;
@@ -89,7 +89,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let object_stores = Arc::new(S3ObjectStoreFactory::default());
     let log_stores = Arc::new(S3LogStoreFactory::default());
     for scheme in ["s3", "s3a"].iter() {
-        let url = Url::parse(&format!("{}://", scheme)).unwrap();
+        let url = Url::parse(&format!("{scheme}://")).unwrap();
         factories().insert(url.clone(), object_stores.clone());
         logstores().insert(url.clone(), log_stores.clone());
     }
@@ -310,7 +310,7 @@ impl DynamoDbLockClient {
     fn get_primary_key(&self, version: i64, table_path: &str) -> HashMap<String, AttributeValue> {
         maplit::hashmap! {
             constants::ATTR_TABLE_PATH.to_owned()  => string_attr(table_path),
-            constants::ATTR_FILE_NAME.to_owned()   => string_attr(format!("{:020}.json", version)),
+            constants::ATTR_FILE_NAME.to_owned()   => string_attr(format!("{version:020}.json")),
         }
     }
 
@@ -669,8 +669,7 @@ fn extract_required_string_field<'a>(
         .as_s()
         .map_err(|v| LockClientError::InconsistentData {
             description: format!(
-                "mandatory string field '{field_name}' exists, but is not a string: {:#?}",
-                v,
+                "mandatory string field '{field_name}' exists, but is not a string: {v:#?}",
             ),
         })
         .map(|s| s.as_str())

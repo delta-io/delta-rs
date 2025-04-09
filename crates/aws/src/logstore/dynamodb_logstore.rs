@@ -127,7 +127,7 @@ impl S3DynamoDbLogStore {
         entry: &CommitEntry,
         copy_performed: bool,
     ) -> Result<RepairLogEntryResult, TransactionError> {
-        debug!("try_complete_entry for {:?}, {}", entry, copy_performed);
+        debug!("try_complete_entry for {entry:?}, {copy_performed}");
         for retry in 0..=MAX_REPAIR_RETRIES {
             match self
                 .lock_client
@@ -277,7 +277,7 @@ impl LogStore for S3DynamoDbLogStore {
                 LockClientError::VersionAlreadyCompleted { version, .. } => {
                     error!("Trying to abort a completed commit");
                     TransactionError::LogStoreError {
-                        msg: format!("trying to abort a completed log entry: {}", version),
+                        msg: format!("trying to abort a completed log entry: {version}"),
                         source: Box::new(err),
                     }
                 }

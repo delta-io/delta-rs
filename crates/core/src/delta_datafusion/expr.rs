@@ -34,7 +34,9 @@ use datafusion_common::Result as DFResult;
 use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::expr::InList;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, TableSource};
+use datafusion_expr::{
+    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, ScalarFunctionArgs, TableSource,
+};
 // Needed for MakeParquetArray
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
@@ -99,13 +101,13 @@ impl ScalarUDFImpl for MakeParquetArray {
         r_type
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let mut data_type = DataType::Null;
-        for arg in args {
+        for arg in &args.args {
             data_type = arg.data_type();
         }
 
-        match self.actual.invoke_batch(args, number_rows)? {
+        match self.actual.invoke_with_args(args)? {
             ColumnarValue::Scalar(ScalarValue::List(df_array)) => {
                 let field = Arc::new(Field::new("element", data_type, true));
                 let result = Ok(ColumnarValue::Scalar(ScalarValue::List(Arc::new(
@@ -255,7 +257,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
 }
 
 /// Parse a string predicate into an `Expr`
-pub(crate) fn parse_predicate_expression(
+pub fn parse_predicate_expression(
     schema: &DFSchema,
     expr: impl AsRef<str>,
     df_state: &SessionState,
@@ -364,7 +366,7 @@ impl Display for SqlFormat<'_> {
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
             Expr::ScalarFunction(func) => fmt_function(f, func.func.name(), false, &func.args),
             Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "arrow_cast({}, '{}')", SqlFormat { expr }, data_type)
+                write!(f, "arrow_cast({}, '{data_type}')", SqlFormat { expr })
             }
             Expr::Between(Between {
                 expr,
@@ -464,7 +466,7 @@ fn fmt_function(f: &mut fmt::Formatter, fun: &str, distinct: bool, args: &[Expr]
         true => "DISTINCT ",
         false => "",
     };
-    write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
+    write!(f, "{fun}({distinct_str}{})", args.join(", "))
 }
 
 macro_rules! format_option {

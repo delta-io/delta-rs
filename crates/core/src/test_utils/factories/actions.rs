@@ -11,7 +11,7 @@ use crate::kernel::arrow::extract::{self as ex};
 use crate::kernel::partitions_schema;
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
 use crate::operations::transaction::PROTOCOL;
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 
 pub struct ActionFactory;
 
@@ -101,8 +101,8 @@ impl ActionFactory {
     pub fn protocol(
         max_reader: Option<i32>,
         max_writer: Option<i32>,
-        reader_features: Option<impl IntoIterator<Item = ReaderFeatures>>,
-        writer_features: Option<impl IntoIterator<Item = WriterFeatures>>,
+        reader_features: Option<impl IntoIterator<Item = ReaderFeature>>,
+        writer_features: Option<impl IntoIterator<Item = WriterFeature>>,
     ) -> Protocol {
         Protocol {
             min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),
@@ -149,5 +149,5 @@ pub fn add_as_remove(add: &Add, data_change: bool) -> Remove {
 
 fn generate_file_name() -> String {
     let file_name = uuid::Uuid::new_v4().hyphenated().to_string();
-    format!("part-0001-{}.parquet", file_name)
+    format!("part-0001-{file_name}.parquet")
 }

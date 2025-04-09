@@ -113,8 +113,7 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
                 Ok(self.clone())
             }
             _ => Err(DataFusionError::NotImplemented(format!(
-                "with_exprs_and_inputs not implemented for {:?}",
-                self
+                "with_exprs_and_inputs not implemented for {self:?}",
             ))),
         }
     }

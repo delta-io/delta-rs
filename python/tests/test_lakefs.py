@@ -6,15 +6,14 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, TableFeatures
+from deltalake import CommitProperties, DeltaTable, TableFeatures
 from deltalake._internal import Field, PrimitiveType
 from deltalake.exceptions import DeltaError, DeltaProtocolError
-from deltalake.table import CommitProperties
 from deltalake.writer import write_deltalake
 from tests.test_alter import _sort_fields
 
 if TYPE_CHECKING:
-    import lakefs as lakefs
+    import lakefs
 
 
 @pytest.fixture
@@ -256,7 +255,6 @@ def test_add_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_opti
         write_deltalake(
             lakefs_path,
             data,
-            engine="rust",
             mode="append",
             storage_options=lakefs_storage_options,
         )
@@ -285,7 +283,6 @@ def test_set_table_properties(
         lakefs_path,
         sample_table,
         mode="append",
-        engine="rust",
         storage_options=lakefs_storage_options,
     )
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)

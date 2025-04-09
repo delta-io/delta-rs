@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -16,7 +17,6 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
 use futures::Stream;
-use hashbrown::HashSet;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use pin_project_lite::pin_project;
@@ -166,10 +166,10 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
             ))?
             .map(|(k, v)| {
                 let field = partition_schema
-                    .field(k.as_str())
+                    .fields()
+                    .find(|field| field.physical_name().eq(k.as_str()))
                     .ok_or(DeltaTableError::generic(format!(
-                        "Partition column {} not found in schema.",
-                        k
+                        "Partition column {k} not found in schema."
                     )))?;
                 let field_type = match field.data_type() {
                     DataType::Primitive(p) => Ok(p),
@@ -448,11 +448,11 @@ fn seen_key(info: &FileInfo<'_>) -> String {
         }
         if let Some(offset) = &dv.offset {
             format!(
-                "{}::{}{}@{offset}",
-                path, dv.storage_type, dv.path_or_inline_dv
+                "{path}::{}{}@{offset}",
+                dv.storage_type, dv.path_or_inline_dv
             )
         } else {
-            format!("{}::{}{}", path, dv.storage_type, dv.path_or_inline_dv)
+            format!("{path}::{}{}", dv.storage_type, dv.path_or_inline_dv)
         }
     } else {
         path.to_string()
@@ -516,10 +516,7 @@ impl LogReplayScanner {
                     // NOTE: there should always be only one action per row.
                     (None, None) => debug!("WARNING: no action found for row"),
                     (Some(a), Some(r)) => {
-                        debug!(
-                            "WARNING: both add and remove actions found for row: {:?} {:?}",
-                            a, r
-                        )
+                        debug!("WARNING: both add and remove actions found for row: {a:?} {r:?}",)
                     }
                 }
             }

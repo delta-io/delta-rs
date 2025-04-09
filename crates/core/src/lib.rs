@@ -97,6 +97,7 @@ pub use self::table::config::TableProperty;
 pub use self::table::DeltaTable;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;
+use std::sync::OnceLock;
 
 // convenience exports for consumers to avoid aligning crate versions
 pub use arrow;
@@ -161,9 +162,18 @@ pub async fn open_table_with_ds(
     Ok(table)
 }
 
-/// Returns rust crate version, can be use used in language bindings to expose Rust core version
+static CLIENT_VERSION: OnceLock<String> = OnceLock::new();
+
+pub fn init_client_version(version: &str) {
+    let _ = CLIENT_VERSION.set(version.to_string());
+}
+
+/// Returns Rust core version or custom set client_version such as the py-binding
 pub fn crate_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    CLIENT_VERSION
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]
@@ -679,8 +689,7 @@ mod tests {
 
         let error = crate::open_table(non_existing_path_str).await.unwrap_err();
         let _expected_error_msg = format!(
-            "Local path \"{}\" does not exist or you don't have access!",
-            non_existing_path_str
+            "Local path \"{non_existing_path_str}\" does not exist or you don't have access!"
         );
         assert!(matches!(
             error,

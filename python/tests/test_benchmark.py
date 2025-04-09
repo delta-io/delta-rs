@@ -24,12 +24,9 @@ def sample_table() -> pa.Table:
     return tab
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 @pytest.mark.benchmark(group="write")
-def test_benchmark_write(benchmark, sample_table, tmp_path, engine):
-    benchmark(
-        write_deltalake, str(tmp_path), sample_table, mode="overwrite", engine=engine
-    )
+def test_benchmark_write(benchmark, sample_table, tmp_path):
+    benchmark(write_deltalake, str(tmp_path), sample_table, mode="overwrite")
 
     dt = DeltaTable(str(tmp_path))
     assert dt.to_pyarrow_table().sort_by("i") == sample_table

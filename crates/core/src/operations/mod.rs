@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use update_field_metadata::UpdateFieldMetadataBuilder;
 use uuid::Uuid;
 
 use add_feature::AddTableFeatureBuilder;
@@ -20,6 +21,7 @@ pub use datafusion_physical_plan::common::collect as collect_sendable_stream;
 use self::add_column::AddColumnBuilder;
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
+#[cfg(feature = "datafusion")]
 use self::optimize::OptimizeBuilder;
 use self::restore::RestoreBuilder;
 use self::set_tbl_properties::SetTablePropertiesBuilder;
@@ -42,12 +44,12 @@ pub mod convert_to_delta;
 pub mod create;
 pub mod drop_constraints;
 pub mod filesystem_check;
-pub mod optimize;
 pub mod restore;
 pub mod transaction;
+pub mod update_field_metadata;
 pub mod vacuum;
 
-#[cfg(all(feature = "cdf", feature = "datafusion"))]
+#[cfg(feature = "datafusion")]
 mod cdc;
 #[cfg(feature = "datafusion")]
 pub mod constraints;
@@ -59,12 +61,13 @@ mod load;
 pub mod load_cdf;
 #[cfg(feature = "datafusion")]
 pub mod merge;
+#[cfg(feature = "datafusion")]
+pub mod optimize;
 pub mod set_tbl_properties;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
-pub mod writer;
 
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
@@ -225,6 +228,7 @@ impl DeltaOps {
     }
 
     /// Audit active files with files present on the filesystem
+    #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())
@@ -294,6 +298,11 @@ impl DeltaOps {
     /// Add new columns
     pub fn add_columns(self) -> AddColumnBuilder {
         AddColumnBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Update field metadata
+    pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
+        UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 

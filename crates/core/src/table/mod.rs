@@ -1,5 +1,6 @@
 //! Delta Table read and write implementation
 
+use std::any::Any;
 use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
@@ -155,6 +156,10 @@ impl DataCheck for Constraint {
     fn get_expression(&self) -> &str {
         &self.expr
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// A generated column
@@ -177,7 +182,7 @@ impl GeneratedColumn {
             name: field_name.to_string(),
             generation_expr: sql_generation.to_string(),
             validation_expr: format!("{field_name} = {sql_generation} OR ({field_name} IS NULL AND {sql_generation} IS NULL)"),
-            // validation_expr: format!("{} <=> {}", field_name, sql_generation), // update to 
+            // validation_expr: format!("{field_name} <=> {sql_generation}"), // update to
             data_type: data_type.clone()
         }
     }
@@ -194,6 +199,10 @@ impl DataCheck for GeneratedColumn {
 
     fn get_expression(&self) -> &str {
         &self.validation_expr
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

@@ -11,7 +11,6 @@ use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion::assert_batches_sorted_eq;
-use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -40,6 +39,7 @@ use serial_test::serial;
 use url::Url;
 
 mod local {
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion::{common::stats::Precision, datasource::provider_as_source};
     use datafusion_expr::LogicalPlanBuilder;
     use deltalake_core::{
@@ -85,7 +85,7 @@ mod local {
             &mut self,
             plan: &dyn ExecutionPlan,
         ) -> std::result::Result<bool, Self::Error> {
-            if let Some(exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+            if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
                 let files = get_scanned_files(exec);
                 self.scanned_files.extend(files);
             } else if let Some(exec) = plan.as_any().downcast_ref::<DeltaScan>() {
@@ -194,8 +194,6 @@ mod local {
         // We want to emulate that this occurs on another node, so that all we have access to is the
         // plan byte serialization.
         let source_scan_bytes = {
-            let ctx = SessionContext::new();
-            let state = ctx.state();
             let source_table = open_table("../test/tests/data/delta-0.8.0-date").await?;
 
             let target_provider = provider_as_source(Arc::new(source_table));
@@ -652,7 +650,7 @@ mod local {
             if column == "decimal" || column == "date" || column == "binary" {
                 continue;
             }
-            println!("[Unwrapped] Test Column: {} value: {}", column, file1_value);
+            println!("[Unwrapped] Test Column: {column} value: {file1_value}");
 
             // Equality
             let e = col(column).eq(file1_value.clone());
@@ -754,7 +752,7 @@ mod local {
                 continue;
             }
 
-            println!("[Wrapped] Test Column: {} value: {}", column, file1_value);
+            println!("[Wrapped] Test Column: {column} value: {file1_value}");
 
             let partitions = vec![column.to_owned()];
             let batch = create_all_types_batch(3, 0, 0);
@@ -840,7 +838,7 @@ mod local {
         // Logically this should prune. See above
         let e = col("k").eq(lit("A")).and(col("k").is_not_null());
         let metrics = get_scan_metrics(&table, &state, &[e]).await.unwrap();
-        println!("{:?}", metrics);
+        println!("{metrics:?}");
         assert!(metrics.num_scanned_files() == 1);
 
         let e = col("k").eq(lit("B"));
@@ -1119,6 +1117,7 @@ mod local {
         let _ = write_builder
             .with_input_execution_plan(plan)
             .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(deltalake_core::operations::write::SchemaMode::Overwrite)
             .await
             .unwrap();
 
@@ -1186,7 +1185,7 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 mod date_partitions {
     use super::*;
 
-    async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
+    async fn setup_test(table_uri: &str) -> Result<DeltaTable, Box<dyn Error>> {
         let columns = vec![
             StructField::new(
                 "id".to_owned(),
@@ -1200,8 +1199,6 @@ mod date_partitions {
             ),
         ];
 
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
         let dt = DeltaOps::try_from_uri(table_uri)
             .await?
             .create()
@@ -1238,7 +1235,9 @@ mod date_partitions {
     #[tokio::test]
     async fn test_issue_1445_date_partition() -> Result<()> {
         let ctx = SessionContext::new();
-        let mut dt = setup_test().await.unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+        let mut dt = setup_test(table_uri).await.unwrap();
         let mut writer = RecordBatchWriter::for_table(&dt)?;
         write(
             &mut writer,

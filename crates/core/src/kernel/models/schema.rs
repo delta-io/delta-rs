@@ -1,5 +1,6 @@
 //! Delta table schema
 
+use std::any::Any;
 use std::sync::Arc;
 
 pub use delta_kernel::schema::{
@@ -44,6 +45,10 @@ impl DataCheck for Invariant {
     fn get_expression(&self) -> &str {
         &self.invariant_sql
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Trait to add convenience functions to struct type
@@ -83,17 +88,17 @@ impl StructTypeExt for StructType {
                     )),
                     Value::Number(sql) => generated_cols.push(GeneratedColumn::new(
                         &field_path,
-                        &format!("{}", sql),
+                        &format!("{sql}"),
                         field.data_type(),
                     )),
                     Value::Bool(sql) => generated_cols.push(GeneratedColumn::new(
                         &field_path,
-                        &format!("{}", sql),
+                        &format!("{sql}"),
                         field.data_type(),
                     )),
                     Value::Array(sql) => generated_cols.push(GeneratedColumn::new(
                         &field_path,
-                        &format!("{:?}", sql),
+                        &format!("{sql:?}"),
                         field.data_type(),
                     )),
                     _ => (), // Other types not sure what to do then

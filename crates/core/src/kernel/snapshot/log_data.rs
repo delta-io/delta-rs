@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
 use chrono::{DateTime, Utc};
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{Scalar, StructData};
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -13,7 +13,7 @@ use percent_encoding::percent_decode_str;
 use super::super::scalars::ScalarExt;
 use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
-    DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
+    Add, DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
 };
 use crate::{DeltaResult, DeltaTableError};
 
@@ -276,12 +276,60 @@ impl LogicalFile<'_> {
             .column_by_name(COL_MIN_VALUES)
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
     }
-
     /// Struct containing all available max values for the columns in this file.
     pub fn max_values(&self) -> Option<Scalar> {
+        // With delta.checkpoint.writeStatsAsStruct the microsecond timestamps are truncated to ms as defined by protocol
+        // this basically implies that it's floored when we parse_stats on the fly they are not truncated
+        // to tackle this we always round upwards by 1ms
+        fn ceil_datetime(v: i64) -> i64 {
+            let remainder = v % 1000;
+            if remainder == 0 {
+                // if nanoseconds precision remainder is 0, we assume it was truncated
+                // else we use the exact stats
+                ((v as f64 / 1000.0).floor() as i64 + 1) * 1000
+            } else {
+                v
+            }
+        }
+
         self.stats
             .column_by_name(COL_MAX_VALUES)
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+            .map(|s| round_ms_datetimes(s, &ceil_datetime))
+    }
+
+    pub fn add_action(&self) -> Add {
+        Add {
+            path: self.path().to_string(),
+            partition_values: self
+                .partition_values()
+                .ok()
+                .map(|pv| {
+                    pv.iter()
+                        .map(|(k, v)| {
+                            (
+                                k.to_string(),
+                                if v.is_null() {
+                                    None
+                                } else {
+                                    Some(v.serialize())
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            size: self.size(),
+            modification_time: self.modification_time(),
+            data_change: true,
+            stats: Scalar::from_array(self.stats as &dyn Array, self.index).map(|s| s.serialize()),
+            tags: None,
+            deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            stats_parsed: None,
+        }
     }
 
     /// Create a remove action for this logical file.
@@ -312,6 +360,28 @@ impl LogicalFile<'_> {
             base_row_id: None,
             default_row_commit_version: None,
         }
+    }
+}
+
+fn round_ms_datetimes<F>(value: Scalar, func: &F) -> Scalar
+where
+    F: Fn(i64) -> i64,
+{
+    match value {
+        Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
+        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
+        Scalar::Struct(struct_data) => {
+            let mut fields = Vec::new();
+            let mut scalars = Vec::new();
+
+            for (field, value) in struct_data.fields().iter().zip(struct_data.values().iter()) {
+                fields.push(field.clone());
+                scalars.push(round_ms_datetimes(value.clone(), func));
+            }
+            let data = StructData::try_new(fields, scalars).unwrap();
+            Scalar::Struct(data)
+        }
+        value => value,
     }
 }
 
@@ -406,8 +476,8 @@ impl<'a> FileStatsAccessor<'a> {
     pub(crate) fn get(&self, index: usize) -> DeltaResult<LogicalFile<'a>> {
         if index >= self.length {
             return Err(DeltaTableError::Generic(format!(
-                "index out of bounds: {} >= {}",
-                index, self.length
+                "index out of bounds: {index} >= {}",
+                self.length,
             )));
         }
         Ok(LogicalFile {
@@ -495,7 +565,7 @@ mod datafusion {
     use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
-    use delta_kernel::{ExpressionEvaluator, ExpressionHandler};
+    use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
 
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
@@ -638,6 +708,7 @@ mod datafusion {
                 null_count,
                 max_value,
                 min_value,
+                sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             })
         }
@@ -653,6 +724,7 @@ mod datafusion {
                 null_count: self.null_count.add(&other.null_count),
                 max_value: self.max_value.max(&other.max_value),
                 min_value: self.min_value.min(&other.min_value),
+                sum_value: Precision::Absent,
                 distinct_count: self.distinct_count.add(&other.distinct_count),
             }
         }
@@ -723,7 +795,7 @@ mod datafusion {
             } else {
                 Expression::column(["add", "stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER.get_evaluator(
+            let evaluator = ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
                 expression,
                 field.data_type().clone(),
@@ -795,7 +867,7 @@ mod datafusion {
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER.get_evaluator(
+                ARROW_HANDLER.new_expression_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
                     Expression::column(["add", "stats_parsed", "numRecords"]),
                     DataType::Primitive(PrimitiveType::Long),
@@ -891,6 +963,6 @@ mod tests {
             .log_data();
 
         let col_stats = file_stats.statistics();
-        println!("{:?}", col_stats);
+        println!("{col_stats:?}");
     }
 }

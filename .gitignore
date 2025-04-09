@@ -34,3 +34,5 @@ justfile
 site
 __pycache__
 dat/
+.zed
+.zed/

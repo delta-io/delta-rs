@@ -1,13 +1,11 @@
 import pathlib
-from typing import List
 
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, TableFeatures, write_deltalake
+from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
 from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.schema import Field, PrimitiveType, StructType
-from deltalake.table import CommitProperties
 
 
 def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
@@ -38,7 +36,7 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
                 "deleted": pa.array([False] * 1),
             }
         )
-        write_deltalake(tmp_path, data, engine="rust", mode="append")
+        write_deltalake(tmp_path, data, mode="append")
 
 
 def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: pa.Table):
@@ -55,7 +53,7 @@ def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: pa.Table
 def test_add_constraint_roundtrip_metadata(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
@@ -109,7 +107,11 @@ def test_drop_constraint_invalid_ignore(tmp_path: pathlib.Path, sample_table: pa
 def test_drop_constraint_roundtrip_metadata(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
 
     dt = DeltaTable(tmp_path)
 
@@ -126,7 +128,11 @@ def test_set_table_properties_min_writer_version(
     sample_table: pa.Table,
     min_writer_version: str,
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
 
     configuration = {"delta.minWriterVersion": min_writer_version}
@@ -142,7 +148,11 @@ def test_set_table_properties_min_writer_version(
 def test_set_table_properties_invalid_min_writer_version(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     with pytest.raises(DeltaError):
         dt.alter.set_table_properties({"delta.minWriterVersion": "8"})
@@ -159,7 +169,11 @@ def test_set_table_properties_min_reader_version(
     sample_table: pa.Table,
     min_reader_version: str,
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     configuration = {"delta.minReaderVersion": min_reader_version}
     dt.alter.set_table_properties(configuration)
@@ -173,7 +187,11 @@ def test_set_table_properties_min_reader_version(
 def test_set_table_properties_invalid_min_reader_version(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     with pytest.raises(DeltaError):
         dt.alter.set_table_properties({"delta.minReaderVersion": "8"})
@@ -187,7 +205,11 @@ def test_set_table_properties_invalid_min_reader_version(
 def test_set_table_properties_enable_cdf(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     dt.alter.set_table_properties({"delta.enableChangeDataFeed": "true"})
 
@@ -200,7 +222,11 @@ def test_set_table_properties_enable_cdf(
 def test_set_table_properties_enable_cdf_invalid(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     with pytest.raises(DeltaError):
         dt.alter.set_table_properties({"delta.enableChangeDataFeed": "wrong"})
@@ -214,7 +240,11 @@ def test_set_table_properties_enable_cdf_invalid(
 def test_set_table_properties_enable_cdf_value_false(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     dt.alter.set_table_properties({"delta.enableChangeDataFeed": "false"})
 
@@ -227,7 +257,11 @@ def test_set_table_properties_enable_cdf_value_false(
 def test_set_table_properties_enable_cdf_with_writer_version_bumped(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     dt.alter.set_table_properties(
         {"delta.enableChangeDataFeed": "true", "delta.minWriterVersion": "7"}
@@ -246,7 +280,11 @@ def test_set_table_properties_enable_cdf_with_writer_version_bumped(
 def test_set_table_properties_enable_cdf_and_deletion_vectors(
     tmp_path: pathlib.Path, sample_table: pa.Table
 ):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     dt.alter.set_table_properties(
         {"delta.enableChangeDataFeed": "true", "delta.enableDeletionVectors": "true"}
@@ -300,7 +338,11 @@ def test_convert_checkConstraints_to_feature_after_version_upgrade(
 
 
 def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa.Table):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     dt.alter.set_table_properties({"delta.enableDeletionVectors": "true"})
 
@@ -312,7 +354,7 @@ def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa
     assert protocol.reader_features == ["deletionVectors"]
 
 
-def _sort_fields(fields: List[Field]) -> List[Field]:
+def _sort_fields(fields: list[Field]) -> list[Field]:
     return list(sorted(iter(fields), key=lambda x: (x.name, str(x.type))))
 
 
@@ -358,7 +400,11 @@ def test_add_field_in_struct_column(existing_table: DeltaTable):
 
 
 def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: pa.Table):
-    write_deltalake(tmp_path, sample_table, mode="append", engine="rust")
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        mode="append",
+    )
     dt = DeltaTable(tmp_path)
     current_fields = dt.schema().fields
 
@@ -457,3 +503,18 @@ def test_add_feautres(existing_sample_table: DeltaTable):
             "v2Checkpoint",
         ]
     )  # type: ignore
+
+
+def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: pa.Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    dt.alter.set_column_metadata("price", {"comment": "my comment"})
+
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["price"].metadata == {"comment": "my comment"}
+
+    with pytest.raises(DeltaError):
+        # Can't set metadata for non existing column.
+        dt.alter.set_column_metadata("non_existing_column", {"comment": "my comment"})

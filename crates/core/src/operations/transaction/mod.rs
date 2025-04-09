@@ -86,7 +86,9 @@ use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
 
+pub use self::conflict_checker::CommitConflictError;
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
+pub use self::protocol::INSTANCE as PROTOCOL;
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
@@ -96,10 +98,8 @@ use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
-
-pub use self::conflict_checker::CommitConflictError;
-pub use self::protocol::INSTANCE as PROTOCOL;
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use serde::{Deserialize, Serialize};
 
 use super::CustomExecuteHandler;
 
@@ -112,6 +112,36 @@ mod state;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;
+
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitMetrics {
+    /// Number of retries before a successful commit
+    pub num_retries: u64,
+}
+
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostCommitMetrics {
+    /// Whether a new checkpoint was created as part of this commit
+    pub new_checkpoint_created: bool,
+
+    /// Number of log files cleaned up
+    pub num_log_files_cleaned_up: u64,
+}
+
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Metrics {
+    /// Number of retries before a successful commit
+    pub num_retries: u64,
+
+    /// Whether a new checkpoint was created as part of this commit
+    pub new_checkpoint_created: bool,
+
+    /// Number of log files cleaned up
+    pub num_log_files_cleaned_up: u64,
+}
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -151,19 +181,19 @@ pub enum TransactionError {
 
     /// Error returned when unsupported reader features are required
     #[error("Unsupported reader features required: {0:?}")]
-    UnsupportedReaderFeatures(Vec<ReaderFeatures>),
+    UnsupportedReaderFeatures(Vec<ReaderFeature>),
 
     /// Error returned when unsupported writer features are required
     #[error("Unsupported writer features required: {0:?}")]
-    UnsupportedWriterFeatures(Vec<WriterFeatures>),
+    UnsupportedWriterFeatures(Vec<WriterFeature>),
 
     /// Error returned when writer features are required but not specified
     #[error("Writer features must be specified for writerversion >= 7, please specify: {0:?}")]
-    WriterFeaturesRequired(WriterFeatures),
+    WriterFeaturesRequired(WriterFeature),
 
     /// Error returned when reader features are required but not specified
     #[error("Reader features must be specified for reader version >= 3, please specify: {0:?}")]
-    ReaderFeaturesRequired(ReaderFeatures),
+    ReaderFeaturesRequired(ReaderFeature),
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
     /// Currently used by DynamoDb-backed S3 log store when database operations fail.
@@ -577,7 +607,7 @@ impl PreparedCommit<'_> {
 }
 
 impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
-    type Output = DeltaResult<PostCommit<'a>>;
+    type Output = DeltaResult<PostCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -596,22 +626,31 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     create_checkpoint: false,
                     cleanup_expired_logs: None,
                     log_store: this.log_store,
-                    table_data: this.table_data,
+                    table_data: None,
                     custom_execute_handler: this.post_commit_hook_handler,
+                    metrics: CommitMetrics { num_retries: 0 },
                 });
             }
 
             // unwrap() is safe here due to the above check
-            let read_snapshot = this.table_data.unwrap().eager_snapshot();
+            let mut read_snapshot = this.table_data.unwrap().eager_snapshot().clone();
 
             let mut attempt_number = 1;
-            while attempt_number <= this.max_retries {
+            let total_retries = this.max_retries + 1;
+            while attempt_number <= total_retries {
                 let latest_version = this
                     .log_store
                     .get_latest_version(read_snapshot.version())
                     .await?;
 
                 if latest_version > read_snapshot.version() {
+                    // If max_retries are set to 0, do not try to use the conflict checker to resolve the conflict
+                    // and throw immediately
+                    if this.max_retries == 0 {
+                        return Err(
+                            TransactionError::MaxCommitAttempts(this.max_retries as i32).into()
+                        );
+                    }
                     warn!("Attempting to write a transaction {} but the underlying table has been updated to {latest_version}\n{:?}", read_snapshot.version() + 1, this.log_store);
                     let mut steps = latest_version - read_snapshot.version();
 
@@ -625,7 +664,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         )
                         .await?;
                         let transaction_info = TransactionInfo::try_new(
-                            read_snapshot,
+                            &read_snapshot,
                             this.data.operation.read_predicate(),
                             &this.data.actions,
                             this.data.operation.read_whole_table(),
@@ -644,6 +683,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         }
                         steps -= 1;
                     }
+                    // Update snapshot to latest version after successful conflict check
+                    read_snapshot
+                        .update(this.log_store.clone(), Some(latest_version))
+                        .await?;
                 }
                 let version: i64 = latest_version + 1;
 
@@ -665,8 +708,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
                             log_store: this.log_store,
-                            table_data: this.table_data,
+                            table_data: Some(Box::new(read_snapshot)),
                             custom_execute_handler: this.post_commit_hook_handler,
+                            metrics: CommitMetrics {
+                                num_retries: attempt_number as u64 - 1,
+                            },
                         });
                     }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
@@ -690,7 +736,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 }
 
 /// Represents items for the post commit hook
-pub struct PostCommit<'a> {
+pub struct PostCommit {
     /// The winning version number of the commit
     pub version: i64,
     /// The data that was committed to the log store
@@ -698,14 +744,15 @@ pub struct PostCommit<'a> {
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
     log_store: LogStoreRef,
-    table_data: Option<&'a dyn TableReference>,
+    table_data: Option<Box<dyn TableReference>>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
+    metrics: CommitMetrics,
 }
 
-impl PostCommit<'_> {
+impl PostCommit {
     /// Runs the post commit activities
-    async fn run_post_commit_hook(&self) -> DeltaResult<DeltaTableState> {
-        if let Some(table) = self.table_data {
+    async fn run_post_commit_hook(&self) -> DeltaResult<(DeltaTableState, PostCommitMetrics)> {
+        if let Some(table) = &self.table_data {
             let post_commit_operation_id = Uuid::new_v4();
             let mut snapshot = table.eager_snapshot().clone();
             if self.version - snapshot.version() > 1 {
@@ -718,7 +765,7 @@ impl PostCommit<'_> {
             } else {
                 snapshot.advance(vec![&self.data])?;
             }
-            let state = DeltaTableState { snapshot };
+            let mut state = DeltaTableState { snapshot };
 
             let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
                 cleanup_logs
@@ -737,26 +784,39 @@ impl PostCommit<'_> {
                     .await?
             }
 
+            let mut new_checkpoint_created = false;
             if self.create_checkpoint {
                 // Execute create checkpoint hook
-                self.create_checkpoint(
-                    &state,
-                    &self.log_store,
-                    self.version,
-                    post_commit_operation_id,
-                )
-                .await?;
+                new_checkpoint_created = self
+                    .create_checkpoint(
+                        &state,
+                        &self.log_store,
+                        self.version,
+                        post_commit_operation_id,
+                    )
+                    .await?;
             }
+
+            let mut num_log_files_cleaned_up: u64 = 0;
             if cleanup_logs {
                 // Execute clean up logs hook
-                cleanup_expired_logs_for(
+                num_log_files_cleaned_up = cleanup_expired_logs_for(
                     self.version,
                     self.log_store.as_ref(),
                     Utc::now().timestamp_millis()
                         - state.table_config().log_retention_duration().as_millis() as i64,
                     Some(post_commit_operation_id),
                 )
-                .await?;
+                .await? as u64;
+                if num_log_files_cleaned_up > 0 {
+                    state = DeltaTableState::try_new(
+                        &state.snapshot().table_root(),
+                        self.log_store.object_store(None),
+                        state.load_config().clone(),
+                        Some(self.version),
+                    )
+                    .await?;
+                }
             }
 
             // Run arbitrary after_post_commit_hook code
@@ -769,7 +829,13 @@ impl PostCommit<'_> {
                     )
                     .await?
             }
-            Ok(state)
+            Ok((
+                state,
+                PostCommitMetrics {
+                    new_checkpoint_created,
+                    num_log_files_cleaned_up,
+                },
+            ))
         } else {
             let state = DeltaTableState::try_new(
                 &Path::default(),
@@ -778,7 +844,13 @@ impl PostCommit<'_> {
                 Some(self.version),
             )
             .await?;
-            Ok(state)
+            Ok((
+                state,
+                PostCommitMetrics {
+                    new_checkpoint_created: false,
+                    num_log_files_cleaned_up: 0,
+                },
+            ))
         }
     }
     async fn create_checkpoint(
@@ -787,18 +859,20 @@ impl PostCommit<'_> {
         log_store: &LogStoreRef,
         version: i64,
         operation_id: Uuid,
-    ) -> DeltaResult<()> {
+    ) -> DeltaResult<bool> {
         if !table_state.load_config().require_files {
             warn!("Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files.");
-            return Ok(());
+            return Ok(false);
         }
 
         let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
             create_checkpoint_for(version, table_state, log_store.as_ref(), Some(operation_id))
-                .await?
+                .await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 }
 
@@ -809,6 +883,9 @@ pub struct FinalizedCommit {
 
     /// Version of the finalized commit
     pub version: i64,
+
+    /// Metrics associated with the commit operation
+    pub metrics: Metrics,
 }
 
 impl FinalizedCommit {
@@ -822,18 +899,23 @@ impl FinalizedCommit {
     }
 }
 
-impl<'a> std::future::IntoFuture for PostCommit<'a> {
+impl std::future::IntoFuture for PostCommit {
     type Output = DeltaResult<FinalizedCommit>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
 
         Box::pin(async move {
             match this.run_post_commit_hook().await {
-                Ok(snapshot) => Ok(FinalizedCommit {
+                Ok((snapshot, post_commit_metrics)) => Ok(FinalizedCommit {
                     snapshot,
                     version: this.version,
+                    metrics: Metrics {
+                        num_retries: this.metrics.num_retries,
+                        new_checkpoint_created: post_commit_metrics.new_checkpoint_created,
+                        num_log_files_cleaned_up: post_commit_metrics.num_log_files_cleaned_up,
+                    },
                 }),
                 Err(err) => Err(err),
             }

@@ -5,7 +5,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.81"
+rust-version = "1.82"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
 edition = "2021"
@@ -26,52 +26,48 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-# delta_kernel = { version = "=0.6.0", features = ["default-engine"] }
-# delta_kernel = { path = "../delta-kernel-rs/kernel", features = [
-#     "default-engine",
-#     "developer-visibility",
-# ] }
-delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "50c1c023b7e9d60df69f6e592b91e4cc06a5a0b1", features = [
-    "default-engine",
+delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs.git", rev = "8961e9741a7b5dad22dce39cce001349e2a4cb0c", features = [
+    "arrow_54",
     "developer-visibility",
+    "default-engine-rustls",
 ] }
 
 # arrow
-arrow = { version = "53" }
-arrow-arith = { version = "53" }
-arrow-array = { version = "53", features = ["chrono-tz"] }
-arrow-buffer = { version = "53" }
-arrow-cast = { version = "53" }
-arrow-ipc = { version = "53" }
-arrow-json = { version = "53" }
-arrow-ord = { version = "53" }
-arrow-row = { version = "53" }
-arrow-schema = { version = "53" }
-arrow-select = { version = "53" }
-object_store = { version = "0.11.2", features = ["cloud"] }
-parquet = { version = "53" }
+arrow = { version = "54" }
+arrow-arith = { version = "54" }
+arrow-array = { version = "54", features = ["chrono-tz"] }
+arrow-buffer = { version = "54" }
+arrow-cast = { version = "54" }
+arrow-ipc = { version = "54" }
+arrow-json = { version = "54" }
+arrow-ord = { version = "54" }
+arrow-row = { version = "54" }
+arrow-schema = { version = "54" }
+arrow-select = { version = "54" }
+object_store = { version = "0.11.2" }
+parquet = { version = "54" }
 
 # datafusion
-datafusion = { version = "44" }
-datafusion-expr = { version = "44" }
-datafusion-common = { version = "44" }
-datafusion-ffi = { version = "44" }
-datafusion-functions = { version = "44" }
-datafusion-functions-aggregate = { version = "44" }
-datafusion-physical-expr = { version = "44" }
-datafusion-physical-plan = { version = "44" }
-datafusion-proto = { version = "44" }
-datafusion-sql = { version = "44" }
+datafusion = "46"
+datafusion-expr = "46"
+datafusion-common = "46"
+datafusion-ffi = "46"
+datafusion-functions = "46"
+datafusion-functions-aggregate = "46"
+datafusion-physical-expr = "46"
+datafusion-physical-plan = "46"
+datafusion-proto = "46"
+datafusion-sql = "46"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "*" }
+strum = { version = "0.27" }
 
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = ">0.4.34", default-features = false, features = ["clock"] }
+chrono = { version = "=0.4.39", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "2" }

@@ -7,12 +7,15 @@ use dashmap::DashMap;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
+#[cfg(feature = "cloud")]
 use humantime::parse_duration;
 use object_store::limit::LimitStore;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::prefix::PrefixStore;
-use object_store::{GetOptions, PutOptions, PutPayload, PutResult, RetryConfig};
+#[cfg(feature = "cloud")]
+use object_store::RetryConfig;
+use object_store::{GetOptions, PutOptions, PutPayload, PutResult};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
 use url::Url;
@@ -343,6 +346,7 @@ pub trait ObjectStoreFactory: Send + Sync {
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
+#[cfg(feature = "cloud")]
 pub trait RetryConfigParse {
     fn parse_retry_config(&self, options: &StorageOptions) -> DeltaResult<RetryConfig> {
         let mut retry_config = RetryConfig::default();
@@ -609,11 +613,9 @@ pub mod storage_constants {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use maplit::hashmap;
-
     use super::*;
+
+    use std::time::Duration;
 
     #[test]
     fn test_url_prefix_handler() {
@@ -645,12 +647,17 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
+    #[cfg(feature = "cloud")]
     fn test_retry_config_from_options() {
+        use maplit::hashmap;
+        use std::time::Duration;
+
         struct TestFactory {}
         impl RetryConfigParse for TestFactory {}
 
-        let options = hashmap! {
+        let options = maplit::hashmap! {
             "max_retries".to_string() => "100".to_string() ,
             "retry_timeout".to_string()  => "300s".to_string() ,
             "backoff_config.init_backoff".to_string()  => "20s".to_string() ,

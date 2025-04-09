@@ -19,6 +19,6 @@ def add_data():
     dt = DeltaTable("../rust/tests/data/simple_table")
 
     df = pd.DataFrame({"id": [-1]})
-    write_deltalake(dt, df, mode="append", engine="rust")
+    write_deltalake(dt, df, mode="append")
     # _internal.DeltaProtocolError: Invariant violations: ["Check or Invariant (id > 0) violated by value in row: [-1]"]
     # --8<-- [end:add_data]

@@ -13,6 +13,7 @@ use itertools::Itertools;
 use object_store::{Error, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
+use parquet::basic::Encoding;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use regex::Regex;
@@ -143,7 +144,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 
     if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table, operation_id).await?;
-        debug!("Deleted {:?} log files.", deleted_log_num);
+        debug!("Deleted {deleted_log_num:?} log files.");
     }
 
     Ok(())
@@ -182,7 +183,7 @@ pub async fn create_checkpoint_for(
     let checkpoint_path = log_store.log_path().child(file_name);
 
     let object_store = log_store.object_store(operation_id);
-    debug!("Writing checkpoint to {:?}.", checkpoint_path);
+    debug!("Writing checkpoint to {checkpoint_path:?}.");
     object_store
         .put(&checkpoint_path, parquet_bytes.into())
         .await?;
@@ -190,7 +191,7 @@ pub async fn create_checkpoint_for(
     let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
-    debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
+    debug!("Writing _last_checkpoint to {last_checkpoint_path:?}.");
     object_store
         .put(&last_checkpoint_path, last_checkpoint_content.into())
         .await?;
@@ -235,7 +236,7 @@ pub async fn cleanup_expired_logs_for(
                 // match the given timestamp range
                 .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
                     if meta.is_err() {
-                        error!("Error received while cleaning up expired logs: {:?}", meta);
+                        error!("Error received while cleaning up expired logs: {meta:?}");
                         return None;
                     }
                     let meta = meta.unwrap();
@@ -338,7 +339,13 @@ fn parquet_bytes_from_state(
     .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
     .chain(files.map(|f| {
-        checkpoint_add_from_state(&f, partition_col_data_types.as_slice(), &stats_conversions)
+        checkpoint_add_from_state(
+            &f,
+            partition_col_data_types.as_slice(),
+            &stats_conversions,
+            state.table_config().write_stats_as_json(),
+            state.table_config().write_stats_as_struct(),
+        )
     }));
 
     // Create the arrow schema that represents the Checkpoint parquet file.
@@ -346,20 +353,28 @@ fn parquet_bytes_from_state(
         (&schema).try_into()?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
+        state.table_config().write_stats_as_json(),
+        state.table_config().write_stats_as_struct(),
     );
 
     debug!("Writing to checkpoint parquet buffer...");
+
+    let writer_properties = if state.table_config().use_checkpoint_rle() {
+        WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build()
+    } else {
+        WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .build()
+    };
+
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
-    let mut writer = ArrowWriter::try_new(
-        &mut bytes,
-        arrow_schema.clone(),
-        Some(
-            WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build(),
-        ),
-    )?;
+    let mut writer =
+        ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), Some(writer_properties))?;
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
@@ -394,13 +409,16 @@ fn checkpoint_add_from_state(
     add: &AddAction,
     partition_col_data_types: &[(&String, &DataType)],
     stats_conversions: &[(SchemaPath, DataType)],
+    write_stats_as_json: bool,
+    write_stats_as_struct: bool,
 ) -> Result<Value, ProtocolError> {
     let mut v = serde_json::to_value(Action::Add(add.clone()))
         .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
     v["add"]["dataChange"] = Value::Bool(false);
 
-    if !add.partition_values.is_empty() {
+    // Only created partitionValues_parsed when delta.checkpoint.writeStatsAsStruct is enabled
+    if !add.partition_values.is_empty() && write_stats_as_struct {
         let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
 
         for (field_name, data_type) in partition_col_data_types.iter() {
@@ -416,25 +434,35 @@ fn checkpoint_add_from_state(
         v["add"]["partitionValues_parsed"] = partition_values_parsed;
     }
 
-    if let Ok(Some(stats)) = add.get_stats() {
-        let mut stats =
-            serde_json::to_value(stats).map_err(|err| ArrowError::JsonError(err.to_string()))?;
-        let min_values = stats.get_mut("minValues").and_then(|v| v.as_object_mut());
+    // Only created stats_parsed when delta.checkpoint.writeStatsAsStruct is enabled
+    if write_stats_as_struct {
+        if let Ok(Some(stats)) = add.get_stats() {
+            let mut stats = serde_json::to_value(stats)
+                .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+            let min_values = stats.get_mut("minValues").and_then(|v| v.as_object_mut());
 
-        if let Some(min_values) = min_values {
-            for (path, data_type) in stats_conversions {
-                apply_stats_conversion(min_values, path.as_slice(), data_type)
+            if let Some(min_values) = min_values {
+                for (path, data_type) in stats_conversions {
+                    apply_stats_conversion(min_values, path.as_slice(), data_type)
+                }
             }
-        }
 
-        let max_values = stats.get_mut("maxValues").and_then(|v| v.as_object_mut());
-        if let Some(max_values) = max_values {
-            for (path, data_type) in stats_conversions {
-                apply_stats_conversion(max_values, path.as_slice(), data_type)
+            let max_values = stats.get_mut("maxValues").and_then(|v| v.as_object_mut());
+            if let Some(max_values) = max_values {
+                for (path, data_type) in stats_conversions {
+                    apply_stats_conversion(max_values, path.as_slice(), data_type)
+                }
             }
-        }
 
-        v["add"]["stats_parsed"] = stats;
+            v["add"]["stats_parsed"] = stats;
+        }
+    }
+
+    // Don't write stats when delta.checkpoint.writeStatsAsJson is disabled
+    if !write_stats_as_json {
+        v.get_mut("add")
+            .and_then(|v| v.as_object_mut())
+            .and_then(|v| v.remove("stats"));
     }
     Ok(v)
 }
@@ -479,15 +507,9 @@ fn typed_partition_value_from_string(
                 })?;
                 Ok((ts.and_utc().timestamp_millis() * 1000).into())
             }
-            s => unimplemented!(
-                "Primitive type {} is not supported for partition column values.",
-                s
-            ),
+            s => unimplemented!("Primitive type {s} is not supported for partition column values."),
         },
-        d => unimplemented!(
-            "Data type {:?} is not supported for partition column values.",
-            d
-        ),
+        d => unimplemented!("Data type {d:?} is not supported for partition column values."),
     }
 }
 
@@ -642,7 +664,7 @@ mod tests {
             query_id: "test".into(),
             epoch_id,
         };
-        let v = CommitBuilder::default()
+        let finalized_commit = CommitBuilder::default()
             .with_actions(actions)
             .build(
                 table.state.as_ref().map(|f| f as &dyn TableReference),
@@ -650,10 +672,25 @@ mod tests {
                 operation,
             )
             .await
-            .unwrap()
-            .version();
+            .unwrap();
 
-        assert_eq!(1, v, "Expected the commit to create table version 1");
+        assert_eq!(
+            1,
+            finalized_commit.version(),
+            "Expected the commit to create table version 1"
+        );
+        assert_eq!(
+            0, finalized_commit.metrics.num_retries,
+            "Expected no retries"
+        );
+        assert_eq!(
+            0, finalized_commit.metrics.num_log_files_cleaned_up,
+            "Expected no log files cleaned up"
+        );
+        assert!(
+            !finalized_commit.metrics.new_checkpoint_created,
+            "Expected checkpoint created."
+        );
         table.load().await.expect("Failed to reload table");
         assert_eq!(
             table.version(),
@@ -901,7 +938,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 0);
-        println!("{:?}", count);
+        println!("{count:?}");
 
         let path = Path::from("_delta_log/00000000000000000000.json");
         let res = table.log_store().object_store(None).get(&path).await;

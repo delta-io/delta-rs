@@ -41,6 +41,7 @@ impl AWSForObjectStore {
     }
 
     /// Return true if a credential has been cached
+    #[cfg(test)]
     async fn has_cached_credentials(&self) -> bool {
         let guard = self.cache.lock().await;
         (*guard).is_some()

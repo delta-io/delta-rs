@@ -22,7 +22,7 @@ jobs:
 
       - name: Check Python
         run: |
-          uv pip install ruff==0.5.2 mypy==1.10.1 types-dataclasses typing-extensions --system
+          uv sync --only-group dev --no-install-project
           make check-python
 
       - name: Check Rust
@@ -46,7 +46,7 @@ jobs:
       - name: Build and install deltalake
         run: |
           # Install minimum PyArrow version
-          uv sync --extra devel --extra pandas --extra polars
+          make develop
           uv pip install pyarrow==16.0.0
         env:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
@@ -84,7 +84,7 @@ jobs:
           uv pip uninstall pandas
           uv run --no-sync pytest -m "not pandas and not integration and not benchmark"
           uv pip install pandas
-  
+
   test-lakefs:
     name: Python Build (Python 3.10 LakeFS Integration tests)
     runs-on: ubuntu-latest
@@ -110,6 +110,64 @@ jobs:
       - name: Run tests
         run: uv run --no-sync pytest -m '(lakefs and integration)' --doctest-modules
 
+  test-unitycatalog-databricks:
+    name: Python Build (Python 3.10 Unity Catalog Integration tests)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Run Mockoon CLI
+        uses: mockoon/cli-action@v2
+        with:
+          version: "latest"
+          data-file: ".github/mockoon_data_files/unitycatalog_databricks.json"
+          port: 8080
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Download Data Acceptance Tests (DAT) files
+        run: make setup-dat
+
+      - name: Run tests
+        run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_databricks 5 10
+
+  test-unitycatalog-oss:
+    name: Python Build (Python 3.10 Unity Catalog Integration tests)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Run Mockoon CLI
+        uses: mockoon/cli-action@v2
+        with:
+          version: "latest"
+          data-file: ".github/mockoon_data_files/unitycatalog_oss.json"
+          port: 8080
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Download Data Acceptance Tests (DAT) files
+        run: make setup-dat
+
+      - name: Run tests
+        run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_oss 5 10
+
   test-pyspark:
     name: PySpark Integration Tests
     runs-on: ubuntu-latest
@@ -134,7 +192,6 @@ jobs:
       - name: Run tests
         run: make test-pyspark
 
-
   multi-python-running:
     name: Running with Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
@@ -156,7 +213,7 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          uv sync
+          make develop
 
       - name: Run deltalake
         run: |

@@ -43,9 +43,10 @@ use tracing::*;
 use uuid::Uuid;
 
 use super::transaction::PROTOCOL;
-use super::writer::{PartitionWriter, PartitionWriterConfig};
+use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::Add;
 use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
@@ -55,6 +56,7 @@ use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
+use crate::delta_datafusion::DeltaTableProvider;
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -478,13 +480,13 @@ impl MergePlan {
     where
         F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
     {
-        debug!("Rewriting files in partition: {:?}", partition_values);
+        debug!("Rewriting files in partition: {partition_values:?}");
         // First, initialize metrics
         let mut partial_actions = files
             .iter()
             .map(|file_meta| {
                 create_remove(
-                    file_meta.location.as_ref(),
+                    file_meta.path.as_ref(),
                     &partition_values,
                     file_meta.size as i64,
                 )
@@ -554,116 +556,24 @@ impl MergePlan {
         });
         partial_actions.extend(add_actions);
 
-        debug!(
-            "Finished rewriting files in partition: {:?}",
-            partition_values
-        );
+        debug!("Finished rewriting files in partition: {partition_values:?}");
 
         Ok((partial_actions, partial_metrics))
     }
 
-    /// Creates a stream of batches that are Z-ordered.
-    ///
-    /// Currently requires loading all the data into memory. This is run for each
-    /// partition, so it is not a problem for tables where each partition is small.
-    /// But for large unpartitioned tables, this could be a problem.
-    #[cfg(not(feature = "datafusion"))]
-    async fn read_zorder(
-        files: MergeBin,
-        context: Arc<zorder::ZOrderExecContext>,
-    ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use arrow_array::cast::as_generic_binary_array;
-        use arrow_array::ArrayRef;
-        use arrow_schema::ArrowError;
-
-        let object_store_ref = context.object_store.clone();
-        // Read all batches into a vec
-        let batches = zorder::collect_batches(object_store_ref, files).await?;
-
-        // For each batch, compute the zorder key
-        let zorder_keys: Vec<ArrayRef> =
-            batches
-                .iter()
-                .map(|batch| {
-                    let mut zorder_columns = Vec::new();
-                    for column in context.columns.iter() {
-                        let array = batch.column_by_name(column).ok_or(ArrowError::SchemaError(
-                            format!("Column not found in data file: {column}"),
-                        ))?;
-                        zorder_columns.push(array.clone());
-                    }
-                    zorder::zorder_key(zorder_columns.as_ref())
-                })
-                .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        let mut indices = zorder_keys
-            .iter()
-            .enumerate()
-            .flat_map(|(batch_i, key)| {
-                let key = as_generic_binary_array::<i32>(key);
-                key.iter()
-                    .enumerate()
-                    .map(move |(row_i, key)| (key.unwrap(), batch_i, row_i))
-            })
-            .collect_vec();
-        indices.sort_by_key(|(key, _, _)| *key);
-        let indices = indices
-            .into_iter()
-            .map(|(_, batch_i, row_i)| (batch_i, row_i))
-            .collect_vec();
-
-        // Interleave the batches
-        Ok(
-            util::interleave_batches(batches, indices, 10_000, context.use_inner_threads)
-                .await
-                .map_err(|err| ParquetError::General(format!("Failed to reorder data: {:?}", err)))
-                .boxed(),
-        )
-    }
-
     /// Datafusion-based z-order read.
-    #[cfg(feature = "datafusion")]
     async fn read_zorder(
         files: MergeBin,
         context: Arc<zorder::ZOrderExecContext>,
+        table_provider: DeltaTableProvider,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_common::Column;
         use datafusion_expr::expr::ScalarFunction;
         use datafusion_expr::{Expr, ScalarUDF};
 
-        // This code is ... not ideal. Essentially `read_parquet` expects Strings that it will then
-        // parse as URLs and then pass back to the object store (x_x). This can cause problems when
-        // paths in object storage have special characters like spaces, etc.
-        //
-        // This [str::replace] i kind of a hack to address
-        // <https://github.com/delta-io/delta-rs/issues/2834 >
-        let locations: Vec<String> = files
-            .iter()
-            .map(|om| {
-                format!(
-                    "delta-rs:///{}",
-                    str::replace(om.location.as_ref(), "%", "%25")
-                )
-            })
-            .collect();
-        debug!("Reading z-order with locations are: {locations:?}");
+        let provider = table_provider.with_files(files.files);
+        let df = context.ctx.read_table(Arc::new(provider))?;
 
-        let df = context
-            .ctx
-            // TODO: should read options have the partition columns
-            .read_parquet(locations, ParquetReadOptions::default())
-            .await?;
-
-        let original_columns = df
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(Column::from_qualified_name_ignore_case(f.name())))
-            .collect_vec();
-
-        // Add a temporary z-order column we will sort by, and then drop.
-        const ZORDER_KEY_COLUMN: &str = "__zorder_key";
         let cols = context
             .columns
             .iter()
@@ -673,16 +583,13 @@ impl MergePlan {
             Arc::new(ScalarUDF::from(zorder::datafusion::ZOrderUDF)),
             cols,
         ));
-        let df = df.with_column(ZORDER_KEY_COLUMN, expr)?;
-
-        let df = df.sort(vec![col(ZORDER_KEY_COLUMN).sort(true, true)])?;
-        let df = df.select(original_columns)?;
+        let df = df.sort(vec![expr.sort(true, true)])?;
 
         let stream = df
             .execute_stream()
             .await?
             .map_err(|err| {
-                ParquetError::General(format!("Z-order failed while scanning data: {:?}", err))
+                ParquetError::General(format!("Z-order failed while scanning data: {err:?}"))
             })
             .boxed();
 
@@ -712,19 +619,21 @@ impl MergePlan {
                 })
                 .map(|(partition, files)| {
                     debug!(
-                        "merging a group of {} files in partition {:?}",
+                        "merging a group of {} files in partition {partition:?}",
                         files.len(),
-                        partition,
                     );
                     for file in files.iter() {
-                        debug!("  file {}", file.location);
+                        debug!("  file {}", file.path);
                     }
                     let object_store_ref = log_store.object_store(Some(operation_id));
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
                             async move {
-                                let file_reader = ParquetObjectReader::new(object_store_ref, file);
+                                let file_reader = ParquetObjectReader::new(
+                                    object_store_ref,
+                                    ObjectMeta::try_from(file).unwrap(),
+                                );
                                 ParquetRecordBatchStreamBuilder::new(file_reader)
                                     .await?
                                     .build()
@@ -746,17 +655,6 @@ impl MergePlan {
             OptimizeOperations::ZOrder(zorder_columns, bins) => {
                 debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
 
-                #[cfg(not(feature = "datafusion"))]
-                let exec_context = Arc::new(zorder::ZOrderExecContext::new(
-                    zorder_columns,
-                    log_store.object_store(Some(operation_id)),
-                    // If there aren't enough bins to use all threads, then instead
-                    // use threads within the bins. This is important for the case where
-                    // the table is un-partitioned, in which case the entire table is just
-                    // one big bin.
-                    bins.len() <= num_cpus::get(),
-                ));
-
                 #[cfg(feature = "datafusion")]
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
@@ -765,10 +663,30 @@ impl MergePlan {
                 )?);
                 let task_parameters = self.task_parameters.clone();
 
+                use crate::delta_datafusion::DataFusionMixins;
+                use crate::delta_datafusion::DeltaScanConfigBuilder;
+                use crate::delta_datafusion::DeltaTableProvider;
+
+                let scan_config = DeltaScanConfigBuilder::default()
+                    .with_file_column(false)
+                    .with_schema(snapshot.input_schema()?)
+                    .build(&snapshot)?;
+
+                // For each rewrite evaluate the predicate and then modify each expression
+                // to either compute the new value or obtain the old one then write these batches
                 let log_store = log_store.clone();
                 futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
-                        let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
+                        let batch_stream = Self::read_zorder(
+                            files.clone(),
+                            exec_context.clone(),
+                            DeltaTableProvider::try_new(
+                                snapshot.clone(),
+                                log_store.clone(),
+                                scan_config.clone(),
+                            )
+                            .unwrap(),
+                        );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
                             partition,
@@ -797,6 +715,7 @@ impl MergePlan {
 
         let mut last_commit = Instant::now();
         let mut commits_made = 0;
+        let mut snapshot = snapshot.clone();
         loop {
             let next = stream.next().await.transpose()?;
 
@@ -836,18 +755,18 @@ impl MergePlan {
 
                 debug!("committing {} actions", actions.len());
 
-                CommitBuilder::from(properties)
+                let commit = CommitBuilder::from(properties)
                     .with_actions(actions)
                     .with_operation_id(operation_id)
                     .with_post_commit_hook_handler(handle.cloned())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
-                        Some(snapshot),
+                        Some(&snapshot),
                         log_store.clone(),
                         self.task_parameters.input_parameters.clone().into(),
                     )
                     .await?;
-
+                snapshot = commit.snapshot();
                 commits_made += 1;
             }
 
@@ -864,7 +783,7 @@ impl MergePlan {
             total_metrics.files_removed.min = 0;
         }
 
-        table.update().await?;
+        table.state = Some(snapshot);
 
         Ok(total_metrics)
     }
@@ -915,7 +834,7 @@ pub fn create_merge_plan(
 /// A collection of bins for a particular partition
 #[derive(Debug, Clone)]
 struct MergeBin {
-    files: Vec<ObjectMeta>,
+    files: Vec<Add>,
     size_bytes: i64,
 }
 
@@ -935,18 +854,18 @@ impl MergeBin {
         self.files.len()
     }
 
-    fn add(&mut self, meta: ObjectMeta) {
-        self.size_bytes += meta.size as i64;
-        self.files.push(meta);
+    fn add(&mut self, add: Add) {
+        self.size_bytes += add.size as i64;
+        self.files.push(add);
     }
 
-    fn iter(&self) -> impl Iterator<Item = &ObjectMeta> {
+    fn iter(&self) -> impl Iterator<Item = &Add> {
         self.files.iter()
     }
 }
 
 impl IntoIterator for MergeBin {
-    type Item = ObjectMeta;
+    type Item = Add;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -961,8 +880,7 @@ fn build_compaction_plan(
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<ObjectMeta>)> =
-        HashMap::new();
+    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let add = add?;
         metrics.total_considered_files += 1;
@@ -981,7 +899,7 @@ fn build_compaction_plan(
             .entry(add.partition_values()?.hive_partition_path())
             .or_insert_with(|| (partition_values, vec![]))
             .1
-            .push(object_meta);
+            .push(add.add_action());
     }
 
     for (_, file) in partition_files.values_mut() {
@@ -1075,13 +993,11 @@ fn build_zorder_plan(
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(&add)?;
-
         partition_files
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
-            .add(object_meta);
+            .add(add.add_action());
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
@@ -1093,73 +1009,6 @@ pub(super) mod util {
     use super::*;
     use futures::Future;
     use tokio::task::JoinError;
-
-    /// Interleaves a vector of record batches based on a set of indices
-    #[cfg(not(feature = "datafusion"))]
-    pub async fn interleave_batches(
-        batches: Vec<RecordBatch>,
-        indices: Vec<(usize, usize)>,
-        batch_size: usize,
-        use_threads: bool,
-    ) -> BoxStream<'static, Result<RecordBatch, DeltaTableError>> {
-        use arrow_array::ArrayRef;
-        use arrow_select::interleave::interleave;
-        use futures::TryFutureExt;
-
-        if batches.is_empty() {
-            return futures::stream::empty().boxed();
-        }
-        let num_columns = batches[0].num_columns();
-        let schema = batches[0].schema();
-        let arrays = (0..num_columns)
-            .map(move |col_i| {
-                Arc::new(
-                    batches
-                        .iter()
-                        .map(|batch| batch.column(col_i).clone())
-                        .collect_vec(),
-                )
-            })
-            .collect_vec();
-        let arrays = Arc::new(arrays);
-
-        fn interleave_task(
-            array_chunks: Arc<Vec<ArrayRef>>,
-            indices: Arc<Vec<(usize, usize)>>,
-        ) -> impl Future<Output = Result<ArrayRef, DeltaTableError>> + Send + 'static {
-            let fut = tokio::task::spawn_blocking(move || {
-                let array_refs = array_chunks.iter().map(|arr| arr.as_ref()).collect_vec();
-                interleave(&array_refs, &indices)
-            });
-            flatten_join_error(fut)
-        }
-
-        fn interleave_batch(
-            arrays: Arc<Vec<Arc<Vec<ArrayRef>>>>,
-            chunk: Vec<(usize, usize)>,
-            schema: ArrowSchemaRef,
-            use_threads: bool,
-        ) -> impl Future<Output = Result<RecordBatch, DeltaTableError>> + Send + 'static {
-            let num_threads = if use_threads { num_cpus::get() } else { 1 };
-            let chunk = Arc::new(chunk);
-            futures::stream::iter(0..arrays.len())
-                .map(move |i| arrays[i].clone())
-                .map(move |array_chunks| interleave_task(array_chunks.clone(), chunk.clone()))
-                .buffered(num_threads)
-                .try_collect::<Vec<_>>()
-                .and_then(move |columns| {
-                    futures::future::ready(
-                        RecordBatch::try_new(schema, columns).map_err(DeltaTableError::from),
-                    )
-                })
-        }
-
-        futures::stream::iter(indices)
-            .chunks(batch_size)
-            .map(move |chunk| interleave_batch(arrays.clone(), chunk, schema.clone(), use_threads))
-            .buffered(2)
-            .boxed()
-    }
 
     pub async fn flatten_join_error<T, E>(
         future: impl Future<Output = Result<Result<T, E>, JoinError>>,
@@ -1188,57 +1037,8 @@ pub(super) mod zorder {
     use arrow_schema::ArrowError;
     // use arrow_schema::Schema as ArrowSchema;
 
-    /// Execution context for Z-order scan
-    #[cfg(not(feature = "datafusion"))]
-    pub struct ZOrderExecContext {
-        /// Columns to z-order by
-        pub columns: Arc<[String]>,
-        /// Object store to use for reading files
-        pub object_store: ObjectStoreRef,
-        /// Whether to use threads when interleaving batches
-        pub use_inner_threads: bool,
-    }
-
-    #[cfg(not(feature = "datafusion"))]
-    impl ZOrderExecContext {
-        pub fn new(
-            columns: Vec<String>,
-            object_store: ObjectStoreRef,
-            use_inner_threads: bool,
-        ) -> Self {
-            let columns = columns.into();
-            Self {
-                columns,
-                object_store,
-                use_inner_threads,
-            }
-        }
-    }
-
-    /// Read all batches into a vec - is an async function in disguise
-    #[cfg(not(feature = "datafusion"))]
-    pub(super) fn collect_batches(
-        object_store: ObjectStoreRef,
-        files: MergeBin,
-    ) -> impl Future<Output = Result<Vec<RecordBatch>, ParquetError>> {
-        futures::stream::iter(files.clone())
-            .then(move |file| {
-                let object_store = object_store.clone();
-                async move {
-                    let file_reader = ParquetObjectReader::new(object_store.clone(), file);
-                    ParquetRecordBatchStreamBuilder::new(file_reader)
-                        .await?
-                        .build()
-                }
-            })
-            .try_flatten()
-            .try_collect::<Vec<_>>()
-    }
-
-    #[cfg(feature = "datafusion")]
     pub use self::datafusion::ZOrderExecContext;
 
-    #[cfg(feature = "datafusion")]
     pub(super) mod datafusion {
         use super::*;
         use url::Url;

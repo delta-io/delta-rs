@@ -14,7 +14,7 @@ def gc_schema() -> Schema:
             Field(
                 name="gc",
                 type=PrimitiveType("integer"),
-                metadata={"delta.generationExpression": "'5'"},
+                metadata={"delta.generationExpression": "5"},
             ),
         ]
     )
@@ -118,7 +118,7 @@ def test_write_with_invalid_gc_to_table(table_with_gc, invalid_gc_data):
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            "Invariant violations: [\"Check or Invariant (gc = '5' OR (gc IS NULL AND '5' IS NULL)) violated by value in row: [10]\"]"
+            'Invariant violations: ["Check or Invariant (gc = 5 OR (gc IS NULL AND 5 IS NULL)) violated by value in row: [10]"]'
         ),
     ):
         write_deltalake(table_with_gc, mode="append", data=invalid_gc_data)
@@ -177,7 +177,7 @@ def test_raise_when_gc_passed_during_adding_new_columns(tmp_path, data_without_g
                 Field(
                     name="gc",
                     type=PrimitiveType("integer"),
-                    metadata={"delta.generationExpression": "'5'"},
+                    metadata={"delta.generationExpression": "5"},
                 )
             ]
         )
@@ -201,13 +201,65 @@ def test_merge_with_gc(table_with_gc: DeltaTable, data_without_gc):
     )
 
 
+def test_merge_with_g_during_schema_evolution(
+    table_with_gc: DeltaTable, data_without_gc
+):
+    (
+        table_with_gc.merge(
+            data_without_gc,
+            predicate="s.id = t.id",
+            source_alias="s",
+            target_alias="t",
+            merge_schema=True,
+        )
+        .when_not_matched_insert_all()
+        .execute()
+    )
+    id_col = pa.field("id", pa.int32())
+    gc = pa.field("gc", pa.int32())
+    expected_data = pa.Table.from_pydict(
+        {"id": [1, 2], "gc": [5, 5]}, schema=pa.schema([id_col, gc])
+    )
+    assert (
+        table_with_gc.to_pyarrow_table().sort_by([("id", "ascending")]) == expected_data
+    )
+
+
+def test_raise_when_gc_passed_merge_statement_during_schema_evolution(
+    tmp_path, data_without_gc, valid_gc_data
+):
+    write_deltalake(
+        tmp_path,
+        mode="append",
+        data=data_without_gc,
+    )
+    dt = DeltaTable(tmp_path)
+    assert dt.protocol().min_writer_version == 2
+
+    with pytest.raises(
+        SchemaMismatchError,
+        match="Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.",
+    ):
+        (
+            dt.merge(
+                valid_gc_data,
+                predicate="s.id = t.id",
+                source_alias="s",
+                target_alias="t",
+                merge_schema=True,
+            )
+            .when_not_matched_insert_all()
+            .execute()
+        )
+
+
 def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
     import re
 
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            "Invariant violations: [\"Check or Invariant (gc = '5' OR (gc IS NULL AND '5' IS NULL)) violated by value in row: [10]\"]"
+            'Invariant violations: ["Check or Invariant (gc = 5 OR (gc IS NULL AND 5 IS NULL)) violated by value in row: [10]"]'
         ),
     ):
         (

@@ -6,11 +6,16 @@ use deltalake_core::protocol::DeltaOperation;
 
 mod simple_checkpoint {
     use deltalake_core::*;
+    use parquet::basic::Encoding;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
     use pretty_assertions::assert_eq;
-    use std::fs;
+    use regex::Regex;
+    use serial_test::serial;
+    use std::fs::{self, File};
     use std::path::{Path, PathBuf};
 
     #[tokio::test]
+    #[serial]
     async fn simple_checkpoint_test() {
         let table_location = "../test/tests/data/checkpoints";
         let table_path = PathBuf::from(table_location);
@@ -31,6 +36,9 @@ mod simple_checkpoint {
         let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
         assert!(checkpoint_path.as_path().exists());
 
+        // Check that the checkpoint does use run length encoding
+        assert_column_rle_encoding(checkpoint_path, true);
+
         // _last_checkpoint should exist and point to the correct version
         let version = get_last_checkpoint_version(&log_path);
         assert_eq!(5, version);
@@ -42,6 +50,9 @@ mod simple_checkpoint {
         let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
         assert!(checkpoint_path.as_path().exists());
 
+        // Check that the checkpoint does use run length encoding
+        assert_column_rle_encoding(checkpoint_path, true);
+
         // _last_checkpoint should exist and point to the correct version
         let version = get_last_checkpoint_version(&log_path);
         assert_eq!(10, version);
@@ -51,6 +62,78 @@ mod simple_checkpoint {
         let table = table_result;
         let files = table.get_files_iter().unwrap();
         assert_eq!(12, files.count());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn checkpoint_run_length_encoding_test() {
+        let table_location = "../test/tests/data/checkpoints";
+        let table_path = PathBuf::from(table_location);
+        let log_path = table_path.join("_delta_log");
+
+        // Delete checkpoint files from previous runs
+        cleanup_checkpoint_files(log_path.as_path());
+
+        // Load the delta table
+        let base_table = deltalake_core::open_table(table_location).await.unwrap();
+
+        // Set the table properties to disable run length encoding
+        // this alters table version and should be done in a more principled way
+        let table = DeltaOps(base_table)
+            .set_tbl_properties()
+            .with_properties(std::collections::HashMap::<String, String>::from([(
+                "delta-rs.checkpoint.useRunLengthEncoding".to_string(),
+                "false".to_string(),
+            )]))
+            .await
+            .unwrap();
+
+        // Write a checkpoint
+        checkpoints::create_checkpoint(&table, None).await.unwrap();
+
+        // checkpoint should exist
+        let checkpoint_path = log_path.join("00000000000000000013.checkpoint.parquet");
+        assert!(checkpoint_path.as_path().exists());
+
+        // Check that the checkpoint does not use run length encoding
+        assert_column_rle_encoding(checkpoint_path, false);
+
+        // _last_checkpoint should exist and point to the correct version
+        let version = get_last_checkpoint_version(&log_path);
+        assert_eq!(table.version(), version);
+
+        // delta table should load just fine with the checkpoint in place
+        let table_result = deltalake_core::open_table(table_location).await.unwrap();
+        let table = table_result;
+        let files = table.get_files_iter().unwrap();
+        assert_eq!(12, files.count());
+    }
+
+    fn assert_column_rle_encoding(file_path: PathBuf, should_be_rle: bool) {
+        let file = File::open(&file_path).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        let meta = reader.metadata();
+        let mut found_rle = false;
+
+        for i in 0..meta.num_row_groups() {
+            let row_group = meta.row_group(i);
+            for j in 0..row_group.num_columns() {
+                let column_chunk: &parquet::file::metadata::ColumnChunkMetaData =
+                    row_group.column(j);
+
+                for encoding in column_chunk.encodings() {
+                    if *encoding == Encoding::RLE_DICTIONARY {
+                        found_rle = true;
+                    }
+                }
+            }
+        }
+
+        if should_be_rle {
+            assert!(found_rle, "Expected RLE_DICTIONARY encoding");
+        } else {
+            assert!(!found_rle, "Expected no RLE_DICTIONARY encoding");
+        }
     }
 
     fn get_last_checkpoint_version(log_path: &Path) -> i64 {
@@ -69,15 +152,22 @@ mod simple_checkpoint {
     }
 
     fn cleanup_checkpoint_files(log_path: &Path) {
-        let paths = fs::read_dir(log_path).unwrap();
-        for d in paths.flatten() {
-            let path = d.path();
+        let re = Regex::new(r"^(\d{20})\.json$").unwrap();
+        for entry in fs::read_dir(log_path).unwrap().flatten() {
+            let path = entry.path();
+            let filename = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
 
-            if path.file_name().unwrap() == "_last_checkpoint"
-                || (path.extension().is_some() && path.extension().unwrap() == "parquet")
-            {
-                fs::remove_file(path).unwrap();
+            if let Some(caps) = re.captures(filename) {
+                if let Ok(num) = caps[1].parse::<u64>() {
+                    if num <= 12 {
+                        continue;
+                    }
+                }
             }
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -106,7 +196,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         let table_path = table.table_uri();
         let set_file_last_modified = |version: usize, last_modified_millis: u64| {
-            let path = format!("{}_delta_log/{:020}.json", &table_path, version);
+            let path = format!("{table_path}_delta_log/{version:020}.json");
             let file = OpenOptions::new().write(true).open(path).unwrap();
             let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
             let times = FileTimes::new()

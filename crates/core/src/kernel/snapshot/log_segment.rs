@@ -28,6 +28,12 @@ static CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
 static DELTA_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.json$").unwrap());
 static CRC_FILE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap());
+static LAST_CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^_last_checkpoint$").unwrap());
+static LAST_VACUUM_INFO_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^_last_vacuum_info$").unwrap());
+static DELETION_VECTOR_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r".*\.bin$").unwrap());
 pub(super) static TOMBSTONE_SCHEMA: LazyLock<StructType> =
     LazyLock::new(|| StructType::new(vec![ActionType::Remove.schema_field().clone()]));
 
@@ -65,6 +71,24 @@ pub(crate) trait PathExt {
         self.filename()
             .map(|name| CRC_FILE_PATTERN.captures(name).is_some())
             .unwrap()
+    }
+
+    fn is_last_checkpoint_file(&self) -> bool {
+        self.filename()
+            .map(|name| LAST_CHECKPOINT_FILE_PATTERN.captures(name).is_some())
+            .unwrap_or(false)
+    }
+
+    fn is_last_vacuum_info_file(&self) -> bool {
+        self.filename()
+            .map(|name| LAST_VACUUM_INFO_FILE_PATTERN.captures(name).is_some())
+            .unwrap_or(false)
+    }
+
+    fn is_deletion_vector_file(&self) -> bool {
+        self.filename()
+            .map(|name| DELETION_VECTOR_FILE_PATTERN.captures(name).is_some())
+            .unwrap_or(false)
     }
 }
 
@@ -142,10 +166,7 @@ impl LogSegment {
         end_version: Option<i64>,
         log_store: &dyn LogStore,
     ) -> DeltaResult<Self> {
-        debug!(
-            "try_new_slice: start_version: {}, end_version: {:?}",
-            start_version, end_version
-        );
+        debug!("try_new_slice: start_version: {start_version}, end_version: {end_version:?}",);
         log_store.refresh().await?;
         let log_url = table_root.child("_delta_log");
         let (mut commit_files, checkpoint_files) = list_log_files(
@@ -167,10 +188,28 @@ impl LogSegment {
         segment.version = segment
             .file_version()
             .unwrap_or(end_version.unwrap_or(start_version));
+
+        segment.validate()?;
+
         Ok(segment)
     }
 
     pub fn validate(&self) -> DeltaResult<()> {
+        let is_contiguous = self
+            .commit_files
+            .iter()
+            .collect_vec()
+            .windows(2)
+            .all(|cfs| {
+                cfs[0].location.commit_version().unwrap() - 1
+                    == cfs[1].location.commit_version().unwrap()
+            });
+        if !is_contiguous {
+            return Err(DeltaTableError::Generic(
+                "non-contiguous log segment".into(),
+            ));
+        }
+
         let checkpoint_version = self
             .checkpoint_files
             .iter()
@@ -538,7 +577,7 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+    use delta_kernel::table_features::{ReaderFeature, WriterFeature};
     use deltalake_test::utils::*;
     use maplit::hashset;
     use tokio::task::JoinHandle;
@@ -644,8 +683,8 @@ pub(super) mod tests {
         let expected = Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(hashset! {ReaderFeatures::DeletionVectors}),
-            writer_features: Some(hashset! {WriterFeatures::DeletionVectors}),
+            reader_features: Some(hashset! {ReaderFeature::DeletionVectors}),
+            writer_features: Some(hashset! {WriterFeature::DeletionVectors}),
         };
         assert_eq!(protocol, expected);
 
@@ -787,7 +826,7 @@ pub(super) mod tests {
         let mut actions = vec![Action::Metadata(metadata), Action::Protocol(protocol)];
         for i in 0..10 {
             actions.push(Action::Add(Add {
-                path: format!("part-{}.parquet", i),
+                path: format!("part-{i}.parquet"),
                 modification_time: chrono::Utc::now().timestamp_millis(),
                 ..Default::default()
             }));
@@ -811,7 +850,7 @@ pub(super) mod tests {
         // remove all but one file
         for i in 0..9 {
             actions.push(Action::Remove(Remove {
-                path: format!("part-{}.parquet", i),
+                path: format!("part-{i}.parquet"),
                 deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
                 ..Default::default()
             }))
@@ -828,6 +867,10 @@ pub(super) mod tests {
         create_checkpoint_for(commit.version, &commit.snapshot, log_store.as_ref(), None)
             .await
             .unwrap();
+
+        assert_eq!(commit.metrics.num_retries, 0);
+        assert_eq!(commit.metrics.num_log_files_cleaned_up, 0);
+        assert!(!commit.metrics.new_checkpoint_created);
 
         let batches = LogSegment::try_new(
             &Path::default(),

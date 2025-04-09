@@ -48,13 +48,11 @@ pub(crate) fn next_data_path(
     let column_path = ColumnPath::new(Vec::new());
     let compression = writer_properties.compression(&column_path);
 
-    let part = format!("{:0>5}", part_count);
+    let part = format!("{part_count:0>5}");
 
     // TODO: what does c000 mean?
     let file_name = format!(
-        "part-{}-{}-c000{}.parquet",
-        part,
-        writer_id,
+        "part-{part}-{writer_id}-c000{}.parquet",
         compression_to_str(&compression)
     );
     prefix.child(file_name)

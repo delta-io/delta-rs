@@ -36,6 +36,10 @@ pub enum TableProperty {
     /// stats_parsed column and to write partition values as a struct for partitionValues_parsed.
     CheckpointWriteStatsAsStruct,
 
+    /// true for Delta Lake to write checkpoint files using run length encoding (RLE).
+    /// Some readers don't support run length encoding (i.e. Fabric) so this can be disabled.
+    CheckpointUseRunLengthEncoding,
+
     /// Whether column mapping is enabled for Delta table columns and the corresponding
     /// Parquet columns that use different names.
     ColumnMappingMode,
@@ -126,6 +130,7 @@ impl AsRef<str> for TableProperty {
             Self::AutoOptimizeOptimizeWrite => "delta.autoOptimize.optimizeWrite",
             Self::CheckpointWriteStatsAsJson => "delta.checkpoint.writeStatsAsJson",
             Self::CheckpointWriteStatsAsStruct => "delta.checkpoint.writeStatsAsStruct",
+            Self::CheckpointUseRunLengthEncoding => "delta-rs.checkpoint.useRunLengthEncoding",
             Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
@@ -158,6 +163,7 @@ impl FromStr for TableProperty {
             "delta.autoOptimize.optimizeWrite" => Ok(Self::AutoOptimizeOptimizeWrite),
             "delta.checkpoint.writeStatsAsJson" => Ok(Self::CheckpointWriteStatsAsJson),
             "delta.checkpoint.writeStatsAsStruct" => Ok(Self::CheckpointWriteStatsAsStruct),
+            "delta-rs.checkpoint.useRunLengthEncoding" => Ok(Self::CheckpointUseRunLengthEncoding),
             "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
@@ -237,6 +243,13 @@ impl TableConfig<'_> {
             write_stats_as_struct,
             bool,
             false
+        ),
+        (
+            "true for Delta Lake to write checkpoint files using run length encoding (RLE)",
+            TableProperty::CheckpointUseRunLengthEncoding,
+            use_checkpoint_rle,
+            bool,
+            true
         ),
         (
             "The target file size in bytes or higher units for file tuning",
@@ -350,7 +363,8 @@ impl TableConfig<'_> {
             .iter()
             .filter_map(|(field, value)| {
                 if field.starts_with("delta.constraints") {
-                    value.as_ref().map(|f| Constraint::new("*", f))
+                    let constraint_name = field.replace("delta.constraints.", "");
+                    value.as_ref().map(|f| Constraint::new(&constraint_name, f))
                 } else {
                     None
                 }

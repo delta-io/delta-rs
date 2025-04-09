@@ -1,5 +1,6 @@
 """Tests that deltalake(delta-rs) can write to tables written by PySpark."""
 
+import os
 import pathlib
 
 import pyarrow as pa
@@ -8,7 +9,7 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaProtocolError
 
-from .utils import assert_spark_read_equal, get_spark
+from .utils import assert_spark_read_equal, get_spark, run_stream_with_checkpoint
 
 try:
     import delta
@@ -95,28 +96,6 @@ def test_write_invariant(tmp_path: pathlib.Path):
 
 @pytest.mark.pyspark
 @pytest.mark.integration
-def test_checks_min_writer_version(tmp_path: pathlib.Path):
-    # Write table in Spark with constraint
-    spark = get_spark()
-
-    spark.createDataFrame([(4,)], schema=["c1"]).write.save(
-        str(tmp_path),
-        mode="append",
-        format="delta",
-    )
-
-    # Add a constraint upgrades the minWriterProtocol
-    spark.sql(f"ALTER TABLE delta.`{tmp_path!s}` ADD CONSTRAINT x CHECK (c1 > 2)")
-
-    with pytest.raises(
-        DeltaProtocolError, match="This table's min_writer_version is 3, but"
-    ):
-        valid_data = pa.table({"c1": pa.array([5, 6])})
-        write_deltalake(str(tmp_path), valid_data, mode="append", engine="pyarrow")
-
-
-@pytest.mark.pyspark
-@pytest.mark.integration
 def test_spark_read_optimize_history(tmp_path: pathlib.Path):
     ids = ["1"] * 10
     values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -169,3 +148,109 @@ def test_spark_read_z_ordered_history(tmp_path: pathlib.Path):
     )
 
     assert latest_operation_metrics["operationMetrics"] is not None
+
+
+@pytest.mark.pyspark
+@pytest.mark.integration
+def test_spark_read_repair_run(tmp_path):
+    ids = ["1"] * 10
+    values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+    id_array = pa.array(ids, type=pa.string())
+    value_array = pa.array(values, type=pa.int32())
+
+    pa_table = pa.Table.from_arrays([id_array, value_array], names=["id", "value"])
+
+    write_deltalake(tmp_path, pa_table, mode="append")
+    write_deltalake(tmp_path, pa_table, mode="append")
+    dt = DeltaTable(tmp_path)
+    os.remove(dt.file_uris()[0])
+
+    dt.repair(dry_run=False)
+    spark = get_spark()
+
+    history_df = spark.sql(f"DESCRIBE HISTORY '{tmp_path}'")
+
+    latest_operation_metrics = (
+        history_df.orderBy(history_df.version.desc()).select("operationMetrics").first()
+    )
+
+    assert latest_operation_metrics["operationMetrics"] is not None
+
+
+@pytest.mark.pyspark
+@pytest.mark.integration
+def test_spark_stream_schema_evolution(tmp_path: pathlib.Path):
+    """https://github.com/delta-io/delta-rs/issues/3274"""
+    """
+    This test ensures that Spark can still read from tables following
+    a schema evolution write, since old behavior was to generate a new table ID
+    between schema evolution runs, which caused Spark to error thinking the table had changed.
+    """
+
+    data_first_write = pa.array(
+        [
+            {"name": "Alice", "age": 30, "details": {"email": "alice@example.com"}},
+            {"name": "Bob", "age": 25, "details": {"email": "bob@example.com"}},
+        ]
+    )
+
+    data_second_write = pa.array(
+        [
+            {
+                "name": "Charlie",
+                "age": 35,
+                "details": {"address": "123 Main St", "email": "charlie@example.com"},
+            },
+            {
+                "name": "Diana",
+                "age": 28,
+                "details": {"address": "456 Elm St", "email": "diana@example.com"},
+            },
+        ]
+    )
+
+    schema_first_write = pa.schema(
+        [
+            ("name", pa.string()),
+            ("age", pa.int64()),
+            ("details", pa.struct([("email", pa.string())])),
+        ]
+    )
+
+    schema_second_write = pa.schema(
+        [
+            ("name", pa.string()),
+            ("age", pa.int64()),
+            (
+                "details",
+                pa.struct(
+                    [
+                        ("address", pa.string()),
+                        ("email", pa.string()),
+                    ]
+                ),
+            ),
+        ]
+    )
+    table_first_write = pa.Table.from_pylist(
+        data_first_write, schema=schema_first_write
+    )
+    table_second_write = pa.Table.from_pylist(
+        data_second_write, schema=schema_second_write
+    )
+
+    write_deltalake(
+        tmp_path,
+        table_first_write,
+        mode="append",
+    )
+
+    run_stream_with_checkpoint(tmp_path.as_posix())
+
+    write_deltalake(tmp_path, table_second_write, mode="append", schema_mode="merge")
+
+    run_stream_with_checkpoint(tmp_path.as_posix())
+
+    # For this test we don't care about the data, we'll just let any
+    # exceptions trickle up to report as a failure

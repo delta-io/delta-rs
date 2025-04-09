@@ -3,6 +3,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use delta_kernel::schema::{DataType, StructField};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -12,7 +13,6 @@ use super::schema::StructType;
 use super::StructTypeExt;
 use crate::kernel::{error::Error, DeltaResult};
 use crate::TableProperty;
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
 
 /// Defines a file format used in table
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -111,6 +111,12 @@ impl Metadata {
         self
     }
 
+    /// set the table ID in the metadata action
+    pub fn with_table_id(mut self, id: String) -> Self {
+        self.id = id;
+        self
+    }
+
     /// get the table schema
     pub fn schema(&self) -> DeltaResult<StructType> {
         Ok(serde_json::from_str(&self.schema_string)?)
@@ -143,11 +149,11 @@ pub struct Protocol {
     /// A collection of features that a client must implement in order to correctly
     /// read this table (exist only when minReaderVersion is set to 3)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reader_features: Option<HashSet<ReaderFeatures>>,
+    pub reader_features: Option<HashSet<ReaderFeature>>,
     /// A collection of features that a client must implement in order to correctly
     /// write this table (exist only when minWriterVersion is set to 7)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub writer_features: Option<HashSet<WriterFeatures>>,
+    pub writer_features: Option<HashSet<WriterFeature>>,
 }
 
 impl Protocol {
@@ -164,7 +170,7 @@ impl Protocol {
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
     pub fn append_reader_features(
         mut self,
-        reader_features: impl IntoIterator<Item = impl Into<ReaderFeatures>>,
+        reader_features: impl IntoIterator<Item = impl Into<ReaderFeature>>,
     ) -> Self {
         let all_reader_features = reader_features
             .into_iter()
@@ -186,7 +192,7 @@ impl Protocol {
     /// Append the writer features in the protocol action, automatically bumps min_writer_version
     pub fn append_writer_features(
         mut self,
-        writer_features: impl IntoIterator<Item = impl Into<WriterFeatures>>,
+        writer_features: impl IntoIterator<Item = impl Into<WriterFeature>>,
     ) -> Self {
         let all_writer_features = writer_features
             .into_iter()
@@ -229,27 +235,27 @@ impl Protocol {
                 })
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableChangeDataFeed" if parse_bool(value) => {
-                        Some(WriterFeatures::ChangeDataFeed)
+                        Some(WriterFeature::ChangeDataFeed)
                     }
-                    "delta.appendOnly" if parse_bool(value) => Some(WriterFeatures::AppendOnly),
+                    "delta.appendOnly" if parse_bool(value) => Some(WriterFeature::AppendOnly),
                     "delta.enableDeletionVectors" if parse_bool(value) => {
-                        Some(WriterFeatures::DeletionVectors)
+                        Some(WriterFeature::DeletionVectors)
                     }
                     "delta.enableRowTracking" if parse_bool(value) => {
-                        Some(WriterFeatures::RowTracking)
+                        Some(WriterFeature::RowTracking)
                     }
                     "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
-                        Some(WriterFeatures::V2Checkpoint)
+                        Some(WriterFeature::V2Checkpoint)
                     }
                     _ => None,
                 })
-                .collect::<HashSet<WriterFeatures>>();
+                .collect::<HashSet<WriterFeature>>();
 
             if configuration
                 .keys()
                 .any(|v| v.starts_with("delta.constraints."))
             {
-                converted_writer_features.insert(WriterFeatures::CheckConstraints);
+                converted_writer_features.insert(WriterFeature::CheckConstraints);
             }
 
             match self.writer_features {
@@ -265,14 +271,14 @@ impl Protocol {
                 .iter()
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableDeletionVectors" if parse_bool(value) => {
-                        Some(ReaderFeatures::DeletionVectors)
+                        Some(ReaderFeature::DeletionVectors)
                     }
                     "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
-                        Some(ReaderFeatures::V2Checkpoint)
+                        Some(ReaderFeature::V2Checkpoint)
                     }
                     _ => None,
                 })
-                .collect::<HashSet<ReaderFeatures>>();
+                .collect::<HashSet<ReaderFeature>>();
             match self.reader_features {
                 Some(mut features) => {
                     features.extend(converted_reader_features);
@@ -323,8 +329,7 @@ impl Protocol {
                 parsed_properties.insert(parsed_key, value.to_string());
             } else if raise_if_not_exists {
                 return Err(Error::Generic(format!(
-                    "Error parsing property '{}':'{}'",
-                    key, value
+                    "Error parsing property '{key}':'{value}'",
                 )));
             }
         }
@@ -340,17 +345,11 @@ impl Protocol {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!(
-                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
-                        min_reader_version
-                    )))
+                        return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!(
-                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
-                        min_reader_version
-                    )))
+                    return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
                 }
             }
         }
@@ -366,17 +365,11 @@ impl Protocol {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!(
-                            "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
-                            min_writer_version
-                        )))
+                        return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!(
-                        "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
-                        min_writer_version
-                    )))
+                    return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
                 }
             }
         }
@@ -389,12 +382,12 @@ impl Protocol {
                     if self.min_writer_version >= 7 {
                         match self.writer_features {
                             Some(mut features) => {
-                                features.insert(WriterFeatures::ChangeDataFeed);
+                                features.insert(WriterFeature::ChangeDataFeed);
                                 self.writer_features = Some(features);
                             }
                             None => {
                                 self.writer_features =
-                                    Some(hashset! {WriterFeatures::ChangeDataFeed})
+                                    Some(hashset! {WriterFeature::ChangeDataFeed})
                             }
                         }
                     } else if self.min_writer_version <= 3 {
@@ -403,10 +396,7 @@ impl Protocol {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!(
-                        "delta.enableChangeDataFeed = '{}' is invalid, valid values are ['true']",
-                        enable_cdf
-                    )))
+                    return Err(Error::Generic(format!("delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']")))
                 }
             }
         }
@@ -417,17 +407,17 @@ impl Protocol {
                 Ok(true) => {
                     let writer_features = match self.writer_features {
                         Some(mut features) => {
-                            features.insert(WriterFeatures::DeletionVectors);
+                            features.insert(WriterFeature::DeletionVectors);
                             features
                         }
-                        None => hashset! {WriterFeatures::DeletionVectors},
+                        None => hashset! {WriterFeature::DeletionVectors},
                     };
                     let reader_features = match self.reader_features {
                         Some(mut features) => {
-                            features.insert(ReaderFeatures::DeletionVectors);
+                            features.insert(ReaderFeature::DeletionVectors);
                             features
                         }
-                        None => hashset! {ReaderFeatures::DeletionVectors},
+                        None => hashset! {ReaderFeature::DeletionVectors},
                     };
                     self.min_reader_version = 3;
                     self.min_writer_version = 7;
@@ -436,10 +426,7 @@ impl Protocol {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!(
-                        "delta.enableDeletionVectors = '{}' is invalid, valid values are ['true']",
-                        enable_dv
-                    )))
+                    return Err(Error::Generic(format!("delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']")))
                 }
             }
         }
@@ -453,8 +440,8 @@ impl Protocol {
 
     /// Enable timestamp_ntz in the protocol
     fn enable_timestamp_ntz(mut self) -> Self {
-        self = self.append_reader_features([ReaderFeatures::TimestampWithoutTimezone]);
-        self = self.append_writer_features([WriterFeatures::TimestampWithoutTimezone]);
+        self = self.append_reader_features([ReaderFeature::TimestampWithoutTimezone]);
+        self = self.append_writer_features([WriterFeature::TimestampWithoutTimezone]);
         self
     }
 
@@ -464,7 +451,7 @@ impl Protocol {
             self.min_writer_version = 4;
         }
         if self.min_writer_version >= 7 {
-            self = self.append_writer_features([WriterFeatures::GeneratedColumns]);
+            self = self.append_writer_features([WriterFeature::GeneratedColumns]);
         }
         self
     }
@@ -472,7 +459,7 @@ impl Protocol {
     /// Enabled generated columns
     fn enable_invariants(mut self) -> Self {
         if self.min_writer_version >= 7 {
-            self = self.append_writer_features([WriterFeatures::Invariants]);
+            self = self.append_writer_features([WriterFeature::Invariants]);
         }
         self
     }
@@ -560,27 +547,37 @@ impl fmt::Display for TableFeatures {
     }
 }
 
-impl TryFrom<&TableFeatures> for ReaderFeatures {
+impl TryFrom<&TableFeatures> for ReaderFeature {
     type Error = strum::ParseError;
 
     fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        ReaderFeatures::try_from(value.as_ref())
+        ReaderFeature::try_from(value.as_ref())
     }
 }
 
-impl TryFrom<&TableFeatures> for WriterFeatures {
+impl TryFrom<&TableFeatures> for WriterFeature {
     type Error = strum::ParseError;
 
     fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        WriterFeatures::try_from(value.as_ref())
+        WriterFeature::try_from(value.as_ref())
     }
 }
 
 impl TableFeatures {
     /// Convert table feature to respective reader or/and write feature
-    pub fn to_reader_writer_features(&self) -> (Option<ReaderFeatures>, Option<WriterFeatures>) {
-        let reader_feature = ReaderFeatures::try_from(self).ok();
-        let writer_feature = WriterFeatures::try_from(self).ok();
+    pub fn to_reader_writer_features(&self) -> (Option<ReaderFeature>, Option<WriterFeature>) {
+        let reader_feature = ReaderFeature::try_from(self)
+            .ok()
+            .and_then(|feature| match feature {
+                ReaderFeature::Unknown(_) => None,
+                _ => Some(feature),
+            });
+        let writer_feature = WriterFeature::try_from(self)
+            .ok()
+            .and_then(|feature| match feature {
+                WriterFeature::Unknown(_) => None,
+                _ => Some(feature),
+            });
         (reader_feature, writer_feature)
     }
 }
@@ -687,14 +684,13 @@ impl DeletionVectorDescriptor {
                 let mut dv_suffix = format!("deletion_vector_{uuid}.bin");
                 if prefix_len > 0 {
                     dv_suffix = format!(
-                        "{}/{}",
+                        "{}/{dv_suffix}",
                         &self.path_or_inline_dv[..(prefix_len as usize)],
-                        dv_suffix
                     );
                 }
                 let dv_path = parent
                     .join(&dv_suffix)
-                    .map_err(|_| Error::DeletionVector(format!("invalid path: {}", dv_suffix)))?;
+                    .map_err(|_| Error::DeletionVector(format!("invalid path: {dv_suffix}")))?;
                 Ok(Some(dv_path))
             }
             StorageType::AbsolutePath => {
@@ -743,7 +739,7 @@ impl DeletionVectorDescriptor {
     //                 i32::from_le_bytes(buf.try_into().map_err(|_| {
     //                     Error::DeletionVector("filed to read magic bytes".to_string())
     //                 })?);
-    //             println!("magic  --> : {}", magic);
+    //             println!("magic  --> : {magic}");
     //             // assert!(magic == 1681511377);
     //
     //             let mut buf = vec![0; size_in_bytes as usize];
@@ -791,6 +787,7 @@ pub struct Add {
     /// Map containing metadata about this logical file.
     pub tags: Option<HashMap<String, Option<String>>>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// Information about deletion vector (DV) associated with this add action
     pub deletion_vector: Option<DeletionVectorDescriptor>,
 
@@ -1221,7 +1218,35 @@ mod tests {
     #[test]
     fn test_primitive() {
         let types: PrimitiveType = serde_json::from_str("\"string\"").unwrap();
-        println!("{:?}", types);
+        println!("{types:?}");
+    }
+
+    #[test]
+    fn test_deserialize_protocol() {
+        // protocol json data
+        let raw = serde_json::json!(
+            {
+              "minReaderVersion": 3,
+              "minWriterVersion": 7,
+              "readerFeatures": ["catalogOwned"],
+              "writerFeatures": ["catalogOwned", "invariants", "appendOnly"]
+            }
+        );
+        let protocol: Protocol = serde_json::from_value(raw).unwrap();
+        assert_eq!(protocol.min_reader_version, 3);
+        assert_eq!(protocol.min_writer_version, 7);
+        assert_eq!(
+            protocol.reader_features,
+            Some(hashset! {ReaderFeature::Unknown("catalogOwned".to_owned())})
+        );
+        assert_eq!(
+            protocol.writer_features,
+            Some(hashset! {
+                WriterFeature::Unknown("catalogOwned".to_owned()),
+                WriterFeature::Invariants,
+                WriterFeature::AppendOnly
+            })
+        );
     }
 
     // #[test]

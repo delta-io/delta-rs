@@ -37,15 +37,11 @@ impl<'a, S: ContextProvider> DeltaSqlToRel<'a, S> {
     pub fn statement_to_plan(&self, statement: Statement) -> DFResult<LogicalPlan> {
         match statement {
             Statement::Datafusion(s) => {
-                let planner = SqlToRel::new_with_options(
-                    self.context_provider,
-                    ParserOptions {
-                        parse_float_as_decimal: self.options.parse_float_as_decimal,
-                        enable_ident_normalization: self.options.enable_ident_normalization,
-                        support_varchar_with_length: false,
-                        enable_options_value_normalization: false,
-                    },
-                );
+                let parser_options = ParserOptions::new()
+                    .with_parse_float_as_decimal(self.options.parse_float_as_decimal)
+                    .with_enable_ident_normalization(self.options.enable_ident_normalization);
+
+                let planner = SqlToRel::new_with_options(self.context_provider, parser_options);
                 planner.statement_to_plan(s)
             }
             Statement::Describe(describe) => self.describe_to_plan(describe),

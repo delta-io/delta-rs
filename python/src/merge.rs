@@ -33,6 +33,8 @@ pub(crate) struct PyMergeBuilder {
     source_alias: Option<String>,
     #[pyo3(get)]
     target_alias: Option<String>,
+    #[pyo3(get)]
+    merge_schema: bool,
     arrow_schema: Arc<ArrowSchema>,
 }
 #[derive(Debug)]
@@ -85,8 +87,9 @@ impl PyMergeBuilder {
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
+        merge_schema: bool,
         safe_cast: bool,
-        streaming: bool,
+        streamed_exec: bool,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -95,7 +98,7 @@ impl PyMergeBuilder {
         let ctx = SessionContext::new();
         let schema = source.schema();
 
-        let source_df = if streaming {
+        let source_df = if streamed_exec {
             let arrow_stream: Arc<Mutex<ArrowArrayStreamReader>> = Arc::new(Mutex::new(source));
             let arrow_stream_batch_generator: Arc<RwLock<dyn LazyBatchGenerator>> =
                 Arc::new(RwLock::new(ArrowStreamBatchGenerator::new(arrow_stream)));
@@ -114,7 +117,7 @@ impl PyMergeBuilder {
 
         let mut cmd = MergeBuilder::new(log_store, snapshot, predicate, source_df)
             .with_safe_cast(safe_cast)
-            .with_streaming(streaming);
+            .with_streaming(streamed_exec);
 
         if let Some(src_alias) = &source_alias {
             cmd = cmd.with_source_alias(src_alias);
@@ -123,6 +126,8 @@ impl PyMergeBuilder {
         if let Some(trgt_alias) = &target_alias {
             cmd = cmd.with_target_alias(trgt_alias);
         }
+
+        cmd = cmd.with_merge_schema(merge_schema);
 
         if let Some(writer_props) = writer_properties {
             cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
@@ -142,6 +147,7 @@ impl PyMergeBuilder {
             _builder: Some(cmd),
             source_alias,
             target_alias,
+            merge_schema,
             arrow_schema: schema,
         })
     }

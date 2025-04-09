@@ -549,3 +549,129 @@ This will result in:
 ## Notes
 
 - Column names with special characters, such as numbers or spaces should be encapsulated in backticks: "target.`123column`" or "target.`my column`"
+
+## Optimizing Merge Performance
+
+Delta Lake merge operations can be resource intensive when working with large tables. Processing time and compute resources can be significantly reduced by using
+efficient predicates which are specific to the data being merged.
+
+The following strategies explain how to optimize merge operations for better performance.
+
+#### 1. Add Partition Columns to Predicates
+
+When your table is partitioned, including partition columns in your merge predicate can improve performance by enabling file pruning:
+
+```python
+# Good - uses partition column and value
+(
+    dt.merge(
+        source=source_data,
+        predicate="s.id = t.id AND s.month_id = t.month_id AND t.month_id = 202501",  # month_id is a partition column
+        source_alias="s",
+        target_alias="t")
+    .execute()
+)
+
+
+# Less optimal - no partition column usage
+(
+    dt.merge(
+        source=source_data,
+        predicate="s.id = t.id",  # No partition column specified
+        source_alias="s",
+        target_alias="t")
+    .execute()
+)
+
+```
+
+As you can see, your filter should specify the partition column(s) and the value(s) you want to target during the merge operation.
+This is especially important when using the default argument `streamed_exec=True` in the `merge` method which disables the use of source table statistics to derive an early pruning predicate.
+Without these statistics, explicit predicates in your merge condition are required for file pruning.
+
+#### 2. Add Additional Filter Columns to Predicates
+
+Partitioning data on certain columns may be inefficient when it creates an excessive number of files or results in files that are too small.
+
+For example, you might have a source which is updated daily with the previous date's data. If the size of the data is too small to justify daily
+partitioning, you can use the following predicate to prune the monthly partition and only join the previous day's data:
+
+```python
+# The predicate below prunes the monthly partition and only joins the previous day's data
+# Note: the table is only partitioned by the `month_id` column. The `date_id` value is computed from the source data.
+(
+    dt.merge(
+        source=source_data,
+        predicate="s.id = t.id AND s.month_id = t.month_id AND t.month_id = 202501 AND s.date_id = t.date_id AND t.date_id = 20250120",
+        source_alias="s",
+        target_alias="t")
+    .execute()
+)
+
+```
+
+### Performance Impact
+
+The effectiveness of these optimizations can be monitored using the operation metrics:
+
+```python
+metrics = dt.merge(...).execute()
+
+print(f"Files scanned: {metrics.get('num_target_files_scanned')}")
+print(f"Files skipped: {metrics.get('num_target_files_skipped_during_scan')}")
+print(f"Execution time: {metrics.get('execution_time_ms')} ms")
+```
+
+An efficient merge operation should show:
+
+- A high ratio of skipped files to scanned files
+- Lower execution time compared to less specific predicates
+
+Here is an example of logs from a merge operation with a partitioned table without adding the partition columns to the predicates:
+
+```text
+Merging table with predicates: {
+    'merge': 's.unique_constraint_hash = t.unique_constraint_hash',
+    'when_matched_update_all': 's.post_transform_row_hash != t.post_transform_row_hash'
+}
+Files Scanned: 24
+Files Skipped: 0
+Files Added: 1
+Execution Time: 23774ms
+```
+
+The table is partitioned by the `month_id` column and all files are scanned which is not efficient. If we add the partition columns to the predicates,
+the merge operation will only scan the relevant files which is faster and more efficient:
+
+```text
+Merging table with predicates: {
+    'merge': 's.unique_constraint_hash = t.unique_constraint_hash AND s.month_id = t.month_id AND t.month_id = 202503',
+    'when_matched_update_all': 's.post_transform_row_hash != t.post_transform_row_hash AND s.month_id = t.month_id AND t.month_id = 202503'
+}
+Files Scanned: 1
+Files Skipped: 10
+Files Added: 1
+Execution Time: 2964ms
+```
+
+For this specific source, it is known that each data update only includes a few recent days. This means that we can further optimize the merge operation
+by making the predicate even more specific by adding the unique `date_id` column values to the predicates.
+
+```text
+ Merging table with predicates: {
+    'merge': 's.unique_constraint_hash = t.unique_constraint_hash AND s.month_id = t.month_id AND t.month_id = 202503 AND s.date_id = t.date_id AND t.date_id IN (20250314, 20250315, 20250316)',
+    'when_matched_update_all': 's.post_transform_row_hash != t.post_transform_row_hash AND s.month_id = t.month_id AND t.month_id = 202503 AND s.date_id = t.date_id AND t.date_id IN (20250314, 20250315, 20250316)'
+}
+Files Scanned: 0
+Files Skipped: 18
+Files Added: 1
+Execution Time: 416ms
+```
+
+The final result skips all files that are not relevant to the merge operation and is significantly faster (98%) than the original operation.
+
+### Best Practices
+
+1. **Always Include Partition Columns**: If your table is partitioned, include partition columns in your merge predicates
+2. **Keep Statistics Updated**: Regular table optimization helps Delta Lake make better decisions about file pruning
+3. **Monitor Metrics**: Use the operation metrics to verify the effectiveness of your predicates
