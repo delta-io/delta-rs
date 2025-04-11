@@ -6,8 +6,8 @@ use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::TableFeatures;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;

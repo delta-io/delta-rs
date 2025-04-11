@@ -1,6 +1,6 @@
 //! Errors for LakeFS log store
 
-use deltalake_core::operations::transaction::TransactionError;
+use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::DeltaTableError;
 use reqwest::Error;
 

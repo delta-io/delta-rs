@@ -7,8 +7,8 @@ use delta_kernel::schema::{MetadataValue, StructType};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;

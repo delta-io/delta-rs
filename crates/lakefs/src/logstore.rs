@@ -11,12 +11,12 @@ use deltalake_core::storage::{
     commit_uri_from_version, DefaultObjectStoreRegistry, ObjectStoreRegistry,
 };
 use deltalake_core::storage::{url_prefix_handler, DeltaIOStorageBackend, IORuntime};
-use deltalake_core::{logstore::*, DeltaTableError, Path};
 use deltalake_core::{
-    operations::transaction::TransactionError,
+    kernel::transaction::TransactionError,
     storage::{ObjectStoreRef, StorageOptions},
     DeltaResult,
 };
+use deltalake_core::{logstore::*, DeltaTableError, Path};
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use tracing::debug;
 use url::Url;
