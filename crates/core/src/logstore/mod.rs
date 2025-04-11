@@ -18,8 +18,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::kernel::log_segment::PathExt;
+use crate::kernel::transaction::TransactionError;
 use crate::kernel::Action;
-use crate::operations::transaction::TransactionError;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
 use crate::storage::DeltaIOStorageBackend;
 use crate::storage::{

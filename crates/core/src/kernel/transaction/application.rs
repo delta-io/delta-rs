@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        checkpoints, kernel::Transaction, operations::transaction::CommitProperties,
+        checkpoints, kernel::transaction::CommitProperties, kernel::Transaction,
         protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
     };
 

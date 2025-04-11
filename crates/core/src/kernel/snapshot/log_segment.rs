@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::parse;
+use crate::kernel::transaction::CommitData;
 use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::logstore::LogStore;
-use crate::operations::transaction::CommitData;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
@@ -584,8 +584,8 @@ pub(super) mod tests {
 
     use crate::{
         checkpoints::{create_checkpoint_for, create_checkpoint_from_table_uri_and_cleanup},
+        kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, Add, Format, Remove},
-        operations::transaction::{CommitBuilder, TableReference},
         protocol::{DeltaOperation, SaveMode},
         DeltaTableBuilder,
     };

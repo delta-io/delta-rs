@@ -5,7 +5,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    operations::transaction::TransactionError,
+    kernel::transaction::TransactionError,
     storage::{ObjectStoreRef, StorageOptions},
     DeltaResult,
 };

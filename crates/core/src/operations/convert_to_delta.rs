@@ -16,6 +16,8 @@ use percent_encoding::percent_decode_str;
 use tracing::debug;
 use uuid::Uuid;
 
+use super::{CustomExecuteHandler, Operation};
+use crate::kernel::transaction::CommitProperties;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
     kernel::{scalars::ScalarExt, Add, DataType, Schema, StructField},
@@ -27,9 +29,6 @@ use crate::{
     writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
-
-use super::transaction::CommitProperties;
-use super::{CustomExecuteHandler, Operation};
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]
