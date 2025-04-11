@@ -351,11 +351,11 @@ impl ConvertToDeltaBuilder {
                 subpath = iter.next();
             }
 
-            let batch_builder = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
-                object_store.clone(),
-                file.clone(),
-            ))
-            .await?;
+            let object_reader =
+                ParquetObjectReader::new(object_store.clone(), file.location.clone())
+                    .with_file_size(file.size);
+
+            let batch_builder = ParquetRecordBatchStreamBuilder::new(object_reader).await?;
 
             // Fetch the stats
             let parquet_metadata = batch_builder.metadata();

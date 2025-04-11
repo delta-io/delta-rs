@@ -29,7 +29,7 @@ impl Serialize for LogSegment {
             .iter()
             .map(|f| FileInfo {
                 path: f.location.to_string(),
-                size: f.size,
+                size: f.size as usize,
                 last_modified: f.last_modified.timestamp_nanos_opt().unwrap(),
                 e_tag: f.e_tag.clone(),
                 version: f.version.clone(),
@@ -40,7 +40,7 @@ impl Serialize for LogSegment {
             .iter()
             .map(|f| FileInfo {
                 path: f.location.to_string(),
-                size: f.size,
+                size: f.size as usize,
                 last_modified: f.last_modified.timestamp_nanos_opt().unwrap(),
                 e_tag: f.e_tag.clone(),
                 version: f.version.clone(),
@@ -88,7 +88,7 @@ impl<'de> Visitor<'de> for LogSegmentVisitor {
                     let nano_seconds = (f.last_modified % 1_000_000_000) as u32;
                     ObjectMeta {
                         location: f.path.into(),
-                        size: f.size,
+                        size: f.size as u64,
                         last_modified: Utc.timestamp_opt(seconds, nano_seconds).single().unwrap(),
                         version: f.version,
                         e_tag: f.e_tag,
@@ -99,7 +99,7 @@ impl<'de> Visitor<'de> for LogSegmentVisitor {
                 .into_iter()
                 .map(|f| ObjectMeta {
                     location: f.path.into(),
-                    size: f.size,
+                    size: f.size as u64,
                     last_modified: DateTime::from_timestamp_millis(f.last_modified).unwrap(),
 
                     version: None,

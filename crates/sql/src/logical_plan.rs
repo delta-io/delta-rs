@@ -90,11 +90,6 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
         write!(f, "{}", self.display())
     }
 
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
-        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
-            .unwrap()
-    }
-
     fn with_exprs_and_inputs(
         &self,
         exprs: Vec<Expr>,

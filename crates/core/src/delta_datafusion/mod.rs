@@ -37,10 +37,12 @@ use arrow_schema::{
 use arrow_select::concat::concat_batches;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig, ParquetSource,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
+    ParquetSource,
 };
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
@@ -671,7 +673,7 @@ impl<'a> DeltaScanBuilder<'a> {
             }
         };
 
-        let file_scan_config = FileScanConfig::new(
+        let file_scan_config = FileScanConfigBuilder::new(
             self.log_store.object_store_url(),
             file_schema,
             Arc::new(file_source),
@@ -682,15 +684,16 @@ impl<'a> DeltaScanBuilder<'a> {
             //
             // See https://github.com/apache/datafusion/issues/11322
             if file_groups.is_empty() {
-                vec![vec![]]
+                vec![FileGroup::from(vec![])]
             } else {
-                file_groups.into_values().collect()
+                file_groups.into_values().map(FileGroup::from).collect()
             },
         )
         .with_statistics(stats)
         .with_projection(self.projection.cloned())
         .with_limit(self.limit)
-        .with_table_partition_cols(table_partition_cols);
+        .with_table_partition_cols(table_partition_cols)
+        .build();
 
         let metrics = ExecutionPlanMetricsSet::new();
         MetricBuilder::new(&metrics)
@@ -702,7 +705,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         Ok(DeltaScan {
             table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
-            parquet_scan: file_scan_config.build(),
+            parquet_scan: DataSourceExec::from_data_source(file_scan_config),
             config,
             logical_schema,
             metrics,
@@ -1974,6 +1977,7 @@ mod tests {
     use bytes::Bytes;
     use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
@@ -2731,10 +2735,6 @@ mod tests {
         visit_execution_plan(&scan, &mut visitor).unwrap();
 
         assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
-        assert_eq!(
-            visitor.pruning_predicate.unwrap().orig_expr().to_string(),
-            "a@0 = s"
-        );
     }
 
     #[tokio::test]
@@ -2766,7 +2766,6 @@ mod tests {
         visit_execution_plan(&scan, &mut visitor).unwrap();
 
         assert!(visitor.predicate.is_none());
-        assert!(visitor.pruning_predicate.is_none());
     }
 
     #[tokio::test]
@@ -2801,7 +2800,6 @@ mod tests {
     #[derive(Default)]
     struct ParquetVisitor {
         predicate: Option<Arc<dyn PhysicalExpr>>,
-        pruning_predicate: Option<Arc<PruningPredicate>>,
         options: Option<TableParquetOptions>,
     }
 
@@ -2828,7 +2826,6 @@ mod tests {
             {
                 self.options = Some(parquet_source.table_parquet_options().clone());
                 self.predicate = parquet_source.predicate().cloned();
-                self.pruning_predicate = parquet_source.pruning_predicate().cloned();
             }
 
             Ok(true)
@@ -2974,8 +2971,8 @@ mod tests {
 
     #[derive(Debug, PartialEq)]
     enum ObjectStoreOperation {
-        GetRanges(LocationType, Vec<Range<usize>>),
-        GetRange(LocationType, Range<usize>),
+        GetRanges(LocationType, Vec<Range<u64>>),
+        GetRange(LocationType, Range<u64>),
         GetOpts(LocationType),
         Get(LocationType),
     }
@@ -3054,7 +3051,7 @@ mod tests {
         async fn get_range(
             &self,
             location: &Path,
-            range: Range<usize>,
+            range: Range<u64>,
         ) -> object_store::Result<Bytes> {
             self.operations
                 .send(ObjectStoreOperation::GetRange(
@@ -3068,7 +3065,7 @@ mod tests {
         async fn get_ranges(
             &self,
             location: &Path,
-            ranges: &[Range<usize>],
+            ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
             self.operations
                 .send(ObjectStoreOperation::GetRanges(
@@ -3094,7 +3091,10 @@ mod tests {
             self.inner.delete_stream(locations)
         }
 
-        fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             self.inner.list(prefix)
         }
 
@@ -3102,7 +3102,7 @@ mod tests {
             &self,
             prefix: Option<&Path>,
             offset: &Path,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             self.inner.list_with_offset(prefix, offset)
         }
 
