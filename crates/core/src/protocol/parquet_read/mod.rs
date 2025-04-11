@@ -73,12 +73,7 @@ impl DeletionVectorDescriptor {
                         })?
                         .clone();
                 }
-                "offset" => {
-                    re.offset = match record.get_int(i) {
-                        Ok(x) => Some(x),
-                        _ => None,
-                    }
-                }
+                "offset" => re.offset = record.get_int(i).ok(),
                 "sizeInBytes" => {
                     re.size_in_bytes = record.get_int(i).map_err(|_| {
                         gen_action_type_error("add", "deletionVector.sizeInBytes", "int")
