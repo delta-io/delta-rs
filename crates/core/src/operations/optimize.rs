@@ -622,11 +622,11 @@ impl MergePlan {
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
+                            let meta = ObjectMeta::try_from(file).unwrap();
                             async move {
-                                let file_reader = ParquetObjectReader::new(
-                                    object_store_ref,
-                                    ObjectMeta::try_from(file).unwrap(),
-                                );
+                                let file_reader =
+                                    ParquetObjectReader::new(object_store_ref, meta.location)
+                                        .with_file_size(meta.size);
                                 ParquetRecordBatchStreamBuilder::new(file_reader)
                                     .await?
                                     .build()
@@ -1043,7 +1043,8 @@ pub(super) mod zorder {
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
         use datafusion_expr::{
-            ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+            ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
+            Volatility,
         };
         use itertools::Itertools;
         use std::any::Any;
@@ -1099,8 +1100,11 @@ pub(super) mod zorder {
                 Ok(DataType::Binary)
             }
 
-            fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-                zorder_key_datafusion(args)
+            fn invoke_with_args(
+                &self,
+                args: ScalarFunctionArgs,
+            ) -> datafusion_common::Result<ColumnarValue> {
+                zorder_key_datafusion(&args.args)
             }
         }
 

@@ -75,7 +75,7 @@ pub fn create_partition_values<F: FileAction>(
             let part = PartitionedFile {
                 object_meta: ObjectMeta {
                     location: Path::parse(action.path().as_str())?,
-                    size: action.size()?,
+                    size: action.size()? as u64,
                     e_tag: None,
                     last_modified: chrono::Utc.timestamp_nanos(0),
                     version: None,

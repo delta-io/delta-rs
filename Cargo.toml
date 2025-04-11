@@ -27,36 +27,36 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 delta_kernel = { version = "0.10.0", features = [
-    "arrow-54",
+    "arrow-55",
     "internal-api",
 ] }
 
 # arrow
-arrow = { version = "54" }
-arrow-arith = { version = "54" }
-arrow-array = { version = "54", features = ["chrono-tz"] }
-arrow-buffer = { version = "54" }
-arrow-cast = { version = "54" }
-arrow-ipc = { version = "54" }
-arrow-json = { version = "54" }
-arrow-ord = { version = "54" }
-arrow-row = { version = "54" }
-arrow-schema = { version = "54" }
-arrow-select = { version = "54" }
-object_store = { version = "0.11.2" }
-parquet = { version = "54" }
+arrow = { version = "55" }
+arrow-arith = { version = "55" }
+arrow-array = { version = "55", features = ["chrono-tz"] }
+arrow-buffer = { version = "55" }
+arrow-cast = { version = "55" }
+arrow-ipc = { version = "55" }
+arrow-json = { version = "55" }
+arrow-ord = { version = "55" }
+arrow-row = { version = "55" }
+arrow-schema = { version = "55" }
+arrow-select = { version = "55" }
+object_store = { version = "0.12.0" }
+parquet = { version = "55" }
 
 # datafusion
-datafusion = "46"
-datafusion-expr = "46"
-datafusion-common = "46"
-datafusion-ffi = "46"
-datafusion-functions = "46"
-datafusion-functions-aggregate = "46"
-datafusion-physical-expr = "46"
-datafusion-physical-plan = "46"
-datafusion-proto = "46"
-datafusion-sql = "46"
+datafusion = "47.0.0"
+datafusion-expr = "47.0.0"
+datafusion-common = "47.0.0"
+datafusion-ffi = "47.0.0"
+datafusion-functions = "47.0.0"
+datafusion-functions-aggregate = "47.0.0"
+datafusion-physical-expr = "47.0.0"
+datafusion-physical-plan = "47.0.0"
+datafusion-proto = "47.0.0"
+datafusion-sql = "47.0.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
