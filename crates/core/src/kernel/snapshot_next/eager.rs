@@ -5,6 +5,7 @@ use arrow_array::RecordBatch;
 use delta_kernel::actions::visitors::SetTransactionMap;
 use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
 use delta_kernel::engine::arrow_extensions::ScanExt;
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{ExpressionRef, Table, Version};
@@ -107,6 +108,11 @@ impl EagerSnapshot {
             .require_files
             .then(|| -> DeltaResult<_> {
                 let all: Vec<RecordBatch> = snapshot.logical_files(None)?.try_collect()?;
+                if all.is_empty() {
+                    return Ok(RecordBatch::new_empty(Arc::new(
+                        (&scan_row_schema()).try_into()?,
+                    )));
+                }
                 Ok(concat_batches(&all[0].schema(), &all)?)
             })
             .transpose()?;
