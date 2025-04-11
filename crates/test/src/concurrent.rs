@@ -3,8 +3,8 @@ use std::future::Future;
 use std::iter::FromIterator;
 use std::time::Duration;
 
+use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};

@@ -60,7 +60,7 @@ impl DeltaTableState {
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
     pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
-        use crate::operations::transaction::CommitData;
+        use crate::kernel::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
 
         let metadata = actions

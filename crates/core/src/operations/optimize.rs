@@ -42,21 +42,19 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializ
 use tracing::*;
 use uuid::Uuid;
 
-use super::transaction::PROTOCOL;
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
+use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::Add;
-use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
+use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::LogStoreRef;
-use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
-use crate::delta_datafusion::DeltaTableProvider;
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
