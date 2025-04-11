@@ -31,6 +31,7 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
 };
@@ -47,9 +48,6 @@ use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
-use deltalake::operations::transaction::{
-    CommitBuilder, CommitProperties, TableReference, PROTOCOL,
-};
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::write::WriteBuilder;

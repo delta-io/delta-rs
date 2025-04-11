@@ -7,11 +7,9 @@ use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOption
 use uuid::Uuid;
 
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
-use crate::{
-    operations::transaction::TransactionError,
-    storage::{commit_uri_from_version, ObjectStoreRef},
-    DeltaResult,
-};
+use crate::kernel::transaction::TransactionError;
+use crate::storage::{commit_uri_from_version, ObjectStoreRef};
+use crate::DeltaResult;
 
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();

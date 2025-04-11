@@ -7,13 +7,17 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::prelude::SessionContext;
 use datafusion_common::ToDFSchema;
 use datafusion_physical_plan::ExecutionPlan;
+use delta_kernel::table_features::WriterFeature;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 
+use super::datafusion_utils::into_expr;
+use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::Protocol;
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
@@ -21,11 +25,6 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use delta_kernel::table_features::WriterFeature;
-
-use super::datafusion_utils::into_expr;
-use super::transaction::{CommitBuilder, CommitProperties};
-use super::{CustomExecuteHandler, Operation};
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {

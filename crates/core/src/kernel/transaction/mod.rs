@@ -86,22 +86,23 @@ use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
 
-pub use self::conflict_checker::CommitConflictError;
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use serde::{Deserialize, Serialize};
+
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
-pub use self::protocol::INSTANCE as PROTOCOL;
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
 use crate::logstore::{CommitOrBytes, LogStoreRef};
+use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
-use serde::{Deserialize, Serialize};
 
-use super::CustomExecuteHandler;
+pub use self::conflict_checker::CommitConflictError;
+pub use self::protocol::INSTANCE as PROTOCOL;
 
 #[cfg(test)]
 pub(crate) mod application;

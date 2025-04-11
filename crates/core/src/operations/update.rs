@@ -45,32 +45,26 @@ use serde::Serialize;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::{
-    datafusion_utils::Expression,
-    transaction::{CommitBuilder, CommitProperties},
-};
-use super::{transaction::PROTOCOL, write::WriterStatsConfig};
+use super::datafusion_utils::Expression;
+use super::write::WriterStatsConfig;
 use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
+use crate::delta_datafusion::{
+    expr::fmt_expr_to_sql,
+    logical::MetricObserver,
+    physical::{find_metric_node, get_metric, MetricObserverExec},
+    DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
+};
 use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::{
-    delta_datafusion::{
-        expr::fmt_expr_to_sql,
-        logical::MetricObserver,
-        physical::{find_metric_node, get_metric, MetricObserverExec},
-        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext,
-        DeltaTableProvider,
-    },
-    DeltaTableError,
-};
-use crate::{DeltaResult, DeltaTable};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
 pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";

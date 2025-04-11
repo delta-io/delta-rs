@@ -10,9 +10,9 @@ use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};

@@ -1,9 +1,9 @@
 use chrono::Utc;
+use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
 };
 use deltalake_core::operations::create::CreateBuilder;
-use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::{GetResult, ObjectStoreResult, StorageOptions};
 use deltalake_core::DeltaTable;

@@ -14,7 +14,7 @@ use url::Url;
 
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    operations::transaction::TransactionError,
+    kernel::transaction::TransactionError,
     storage::{ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError,
 };
