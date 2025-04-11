@@ -615,8 +615,6 @@ pub mod storage_constants {
 mod tests {
     use super::*;
 
-    use std::time::Duration;
-
     #[test]
     fn test_url_prefix_handler() {
         let store = InMemory::new();
@@ -647,7 +645,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cloud")]
     #[test]
     #[cfg(feature = "cloud")]
     fn test_retry_config_from_options() {

@@ -26,11 +26,16 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs.git", rev = "8961e9741a7b5dad22dce39cce001349e2a4cb0c", features = [
+delta_kernel = { git = "https://github.com/roeap/delta-kernel-rs", rev = "b0cd12264ae4ada8d51cff02b25864258568eb88", features = [
     "arrow_54",
     "developer-visibility",
     "default-engine-rustls",
 ] }
+# delta_kernel = { path = "../delta-kernel-rs/kernel", features = [
+#     "arrow_54",
+#     "developer-visibility",
+#     "default-engine-rustls",
+# ] }
 
 # arrow
 arrow = { version = "54" }
@@ -62,7 +67,7 @@ datafusion-sql = "46"
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "0.27" }
+strum = { version = "0.26" }
 
 
 # "stdlib"

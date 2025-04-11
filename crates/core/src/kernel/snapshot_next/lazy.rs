@@ -3,13 +3,15 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
-use arrow_array::{BooleanArray, RecordBatch};
+use arrow::array::AsArray;
+use arrow_array::RecordBatch;
 use arrow_select::filter::filter_record_batch;
-use delta_kernel::actions::set_transaction::{SetTransactionMap, SetTransactionScanner};
-use delta_kernel::actions::{get_log_schema, REMOVE_NAME};
+use delta_kernel::actions::set_transaction::SetTransactionScanner;
+use delta_kernel::actions::visitors::SetTransactionMap;
+use delta_kernel::actions::{get_log_schema, REMOVE_NAME, SIDECAR_NAME};
 use delta_kernel::actions::{Metadata, Protocol, SetTransaction};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine::arrow_expression::evaluate_expression;
+use delta_kernel::engine::arrow_extensions::{ExpressionEvaluatorExt, ScanExt};
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
@@ -18,14 +20,15 @@ use delta_kernel::log_segment::LogSegment;
 use delta_kernel::schema::{DataType, Schema};
 use delta_kernel::snapshot::Snapshot as SnapshotInner;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{Engine, Expression, ExpressionHandler, ExpressionRef, Table, Version};
+use delta_kernel::{
+    Engine, EvaluationHandler, Expression, ExpressionEvaluator, ExpressionRef, Table, Version,
+};
 use itertools::Itertools;
-use object_store::path::Path;
 use object_store::ObjectStore;
 use url::Url;
 
 use super::cache::CommitCacheObjectStore;
-use super::{replay_file_actions, Snapshot};
+use super::Snapshot;
 use crate::kernel::{Action, CommitInfo, ARROW_HANDLER};
 use crate::{DeltaResult, DeltaTableError};
 
@@ -46,7 +49,7 @@ impl Snapshot for LazySnapshot {
         self.inner.version()
     }
 
-    fn schema(&self) -> &Schema {
+    fn schema(&self) -> Arc<Schema> {
         self.inner.schema()
     }
 
@@ -65,61 +68,50 @@ impl Snapshot for LazySnapshot {
     fn logical_files(
         &self,
         predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>> + '_>> {
         let scan = self
             .inner
             .clone()
             .scan_builder()
             .with_predicate(predicate)
             .build()?;
-        Ok(Box::new(
-            scan.scan_data(self.engine.as_ref())?
-                .map(|res| {
-                    res.and_then(|(data, predicate)| {
-                        let batch: RecordBatch =
-                            ArrowEngineData::try_from_engine_data(data)?.into();
-                        Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
-                    })
-                })
-                .map(|batch| batch.map_err(|e| e.into())),
-        ))
-    }
 
-    fn files(
-        &self,
-        predicate: Option<Arc<Expression>>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
-        Ok(Box::new(std::iter::once(replay_file_actions(
-            &self, predicate,
-        ))))
+        // Move scan_metadata_arrow to a separate variable to avoid returning a reference to a local variable
+        let engine = self.engine.clone();
+        let scan_result: Vec<_> = scan
+            .scan_metadata_arrow(engine.as_ref())?
+            .map(|sc| Ok(sc?.scan_files))
+            .collect();
+        Ok(Box::new(scan_result.into_iter()))
     }
 
     fn tombstones(&self) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
         static META_PREDICATE: LazyLock<ExpressionRef> =
             LazyLock::new(|| Arc::new(Expression::column([REMOVE_NAME, "path"]).is_not_null()));
+        static EVALUATOR: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
+            ARROW_HANDLER.new_expression_evaluator(
+                get_log_schema().project(&[REMOVE_NAME]).unwrap(),
+                META_PREDICATE.as_ref().clone(),
+                DataType::BOOLEAN,
+            )
+        });
         let read_schema = get_log_schema().project(&[REMOVE_NAME])?;
+        let read_schema2 = get_log_schema().project(&[REMOVE_NAME, SIDECAR_NAME])?;
         Ok(Box::new(
             self.inner
-                ._log_segment()
-                .replay(
+                .log_segment()
+                .read_actions(
                     self.engine.as_ref(),
-                    read_schema.clone(),
                     read_schema,
+                    read_schema2,
                     Some(META_PREDICATE.clone()),
                 )?
                 .map_ok(|(d, _)| {
                     let batch = RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?);
-                    let selection = evaluate_expression(
-                        META_PREDICATE.as_ref(),
-                        &batch,
-                        Some(&DataType::BOOLEAN),
-                    )?;
-                    let filter = selection
-                        .as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .ok_or_else(|| {
-                            DeltaTableError::generic("failed to downcast to BooleanArray")
-                        })?;
+                    let selection = EVALUATOR.evaluate_arrow(batch.clone())?;
+                    let filter = selection.column(0).as_boolean_opt().ok_or_else(|| {
+                        DeltaTableError::generic("failed to downcast to BooleanArray")
+                    })?;
                     Ok(filter_record_batch(&batch, filter)?)
                 })
                 .flatten(),
@@ -142,7 +134,7 @@ impl Snapshot for LazySnapshot {
         limit: Option<usize>,
     ) -> DeltaResult<Box<dyn Iterator<Item = (Version, CommitInfo)>>> {
         // let start_version = start_version.into();
-        let fs_client = self.engine.get_file_system_client();
+        let fs_client = self.engine.storage_handler();
         let end_version = start_version.unwrap_or_else(|| self.version());
         let start_version = limit
             .and_then(|limit| {
@@ -191,9 +183,10 @@ impl Snapshot for LazySnapshot {
     }
 
     fn update(&mut self, target_version: Option<Version>) -> DeltaResult<bool> {
-        let mut snapshot = self.inner.as_ref().clone();
-        let did_update = snapshot.update(target_version, self.engine_ref().as_ref())?;
-        self.inner = Arc::new(snapshot);
+        let snapshot =
+            SnapshotInner::try_new_from(self.inner.clone(), self.engine.as_ref(), target_version)?;
+        let did_update = snapshot.version() != self.inner.version();
+        self.inner = snapshot;
         Ok(did_update)
     }
 }
@@ -212,23 +205,16 @@ impl LazySnapshot {
     ) -> DeltaResult<Self> {
         // TODO: how to deal with the dedicated IO runtime? Would this already be covered by the
         // object store implementation pass to this?
-        let table_root = Path::from_url_path(table.location().path())?;
-        let store_str = format!("{}", store);
-        let is_local = store_str.starts_with("LocalFileSystem");
         let store = Arc::new(CommitCacheObjectStore::new(store));
         let handle = tokio::runtime::Handle::current();
         let engine: Arc<dyn Engine> = match handle.runtime_flavor() {
-            tokio::runtime::RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new_with_opts(
+            tokio::runtime::RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new(
                 store,
-                table_root,
                 Arc::new(TokioMultiThreadExecutor::new(handle)),
-                !is_local,
             )),
-            tokio::runtime::RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new_with_opts(
+            tokio::runtime::RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new(
                 store,
-                table_root,
                 Arc::new(TokioBackgroundExecutor::new()),
-                !is_local,
             )),
             _ => return Err(DeltaTableError::generic("unsupported runtime flavor")),
         };
@@ -249,7 +235,7 @@ impl LazySnapshot {
     /// current log segment, `None` is returned.
     pub fn version_timestamp(&self, version: Version) -> Option<i64> {
         self.inner
-            ._log_segment()
+            .log_segment()
             .ascending_commit_files
             .iter()
             .find(|f| f.version == version)
@@ -278,7 +264,7 @@ mod tests {
 
         let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string)?;
-        assert_eq!(snapshot.schema(), &expected);
+        assert_eq!(snapshot.schema().as_ref(), &expected);
 
         let infos = snapshot.commit_infos(None, None)?.collect_vec();
         assert_eq!(infos.len(), 5);

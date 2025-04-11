@@ -1,25 +1,22 @@
 use std::sync::Arc;
 
-use arrow_array::{BooleanArray, RecordBatch};
-use arrow_select::filter::filter_record_batch;
-use delta_kernel::actions::set_transaction::SetTransactionMap;
-use delta_kernel::actions::{get_log_add_schema, get_log_schema, ADD_NAME, REMOVE_NAME};
+use arrow::compute::concat_batches;
+use arrow_array::RecordBatch;
+use delta_kernel::actions::visitors::SetTransactionMap;
 use delta_kernel::actions::{Add, Metadata, Protocol, SetTransaction};
-use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::log_segment::LogSegment;
-use delta_kernel::scan::log_replay::scan_action_iter;
+use delta_kernel::engine::arrow_extensions::ScanExt;
 use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{EngineData, ExpressionRef, Table, Version};
+use delta_kernel::{ExpressionRef, Table, Version};
 use itertools::Itertools;
 use object_store::ObjectStore;
 use url::Url;
 
 use super::iterators::AddIterator;
 use super::lazy::LazySnapshot;
-use super::{replay_file_actions, scan_as_log_data, Snapshot, SnapshotError};
+use super::{Snapshot, SnapshotError};
 use crate::kernel::CommitInfo;
-use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::{DeltaResult, DeltaTableConfig};
 
 /// An eager snapshot of a Delta Table at a specific version.
 ///
@@ -39,7 +36,7 @@ impl Snapshot for EagerSnapshot {
         self.snapshot.version()
     }
 
-    fn schema(&self) -> &Schema {
+    fn schema(&self) -> Arc<Schema> {
         self.snapshot.schema()
     }
 
@@ -58,46 +55,17 @@ impl Snapshot for EagerSnapshot {
     fn logical_files(
         &self,
         predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
-        let scan = self
-            .snapshot
-            .inner
-            .as_ref()
-            .clone()
-            .into_scan_builder()
-            .with_predicate(predicate)
-            .build()?;
-
-        let iter = scan_action_iter(
-            self.snapshot.engine_ref().as_ref(),
-            vec![Ok((
-                Box::new(ArrowEngineData::new(self.file_data()?.clone())) as Box<dyn EngineData>,
-                false,
-            ))]
-            .into_iter(),
-            scan.physical_predicate()
-                .map(|p| (p, scan.schema().clone())),
-        )
-        .map(|res| {
-            res.and_then(|(data, predicate)| {
-                let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
-                Ok(filter_record_batch(&batch, &BooleanArray::from(predicate))?)
-            })
-        })
-        .map(|batch| batch.map_err(|e| e.into()));
-
-        Ok(Box::new(iter))
-    }
-
-    fn files(
-        &self,
-        predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
-        Ok(Box::new(std::iter::once(scan_as_log_data(
-            &self.snapshot,
-            vec![(self.file_data()?.clone(), false)],
-            predicate,
-        ))))
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>> + '_>> {
+        let scan = self.snapshot.inner.as_ref().clone();
+        let builder = scan.into_scan_builder().with_predicate(predicate).build()?;
+        let iter: Vec<_> = builder
+            .scan_metadata_from_existing_arrow(
+                self.snapshot.engine_ref().as_ref(),
+                self.version(),
+                Some(self.file_data()?.clone()),
+            )?
+            .collect();
+        Ok(Box::new(iter.into_iter().map(|sc| Ok(sc?.scan_files))))
     }
 
     fn tombstones(&self) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
@@ -137,7 +105,10 @@ impl EagerSnapshot {
             LazySnapshot::try_new(Table::try_from_uri(table_root)?, store, version).await?;
         let files = config
             .require_files
-            .then(|| -> DeltaResult<_> { replay_file_actions(&snapshot, None) })
+            .then(|| -> DeltaResult<_> {
+                let all: Vec<RecordBatch> = snapshot.logical_files(None)?.try_collect()?;
+                Ok(concat_batches(&all[0].schema(), &all)?)
+            })
             .transpose()?;
         Ok(Self { snapshot, files })
     }
@@ -164,48 +135,23 @@ impl EagerSnapshot {
 
     fn update_impl(&mut self, target_version: Option<Version>) -> DeltaResult<bool> {
         let mut snapshot = self.snapshot.clone();
+        let current = snapshot.version();
         if !snapshot.update(target_version.clone())? {
             return Ok(false);
         }
 
-        let log_root = snapshot
-            .table_root()
-            .join("_delta_log/")
-            .map_err(|e| DeltaTableError::generic(e))?;
-        let fs_client = snapshot.engine_ref().get_file_system_client();
-        let commit_read_schema = get_log_schema().project(&[ADD_NAME, REMOVE_NAME])?;
-        let checkpoint_read_schema = get_log_add_schema().clone();
-
-        let segment = LogSegment::for_table_changes(
-            fs_client.as_ref(),
-            log_root,
-            self.snapshot.version() + 1,
-            snapshot.version(),
-        )?;
-        let mut slice_iter = segment
-            .replay(
-                self.snapshot.engine_ref().as_ref(),
-                commit_read_schema,
-                checkpoint_read_schema,
-                None,
+        let scan = snapshot.inner.clone().scan_builder().build()?;
+        let engine = snapshot.engine_ref().clone();
+        let files: Vec<_> = scan
+            .scan_metadata_from_existing_arrow(
+                engine.as_ref(),
+                current,
+                Some(self.file_data()?.clone()),
             )?
-            .map_ok(
-                |(data, flag)| -> Result<(RecordBatch, bool), delta_kernel::Error> {
-                    Ok((ArrowEngineData::try_from_engine_data(data)?.into(), flag))
-                },
-            )
-            .flatten()
-            .collect::<Result<Vec<_>, _>>()?;
+            .map_ok(|s| s.scan_files)
+            .try_collect()?;
 
-        slice_iter.push((
-            self.files
-                .as_ref()
-                .ok_or(SnapshotError::FilesNotInitialized)?
-                .clone(),
-            false,
-        ));
-
-        self.files = Some(scan_as_log_data(&self.snapshot, slice_iter, None)?);
+        self.files = Some(concat_batches(&files[0].schema(), &files)?);
         self.snapshot = snapshot;
 
         Ok(true)

@@ -2,23 +2,15 @@
 
 use std::sync::Arc;
 
-use arrow_array::{BooleanArray, RecordBatch, StructArray};
-use arrow_select::concat::concat_batches;
-use arrow_select::filter::filter_record_batch;
+use arrow_array::RecordBatch;
 use delta_kernel::actions::visitors::SetTransactionMap;
-use delta_kernel::actions::{
-    get_log_add_schema, get_log_schema, Metadata, Protocol, SetTransaction, ADD_NAME, REMOVE_NAME,
-};
-use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine::arrow_expression::apply_schema;
+use delta_kernel::actions::{Metadata, Protocol, SetTransaction};
 use delta_kernel::expressions::{Scalar, StructData};
-use delta_kernel::scan::log_replay::scan_action_iter;
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::{DataType, Schema};
+use delta_kernel::schema::Schema;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{EngineData, ExpressionRef, Version};
-use iterators::{AddView, AddViewIterator, LogicalFileView, LogicalFileViewIterator};
-use itertools::Itertools;
+use delta_kernel::{ExpressionRef, Version};
+use iterators::{LogicalFileView, LogicalFileViewIterator};
 use url::Url;
 
 use crate::kernel::actions::CommitInfo;
@@ -75,7 +67,7 @@ pub trait Snapshot {
     fn version(&self) -> Version;
 
     /// Table [`Schema`] at this `Snapshot`s version.
-    fn schema(&self) -> &Schema;
+    fn schema(&self) -> Arc<Schema>;
 
     /// Table [`Metadata`] at this `Snapshot`s version.
     ///
@@ -93,7 +85,7 @@ pub trait Snapshot {
     /// Get the [`TableProperties`] for this [`Snapshot`].
     fn table_properties(&self) -> &TableProperties;
 
-    fn logical_file_schema(&self) -> &'static Schema {
+    fn logical_file_schema(&self) -> Schema {
         scan_row_schema()
     }
 
@@ -107,44 +99,16 @@ pub trait Snapshot {
     fn logical_files(
         &self,
         predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>> + '_>>;
 
     fn logical_files_view(
         &self,
         predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<LogicalFileView>>>> {
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<LogicalFileView>> + '_>> {
         #[allow(deprecated)]
         Ok(Box::new(LogicalFileViewIterator::new(
             self.logical_files(predicate)?,
         )))
-    }
-
-    /// Get all currently active files in the table.
-    ///
-    /// # Parameters
-    /// - `predicate`: An optional predicate to filter the files based on file statistics.
-    ///
-    /// # Returns
-    /// An iterator of [`RecordBatch`]es, where each batch contains add action data.
-    #[deprecated(
-        since = "0.25.0",
-        note = "Use `logical_files` instead, which returns a more focussed dataset and avoids computational overhead."
-    )]
-    fn files(
-        &self,
-        predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>>;
-
-    #[deprecated(
-        since = "0.25.0",
-        note = "Use `logical_files_view` instead, which returns a more focussed dataset and avoids computational overhead."
-    )]
-    fn files_view(
-        &self,
-        predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<AddView>>>> {
-        #[allow(deprecated)]
-        Ok(Box::new(AddViewIterator::new(self.files(predicate)?)))
     }
 
     /// Get all tombstones in the table.
@@ -220,7 +184,7 @@ impl<T: Snapshot> Snapshot for Box<T> {
         self.as_ref().version()
     }
 
-    fn schema(&self) -> &Schema {
+    fn schema(&self) -> Arc<Schema> {
         self.as_ref().schema()
     }
 
@@ -239,16 +203,8 @@ impl<T: Snapshot> Snapshot for Box<T> {
     fn logical_files(
         &self,
         predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>> + '_>> {
         self.as_ref().logical_files(predicate)
-    }
-
-    fn files(
-        &self,
-        predicate: Option<ExpressionRef>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
-        #[allow(deprecated)]
-        self.as_ref().files(predicate)
     }
 
     fn tombstones(&self) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<RecordBatch>>>> {
@@ -274,89 +230,6 @@ impl<T: Snapshot> Snapshot for Box<T> {
     fn update(&mut self, target_version: Option<Version>) -> DeltaResult<bool> {
         self.as_mut().update(target_version)
     }
-}
-
-fn replay_file_actions(
-    snapshot: &LazySnapshot,
-    predicate: impl Into<Option<ExpressionRef>>,
-) -> DeltaResult<RecordBatch> {
-    let commit_read_schema = get_log_schema().project(&[ADD_NAME, REMOVE_NAME])?;
-    let checkpoint_read_schema = get_log_add_schema().clone();
-
-    let curr_data = snapshot
-        .inner
-        ._log_segment()
-        .replay(
-            snapshot.engine_ref().as_ref(),
-            commit_read_schema.clone(),
-            checkpoint_read_schema.clone(),
-            None,
-        )?
-        .map_ok(
-            |(data, flag)| -> Result<(RecordBatch, bool), delta_kernel::Error> {
-                Ok((ArrowEngineData::try_from_engine_data(data)?.into(), flag))
-            },
-        )
-        .flatten()
-        .collect::<Result<Vec<_>, _>>()?;
-
-    scan_as_log_data(snapshot, curr_data, predicate)
-}
-
-// helper function to replay log data as stored using kernel log replay.
-// The kernel replay usually emits a tuple of (data, selection) where data is the
-// data is a re-ordered subset of the full data in the log which is relevant to the
-// engine. this function leverages the replay, but applies the selection to the
-// original data to get the final data.
-fn scan_as_log_data(
-    snapshot: &LazySnapshot,
-    curr_data: impl IntoIterator<Item = (RecordBatch, bool)>,
-    predicate: impl Into<Option<ExpressionRef>>,
-) -> Result<RecordBatch, DeltaTableError> {
-    let curr_data = curr_data.into_iter().collect::<Vec<_>>();
-    let scan_iter = curr_data.clone().into_iter().map(|(data, flag)| {
-        Ok((
-            Box::new(ArrowEngineData::new(data.clone())) as Box<dyn EngineData>,
-            flag,
-        ))
-    });
-
-    let scan = snapshot
-        .inner
-        .as_ref()
-        .clone()
-        .into_scan_builder()
-        .with_predicate(predicate)
-        .build()?;
-
-    let res = scan_action_iter(
-        snapshot.engine_ref().as_ref(),
-        scan_iter,
-        scan.physical_predicate()
-            .map(|p| (p, scan.schema().clone())),
-    )
-    .map(|res| {
-        res.and_then(|(d, selection)| {
-            Ok((
-                RecordBatch::from(ArrowEngineData::try_from_engine_data(d)?),
-                selection,
-            ))
-        })
-    })
-    .zip(curr_data.into_iter())
-    .map(|(scan_res, (data_raw, _))| match scan_res {
-        Ok((_, selection)) => {
-            let data = filter_record_batch(&data_raw, &BooleanArray::from(selection))?;
-            let dt: DataType = get_log_add_schema().as_ref().clone().into();
-            let data: StructArray = data.project(&[0])?.into();
-            apply_schema(&data, &dt)
-        }
-        Err(e) => Err(e),
-    })
-    .collect::<Result<Vec<_>, _>>()?;
-
-    let schema_ref = Arc::new(get_log_add_schema().as_ref().try_into()?);
-    Ok(concat_batches(&schema_ref, &res)?)
 }
 
 #[cfg(test)]
@@ -422,8 +295,6 @@ mod tests {
             let snapshot = get_snapshot(ctx, TestTables::Checkpoints, Some(version))?.await?;
             assert_eq!(snapshot.version(), version);
 
-            test_files(snapshot.as_ref())?;
-            test_files_view(snapshot.as_ref())?;
             test_commit_infos(snapshot.as_ref())?;
             test_logical_files(snapshot.as_ref())?;
             test_logical_files_view(snapshot.as_ref())?;
@@ -434,8 +305,6 @@ mod tests {
             snapshot.update(Some(version))?;
             assert_eq!(snapshot.version(), version);
 
-            test_files(snapshot.as_ref())?;
-            test_files_view(snapshot.as_ref())?;
             test_commit_infos(snapshot.as_ref())?;
             test_logical_files(snapshot.as_ref())?;
             test_logical_files_view(snapshot.as_ref())?;
@@ -459,24 +328,6 @@ mod tests {
     fn test_logical_files_view(snapshot: &dyn Snapshot) -> TestResult<()> {
         let num_files_view = snapshot
             .logical_files_view(None)?
-            .map(|f| f.unwrap().path().to_string())
-            .count() as u64;
-        assert_eq!(num_files_view, snapshot.version());
-        Ok(())
-    }
-
-    fn test_files(snapshot: &dyn Snapshot) -> TestResult<()> {
-        #[allow(deprecated)]
-        let batches = snapshot.files(None)?.collect::<Result<Vec<_>, _>>()?;
-        let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
-        assert_eq!((num_files as u64), snapshot.version());
-        Ok(())
-    }
-
-    fn test_files_view(snapshot: &dyn Snapshot) -> TestResult<()> {
-        #[allow(deprecated)]
-        let num_files_view = snapshot
-            .files_view(None)?
             .map(|f| f.unwrap().path().to_string())
             .count() as u64;
         assert_eq!(num_files_view, snapshot.version());

@@ -369,10 +369,8 @@ impl std::future::IntoFuture for RestoreBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
-    use crate::{DeltaOps, DeltaResult, DeltaTable};
+    use crate::writer::test_utils::{create_bare_table, get_record_batch};
+    use crate::{DeltaOps, DeltaResult};
 
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>

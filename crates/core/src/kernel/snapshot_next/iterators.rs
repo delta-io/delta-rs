@@ -28,7 +28,7 @@ impl AddIterator<'_> {
     pub fn try_new(actions: &RecordBatch) -> DeltaResult<AddIterator<'_>> {
         validate_add(&actions)?;
 
-        let visitor = AddVisitor::new();
+        let visitor = AddVisitor::default();
         let fields = visitor.selected_column_names_and_types();
 
         let mut mask = HashSet::new();
@@ -64,81 +64,6 @@ impl Iterator for AddIterator<'_> {
         } else {
             None
         }
-    }
-}
-
-pub struct AddView {
-    actions: RecordBatch,
-    index: usize,
-}
-
-impl AddView {
-    pub fn path(&self) -> &str {
-        extract_column(&self.actions, &[ADD_NAME, "path"])
-            .unwrap()
-            .as_string::<i32>()
-            .value(self.index)
-    }
-
-    pub fn size(&self) -> i64 {
-        extract_column(&self.actions, &[ADD_NAME, "size"])
-            .unwrap()
-            .as_primitive::<Int64Type>()
-            .value(self.index)
-    }
-
-    pub fn modification_time(&self) -> i64 {
-        extract_column(&self.actions, &[ADD_NAME, "modificationTime"])
-            .unwrap()
-            .as_primitive::<Int64Type>()
-            .value(self.index)
-    }
-
-    /// Datetime of the last modification time of the file.
-    pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        DateTime::from_timestamp_millis(self.modification_time()).ok_or(DeltaTableError::from(
-            crate::protocol::ProtocolError::InvalidField(format!(
-                "invalid modification_time: {:?}",
-                self.modification_time()
-            )),
-        ))
-    }
-
-    pub fn data_change(&self) -> bool {
-        extract_column(&self.actions, &[ADD_NAME, "dataChange"])
-            .unwrap()
-            .as_boolean()
-            .value(self.index)
-    }
-
-    pub fn stats(&self) -> Option<&str> {
-        extract_column(&self.actions, &[ADD_NAME, "stats"])
-            .ok()
-            .and_then(|c| c.as_string_opt::<i32>().map(|v| v.value(self.index)))
-    }
-
-    pub fn base_row_id(&self) -> Option<i64> {
-        extract_column(&self.actions, &[ADD_NAME, "baseRowId"])
-            .ok()
-            .and_then(|c| {
-                c.as_primitive_opt::<Int64Type>()
-                    .map(|v| v.value(self.index))
-            })
-    }
-
-    pub fn default_row_commit_version(&self) -> Option<i64> {
-        extract_column(&self.actions, &[ADD_NAME, "defaultRowCommitVersion"])
-            .ok()
-            .and_then(|c| {
-                c.as_primitive_opt::<Int64Type>()
-                    .map(|v| v.value(self.index))
-            })
-    }
-
-    pub fn clustering_provider(&self) -> Option<&str> {
-        extract_column(&self.actions, &[ADD_NAME, "clusteringProvider"])
-            .ok()
-            .and_then(|c| c.as_string_opt::<i32>().map(|v| v.value(self.index)))
     }
 }
 
@@ -248,69 +173,6 @@ where
                 if validate_logical_file(&batch).is_err() {
                     return Some(Err(DeltaTableError::generic(
                         "Invalid logical file data encountered.",
-                    )));
-                }
-                self.batch = Some(batch);
-                self.current = 0;
-                self.next()
-            }
-            Some(Err(e)) => Some(Err(e)),
-            None => None,
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-pub struct AddViewIterator<I>
-where
-    I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
-{
-    inner: I::IntoIter,
-    batch: Option<RecordBatch>,
-    current: usize,
-}
-
-impl<I> AddViewIterator<I>
-where
-    I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
-{
-    /// Create a new [AddViewIterator].
-    ///
-    /// If `iter` is an infallible iterator, use `.map(Ok)`.
-    pub fn new(iter: I) -> Self {
-        Self {
-            inner: iter.into_iter(),
-            batch: None,
-            current: 0,
-        }
-    }
-}
-
-impl<I> Iterator for AddViewIterator<I>
-where
-    I: IntoIterator<Item = DeltaResult<RecordBatch>>,
-{
-    type Item = DeltaResult<AddView>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(batch) = &self.batch {
-            if self.current < batch.num_rows() {
-                let item = AddView {
-                    actions: batch.clone(),
-                    index: self.current,
-                };
-                self.current += 1;
-                return Some(Ok(item));
-            }
-        }
-        match self.inner.next() {
-            Some(Ok(batch)) => {
-                if validate_add(&batch).is_err() {
-                    return Some(Err(DeltaTableError::generic(
-                        "Invalid add action data encountered.",
                     )));
                 }
                 self.batch = Some(batch);
