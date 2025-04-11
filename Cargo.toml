@@ -26,37 +26,38 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.9.0", features = [
-    "arrow_54",
+# https://github.com/delta-io/delta-kernel-rs/pull/831
+delta_kernel = { git = "https://github.com/alamb/delta-kernel-rs.git", rev = "f6d0f7ffb14d7d2e10b68b770de740f79215c250", features = [
+    "arrow_55",
     "developer-visibility",
 ] }
 
 # arrow
-arrow = { version = "54" }
-arrow-arith = { version = "54" }
-arrow-array = { version = "54", features = ["chrono-tz"] }
-arrow-buffer = { version = "54" }
-arrow-cast = { version = "54" }
-arrow-ipc = { version = "54" }
-arrow-json = { version = "54" }
-arrow-ord = { version = "54" }
-arrow-row = { version = "54" }
-arrow-schema = { version = "54" }
-arrow-select = { version = "54" }
-object_store = { version = "0.11.2" }
-parquet = { version = "54" }
+arrow = { version = "55" }
+arrow-arith = { version = "55" }
+arrow-array = { version = "55", features = ["chrono-tz"] }
+arrow-buffer = { version = "55" }
+arrow-cast = { version = "55" }
+arrow-ipc = { version = "55" }
+arrow-json = { version = "55" }
+arrow-ord = { version = "55" }
+arrow-row = { version = "55" }
+arrow-schema = { version = "55" }
+arrow-select = { version = "55" }
+object_store = { version = "0.12.0" }
+parquet = { version = "55" }
 
 # datafusion
-datafusion = "46"
-datafusion-expr = "46"
-datafusion-common = "46"
-datafusion-ffi = "46"
-datafusion-functions = "46"
-datafusion-functions-aggregate = "46"
-datafusion-physical-expr = "46"
-datafusion-physical-plan = "46"
-datafusion-proto = "46"
-datafusion-sql = "46"
+datafusion = "47.0.0"
+datafusion-expr = "47.0.0"
+datafusion-common = "47.0.0"
+datafusion-ffi = "47.0.0"
+datafusion-functions = "47.0.0"
+datafusion-functions-aggregate = "47.0.0"
+datafusion-physical-expr = "47.0.0"
+datafusion-physical-plan = "47.0.0"
+datafusion-proto = "47.0.0"
+datafusion-sql = "47.0.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -65,7 +66,7 @@ strum = { version = "0.26" }
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "=0.4.39", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "2" }
@@ -78,3 +79,17 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+
+
+[patch.crates-io]
+# https://github.com/apache/datafusion/pull/15466 (arrow 55)
+datafusion = { git = "https://github.com/apache/datafusion.git", branch = "branch-47" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }
+datafusion-ffi = { git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }
+datafusion-functions-aggregate = {git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", branch = "branch-47" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", branch = "branch-47" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", branch = "branch-47"  }

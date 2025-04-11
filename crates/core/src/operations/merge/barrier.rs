@@ -125,7 +125,9 @@ impl ExecutionPlan for MergeBarrierExec {
 impl DisplayAs for MergeBarrierExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "MergeBarrier",)?;
                 Ok(())
             }
@@ -419,15 +421,6 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
 
     fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "MergeBarrier")
-    }
-
-    fn from_template(
-        &self,
-        exprs: &[datafusion_expr::Expr],
-        inputs: &[datafusion_expr::LogicalPlan],
-    ) -> Self {
-        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
-            .unwrap()
     }
 
     fn with_exprs_and_inputs(

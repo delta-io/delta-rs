@@ -300,7 +300,8 @@ impl LogSegment {
                 let store = store.clone();
                 let read_schema = read_schema.clone();
                 async move {
-                    let mut reader = ParquetObjectReader::new(store, meta);
+                    let mut reader =
+                        ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
                     let options = ArrowReaderOptions::new();
                     let reader_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
 
@@ -413,7 +414,7 @@ impl LogSegment {
             let bytes = commit.get_bytes()?;
             let meta = ObjectMeta {
                 location: path,
-                size: bytes.len(),
+                size: bytes.len() as u64,
                 last_modified: Utc::now(),
                 e_tag: None,
                 version: None,
@@ -777,7 +778,7 @@ pub(super) mod tests {
                 self.store.delete(location).await
             }
 
-            fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+            fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 self.store.list(prefix)
             }

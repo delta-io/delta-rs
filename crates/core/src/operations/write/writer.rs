@@ -553,7 +553,7 @@ mod tests {
             .head(&Path::from(adds[0].path.clone()))
             .await
             .unwrap();
-        assert_eq!(head.size, adds[0].size as usize)
+        assert_eq!(head.size, adds[0].size as u64)
     }
 
     #[tokio::test]

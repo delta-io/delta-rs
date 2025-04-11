@@ -9,7 +9,7 @@ use deltalake_core::{
     kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
 };
 use deltalake_core::{logstore::*, DeltaTableError};
-use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
+use object_store::{Error as ObjectStoreError, ObjectStore, PutOptions};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -324,7 +324,8 @@ fn put_options() -> &'static PutOptions {
     static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
     PUT_OPTS.get_or_init(|| PutOptions {
         mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
-        tags: TagSet::default(),
-        attributes: Attributes::default(),
+        tags: Default::default(),
+        attributes: Default::default(),
+        extensions: Default::default(),
     })
 }

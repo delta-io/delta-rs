@@ -85,7 +85,8 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
     assert_eq!(expected, fetched);
 
     for range in [0..10, 3..5, 0..expected.len()] {
-        let data = delta_store.get_range(path, range.clone()).await.unwrap();
+        let range_u64 = range.start as u64..range.end as u64;
+        let data = delta_store.get_range(path, range_u64).await.unwrap();
         assert_eq!(&data[..], &expected[range])
     }
 

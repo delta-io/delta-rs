@@ -872,7 +872,8 @@ async fn read_parquet_file(
     object_store: ObjectStoreRef,
 ) -> Result<RecordBatch, Box<dyn Error>> {
     let file = object_store.head(path).await?;
-    let file_reader = ParquetObjectReader::new(object_store, file);
+    let file_reader =
+        ParquetObjectReader::new(object_store, file.location).with_file_size(file.size);
     let batches = ParquetRecordBatchStreamBuilder::new(file_reader)
         .await?
         .build()?

@@ -187,7 +187,7 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -199,7 +199,7 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -207,7 +207,7 @@ impl ObjectStore for DelayedObjectStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 
