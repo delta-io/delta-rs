@@ -441,7 +441,7 @@ impl Field {
                 match v {
                     serde_json::Value::Number(n) => n.as_i64().map_or_else(
                         || MetadataValue::String(v.to_string()),
-                        |i| MetadataValue::Number(i),
+                        MetadataValue::Number,
                     ),
                     serde_json::Value::String(s) => MetadataValue::String(s.to_string()),
                     other => MetadataValue::String(other.to_string()),

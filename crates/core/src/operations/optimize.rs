@@ -485,11 +485,7 @@ impl MergePlan {
         let mut partial_actions = files
             .iter()
             .map(|file_meta| {
-                create_remove(
-                    file_meta.path.as_ref(),
-                    &partition_values,
-                    file_meta.size as i64,
-                )
+                create_remove(file_meta.path.as_ref(), &partition_values, file_meta.size)
             })
             .collect::<Result<Vec<_>, DeltaTableError>>()?;
 
@@ -497,9 +493,9 @@ impl MergePlan {
             .iter()
             .fold(MetricDetails::default(), |mut curr, file| {
                 curr.total_files += 1;
-                curr.total_size += file.size as i64;
-                curr.max = std::cmp::max(curr.max, file.size as i64);
-                curr.min = std::cmp::min(curr.min, file.size as i64);
+                curr.total_size += file.size;
+                curr.max = std::cmp::max(curr.max, file.size);
+                curr.min = std::cmp::min(curr.min, file.size);
                 curr
             });
 
@@ -538,7 +534,7 @@ impl MergePlan {
                 true,
             )?;
             partial_metrics.num_batches += 1;
-            writer.write(&batch).await.map_err(DeltaTableError::from)?;
+            writer.write(&batch).await?;
         }
 
         let add_actions = writer.close().await?.into_iter().map(|mut add| {
@@ -670,7 +666,7 @@ impl MergePlan {
                 let scan_config = DeltaScanConfigBuilder::default()
                     .with_file_column(false)
                     .with_schema(snapshot.input_schema()?)
-                    .build(&snapshot)?;
+                    .build(snapshot)?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
@@ -855,7 +851,7 @@ impl MergeBin {
     }
 
     fn add(&mut self, add: Add) {
-        self.size_bytes += add.size as i64;
+        self.size_bytes += add.size;
         self.files.push(add);
     }
 
@@ -913,7 +909,7 @@ fn build_compaction_plan(
 
         'files: for file in files {
             for bin in merge_bins.iter_mut() {
-                if bin.total_file_size() + file.size as i64 <= target_size {
+                if bin.total_file_size() + file.size <= target_size {
                     bin.add(file);
                     // Move to next file
                     continue 'files;

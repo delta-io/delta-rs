@@ -369,6 +369,7 @@ impl std::future::IntoFuture for RestoreBuilder {
 
 #[cfg(test)]
 mod tests {
+
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult};
 
@@ -404,7 +405,7 @@ mod tests {
         assert_ne!(table.version(), first_v);
 
         let constraints = table.state.unwrap().table_config().get_constraints();
-        assert!(constraints.len() == 0);
+        assert!(constraints.is_empty());
 
         Ok(())
     }

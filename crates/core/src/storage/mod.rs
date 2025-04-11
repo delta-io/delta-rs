@@ -648,7 +648,6 @@ mod tests {
     #[test]
     #[cfg(feature = "cloud")]
     fn test_retry_config_from_options() {
-        use maplit::hashmap;
         use std::time::Duration;
 
         struct TestFactory {}
