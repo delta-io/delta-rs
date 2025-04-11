@@ -9,8 +9,8 @@ use object_store::ObjectMeta;
 use super::{get_parquet_bytes, DataFactory, FileStats};
 use crate::kernel::arrow::extract::{self as ex};
 use crate::kernel::partitions_schema;
+use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
-use crate::operations::transaction::PROTOCOL;
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 
 pub struct ActionFactory;

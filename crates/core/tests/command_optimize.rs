@@ -5,11 +5,11 @@ use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use deltalake_core::errors::DeltaTableError;
+use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
-use deltalake_core::operations::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::storage::ObjectStoreRef;

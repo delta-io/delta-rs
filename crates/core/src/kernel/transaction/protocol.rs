@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+
 use super::{TableReference, TransactionError};
 use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Protocol, Schema};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 
 static READER_V2: LazyLock<HashSet<ReaderFeature>> =
     LazyLock::new(|| HashSet::from_iter([ReaderFeature::ColumnMapping]));

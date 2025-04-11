@@ -32,9 +32,9 @@ use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
 
-use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;

@@ -36,10 +36,9 @@ use super::{
     Transaction,
 };
 use crate::kernel::parse::read_cdf_adds;
+use crate::kernel::transaction::{CommitData, PROTOCOL};
 use crate::kernel::{ActionType, StructType};
 use crate::logstore::LogStore;
-use crate::operations::transaction::CommitData;
-use crate::operations::transaction::PROTOCOL;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
