@@ -25,7 +25,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.82'
+          toolchain: "1.82"
           override: true
 
       - name: Build
@@ -40,7 +40,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.81"
+          toolchain: "1.82"
           override: true
 
       - name: Format
@@ -62,7 +62,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.81"
+          toolchain: "1.82"
           override: true
 
       - name: build and lint with clippy
@@ -92,7 +92,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.81"
+          toolchain: "1.82"
           override: true
 
       - name: Load DAT data
@@ -124,7 +124,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.81"
+          toolchain: "1.82"
           override: true
 
       # Install Java and Hadoop for HDFS integration tests
@@ -168,7 +168,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.81"
+          toolchain: "1.82"
           override: true
 
       - name: Download Lakectl
