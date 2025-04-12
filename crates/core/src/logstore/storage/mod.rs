@@ -19,9 +19,11 @@ pub use retry_ext::ObjectStoreRetryExt;
 pub use retry_ext::RetryConfigParse;
 pub use runtime::{DeltaIOStorageBackend, IORuntime};
 
-pub mod retry_ext;
-mod runtime;
-pub mod utils;
+#[cfg(feature = "delta-cache")]
+pub(super) mod cache;
+pub(super) mod retry_ext;
+pub(super) mod runtime;
+pub(super) mod utils;
 
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
