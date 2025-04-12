@@ -645,7 +645,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cloud")]
     #[test]
     #[cfg(feature = "cloud")]
     fn test_retry_config_from_options() {

@@ -1,0 +1,26 @@
+name: Delta Acceptance Tests
+description: Load Delta Lake acceptance test data
+
+inputs:
+  version:
+    description: "The Python version to set up"
+    required: false
+    default: "0.0.3"
+
+  target-directory:
+    description: target directory for acceptance test data
+    required: false
+    default: ${{ github.workspace }}/dat
+
+runs:
+  using: composite
+
+  steps:
+    - name: load DAT
+      shell: bash
+      run: |
+        rm -rf ${{ inputs.target-directory }}
+        curl -OL https://github.com/delta-incubator/dat/releases/download/v${{ inputs.version }}/deltalake-dat-v${{ inputs.version }}.tar.gz
+        mkdir -p ${{ inputs.target-directory }}
+        tar --no-same-permissions -xzf deltalake-dat-v${{ inputs.version }}.tar.gz --directory ${{ inputs.target-directory }}
+        rm deltalake-dat-v${{ inputs.version }}.tar.gz
