@@ -72,6 +72,10 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 
+# caching
+foyer = { version = "0.16.1", optional = true, features = ["serde"] }
+tempfile = { version = "3.19.1", optional = true }
+
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
@@ -127,3 +131,6 @@ python = ["arrow/pyarrow"]
 native-tls = ["delta_kernel/default-engine"]
 rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud"]
+
+# enable caching some file I/O operations when scanning delta logs
+delta-cache = ["foyer", "tempfile", "url/serde"]

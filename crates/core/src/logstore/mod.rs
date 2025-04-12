@@ -25,6 +25,7 @@ use crate::kernel::Action;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
 use crate::{DeltaResult, DeltaTableError};
 
+mod config;
 pub(crate) mod default_logstore;
 pub(crate) mod storage;
 
@@ -37,6 +38,7 @@ pub use self::storage::{
     ObjectStoreRetryExt, StorageOptions,
 };
 pub use ::object_store;
+pub use config::StorageConfig;
 
 /// Trait for generating [LogStore] implementations
 pub trait LogStoreFactory: Send + Sync {

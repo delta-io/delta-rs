@@ -24,24 +24,30 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
     IO_RT.get_or_init(|| {
         let rt = match config {
             Some(config) => {
-                let mut builder = if config.multi_threaded {
+                let mut builder = if let Some(true) = config.multi_threaded {
                     RuntimeBuilder::new_multi_thread()
                 } else {
                     RuntimeBuilder::new_current_thread()
                 };
-                let builder = builder.worker_threads(config.worker_threads);
-                #[allow(unused_mut)]
-                let mut builder = if config.enable_io && config.enable_time {
-                    builder.enable_all()
-                } else if !config.enable_io && config.enable_time {
-                    builder.enable_time()
-                } else {
-                    builder
+
+                if let Some(threads) = config.worker_threads {
+                    builder.worker_threads(threads);
+                }
+
+                match (config.enable_io, config.enable_time) {
+                    (Some(true), Some(true)) => {
+                        builder.enable_all();
+                    }
+                    (Some(false), Some(true)) => {
+                        builder.enable_time();
+                    }
+                    _ => (),
                 };
+
                 #[cfg(unix)]
                 {
-                    if config.enable_io && !config.enable_time {
-                        builder = builder.enable_io();
+                    if let (Some(true), Some(false)) = (config.enable_io, config.enable_time) {
+                        builder.enable_io();
                     }
                 }
                 builder
@@ -60,13 +66,13 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
 }
 
 /// Configuration for Tokio runtime
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeConfig {
-    multi_threaded: bool,
-    worker_threads: usize,
-    thread_name: Option<String>,
-    enable_io: bool,
-    enable_time: bool,
+    pub(crate) multi_threaded: Option<bool>,
+    pub(crate) worker_threads: Option<usize>,
+    pub(crate) thread_name: Option<String>,
+    pub(crate) enable_io: Option<bool>,
+    pub(crate) enable_time: Option<bool>,
 }
 
 /// Provide custom Tokio RT or a runtime config

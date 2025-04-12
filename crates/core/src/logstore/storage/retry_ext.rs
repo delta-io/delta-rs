@@ -8,6 +8,8 @@ use tracing::log::*;
 use super::StorageOptions;
 use crate::{DeltaResult, DeltaTableError};
 
+impl<T: ObjectStore + ?Sized> ObjectStoreRetryExt for T {}
+
 /// Retry extension for [`ObjectStore`]
 ///
 /// Read-only operations are retried by [`ObjectStore`] internally. However, PUT/DELETE operations
@@ -76,8 +78,6 @@ pub trait ObjectStoreRetryExt: ObjectStore {
         unreachable!("loop yields Ok or Err in body when attempt_number = max_retries")
     }
 }
-
-impl<T: ObjectStore + ?Sized> ObjectStoreRetryExt for T {}
 
 #[cfg(feature = "cloud")]
 pub trait RetryConfigParse {
