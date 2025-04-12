@@ -28,7 +28,7 @@ data
 Cargo.lock
 !/aws/delta-checkpoint/Cargo.lock
 !/delta-inspect/Cargo.lock
-!/proofs/Cargo.lock
+!/proofs/stateright/Cargo.lock
 
 justfile
 site
