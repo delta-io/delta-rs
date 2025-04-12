@@ -32,8 +32,7 @@ use deltalake_core::{
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse,
-    StorageOptions,
+    factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
 };
 pub mod client;
 pub mod credential;
@@ -834,8 +833,6 @@ impl UnityCatalog {
 
 #[derive(Clone, Default, Debug)]
 pub struct UnityCatalogFactory {}
-
-impl RetryConfigParse for UnityCatalogFactory {}
 
 impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
