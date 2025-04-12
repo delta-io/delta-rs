@@ -37,6 +37,7 @@ use deltalake::kernel::{
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
+use deltalake::logstore::{IORuntime, ObjectStoreRef};
 use deltalake::operations::add_column::AddColumnBuilder;
 use deltalake::operations::add_feature::AddTableFeatureBuilder;
 use deltalake::operations::constraints::ConstraintBuilder;
@@ -57,7 +58,6 @@ use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
-use deltalake::storage::{IORuntime, ObjectStoreRef};
 use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaTableBuilder};
 use deltalake::{DeltaOps, DeltaResult};

@@ -31,7 +31,7 @@ use deltalake_core::{
 };
 
 use crate::client::retry::*;
-use deltalake_core::storage::{
+use deltalake_core::logstore::{
     factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse,
     StorageOptions,
 };

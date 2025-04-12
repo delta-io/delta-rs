@@ -800,7 +800,7 @@ pub(super) mod tests {
     pub fn is_commit_file_only_matches_commits() {
         for path in [0, 1, 5, 10, 100, i64::MAX]
             .into_iter()
-            .map(crate::storage::commit_uri_from_version)
+            .map(crate::logstore::commit_uri_from_version)
         {
             assert!(path.is_commit_file());
         }

@@ -6,9 +6,9 @@ use bytes::Bytes;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use uuid::Uuid;
 
+use super::storage::{utils::commit_uri_from_version, ObjectStoreRef};
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
 use crate::kernel::transaction::TransactionError;
-use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::DeltaResult;
 
 fn put_options() -> &'static PutOptions {

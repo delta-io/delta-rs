@@ -25,7 +25,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt, StructType};
-use crate::storage::retry_ext::ObjectStoreRetryExt;
+use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;

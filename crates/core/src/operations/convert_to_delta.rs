@@ -472,9 +472,8 @@ mod tests {
     use super::*;
     use crate::{
         kernel::{DataType, PrimitiveType},
-        open_table,
-        storage::StorageOptions,
-        Path,
+        logstore::StorageOptions,
+        open_table, Path,
     };
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {

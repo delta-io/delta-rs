@@ -6,6 +6,8 @@ use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+#[cfg(feature = "datafusion")]
+use datafusion::datasource::object_store::ObjectStoreUrl;
 use delta_kernel::AsAny;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
@@ -13,7 +15,7 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -21,18 +23,20 @@ use crate::kernel::log_segment::PathExt;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::Action;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
-use crate::storage::DeltaIOStorageBackend;
-use crate::storage::{
-    commit_uri_from_version, retry_ext::ObjectStoreRetryExt, IORuntime, ObjectStoreRef,
-    StorageOptions,
-};
-
 use crate::{DeltaResult, DeltaTableError};
 
-#[cfg(feature = "datafusion")]
-use datafusion::datasource::object_store::ObjectStoreUrl;
-
 pub(crate) mod default_logstore;
+pub(crate) mod storage;
+
+pub use self::storage::utils::{commit_uri_from_version, str_is_truthy};
+#[cfg(feature = "cloud")]
+pub use self::storage::RetryConfigParse;
+pub use self::storage::{
+    factories, limit_store_handler, store_for, url_prefix_handler, DefaultObjectStoreRegistry,
+    DeltaIOStorageBackend, IORuntime, ObjectStoreFactory, ObjectStoreRef, ObjectStoreRegistry,
+    ObjectStoreRetryExt, StorageOptions,
+};
+pub use ::object_store;
 
 /// Trait for generating [LogStore] implementations
 pub trait LogStoreFactory: Send + Sync {
@@ -113,7 +117,7 @@ pub fn logstore_for(
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
-    if let Some(entry) = crate::storage::factories().get(&scheme) {
+    if let Some(entry) = self::storage::factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
 
         let (store, _prefix) = entry
@@ -143,10 +147,9 @@ pub fn logstore_with(
     if let Some(factory) = logstores().get(&scheme) {
         debug!("Found a logstore provider for {scheme}");
         return factory.with_options(store, &location, &options.into());
-    } else {
-        println!("Could not find a logstore for the scheme {scheme}");
-        warn!("Could not find a logstore for the scheme {scheme}");
     }
+
+    error!("Could not find a logstore for the scheme {scheme}");
     Err(DeltaTableError::InvalidTableLocation(
         location.clone().into(),
     ))
@@ -586,7 +589,7 @@ pub async fn abort_commit_entry(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -766,7 +769,7 @@ mod tests {
     /// <https://github.com/delta-io/delta-rs/issues/3297>:w
     #[tokio::test]
     async fn test_peek_with_invalid_json() -> DeltaResult<()> {
-        use crate::storage::object_store::memory::InMemory;
+        use crate::logstore::object_store::memory::InMemory;
         let memory_store = Arc::new(InMemory::new());
         let log_path = Path::from("_delta_log/00000000000000000001.json");
 
@@ -788,10 +791,21 @@ mod tests {
         assert!(result.is_err());
         Ok(())
     }
+
+    /// Collect list stream
+    pub async fn flatten_list_stream(
+        storage: &object_store::DynObjectStore,
+        prefix: Option<&Path>,
+    ) -> object_store::Result<Vec<Path>> {
+        storage
+            .list(prefix)
+            .map_ok(|meta| meta.location)
+            .try_collect::<Vec<Path>>()
+            .await
+    }
 }
 
-#[cfg(feature = "datafusion")]
-#[cfg(test)]
+#[cfg(all(test, feature = "datafusion"))]
 mod datafusion_tests {
     use super::*;
     use url::Url;
