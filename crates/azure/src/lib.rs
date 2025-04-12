@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::storage::{
+use deltalake_core::logstore::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
     RetryConfigParse, StorageOptions,
 };

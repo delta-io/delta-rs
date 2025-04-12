@@ -93,10 +93,10 @@ use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
+use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
-use crate::storage::ObjectStoreRef;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
@@ -929,10 +929,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use super::*;
-    use crate::{
-        logstore::{default_logstore::DefaultLogStore, LogStore},
-        storage::commit_uri_from_version,
-    };
+    use crate::logstore::{commit_uri_from_version, default_logstore::DefaultLogStore, LogStore};
     use object_store::{memory::InMemory, ObjectStore, PutPayload};
     use url::Url;
 

@@ -29,10 +29,7 @@ arrow-ord = { workspace = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
-parquet = { workspace = true, features = [
-    "async",
-    "object_store",
-] }
+parquet = { workspace = true, features = ["async", "object_store"] }
 pin-project-lite = "^0.2.7"
 
 # datafusion
@@ -49,7 +46,7 @@ datafusion-functions-aggregate = { workspace = true, optional = true }
 # serde
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-strum = { workspace =  true}
+strum = { workspace = true }
 
 # "stdlib"
 bytes = { workspace = true }

@@ -18,9 +18,11 @@ use self::state::DeltaTableState;
 use crate::kernel::{
     CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
 };
-use crate::logstore::{extract_version_from_filename, LogStoreConfig, LogStoreRef};
+use crate::logstore::{
+    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreRef,
+    ObjectStoreRef,
+};
 use crate::partitions::PartitionFilter;
-use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{DeltaResult, DeltaTableError};
 
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]

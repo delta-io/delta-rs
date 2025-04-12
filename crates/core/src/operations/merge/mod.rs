@@ -3955,7 +3955,7 @@ mod tests {
         assert_merge(table.clone(), metrics).await;
 
         // Just checking that the data wasn't actually written instead!
-        if let Ok(files) = crate::storage::utils::flatten_list_stream(
+        if let Ok(files) = crate::logstore::tests::flatten_list_stream(
             &table.object_store(),
             Some(&object_store::path::Path::from("_change_data")),
         )

@@ -20,7 +20,7 @@ use super::async_utils::AsyncShareableBuffer;
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
-use crate::storage::ObjectStoreRef;
+use crate::logstore::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -486,7 +486,7 @@ impl PartitionWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::utils::flatten_list_stream as list;
+    use crate::logstore::tests::flatten_list_stream as list;
     use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::*;
     use crate::DeltaTableBuilder;

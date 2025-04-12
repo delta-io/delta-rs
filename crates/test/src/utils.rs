@@ -1,5 +1,5 @@
 #![allow(dead_code, missing_docs)]
-use deltalake_core::storage::ObjectStoreRef;
+use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use fs_extra::dir::{copy, CopyOptions};
 use std::collections::HashMap;

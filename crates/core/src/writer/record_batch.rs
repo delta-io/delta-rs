@@ -29,8 +29,8 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, StructType};
+use crate::logstore::ObjectStoreRetryExt;
 use crate::operations::cast::merge_schema::merge_arrow_schema;
-use crate::storage::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::DeltaTable;

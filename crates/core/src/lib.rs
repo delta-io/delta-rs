@@ -76,7 +76,6 @@ pub mod logstore;
 pub mod operations;
 pub mod protocol;
 pub mod schema;
-pub mod storage;
 pub mod table;
 
 #[cfg(test)]

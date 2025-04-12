@@ -91,7 +91,7 @@ mod tests {
     use crate::register_handlers;
 
     use super::*;
-    use deltalake_core::{logstore::logstore_for, storage::ObjectStoreRegistry};
+    use deltalake_core::{logstore::logstore_for, logstore::ObjectStoreRegistry};
     use http::StatusCode;
     use maplit::hashmap;
     use std::{collections::HashMap, sync::OnceLock};
