@@ -31,7 +31,6 @@ pub(crate) mod storage;
 
 pub use self::storage::utils::{commit_uri_from_version, str_is_truthy};
 #[cfg(feature = "cloud")]
-pub use self::storage::RetryConfigParse;
 pub use self::storage::{
     factories, limit_store_handler, store_for, url_prefix_handler, DefaultObjectStoreRegistry,
     DeltaIOStorageBackend, IORuntime, ObjectStoreFactory, ObjectStoreRef, ObjectStoreRegistry,

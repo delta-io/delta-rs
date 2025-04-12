@@ -5,7 +5,7 @@ use std::sync::Arc;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::logstore::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    RetryConfigParse, StorageOptions,
+    StorageConfig, StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
@@ -36,8 +36,6 @@ impl AzureOptions for StorageOptions {
 #[derive(Clone, Default, Debug)]
 pub struct AzureFactory {}
 
-impl RetryConfigParse for AzureFactory {}
-
 impl ObjectStoreFactory for AzureFactory {
     fn parse_url_opts(
         &self,
@@ -58,9 +56,8 @@ impl ObjectStoreFactory for AzureFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let inner = builder
-            .with_retry(self.parse_retry_config(options)?)
-            .build()?;
+        let storage_config = StorageConfig::try_from_storage_options(options)?;
+        let inner = builder.with_retry(storage_config.retry).build()?;
 
         let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), options);
         Ok((store, prefix))
