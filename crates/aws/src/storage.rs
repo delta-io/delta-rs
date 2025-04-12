@@ -8,7 +8,7 @@ use deltalake_core::logstore::object_store::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
-    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse,
+    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
     StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
@@ -34,8 +34,6 @@ const STORE_NAME: &str = "DeltaS3ObjectStore";
 pub struct S3ObjectStoreFactory {}
 
 impl S3StorageOptionsConversion for S3ObjectStoreFactory {}
-
-impl RetryConfigParse for S3ObjectStoreFactory {}
 
 impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
@@ -69,7 +67,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         }
 
         let inner = builder
-            .with_retry(self.parse_retry_config(&options)?)
+            .with_retry(StorageConfig::parse_retry(&options.0)?)
             .build()?;
 
         let store = aws_storage_handler(limit_store_handler(inner, &options), &s3_options)?;

@@ -2,7 +2,7 @@
 
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{
-    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse, StorageOptions,
+    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, StorageConfig, StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::aws::AmazonS3Builder;
@@ -62,15 +62,13 @@ pub(crate) trait S3StorageOptionsConversion {
 
 impl S3StorageOptionsConversion for LakeFSObjectStoreFactory {}
 
-impl RetryConfigParse for LakeFSObjectStoreFactory {}
-
 impl ObjectStoreFactory for LakeFSObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        storage_options: &StorageOptions,
+        options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(storage_options);
+        let options = self.with_env_s3(options);
 
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
@@ -105,7 +103,7 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         }
 
         let inner = builder
-            .with_retry(self.parse_retry_config(&options)?)
+            .with_retry(StorageConfig::parse_retry(&options.0)?)
             .build()?;
 
         let store = limit_store_handler(inner, &options);

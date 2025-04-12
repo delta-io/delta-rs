@@ -5,7 +5,7 @@ use std::sync::Arc;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::logstore::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    RetryConfigParse, StorageOptions,
+    StorageConfig, StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
@@ -37,8 +37,6 @@ impl GcpOptions for StorageOptions {
 #[derive(Clone, Default, Debug)]
 pub struct GcpFactory {}
 
-impl RetryConfigParse for GcpFactory {}
-
 impl ObjectStoreFactory for GcpFactory {
     fn parse_url_opts(
         &self,
@@ -60,7 +58,7 @@ impl ObjectStoreFactory for GcpFactory {
         }
 
         let inner = builder
-            .with_retry(self.parse_retry_config(options)?)
+            .with_retry(StorageConfig::parse_retry(&options.0)?)
             .build()?;
 
         let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;

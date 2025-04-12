@@ -15,8 +15,7 @@ use crate::{DeltaResult, DeltaTableError};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
 pub use retry_ext::ObjectStoreRetryExt;
-#[cfg(feature = "cloud")]
-pub use retry_ext::RetryConfigParse;
+
 pub use runtime::{DeltaIOStorageBackend, IORuntime};
 
 #[cfg(feature = "delta-cache")]
