@@ -45,7 +45,6 @@ pub mod create;
 pub mod drop_constraints;
 pub mod filesystem_check;
 pub mod restore;
-pub mod transaction;
 pub mod update_field_metadata;
 pub mod vacuum;
 

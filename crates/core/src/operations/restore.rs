@@ -33,14 +33,13 @@ use object_store::ObjectStore;
 use serde::Serialize;
 use uuid::Uuid;
 
+use super::{CustomExecuteHandler, Operation};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
 use crate::kernel::{Action, Add, Protocol, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
-
-use super::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use super::{CustomExecuteHandler, Operation};
 
 /// Errors that can occur during restore
 #[derive(thiserror::Error, Debug)]
