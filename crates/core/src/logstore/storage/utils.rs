@@ -1,23 +1,44 @@
 //! Utility functions for working across Delta tables
 
 use chrono::DateTime;
-use futures::TryStreamExt;
 use object_store::path::Path;
-use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
+use object_store::ObjectMeta;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 
-/// Collect list stream
-pub async fn flatten_list_stream(
-    storage: &DynObjectStore,
-    prefix: Option<&Path>,
-) -> ObjectStoreResult<Vec<Path>> {
-    storage
-        .list(prefix)
-        .map_ok(|meta| meta.location)
-        .try_collect::<Vec<Path>>()
-        .await
+/// Return true for all the stringly values typically associated with true
+///
+/// aka YAML booleans
+///
+/// ```rust
+/// # use deltalake_core::logstore::*;
+/// for value in ["1", "true", "on", "YES", "Y"] {
+///     assert!(str_is_truthy(value));
+/// }
+/// for value in ["0", "FALSE", "off", "NO", "n", "bork"] {
+///     assert!(!str_is_truthy(value));
+/// }
+/// ```
+pub fn str_is_truthy(val: &str) -> bool {
+    val.eq_ignore_ascii_case("1")
+        | val.eq_ignore_ascii_case("true")
+        | val.eq_ignore_ascii_case("on")
+        | val.eq_ignore_ascii_case("yes")
+        | val.eq_ignore_ascii_case("y")
+}
+
+/// Return the uri of commit version.
+///
+/// ```rust
+/// # use deltalake_core::logstore::*;
+/// use object_store::path::Path;
+/// let uri = commit_uri_from_version(1);
+/// assert_eq!(uri, Path::from("_delta_log/00000000000000000001.json"));
+/// ```
+pub fn commit_uri_from_version(version: i64) -> Path {
+    let version = format!("{version:020}.json");
+    super::DELTA_LOG_PATH.child(version.as_str())
 }
 
 impl TryFrom<Add> for ObjectMeta {

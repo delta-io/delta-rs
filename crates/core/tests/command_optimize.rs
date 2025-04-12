@@ -7,12 +7,12 @@ use arrow_select::concat::concat_batches;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
+use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::DeltaOperation;
-use deltalake_core::storage::ObjectStoreRef;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;

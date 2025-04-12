@@ -6,7 +6,7 @@ use bytes::Bytes;
 use deltalake_core::logstore::*;
 use deltalake_core::{
     kernel::transaction::TransactionError,
-    storage::{ObjectStoreRef, StorageOptions},
+    logstore::{ObjectStoreRef, StorageOptions},
     DeltaResult,
 };
 use object_store::{Error as ObjectStoreError, ObjectStore};

@@ -3,9 +3,12 @@ use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
 };
+use deltalake_core::logstore::{
+    object_store::{GetResult, Result as ObjectStoreResult},
+    StorageOptions,
+};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::{GetResult, ObjectStoreResult, StorageOptions};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
@@ -149,10 +152,10 @@ impl SlowStore {
     #[allow(dead_code)]
     pub fn new(
         location: Url,
-        _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
+        _options: impl Into<deltalake_core::logstore::StorageOptions> + Clone,
     ) -> deltalake_core::DeltaResult<Self> {
         Ok(Self {
-            inner: deltalake_core::storage::store_for(&location, &StorageOptions::default())?,
+            inner: deltalake_core::logstore::store_for(&location, &StorageOptions::default())?,
         })
     }
 }

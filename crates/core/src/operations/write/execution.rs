@@ -19,9 +19,8 @@ use crate::delta_datafusion::{find_files, DeltaScanConfigBuilder, DeltaTableProv
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, Remove, StructType, StructTypeExt};
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::should_write_cdc;
-use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::DeltaTableError;

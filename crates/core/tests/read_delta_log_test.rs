@@ -25,7 +25,7 @@ async fn test_log_buffering() {
     let store = std::sync::Arc::new(
         fs_common::SlowStore::new(
             location.clone(),
-            deltalake_core::storage::StorageOptions::from(HashMap::new()),
+            deltalake_core::logstore::StorageOptions::from(HashMap::new()),
         )
         .unwrap(),
     );

@@ -1,13 +1,13 @@
 //! GCP GCS storage backend.
 
 use bytes::Bytes;
-use deltalake_core::storage::ObjectStoreRef;
+use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::Path;
 use futures::stream::BoxStream;
 use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use std::ops::Range;
 
-use deltalake_core::storage::object_store::{
+use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };

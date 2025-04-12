@@ -2,12 +2,12 @@
 
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
-use deltalake_core::storage::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
-use deltalake_core::storage::object_store::{
+use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::storage::{
+use deltalake_core::logstore::{
     limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse,
     StorageOptions,
 };
