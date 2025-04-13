@@ -8,7 +8,9 @@ compile_error!(
 );
 
 use datafusion_common::DataFusionError;
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
+use deltalake_core::logstore::{
+    default_logstore, logstores, LogStore, LogStoreFactory, StorageConfig,
+};
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use reqwest::Url;
 use std::collections::HashMap;
@@ -32,7 +34,7 @@ use deltalake_core::{
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef,
 };
 pub mod client;
 pub mod credential;
@@ -838,13 +840,13 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
         &self,
         table_uri: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),
         )??;
 
-        let mut storage_options = options.0.clone();
+        let mut storage_options = options.raw.clone();
         storage_options.extend(temp_creds);
 
         let mut builder =
@@ -865,7 +867,7 @@ impl LogStoreFactory for UnityCatalogFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }

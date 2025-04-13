@@ -1,6 +1,5 @@
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 use std::time::SystemTime;
 
 #[allow(dead_code)]
@@ -22,13 +21,7 @@ async fn test_log_buffering() {
     let location = deltalake_core::table::builder::ensure_table_uri(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
-    let store = std::sync::Arc::new(
-        fs_common::SlowStore::new(
-            location.clone(),
-            deltalake_core::logstore::StorageOptions::from(HashMap::new()),
-        )
-        .unwrap(),
-    );
+    let store = std::sync::Arc::new(fs_common::SlowStore::new(location.clone()).unwrap());
 
     let mut seq_version = 0;
     let t = SystemTime::now();

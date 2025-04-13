@@ -311,7 +311,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_error_with_invalid_log_store() {
         let location = Url::parse("memory://table").unwrap();
-        let invalid_default_store = logstore_for(location, HashMap::default(), None).unwrap();
+        let invalid_default_store =
+            logstore_for(location, HashMap::<String, String>::default(), None).unwrap();
 
         let handler = LakeFSCustomExecuteHandler {};
         let operation_id = Uuid::new_v4();
@@ -366,7 +367,8 @@ mod tests {
         // When file operations is false, the commit hook executor is a noop, since we don't need
         // to create any branches, or commit and merge them back.
         let location = Url::parse("memory://table").unwrap();
-        let invalid_default_store = logstore_for(location, HashMap::default(), None).unwrap();
+        let invalid_default_store =
+            logstore_for(location, HashMap::<String, String>::default(), None).unwrap();
 
         let handler = LakeFSCustomExecuteHandler {};
         let operation_id = Uuid::new_v4();

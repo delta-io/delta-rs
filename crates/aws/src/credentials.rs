@@ -18,7 +18,6 @@ use deltalake_core::logstore::object_store::aws::{AmazonS3ConfigKey, AwsCredenti
 use deltalake_core::logstore::object_store::{
     CredentialProvider, Error as ObjectStoreError, Result as ObjectStoreResult,
 };
-use deltalake_core::logstore::StorageOptions;
 use deltalake_core::DeltaResult;
 use tokio::sync::Mutex;
 use tracing::log::*;
@@ -117,7 +116,7 @@ const OPTS_PROVIDER: &str = "DeltaStorageOptionsProvider";
 /// [aws_config::default_provider::credentials::DefaultCredentialsChain]
 #[derive(Clone, Debug)]
 pub(crate) struct OptionsCredentialsProvider {
-    options: StorageOptions,
+    options: HashMap<String, String>,
 }
 
 impl OptionsCredentialsProvider {
@@ -130,7 +129,7 @@ impl OptionsCredentialsProvider {
         // [object_store::aws::AmazonS3ConfigKey] supports a couple different variants for key
         // names.
         let config_keys: HashMap<AmazonS3ConfigKey, String> =
-            HashMap::from_iter(self.options.0.iter().filter_map(|(k, v)| {
+            HashMap::from_iter(self.options.iter().filter_map(|(k, v)| {
                 match AmazonS3ConfigKey::from_str(&k.to_lowercase()) {
                     Ok(k) => Some((k, v.into())),
                     Err(_) => None,
@@ -171,7 +170,7 @@ mod options_tests {
 
     #[test]
     fn test_empty_options_error() {
-        let options = StorageOptions::default();
+        let options = HashMap::default();
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
         assert!(
@@ -182,11 +181,10 @@ mod options_tests {
 
     #[test]
     fn test_uppercase_options_resolve() {
-        let mash = hashmap! {
+        let options = hashmap! {
             "AWS_ACCESS_KEY_ID".into() => "key".into(),
             "AWS_SECRET_ACCESS_KEY".into() => "secret".into(),
         };
-        let options = StorageOptions(mash);
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
         assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
@@ -197,11 +195,10 @@ mod options_tests {
 
     #[test]
     fn test_lowercase_options_resolve() {
-        let mash = hashmap! {
+        let options = hashmap! {
             "aws_access_key_id".into() => "key".into(),
             "aws_secret_access_key".into() => "secret".into(),
         };
-        let options = StorageOptions(mash);
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
         assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
@@ -219,13 +216,12 @@ fn assume_role_session_name() -> String {
 }
 
 /// Return the configured IAM role ARN or whatever is defined in the environment
-fn assume_role_arn(options: &StorageOptions) -> Option<String> {
+fn assume_role_arn(options: &HashMap<String, String>) -> Option<String> {
     options
-        .0
         .get(constants::AWS_IAM_ROLE_ARN)
         .or(
             #[allow(deprecated)]
-            options.0.get(constants::AWS_S3_ASSUME_ROLE_ARN),
+            options.get(constants::AWS_S3_ASSUME_ROLE_ARN),
         )
         .or(std::env::var_os(constants::AWS_IAM_ROLE_ARN)
             .map(|o| {
@@ -247,22 +243,20 @@ fn assume_role_arn(options: &StorageOptions) -> Option<String> {
 }
 
 /// Return the configured IAM assume role session name or provide a unique one
-fn assume_session_name(options: &StorageOptions) -> String {
+fn assume_session_name(options: &HashMap<String, String>) -> String {
     let assume_session = options
-        .0
         .get(constants::AWS_IAM_ROLE_SESSION_NAME)
         .or(
             #[allow(deprecated)]
-            options.0.get(constants::AWS_S3_ROLE_SESSION_NAME),
+            options.get(constants::AWS_S3_ROLE_SESSION_NAME),
         )
         .cloned();
-
     assume_session.unwrap_or_else(assume_role_session_name)
 }
 
 /// Take a set of [StorageOptions] and produce an appropriate AWS SDK [SdkConfig]
 /// for use with various AWS SDK APIs, such as in our [crate::logstore::S3DynamoDbLogStore]
-pub async fn resolve_credentials(options: StorageOptions) -> DeltaResult<SdkConfig> {
+pub async fn resolve_credentials(options: &HashMap<String, String>) -> DeltaResult<SdkConfig> {
     let default_provider = DefaultCredentialsChain::builder().build().await;
 
     let credentials_provider = match assume_role_arn(&options) {
@@ -308,12 +302,12 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_options_credentials_provider() {
-        let options = StorageOptions(hashmap! {
+        let options = hashmap! {
             constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
             constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        });
+        };
 
-        let config = resolve_credentials(options).await;
+        let config = resolve_credentials(&options).await;
         assert!(config.is_ok(), "{config:?}");
         let config = config.unwrap();
 
@@ -340,13 +334,13 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_options_credentials_provider_session_token() {
-        let options = StorageOptions(hashmap! {
+        let options = hashmap! {
             constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
             constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
             constants::AWS_SESSION_TOKEN.to_string() => "test_token".to_string(),
-        });
+        };
 
-        let config = resolve_credentials(options)
+        let config = resolve_credentials(&options)
             .await
             .expect("Failed to resolve_credentials");
 
@@ -368,11 +362,11 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_object_store_credential_provider() -> DeltaResult<()> {
-        let options = StorageOptions(hashmap! {
+        let options = hashmap! {
             constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
             constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        });
-        let sdk_config = resolve_credentials(options)
+        };
+        let sdk_config = resolve_credentials(&options)
             .await
             .expect("Failed to resolve credentials for the test");
         let provider = AWSForObjectStore::new(sdk_config);
@@ -392,11 +386,11 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_object_store_credential_provider_consistency() -> DeltaResult<()> {
-        let options = StorageOptions(hashmap! {
+        let options = hashmap! {
             constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
             constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        });
-        let sdk_config = resolve_credentials(options)
+        };
+        let sdk_config = resolve_credentials(&options)
             .await
             .expect("Failed to resolve credentijals for the test");
         let provider = AWSForObjectStore::new(sdk_config);

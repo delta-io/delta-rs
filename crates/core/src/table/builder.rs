@@ -12,7 +12,7 @@ use url::Url;
 
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::logstore::storage::{factories, IORuntime, StorageOptions};
+use crate::logstore::storage::{factories, IORuntime};
 use crate::logstore::LogStoreRef;
 
 #[allow(dead_code)]
@@ -217,7 +217,8 @@ impl DeltaTableBuilder {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with
+    ///   "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storagle location of `storage`.
     pub fn with_storage_backend(mut self, storage: Arc<DynObjectStore>, location: Url) -> Self {
         self.storage_backend = Some((storage, location));
@@ -271,7 +272,7 @@ impl DeltaTableBuilder {
     }
 
     /// Storage options for configuring backend object store
-    pub fn storage_options(&self) -> StorageOptions {
+    pub fn storage_options(&self) -> HashMap<String, String> {
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
         if let Some(allow) = self.allow_http {
             storage_options.insert(
@@ -279,7 +280,7 @@ impl DeltaTableBuilder {
                 if allow { "true" } else { "false" }.into(),
             );
         };
-        storage_options.into()
+        storage_options
     }
 
     /// Build a delta storage backend for the given config
@@ -597,7 +598,7 @@ mod tests {
 
             let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(storage_opts);
             let found_opts = table.storage_options();
-            assert_eq!(expected, found_opts.0.get(key).unwrap());
+            assert_eq!(expected, found_opts.get(key).unwrap());
         }
     }
 }

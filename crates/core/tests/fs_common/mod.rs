@@ -3,10 +3,7 @@ use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
 };
-use deltalake_core::logstore::{
-    object_store::{GetResult, Result as ObjectStoreResult},
-    StorageOptions,
-};
+use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
@@ -150,12 +147,9 @@ impl std::fmt::Display for SlowStore {
 
 impl SlowStore {
     #[allow(dead_code)]
-    pub fn new(
-        location: Url,
-        _options: impl Into<deltalake_core::logstore::StorageOptions> + Clone,
-    ) -> deltalake_core::DeltaResult<Self> {
+    pub fn new(location: Url) -> deltalake_core::DeltaResult<Self> {
         Ok(Self {
-            inner: deltalake_core::logstore::store_for(&location, &StorageOptions::default())?,
+            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
         })
     }
 }

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::logstore::{
-    factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    default_logstore, logstores, LogStore, LogStoreFactory, StorageConfig,
 };
+use deltalake_core::logstore::{factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, Path};
 use hdfs_native_object_store::HdfsObjectStore;
 use url::Url;
@@ -15,11 +15,11 @@ impl ObjectStoreFactory for HdfsFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let store: ObjectStoreRef = Arc::new(HdfsObjectStore::with_config(
             url.as_str(),
-            options.0.clone(),
+            options.raw.clone(),
         )?);
         let prefix = Path::parse(url.path())?;
         Ok((url_prefix_handler(store, prefix.clone()), prefix))
@@ -31,7 +31,7 @@ impl LogStoreFactory for HdfsFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }
