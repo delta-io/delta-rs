@@ -30,6 +30,7 @@ arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
 parquet = { workspace = true, features = ["async", "object_store"] }
+object_store = { workspace = true, features = ["cloud"] }
 pin-project-lite = "^0.2.7"
 
 # datafusion
@@ -87,7 +88,6 @@ itertools = "0.14"
 libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = { workspace = true }
 parking_lot = "0.12"
 percent-encoding = "2"
 roaring = "0.10.1"

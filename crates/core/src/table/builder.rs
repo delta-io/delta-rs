@@ -54,20 +54,13 @@ pub enum DeltaVersion {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
-    /// Indicates whether our use case requires tracking tombstones.
-    /// This defaults to `true`
-    ///
-    /// Read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    pub require_tombstones: bool,
-
     /// Indicates whether DeltaTable should track files.
     /// This defaults to `true`
     ///
     /// Some append-only applications might have no need of tracking any files.
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
+
     /// Controls how many files to buffer from the commit log when updating the table.
     /// This defaults to 4 * number of cpus
     ///
@@ -76,9 +69,11 @@ pub struct DeltaTableConfig {
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
+
     /// Control the number of records to read / process from the commit / checkpoint files
     /// when processing record batches.
     pub log_batch_size: usize,
+
     #[serde(skip_serializing, skip_deserializing)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
@@ -87,7 +82,6 @@ pub struct DeltaTableConfig {
 impl Default for DeltaTableConfig {
     fn default() -> Self {
         Self {
-            require_tombstones: true,
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
@@ -98,8 +92,7 @@ impl Default for DeltaTableConfig {
 
 impl PartialEq for DeltaTableConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.require_tombstones == other.require_tombstones
-            && self.require_files == other.require_files
+        self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
     }
@@ -166,12 +159,6 @@ impl DeltaTableBuilder {
             allow_http: None,
             table_config: DeltaTableConfig::default(),
         })
-    }
-
-    /// Sets `require_tombstones=false` to the builder
-    pub fn without_tombstones(mut self) -> Self {
-        self.table_config.require_tombstones = false;
-        self
     }
 
     /// Sets `require_files=false` to the builder

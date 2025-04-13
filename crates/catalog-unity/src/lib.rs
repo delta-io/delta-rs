@@ -9,7 +9,8 @@ compile_error!(
 
 use datafusion_common::DataFusionError;
 use deltalake_core::logstore::{
-    default_logstore, logstores, LogStore, LogStoreFactory, StorageConfig,
+    default_logstore, logstores, object_store::RetryConfig, LogStore, LogStoreFactory,
+    StorageConfig,
 };
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use reqwest::Url;
@@ -840,23 +841,25 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
         &self,
         table_uri: &Url,
-        options: &StorageConfig,
+        options: &HashMap<String, String>,
+        _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),
         )??;
 
-        let mut storage_options = options.raw.clone();
+        let mut storage_options = options.clone();
         storage_options.extend(temp_creds);
 
+        // TODO(roeap): we should not have to go through the table here.
+        // ideally we just create the right storage ...
         let mut builder =
             DeltaTableBuilder::from_uri(&table_path).with_io_runtime(IORuntime::default());
         if !storage_options.is_empty() {
             builder = builder.with_storage_options(storage_options.clone());
         }
-
         let prefix = Path::parse(table_uri.path())?;
-        let store = builder.build()?.object_store();
+        let store = builder.build_storage()?.object_store(None);
 
         Ok((store, prefix))
     }

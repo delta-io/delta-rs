@@ -534,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_partition() {
-        let log_store = DeltaTableBuilder::from_uri("memory://")
+        let log_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap();
         let object_store = log_store.object_store(None);
@@ -566,7 +566,7 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -597,7 +597,7 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -624,7 +624,7 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -639,7 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_mismatched_schema() {
-        let log_store = DeltaTableBuilder::from_uri("memory://")
+        let log_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap();
         let object_store = log_store.object_store(None);

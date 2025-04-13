@@ -130,7 +130,7 @@ impl DeltaOps {
     /// use deltalake_core::DeltaOps;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    ///     let ops = DeltaOps::try_from_uri("memory:///").await.unwrap();
     /// };
     /// ```
     pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
@@ -171,7 +171,7 @@ impl DeltaOps {
     /// ```
     #[must_use]
     pub fn new_in_memory() -> Self {
-        DeltaTableBuilder::from_uri("memory://")
+        DeltaTableBuilder::from_uri("memory:///")
             .build()
             .unwrap()
             .into()
@@ -183,7 +183,7 @@ impl DeltaOps {
     /// use deltalake_core::DeltaOps;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    ///     let ops = DeltaOps::try_from_uri("memory:///").await.unwrap();
     ///     let table = ops.create().with_table_name("my_table").await.unwrap();
     ///     assert_eq!(table.version(), 0);
     /// };

@@ -8,6 +8,7 @@ use deltalake_core::logstore::{
 use deltalake_core::logstore::{factories, str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
+use object_store::RetryConfig;
 use url::Url;
 
 mod config;
@@ -18,9 +19,9 @@ trait MountOptions {
     fn as_mount_options(&self) -> HashMap<config::MountConfigKey, String>;
 }
 
-impl MountOptions for StorageConfig {
+impl MountOptions for HashMap<String, String> {
     fn as_mount_options(&self) -> HashMap<config::MountConfigKey, String> {
-        self.raw()
+        self.iter()
             .filter_map(|(key, value)| {
                 Some((
                     config::MountConfigKey::from_str(&key.to_ascii_lowercase()).ok()?,
@@ -38,7 +39,8 @@ impl ObjectStoreFactory for MountFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageConfig,
+        options: &HashMap<String, String>,
+        _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::MountConfigHelper::try_new(options.as_mount_options())?.build()?;
 
@@ -68,10 +70,9 @@ impl ObjectStoreFactory for MountFactory {
                     )?) as ObjectStoreRef;
                     Ok((store, Path::from("/")))
                 } else {
-                    let store = Arc::new(LocalFileSystem::new_with_prefix(
-                        url.to_file_path().unwrap(),
-                    )?) as ObjectStoreRef;
-                    Ok((store, Path::from("/")))
+                    let store = Arc::new(LocalFileSystem::new()) as ObjectStoreRef;
+                    let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
+                    Ok((store, prefix))
                 }
             }
             _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),

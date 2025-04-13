@@ -2,14 +2,11 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use deltalake_core::logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use deltalake_core::logstore::object_store::{ObjectStoreScheme, RetryConfig};
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::logstore::{
-    factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    StorageConfig,
-};
+use deltalake_core::logstore::{factories, ObjectStoreFactory, ObjectStoreRef, StorageConfig};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
-use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
-use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
@@ -20,10 +17,9 @@ trait GcpOptions {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String>;
 }
 
-impl GcpOptions for StorageConfig {
+impl GcpOptions for HashMap<String, String> {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String> {
-        self.raw
-            .iter()
+        self.iter()
             .filter_map(|(key, value)| {
                 Some((
                     GoogleConfigKey::from_str(&key.to_ascii_lowercase()).ok()?,
@@ -41,7 +37,8 @@ impl ObjectStoreFactory for GcpFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageConfig,
+        options: &HashMap<String, String>,
+        retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
 
@@ -57,11 +54,10 @@ impl ObjectStoreFactory for GcpFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let inner = builder.with_retry(options.retry.clone()).build()?;
-        let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
-        let limit = options.limit.clone().unwrap_or_default();
-        let store = limit_store_handler(url_prefix_handler(gcs_backend, prefix.clone()), &limit);
-        Ok((store, prefix))
+        let inner = builder.with_retry(retry.clone()).build()?;
+        let store = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
+
+        Ok((Arc::new(store), prefix))
     }
 }
 

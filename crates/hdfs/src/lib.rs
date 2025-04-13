@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
     default_logstore, logstores, LogStore, LogStoreFactory, StorageConfig,
 };
-use deltalake_core::logstore::{factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef};
+use deltalake_core::logstore::{factories, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, Path};
 use hdfs_native_object_store::HdfsObjectStore;
+use object_store::RetryConfig;
 use url::Url;
 
 #[derive(Clone, Default, Debug)]
@@ -15,14 +17,13 @@ impl ObjectStoreFactory for HdfsFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageConfig,
+        options: &HashMap<String, String>,
+        _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let store: ObjectStoreRef = Arc::new(HdfsObjectStore::with_config(
-            url.as_str(),
-            options.raw.clone(),
-        )?);
+        let store: ObjectStoreRef =
+            Arc::new(HdfsObjectStore::with_config(url.as_str(), options.clone())?);
         let prefix = Path::parse(url.path())?;
-        Ok((url_prefix_handler(store, prefix.clone()), prefix))
+        Ok((store, prefix))
     }
 }
 

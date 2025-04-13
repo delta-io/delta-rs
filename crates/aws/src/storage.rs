@@ -1,4 +1,10 @@
 //! AWS S3 storage backend.
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
@@ -7,18 +13,12 @@ use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::logstore::{
-    limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
-};
+use deltalake_core::logstore::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
+use object_store::aws::AmazonS3;
+use object_store::RetryConfig;
 use tracing::log::*;
 use url::Url;
 
@@ -36,9 +36,10 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        storage_options: &StorageConfig,
+        storage_options: &HashMap<String, String>,
+        retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(&storage_options.raw);
+        let options = self.with_env_s3(storage_options);
 
         // All S3-likes should start their builder the same way
         let mut builder = AmazonS3Builder::new().with_url(url.to_string());
@@ -63,9 +64,8 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             ));
         }
 
-        let inner = builder.with_retry(storage_options.retry.clone()).build()?;
-        let limit = storage_options.limit.clone().unwrap_or_default();
-        let store = aws_storage_handler(limit_store_handler(inner, &limit), &s3_options)?;
+        let inner = builder.with_retry(retry.clone()).build()?;
+        let store = aws_storage_handler(inner, &s3_options)?;
         debug!("Initialized the object store: {store:?}");
 
         Ok((store, prefix))
@@ -73,7 +73,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
 }
 
 fn aws_storage_handler(
-    store: ObjectStoreRef,
+    store: AmazonS3,
     s3_options: &S3StorageOptions,
 ) -> DeltaResult<ObjectStoreRef> {
     // Nearly all S3 Object stores support conditional put, so we change the default to always returning an S3 Object store
@@ -81,13 +81,13 @@ fn aws_storage_handler(
     if s3_options.locking_provider.as_deref() == Some("dynamodb") || s3_options.allow_unsafe_rename
     {
         let store = S3StorageBackend::try_new(
-            store,
+            Arc::new(store),
             Some("dynamodb") == s3_options.locking_provider.as_deref()
                 || s3_options.allow_unsafe_rename,
         )?;
         Ok(Arc::new(store))
     } else {
-        Ok(store)
+        Ok(Arc::new(store))
     }
 }
 

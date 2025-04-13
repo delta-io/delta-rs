@@ -1,15 +1,14 @@
 //! LakeFS storage backend (internally S3).
 
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
-use deltalake_core::logstore::{
-    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
-};
+use deltalake_core::logstore::{ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::aws::AmazonS3Builder;
-use object_store::ObjectStoreScheme;
+use object_store::{ObjectStoreScheme, RetryConfig};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::log::*;
 use url::Url;
 
@@ -61,9 +60,10 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        storage_config: &StorageConfig,
+        storage_config: &HashMap<String, String>,
+        retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(&storage_config.raw);
+        let options = self.with_env_s3(storage_config);
 
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
@@ -91,17 +91,14 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         let prefix = Path::parse(path)?;
 
         let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
-
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let inner = builder.with_retry(storage_config.retry.clone()).build()?;
+        let store = builder.with_retry(retry.clone()).build()?;
 
-        let limit = storage_config.limit.clone().unwrap_or_default();
-        let store = limit_store_handler(inner, &limit);
         debug!("Initialized the object store: {store:?}");
-        Ok((store, prefix))
+        Ok((Arc::new(store), prefix))
     }
 }
 
