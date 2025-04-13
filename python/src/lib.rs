@@ -28,6 +28,8 @@ use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
 use deltalake::errors::DeltaTableError;
@@ -50,6 +52,7 @@ use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
 use deltalake::operations::update::UpdateBuilder;
+use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
@@ -59,45 +62,32 @@ use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::state::DeltaTableState;
-use deltalake::{init_client_version, DeltaTableBuilder};
-use deltalake::{DeltaOps, DeltaResult};
-use error::DeltaError;
-use reader::convert_stream_to_reader;
-use tracing::log::*;
-
-use crate::writer::to_lazy_table;
-use deltalake::datafusion::datasource::provider_as_source;
-use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
-
-use crate::error::DeltaProtocolError;
-use crate::error::PythonError;
-use crate::features::TableFeatures;
-use crate::filesystem::FsConfig;
-use crate::merge::PyMergeBuilder;
-use crate::query::PyQueryBuilder;
-use crate::schema::{schema_to_pyobject, Field};
-use crate::utils::rt;
-use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
+use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
 use serde_json::{Map, Value};
+use tracing::log::*;
 use uuid::Uuid;
 
-#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
-use jemallocator::Jemalloc;
-
-#[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
-use mimalloc::MiMalloc;
+use crate::error::{DeltaError, DeltaProtocolError, PythonError};
+use crate::features::TableFeatures;
+use crate::filesystem::FsConfig;
+use crate::merge::PyMergeBuilder;
+use crate::query::PyQueryBuilder;
+use crate::reader::convert_stream_to_reader;
+use crate::schema::{schema_to_pyobject, Field};
+use crate::utils::rt;
+use crate::writer::to_lazy_table;
 
 #[global_allocator]
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
-static ALLOC: Jemalloc = Jemalloc;
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[global_allocator]
 #[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
-static ALLOC: MiMalloc = MiMalloc;
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
@@ -1331,14 +1321,6 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
 
             Ok(())
-        })
-    }
-
-    pub fn get_py_storage_backend(&self) -> PyResult<filesystem::DeltaFileSystemHandler> {
-        Ok(filesystem::DeltaFileSystemHandler {
-            inner: self.object_store()?,
-            config: self._config.clone(),
-            known_sizes: None,
         })
     }
 

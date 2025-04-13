@@ -1,13 +1,10 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, OnceLock};
 
 use dashmap::DashMap;
-use object_store::limit::LimitStore;
-use object_store::local::LocalFileSystem;
-use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::prefix::PrefixStore;
-use object_store::{DynObjectStore, ObjectStore};
+use object_store::{DynObjectStore, ObjectStore, RetryConfig};
 use url::Url;
 
 use super::{config, StorageConfig};
@@ -29,11 +26,19 @@ pub type ObjectStoreRef = Arc<DynObjectStore>;
 
 /// Factory trait for creating [ObjectStoreRef] instances at runtime
 pub trait ObjectStoreFactory: Send + Sync {
-    #[allow(missing_docs)]
+    /// Parse URL options and create an object store instance.
+    ///
+    /// The object store instance returned by this method must point at the root of the storage location.
+    /// Root in this case means scheme, authority/host and maybe port.
+    /// The path segment is returned as second element of the tuple. It must point at the path
+    /// corresponding to the path segment of the URL.
+    ///
+    /// The store should __NOT__ apply the decorations via the passed `StorageConfig`
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageConfig,
+        options: &HashMap<String, String>,
+        retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
@@ -44,28 +49,15 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageConfig,
+        options: &HashMap<String, String>,
+        _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let (store, path) = match url.scheme() {
-            "memory" => {
-                let path = Path::from_url_path(url.path())?;
-                let store = Box::new(PrefixStore::new(InMemory::new(), path.clone()))
-                    as Box<dyn ObjectStore>;
-                (store, path)
+        match url.scheme() {
+            "memory" | "file" => {
+                let (store, path) = object_store::parse_url_opts(url, options)?;
+                Ok((Arc::new(store), path))
             }
-            "file" => {
-                let store = Box::new(LocalFileSystem::new_with_prefix(
-                    url.to_file_path().unwrap(),
-                )?) as Box<dyn ObjectStore>;
-                (store, Path::from("/"))
-            }
-            _ => return Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
-        };
-
-        if let Some(limit) = &options.limit {
-            Ok((limit_store_handler(store, limit), path))
-        } else {
-            Ok((Arc::new(store), path))
+            _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
         }
     }
 }
@@ -179,23 +171,12 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = factories().get(&scheme) {
-        let (store, _prefix) = factory.parse_url_opts(url, &storage_config)?;
-        Ok(store)
+        let (store, _prefix) =
+            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry)?;
+        let store = storage_config.decorate_store(store, url, None)?;
+        Ok(Arc::new(store))
     } else {
         Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
-    }
-}
-
-/// Simple function to wrap the given [ObjectStore] in a [PrefixStore] if necessary
-///
-/// This simplifies the use of the storage since it ensures that list/get/etc operations
-/// start from the prefix in the object storage rather than from the root configured URI of the
-/// [ObjectStore]
-pub fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> ObjectStoreRef {
-    if prefix != Path::from("/") {
-        Arc::new(PrefixStore::new(store, prefix))
-    } else {
-        Arc::new(store)
     }
 }
 
@@ -216,54 +197,5 @@ impl config::TryUpdateKey for LimitConfig {
             _ => return Ok(None),
         }
         Ok(Some(()))
-    }
-}
-
-/// Wrap the given [ObjectStore] in a [LimitStore] if configured
-///
-/// Limits the number of concurrent connections the underlying object store
-/// Reference [LimitStore](https://docs.rs/object_store/latest/object_store/limit/struct.LimitStore.html) for more information
-pub fn limit_store_handler<T: ObjectStore>(store: T, options: &LimitConfig) -> ObjectStoreRef {
-    if let Some(limit) = options.max_concurrency {
-        Arc::new(LimitStore::new(store, limit))
-    } else {
-        Arc::new(store)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn test_url_prefix_handler() {
-        let store = InMemory::new();
-        let path = Path::parse("/databases/foo/bar").expect("Failed to parse path");
-
-        let prefixed = url_prefix_handler(store, path.clone());
-
-        assert_eq!(
-            String::from("PrefixObjectStore(databases/foo/bar)"),
-            format!("{prefixed}")
-        );
-    }
-
-    #[test]
-    fn test_limit_store_handler() {
-        let store = InMemory::new();
-
-        let options = StorageConfig::parse_options(HashMap::<&str, &str>::from_iter(vec![(
-            "OBJECT_STORE_CONCURRENCY_LIMIT",
-            "500",
-        )]))
-        .unwrap();
-
-        let limited = limit_store_handler(store, options.limit.as_ref().unwrap());
-
-        assert_eq!(
-            String::from("LimitStore(500, InMemory)"),
-            format!("{limited}")
-        );
     }
 }

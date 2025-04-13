@@ -5,11 +5,10 @@ use bytes::Bytes;
 use deltalake_core::logstore::{
     commit_uri_from_version, DefaultObjectStoreRegistry, ObjectStoreRegistry,
 };
-use deltalake_core::logstore::{url_prefix_handler, DeltaIOStorageBackend, IORuntime};
 use deltalake_core::{
     kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
 };
-use deltalake_core::{logstore::*, DeltaTableError, Path};
+use deltalake_core::{logstore::*, DeltaTableError};
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use tracing::debug;
 use url::Url;
@@ -84,10 +83,13 @@ impl LakeFSLogStore {
         let scheme = Url::parse(&format!("{}://", url.scheme()))
             .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
 
-        if let Some(entry) = deltalake_core::logstore::factories().get(&scheme) {
+        if let Some(entry) = self.config().object_store_factory().get(&scheme) {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
-
-            let (store, _prefix) = entry.value().parse_url_opts(url, &self.config().options)?;
+            let (store, _prefix) = entry.value().parse_url_opts(
+                url,
+                &self.config().options.raw,
+                &self.config().options.retry,
+            )?;
             return Ok(store);
         }
         Err(DeltaTableError::InvalidTableLocation(url.to_string()))
@@ -118,13 +120,11 @@ impl LakeFSLogStore {
             .await?;
 
         // Build new object store store using the new lakefs url
-        let txn_store = url_prefix_handler(
-            Arc::new(DeltaIOStorageBackend::new(
-                self.build_new_store(&lakefs_url)?,
-                IORuntime::default().get_handle(),
-            )) as ObjectStoreRef,
-            Path::parse(lakefs_url.path())?,
-        );
+        let txn_store = Arc::new(self.config.decorate_store(
+            self.build_new_store(&lakefs_url)?,
+            Some(&lakefs_url),
+            None,
+        )?);
 
         // Register transaction branch as ObjectStore in log_store storages
         self.register_object_store(&lakefs_url, txn_store);

@@ -165,7 +165,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
     let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
-        options.clone(),
+        &options,
         &S3_OPTIONS,
         std::sync::Arc::new(table.object_store()),
     )?;
@@ -240,7 +240,7 @@ async fn test_abort_commit_entry() -> TestResult<()> {
     let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
-        options.clone(),
+        &options,
         &S3_OPTIONS,
         std::sync::Arc::new(table.object_store()),
     )?;
@@ -287,7 +287,7 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
-        options.clone(),
+        &options,
         &S3_OPTIONS,
         std::sync::Arc::new(table.object_store()),
     )?;

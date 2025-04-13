@@ -815,7 +815,8 @@ class DeltaTable:
         ):
             raise DeltaProtocolError(
                 f"The table's minimum reader version is {table_protocol.min_reader_version} "
-                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} with these reader features: {SUPPORTED_READER_FEATURES}"
+                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} "
+                f"with these reader features: {SUPPORTED_READER_FEATURES}"
             )
         if (
             table_protocol.min_reader_version >= 3
@@ -826,7 +827,8 @@ class DeltaTable:
             )
             if len(missing_features) > 0:
                 raise DeltaProtocolError(
-                    f"The table has set these reader features: {missing_features} but these are not yet supported by the deltalake reader."
+                    f"The table has set these reader features: {missing_features} "
+                    "but these are not yet supported by the deltalake reader."
                 )
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
@@ -991,7 +993,7 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
     ) -> dict[str, Any]:
-        """Delete records from a Delta Table that statisfy a predicate.
+        """Delete records from a Delta Table that satisfy a predicate.
 
         When a predicate is not provided then all records are deleted from the Delta
         Table. Otherwise a scan of the Delta table is performed to mark any files
@@ -1590,7 +1592,7 @@ class TableAlterer:
 
         Args:
             feature: Table Feature e.g. Deletion Vectors, Change Data Feed
-            allow_protocol_versions_increase: Allow the protocol to be implicitily bumped to reader 3 or writer 7
+            allow_protocol_versions_increase: Allow the protocol to be implicitly bumped to reader 3 or writer 7
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 

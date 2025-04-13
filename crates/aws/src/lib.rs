@@ -27,7 +27,7 @@ use aws_sdk_dynamodb::{
 };
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::logstore::{factories, url_prefix_handler, ObjectStoreRef, StorageConfig};
+use deltalake_core::logstore::{factories, ObjectStoreRef, StorageConfig};
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
 use regex::Regex;
@@ -55,7 +55,6 @@ impl LogStoreFactory for S3LogStoreFactory {
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let store = url_prefix_handler(store, Path::parse(location.path())?);
         let s3_options = self.with_env_s3(&options.raw.clone().into());
         if s3_options.keys().any(|key| {
             let key = key.to_ascii_lowercase();

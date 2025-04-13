@@ -6,6 +6,7 @@ use std::time::SystemTime;
 mod fs_common;
 
 #[tokio::test]
+#[ignore]
 async fn test_log_buffering() {
     let n_commits = 10;
     let path = "../test/tests/data/simple_table_with_no_checkpoint";

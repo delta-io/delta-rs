@@ -95,7 +95,7 @@ dev = [
     "pytest-timeout",
     "pytest-benchmark",
     "mypy==1.10.1",
-    "ruff==0.11.2",
+    "ruff>=0.11.2",
 ]
 polars = ["polars==1.17.1"]
 lakefs = ["lakefs==0.8.0"]
@@ -104,10 +104,7 @@ pyspark = [
     "delta-spark",
     "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
-docs = [
-    "sphinx<=4.5",
-    "sphinx-rtd-theme",
-]
+docs = ["sphinx<=4.5", "sphinx-rtd-theme"]
 other = [
     "azure-storage-blob==12.20.0",
     "packaging>=20",

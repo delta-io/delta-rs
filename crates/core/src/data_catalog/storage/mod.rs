@@ -49,7 +49,6 @@ impl ListingSchemaProvider {
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
         let options = options.unwrap_or_default();
-        // We already parsed the url, so unwrapping is safe.
         let store = store_for(&uri, &options)?;
         Ok(Self {
             authority: uri.to_string(),
