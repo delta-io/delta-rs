@@ -9,7 +9,6 @@ use deltalake_core::logstore::object_store::{
 };
 use deltalake_core::logstore::{
     limit_store_handler, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
-    StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::stream::BoxStream;
@@ -25,8 +24,6 @@ use url::Url;
 
 use crate::constants;
 use crate::errors::DynamoDbConfigError;
-#[cfg(feature = "native-tls")]
-use crate::native;
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
 
@@ -39,14 +36,14 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        storage_options: &StorageOptions,
+        storage_options: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(storage_options);
+        let options = self.with_env_s3(&storage_options.raw);
 
         // All S3-likes should start their builder the same way
         let mut builder = AmazonS3Builder::new().with_url(url.to_string());
 
-        for (key, value) in options.0.iter() {
+        for (key, value) in options.iter() {
             if let Ok(key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
                 builder = builder.with_config(key, value.clone());
             }
@@ -58,7 +55,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             })?;
         let prefix = Path::parse(path)?;
 
-        let s3_options: S3StorageOptions = S3StorageOptions::from_map(&options.0)?;
+        let s3_options: S3StorageOptions = S3StorageOptions::from_map(&options)?;
 
         if let Some(ref sdk_config) = s3_options.sdk_config {
             builder = builder.with_credentials(Arc::new(
@@ -66,11 +63,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             ));
         }
 
-        let inner = builder
-            .with_retry(StorageConfig::parse_retry(&options.0)?)
-            .build()?;
-
-        let store = aws_storage_handler(limit_store_handler(inner, &options), &s3_options)?;
+        let inner = builder.with_retry(storage_options.retry.clone()).build()?;
+        let limit = storage_options.limit.clone().unwrap_or_default();
+        let store = aws_storage_handler(limit_store_handler(inner, &limit), &s3_options)?;
         debug!("Initialized the object store: {store:?}");
 
         Ok((store, prefix))
@@ -100,22 +95,22 @@ fn aws_storage_handler(
 //
 // This function will return true in the default case since it's most likely that the absence of
 // options will mean default/S3 configuration
-fn is_aws(options: &StorageOptions) -> bool {
+fn is_aws(options: &HashMap<String, String>) -> bool {
     // Checks storage option first then env var for existence of aws force credential load
     // .from_s3_env never inserts these into the options because they are delta-rs specific
-    if str_option(&options.0, constants::AWS_FORCE_CREDENTIAL_LOAD).is_some() {
+    if str_option(options, constants::AWS_FORCE_CREDENTIAL_LOAD).is_some() {
         return true;
     }
 
     // Checks storage option first then env var for existence of locking provider
     // .from_s3_env never inserts these into the options because they are delta-rs specific
-    if str_option(&options.0, constants::AWS_S3_LOCKING_PROVIDER).is_some() {
+    if str_option(options, constants::AWS_S3_LOCKING_PROVIDER).is_some() {
         return true;
     }
 
     // Options at this stage should only contain 'aws_endpoint' in lowercase
     // due to with_env_s3
-    !(options.0.contains_key("aws_endpoint") || options.0.contains_key(constants::AWS_ENDPOINT_URL))
+    !(options.contains_key("aws_endpoint") || options.contains_key(constants::AWS_ENDPOINT_URL))
 }
 
 /// Options used to configure the [S3StorageBackend].
@@ -196,14 +191,12 @@ impl S3StorageOptions {
             .map(|val| str_is_truthy(&val))
             .unwrap_or(false);
 
-        let storage_options = StorageOptions(options.clone());
-
-        let sdk_config = match is_aws(&storage_options) {
+        let sdk_config = match is_aws(&options) {
             false => None,
             true => {
                 debug!("Detected AWS S3 Storage options, resolving AWS credentials");
                 Some(execute_sdk_future(
-                    crate::credentials::resolve_credentials(storage_options.clone()),
+                    crate::credentials::resolve_credentials(&options),
                 )??)
             }
         };
@@ -439,27 +432,23 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
 }
 
 pub(crate) trait S3StorageOptionsConversion {
-    fn with_env_s3(&self, options: &StorageOptions) -> StorageOptions {
-        let mut options = StorageOptions(
-            options
-                .0
-                .clone()
-                .into_iter()
-                .map(|(k, v)| {
-                    if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
-                        (config_key.as_ref().to_string(), v)
-                    } else {
-                        (k, v)
-                    }
-                })
-                .collect(),
-        );
+    fn with_env_s3(&self, options: &HashMap<String, String>) -> HashMap<String, String> {
+        let mut options: HashMap<String, String> = options
+            .clone()
+            .into_iter()
+            .map(|(k, v)| {
+                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
+                    (config_key.as_ref().to_string(), v)
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
 
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
                     options
-                        .0
                         .entry(config_key.as_ref().to_string())
                         .or_insert(value.to_string());
                 }
@@ -470,7 +459,7 @@ pub(crate) trait S3StorageOptionsConversion {
         // set this behaviour. We will however assume, when a locking provider/copy-if-not-exists keys are not provided
         // that PutIfAbsent is supported.
         // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
-        if !options.0.keys().any(|key| {
+        if !options.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
                 AmazonS3ConfigKey::ConditionalPut.as_ref(),
@@ -478,7 +467,7 @@ pub(crate) trait S3StorageOptionsConversion {
             ]
             .contains(&key.as_str())
         }) {
-            options.0.insert("conditional_put".into(), "etag".into());
+            options.insert("conditional_put".into(), "etag".into());
         }
         options
     }
@@ -791,13 +780,12 @@ mod tests {
             std::env::set_var(constants::AWS_ENDPOINT_URL, "env_key");
             std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "env_key");
             std::env::set_var(constants::AWS_REGION, "env_key");
-            let combined_options =
-                S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+            let combined_options = S3ObjectStoreFactory {}.with_env_s3(&raw_options);
 
             // Four and then the conditional_put built-in
-            assert_eq!(combined_options.0.len(), 5);
+            assert_eq!(combined_options.len(), 5);
 
-            for (key, v) in combined_options.0 {
+            for (key, v) in combined_options {
                 if key != "conditional_put" {
                     assert_eq!(v, "env_key");
                 }
@@ -821,10 +809,9 @@ mod tests {
             std::env::set_var("aws_secret_access_key", "env_key");
             std::env::set_var("aws_region", "env_key");
 
-            let combined_options =
-                S3ObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+            let combined_options = S3ObjectStoreFactory {}.with_env_s3(&raw_options);
 
-            for (key, v) in combined_options.0 {
+            for (key, v) in combined_options {
                 if key != "conditional_put" {
                     assert_eq!(v, "options_key");
                 }
@@ -836,26 +823,23 @@ mod tests {
     #[serial]
     fn test_is_aws() {
         clear_env_of_aws_keys();
-        let options = StorageOptions::default();
+        let options = HashMap::default();
         assert!(is_aws(&options));
 
         let minio: HashMap<String, String> = hashmap! {
             constants::AWS_ENDPOINT_URL.to_string() => "http://minio:8080".to_string(),
         };
-        let options = StorageOptions::from(minio);
-        assert!(!is_aws(&options));
+        assert!(!is_aws(&minio));
 
         let minio: HashMap<String, String> = hashmap! {
             "aws_endpoint".to_string() => "http://minio:8080".to_string(),
         };
-        let options = StorageOptions::from(minio);
-        assert!(!is_aws(&options));
+        assert!(!is_aws(&minio));
 
         let localstack: HashMap<String, String> = hashmap! {
             constants::AWS_FORCE_CREDENTIAL_LOAD.to_string() => "true".to_string(),
             "aws_endpoint".to_string() => "http://minio:8080".to_string(),
         };
-        let options = StorageOptions::from(localstack);
-        assert!(is_aws(&options));
+        assert!(is_aws(&localstack));
     }
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::logstore::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    StorageConfig, StorageOptions,
+    StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
@@ -20,9 +20,9 @@ trait GcpOptions {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String>;
 }
 
-impl GcpOptions for StorageOptions {
+impl GcpOptions for StorageConfig {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String> {
-        self.0
+        self.raw
             .iter()
             .filter_map(|(key, value)| {
                 Some((
@@ -41,7 +41,7 @@ impl ObjectStoreFactory for GcpFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
 
@@ -57,12 +57,10 @@ impl ObjectStoreFactory for GcpFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let inner = builder
-            .with_retry(StorageConfig::parse_retry(&options.0)?)
-            .build()?;
-
+        let inner = builder.with_retry(options.retry.clone()).build()?;
         let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
-        let store = limit_store_handler(url_prefix_handler(gcs_backend, prefix.clone()), options);
+        let limit = options.limit.clone().unwrap_or_default();
+        let store = limit_store_handler(url_prefix_handler(gcs_backend, prefix.clone()), &limit);
         Ok((store, prefix))
     }
 }
@@ -72,7 +70,7 @@ impl LogStoreFactory for GcpFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }

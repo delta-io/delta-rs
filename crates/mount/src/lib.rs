@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::logstore::{
-    factories, str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+    default_logstore, logstores, LogStore, LogStoreFactory, StorageConfig,
 };
+use deltalake_core::logstore::{factories, str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
 use url::Url;
@@ -18,10 +18,9 @@ trait MountOptions {
     fn as_mount_options(&self) -> HashMap<config::MountConfigKey, String>;
 }
 
-impl MountOptions for StorageOptions {
+impl MountOptions for StorageConfig {
     fn as_mount_options(&self) -> HashMap<config::MountConfigKey, String> {
-        self.0
-            .iter()
+        self.raw()
             .filter_map(|(key, value)| {
                 Some((
                     config::MountConfigKey::from_str(&key.to_ascii_lowercase()).ok()?,
@@ -39,7 +38,7 @@ impl ObjectStoreFactory for MountFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::MountConfigHelper::try_new(options.as_mount_options())?.build()?;
 
@@ -85,7 +84,7 @@ impl LogStoreFactory for MountFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }

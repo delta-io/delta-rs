@@ -1,229 +1,261 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "cloud")]
+use ::object_store::RetryConfig;
+
 #[cfg(feature = "delta-cache")]
 use super::storage::cache::LogCacheConfig;
 use super::storage::runtime::RuntimeConfig;
-use super::StorageOptions;
+use super::storage::LimitConfig;
 use crate::{DeltaResult, DeltaTableError};
 
-#[derive(Default)]
+pub(super) trait TryUpdateKey {
+    /// Update an internal field in the configuration.
+    ///
+    /// ## Returns
+    /// - `Ok(Some(()))` if the key was updated.
+    /// - `Ok(None)` if the key was not found and no internal field was updated.
+    /// - `Err(_)` if the update failed. Failed updates may include finding a known key,
+    ///   but failing to parse the value into the expected type.
+    fn try_update_key(&mut self, key: &str, value: &str) -> DeltaResult<Option<()>>;
+}
+
+impl<K, V> FromIterator<(K, V)> for RuntimeConfig
+where
+    K: AsRef<str> + Into<String>,
+    V: AsRef<str> + Into<String>,
+{
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        ParseResult::from_iter(iter).config
+    }
+}
+
+#[cfg(feature = "delta-cache")]
+impl<K, V> FromIterator<(K, V)> for LogCacheConfig
+where
+    K: AsRef<str> + Into<String>,
+    V: AsRef<str> + Into<String>,
+{
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        ParseResult::from_iter(iter).config
+    }
+}
+
+pub(super) struct ParseResult<T> {
+    pub config: T,
+    pub unparsed: HashMap<String, String>,
+    pub errors: Vec<(String, String)>,
+    pub is_default: bool,
+}
+
+impl<T> ParseResult<T> {
+    pub fn raise_errors(&self) -> DeltaResult<()> {
+        if !self.errors.is_empty() {
+            return Err(DeltaTableError::Generic(format!(
+                "Failed to parse config: {:?}",
+                self.errors
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl<T, K, V> FromIterator<(K, V)> for ParseResult<T>
+where
+    T: TryUpdateKey + Default,
+    K: AsRef<str> + Into<String>,
+    V: AsRef<str> + Into<String>,
+{
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut config = T::default();
+        let mut unparsed = HashMap::new();
+        let mut errors = Vec::new();
+        let mut is_default = true;
+        for (k, v) in iter {
+            match config.try_update_key(k.as_ref(), v.as_ref()) {
+                Ok(None) => {
+                    unparsed.insert(k.into(), v.into());
+                }
+                Ok(Some(_)) => is_default = false,
+                Err(e) => errors.push((k.into(), e.to_string())),
+            }
+        }
+        ParseResult {
+            config,
+            unparsed,
+            errors,
+            is_default,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone)]
 pub struct StorageConfig {
     #[cfg(feature = "delta-cache")]
-    pub cache: LogCacheConfig,
+    /// Log cache configuration.
+    ///
+    /// The log cache will selectively cache reads from the storage layer
+    /// that target known log files. Specifically JSON commit files
+    /// (including compacted commits) and deletion vectors.
+    pub cache: Option<LogCacheConfig>,
 
+    /// Runtime configuration.
+    ///
+    /// Configuration to set up a dedicated IO runtime to execute IO related operations.
     pub runtime: Option<RuntimeConfig>,
 
     #[cfg(feature = "cloud")]
     pub retry: ::object_store::RetryConfig,
 
+    pub limit: Option<LimitConfig>,
+
     pub unknown_properties: HashMap<String, String>,
+
+    pub raw: HashMap<String, String>,
 }
 
-impl StorageConfig {
-    pub fn parse_runtime<K, V, I>(options: I) -> DeltaResult<RuntimeConfig>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str> + Into<String>,
-        V: AsRef<str> + Into<String>,
-    {
-        parse_runtime(options).map(|c| c.0)
-    }
+impl<K, V> FromIterator<(K, V)> for StorageConfig
+where
+    K: AsRef<str> + Into<String>,
+    V: AsRef<str> + Into<String>,
+{
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut config = Self::default();
+        config.raw = iter
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
 
-    #[cfg(feature = "cloud")]
-    pub fn parse_retry<K, V, I>(options: I) -> DeltaResult<::object_store::RetryConfig>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str> + Into<String>,
-        V: AsRef<str> + Into<String>,
-    {
-        cloud::parse_retry(options).map(|c| c.0)
-    }
+        let result = ParseResult::<RuntimeConfig>::from_iter(&config.raw);
+        config.runtime = (!result.is_default).then_some(result.config);
 
-    #[cfg(feature = "delta-cache")]
-    pub fn parse_log_cache<K, V, I>(
-        options: &HashMap<String, String>,
-    ) -> DeltaResult<LogCacheConfig>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str> + Into<String>,
-        V: AsRef<str> + Into<String>,
-    {
-        parse_log_cache(options).map(|c| c.0)
-    }
+        let result = ParseResult::<LimitConfig>::from_iter(result.unparsed);
+        config.limit = (!result.is_default).then_some(result.config);
 
-    pub fn try_from_options(options: &HashMap<String, String>) -> DeltaResult<Self> {
-        let mut props = StorageConfig::default();
-
-        let opt_count = options.len();
-        let (runtime, remainder) = parse_runtime(options)?;
-        // NOTE: we only want to assign an actual runtime config we consumed an option
-        if opt_count > remainder.len() {
-            props.runtime = Some(runtime);
-        }
+        let remainder = result.unparsed;
 
         #[cfg(feature = "delta-cache")]
         let remainder = {
-            let (cache_config, remainder) = parse_log_cache(remainder)?;
-            props.cache = cache_config;
-            remainder
+            let result = ParseResult::<LogCacheConfig>::from_iter(remainder);
+            config.cache = (!result.is_default).then_some(result.config);
+            result.unparsed
         };
 
         #[cfg(feature = "cloud")]
         let remainder = {
-            let (retry_config, remainder) = cloud::parse_retry(remainder)?;
-            props.retry = retry_config;
+            let result = ParseResult::<RetryConfig>::from_iter(remainder);
+            config.retry = result.config;
+            result.unparsed
+        };
+
+        config.unknown_properties = remainder;
+        config
+    }
+}
+
+impl StorageConfig {
+    pub fn raw(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.raw.iter()
+    }
+
+    pub fn parse_options<K, V, I>(options: I) -> DeltaResult<Self>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str> + Into<String>,
+        V: AsRef<str> + Into<String>,
+    {
+        let mut props = StorageConfig::default();
+        props.raw = options
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+
+        let (runtime, remainder): (RuntimeConfig, _) = try_parse_impl(&props.raw)?;
+        // NOTE: we only want to assign an actual runtime config we consumed an option
+        if props.raw.len() > remainder.len() {
+            props.runtime = Some(runtime);
+        }
+
+        let result = ParseResult::<LimitConfig>::from_iter(remainder);
+        result.raise_errors()?;
+        props.limit = (!result.is_default).then_some(result.config);
+        let remainder = result.unparsed;
+
+        #[cfg(feature = "delta-cache")]
+        let remainder = {
+            let result = ParseResult::<LogCacheConfig>::from_iter(remainder);
+            result.raise_errors()?;
+            props.cache = (!result.is_default).then_some(result.config);
+            result.unparsed
+        };
+
+        #[cfg(feature = "cloud")]
+        let remainder = {
+            let (retry, remainder): (RetryConfig, _) = try_parse_impl(remainder)?;
+            props.retry = retry;
             remainder
         };
 
         props.unknown_properties = remainder;
         Ok(props)
     }
-
-    pub fn try_from_storage_options(options: &StorageOptions) -> DeltaResult<Self> {
-        Self::try_from_options(&options.0)
-    }
 }
 
-#[cfg(feature = "delta-cache")]
-fn parse_log_cache<K, V, I>(options: I) -> DeltaResult<(LogCacheConfig, HashMap<String, String>)>
+pub(super) fn try_parse_impl<T, K, V, I>(options: I) -> DeltaResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
+    T: TryUpdateKey + Default,
 {
-    fn try_parse(props: &mut LogCacheConfig, k: &str, v: &str) -> DeltaResult<Option<()>> {
-        match k {
-            "max_size_memory_mb" => props.max_size_memory_mb = parse_usize(v)?,
-            "max_size_disk_mb" => props.max_size_disk_mb = parse_usize(v)?,
-            "directory" => props.directory = Some(v.into()),
-            _ => return Ok(None),
-        }
-        Ok(Some(()))
-    }
-
-    parse_options_impl(options, try_parse)
+    let result = ParseResult::from_iter(options);
+    result.raise_errors()?;
+    Ok((result.config, result.unparsed))
 }
 
-fn parse_runtime<K, V, I>(options: I) -> DeltaResult<(RuntimeConfig, HashMap<String, String>)>
-where
-    I: IntoIterator<Item = (K, V)>,
-    K: AsRef<str> + Into<String>,
-    V: AsRef<str> + Into<String>,
-{
-    fn try_parse(props: &mut RuntimeConfig, k: &str, v: &str) -> DeltaResult<Option<()>> {
-        match k {
-            "multi_threaded" => props.multi_threaded = Some(parse_bool(v)?),
-            "worker_threads" => props.worker_threads = Some(parse_usize(v)?),
-            "thread_name" => props.thread_name = Some(v.into()),
-            "enable_io" => props.enable_io = Some(parse_bool(v)?),
-            "enable_time" => props.enable_time = Some(parse_bool(v)?),
-            _ => return Ok(None),
-        }
-        Ok(Some(()))
-    }
-
-    parse_options_impl(options, try_parse)
-}
-
-fn parse_options_impl<T, K, V, I, F>(
-    options: I,
-    parse_fn: F,
-) -> DeltaResult<(T, HashMap<String, String>)>
-where
-    F: Fn(&mut T, &str, &str) -> DeltaResult<Option<()>>,
-    I: IntoIterator<Item = (K, V)>,
-    K: AsRef<str> + Into<String>,
-    V: AsRef<str> + Into<String>,
-    T: Default,
-{
-    let mut config = T::default();
-    let mut unparsed = HashMap::new();
-    for (k, v) in options {
-        if parse_fn(&mut config, k.as_ref(), v.as_ref())?.is_none() {
-            unparsed.insert(k.into(), v.into());
-        }
-    }
-    Ok((config, unparsed))
-}
-
-fn parse_usize(value: &str) -> DeltaResult<usize> {
+pub(super) fn parse_usize(value: &str) -> DeltaResult<usize> {
     value
         .parse::<usize>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as usize")))
 }
 
-fn parse_f64(value: &str) -> DeltaResult<f64> {
+pub(super) fn parse_f64(value: &str) -> DeltaResult<f64> {
     value
         .parse::<f64>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as f64")))
 }
 
-fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
+pub(super) fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
     humantime::parse_duration(value)
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
 }
 
-fn parse_bool(value: &str) -> DeltaResult<bool> {
+pub(super) fn parse_bool(value: &str) -> DeltaResult<bool> {
     Ok(super::storage::utils::str_is_truthy(value))
 }
 
-#[cfg(feature = "cloud")]
-mod cloud {
-    use ::object_store::RetryConfig;
+#[cfg(all(test, feature = "cloud"))]
+mod tests {
+    use maplit::hashmap;
+    use object_store::RetryConfig;
+    use std::time::Duration;
 
-    use super::*;
+    #[test]
+    fn test_retry_config_from_options() {
+        let options = hashmap! {
+            "max_retries".to_string() => "100".to_string() ,
+            "retry_timeout".to_string()  => "300s".to_string() ,
+            "backoff_config.init_backoff".to_string()  => "20s".to_string() ,
+            "backoff_config.max_backoff".to_string()  => "1h".to_string() ,
+            "backoff_config.base".to_string()  =>  "50.0".to_string() ,
+        };
+        let (retry_config, remainder): (RetryConfig, _) = super::try_parse_impl(options).unwrap();
+        assert!(remainder.is_empty());
 
-    pub(super) fn parse_retry<K, V, I>(
-        options: I,
-    ) -> DeltaResult<(RetryConfig, HashMap<String, String>)>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str> + Into<String>,
-        V: AsRef<str> + Into<String>,
-    {
-        fn try_parse(props: &mut RetryConfig, k: &str, v: &str) -> DeltaResult<Option<()>> {
-            match k {
-                "max_retries" => props.max_retries = parse_usize(v)?,
-                "retry_timeout" => props.retry_timeout = parse_duration(v)?,
-                "init_backoff" | "backoff_config.init_backoff" | "backoff.init_backoff" => {
-                    props.backoff.init_backoff = parse_duration(v)?
-                }
-                "max_backoff" | "backoff_config.max_backoff" | "backoff.max_backoff" => {
-                    props.backoff.max_backoff = parse_duration(v)?;
-                }
-                "base" | "backoff_config.base" | "backoff.base" => {
-                    props.backoff.base = parse_f64(v)?;
-                }
-                _ => return Ok(None),
-            }
-            Ok(Some(()))
-        }
-
-        parse_options_impl(options, try_parse)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use maplit::hashmap;
-        use std::time::Duration;
-
-        #[test]
-        fn test_retry_config_from_options() {
-            let options = hashmap! {
-                "max_retries".to_string() => "100".to_string() ,
-                "retry_timeout".to_string()  => "300s".to_string() ,
-                "backoff_config.init_backoff".to_string()  => "20s".to_string() ,
-                "backoff_config.max_backoff".to_string()  => "1h".to_string() ,
-                "backoff_config.base".to_string()  =>  "50.0".to_string() ,
-            };
-            let (retry_config, remainder) = super::parse_retry(&options).unwrap();
-            assert!(remainder.is_empty());
-
-            assert_eq!(retry_config.max_retries, 100);
-            assert_eq!(retry_config.retry_timeout, Duration::from_secs(300));
-            assert_eq!(retry_config.backoff.init_backoff, Duration::from_secs(20));
-            assert_eq!(retry_config.backoff.max_backoff, Duration::from_secs(3600));
-            assert_eq!(retry_config.backoff.base, 50_f64);
-        }
+        assert_eq!(retry_config.max_retries, 100);
+        assert_eq!(retry_config.retry_timeout, Duration::from_secs(300));
+        assert_eq!(retry_config.backoff.init_backoff, Duration::from_secs(20));
+        assert_eq!(retry_config.backoff.max_backoff, Duration::from_secs(3600));
+        assert_eq!(retry_config.backoff.base, 50_f64);
     }
 }
