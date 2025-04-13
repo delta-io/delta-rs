@@ -4,6 +4,8 @@ use ::object_store::path::Path;
 use ::object_store::{Error, ObjectStore, PutPayload, PutResult, Result};
 use tracing::log::*;
 
+use crate::logstore::config;
+
 impl<T: ObjectStore + ?Sized> ObjectStoreRetryExt for T {}
 
 /// Retry extension for [`ObjectStore`]
@@ -72,5 +74,26 @@ pub trait ObjectStoreRetryExt: ObjectStore {
             }
         }
         unreachable!("loop yields Ok or Err in body when attempt_number = max_retries")
+    }
+}
+
+#[cfg(feature = "cloud")]
+impl config::TryUpdateKey for object_store::RetryConfig {
+    fn try_update_key(&mut self, key: &str, v: &str) -> crate::DeltaResult<Option<()>> {
+        match key {
+            "max_retries" => self.max_retries = config::parse_usize(v)?,
+            "retry_timeout" => self.retry_timeout = config::parse_duration(v)?,
+            "init_backoff" | "backoff_config.init_backoff" | "backoff.init_backoff" => {
+                self.backoff.init_backoff = config::parse_duration(v)?
+            }
+            "max_backoff" | "backoff_config.max_backoff" | "backoff.max_backoff" => {
+                self.backoff.max_backoff = config::parse_duration(v)?;
+            }
+            "base" | "backoff_config.base" | "backoff.base" => {
+                self.backoff.base = config::parse_f64(v)?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
     }
 }

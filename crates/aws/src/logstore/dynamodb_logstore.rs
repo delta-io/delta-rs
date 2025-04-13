@@ -14,9 +14,7 @@ use url::Url;
 
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    kernel::transaction::TransactionError,
-    logstore::{ObjectStoreRef, StorageOptions},
-    DeltaResult, DeltaTableError,
+    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult, DeltaTableError,
 };
 use uuid::Uuid;
 
@@ -41,7 +39,7 @@ impl S3DynamoDbLogStore {
     /// Create log store
     pub fn try_new(
         location: Url,
-        options: impl Into<StorageOptions> + Clone,
+        options: &StorageConfig,
         s3_options: &S3StorageOptions,
         object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
@@ -77,7 +75,7 @@ impl S3DynamoDbLogStore {
             lock_client,
             config: LogStoreConfig {
                 location,
-                options: options.into(),
+                options: options.clone(),
             },
             table_path,
         })

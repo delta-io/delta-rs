@@ -17,6 +17,7 @@ use tempfile::TempDir;
 use url::Url;
 
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::logstore::config;
 
 pub(super) type DeltaLogCache = Arc<HybridCache<Url, Entry>>;
 
@@ -56,9 +57,13 @@ impl From<CachedStoreError> for ObjectStoreError {
 #[derive(Clone, Debug)]
 pub struct LogCacheConfig {
     /// Maximum size of the cache in memory in megabytes.
+    ///
+    /// Default is 64MB.
     pub max_size_memory_mb: usize,
 
     /// Maximum size of the cache on disk in megabytes.
+    ///
+    /// Default is 256MB.
     pub max_size_disk_mb: usize,
 
     /// Directory where the cache is stored.
@@ -67,7 +72,7 @@ pub struct LogCacheConfig {
     /// and deleted once the cache is dropped. When a valid directory is
     /// provided, the cache will be not be cleaned up and all housekeeping
     /// is the responsibility of the caller.
-    pub directory: Option<String>,
+    pub cache_directory: Option<String>,
 }
 
 impl Default for LogCacheConfig {
@@ -75,8 +80,20 @@ impl Default for LogCacheConfig {
         Self {
             max_size_memory_mb: 64,
             max_size_disk_mb: 256,
-            directory: None,
+            cache_directory: None,
         }
+    }
+}
+
+impl config::TryUpdateKey for LogCacheConfig {
+    fn try_update_key(&mut self, key: &str, v: &str) -> DeltaResult<Option<()>> {
+        match key {
+            "max_size_memory_mb" => self.max_size_memory_mb = config::parse_usize(v)?,
+            "max_size_disk_mb" => self.max_size_disk_mb = config::parse_usize(v)?,
+            "cache_directory" => self.cache_directory = Some(v.to_string()),
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
     }
 }
 

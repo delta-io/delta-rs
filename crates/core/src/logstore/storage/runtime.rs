@@ -11,12 +11,12 @@ use object_store::{
     Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,
     PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
+use object_store::{MultipartUpload, PutMultipartOpts};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
 
-use object_store::{MultipartUpload, PutMultipartOpts};
-
-use super::ObjectStoreRef;
+use super::{super::config, ObjectStoreRef};
+use crate::DeltaResult;
 
 /// Creates static IO Runtime with optional configuration
 fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
@@ -73,6 +73,20 @@ pub struct RuntimeConfig {
     pub(crate) thread_name: Option<String>,
     pub(crate) enable_io: Option<bool>,
     pub(crate) enable_time: Option<bool>,
+}
+
+impl config::TryUpdateKey for RuntimeConfig {
+    fn try_update_key(&mut self, key: &str, v: &str) -> DeltaResult<Option<()>> {
+        match key {
+            "multi_threaded" => self.multi_threaded = Some(config::parse_bool(v)?),
+            "worker_threads" => self.worker_threads = Some(config::parse_usize(v)?),
+            "thread_name" => self.thread_name = Some(v.into()),
+            "enable_io" => self.enable_io = Some(config::parse_bool(v)?),
+            "enable_time" => self.enable_time = Some(config::parse_bool(v)?),
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
 }
 
 /// Provide custom Tokio RT or a runtime config

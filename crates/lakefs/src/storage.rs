@@ -2,7 +2,7 @@
 
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{
-    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, StorageConfig, StorageOptions,
+    limit_store_handler, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::aws::AmazonS3Builder;
@@ -17,36 +17,31 @@ use url::Url;
 pub struct LakeFSObjectStoreFactory {}
 
 pub(crate) trait S3StorageOptionsConversion {
-    fn with_env_s3(&self, options: &StorageOptions) -> StorageOptions {
-        let mut options = StorageOptions(
-            options
-                .0
-                .clone()
-                .into_iter()
-                .map(|(k, v)| {
-                    if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
-                        (config_key.as_ref().to_string(), v)
-                    } else {
-                        (k, v)
-                    }
-                })
-                .collect(),
-        );
+    fn with_env_s3(&self, options: &HashMap<String, String>) -> HashMap<String, String> {
+        let mut options: HashMap<String, String> = options
+            .clone()
+            .into_iter()
+            .map(|(k, v)| {
+                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
+                    (config_key.as_ref().to_string(), v)
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
 
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    if !options.0.contains_key(config_key.as_ref()) {
-                        options
-                            .0
-                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    if !options.contains_key(config_key.as_ref()) {
+                        options.insert(config_key.as_ref().to_string(), value.to_string());
                     }
                 }
             }
         }
 
         // Conditional put is supported in LakeFS since v1.47
-        if !options.0.keys().any(|key| {
+        if !options.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
                 AmazonS3ConfigKey::ConditionalPut.as_ref(),
@@ -54,7 +49,7 @@ pub(crate) trait S3StorageOptionsConversion {
             ]
             .contains(&key.as_str())
         }) {
-            options.0.insert("conditional_put".into(), "etag".into());
+            options.insert("conditional_put".into(), "etag".into());
         }
         options
     }
@@ -66,9 +61,9 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        storage_config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(options);
+        let options = self.with_env_s3(&storage_config.raw);
 
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
@@ -79,7 +74,6 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         // All S3-likes should start their builder the same way
         let config = options
             .clone()
-            .0
             .into_iter()
             .filter_map(|(k, v)| {
                 if let Ok(key) = AmazonS3ConfigKey::from_str(&k.to_ascii_lowercase()) {
@@ -102,11 +96,10 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let inner = builder
-            .with_retry(StorageConfig::parse_retry(&options.0)?)
-            .build()?;
+        let inner = builder.with_retry(storage_config.retry.clone()).build()?;
 
-        let store = limit_store_handler(inner, &options);
+        let limit = storage_config.limit.clone().unwrap_or_default();
+        let store = limit_store_handler(inner, &limit);
         debug!("Initialized the object store: {store:?}");
         Ok((store, prefix))
     }
@@ -158,13 +151,12 @@ mod tests {
             std::env::set_var("ENDPOINT", "env_key");
             std::env::set_var("SECRET_ACCESS_KEY", "env_key");
             std::env::set_var("REGION", "env_key");
-            let combined_options =
-                LakeFSObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+            let combined_options = LakeFSObjectStoreFactory {}.with_env_s3(&raw_options);
 
             // Four and then the conditional_put built-in
-            assert_eq!(combined_options.0.len(), 5);
+            assert_eq!(combined_options.len(), 5);
 
-            for (key, v) in combined_options.0 {
+            for (key, v) in combined_options {
                 if key != "conditional_put" {
                     assert_eq!(v, "env_key");
                 }
@@ -188,10 +180,9 @@ mod tests {
             std::env::set_var("aws_secret_access_key", "env_key");
             std::env::set_var("aws_region", "env_key");
 
-            let combined_options =
-                LakeFSObjectStoreFactory {}.with_env_s3(&StorageOptions(raw_options));
+            let combined_options = LakeFSObjectStoreFactory {}.with_env_s3(&raw_options);
 
-            for (key, v) in combined_options.0 {
+            for (key, v) in combined_options {
                 if key != "conditional_put" {
                     assert_eq!(v, "options_key");
                 }

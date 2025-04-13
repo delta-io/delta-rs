@@ -5,7 +5,7 @@ use std::sync::Arc;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
 use deltalake_core::logstore::{
     factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    StorageConfig, StorageOptions,
+    StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
@@ -19,9 +19,9 @@ trait AzureOptions {
     fn as_azure_options(&self) -> HashMap<AzureConfigKey, String>;
 }
 
-impl AzureOptions for StorageOptions {
+impl AzureOptions for StorageConfig {
     fn as_azure_options(&self) -> HashMap<AzureConfigKey, String> {
-        self.0
+        self.raw
             .iter()
             .filter_map(|(key, value)| {
                 Some((
@@ -40,7 +40,7 @@ impl ObjectStoreFactory for AzureFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
 
@@ -56,10 +56,9 @@ impl ObjectStoreFactory for AzureFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let storage_config = StorageConfig::try_from_storage_options(options)?;
-        let inner = builder.with_retry(storage_config.retry).build()?;
-
-        let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), options);
+        let inner = builder.with_retry(options.retry.clone()).build()?;
+        let limit = options.limit.clone().unwrap_or_default();
+        let store = limit_store_handler(url_prefix_handler(inner, prefix.clone()), &limit);
         Ok((store, prefix))
     }
 }
@@ -69,7 +68,7 @@ impl LogStoreFactory for AzureFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }

@@ -13,7 +13,7 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
-use crate::logstore::storage::*;
+use crate::logstore::{storage::*, StorageConfig};
 use crate::open_table_with_storage_options;
 use crate::table::builder::ensure_table_uri;
 
@@ -38,24 +38,24 @@ pub struct ListingSchemaProvider {
     /// A map of table names to a fully quilfied storage location
     tables: DashMap<String, String>,
     /// Options used to create underlying object stores
-    storage_options: StorageOptions,
+    storage_options: StorageConfig,
 }
 
 impl ListingSchemaProvider {
     /// Create a new [`ListingSchemaProvider`]
     pub fn try_new(
         root_uri: impl AsRef<str>,
-        storage_options: Option<HashMap<String, String>>,
+        options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let storage_options: StorageOptions = storage_options.unwrap_or_default().into();
+        let options = options.unwrap_or_default();
         // We already parsed the url, so unwrapping is safe.
-        let store = store_for(&uri, &storage_options)?;
+        let store = store_for(&uri, &options)?;
         Ok(Self {
             authority: uri.to_string(),
             store,
             tables: DashMap::new(),
-            storage_options,
+            storage_options: StorageConfig::parse_options(options)?,
         })
     }
 
@@ -116,7 +116,7 @@ impl SchemaProvider for ListingSchemaProvider {
             return Ok(None);
         };
         let provider =
-            open_table_with_storage_options(location, self.storage_options.0.clone()).await?;
+            open_table_with_storage_options(location, self.storage_options.raw.clone()).await?;
         Ok(Some(Arc::new(provider) as Arc<dyn TableProvider>))
     }
 

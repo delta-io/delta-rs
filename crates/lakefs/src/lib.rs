@@ -8,7 +8,7 @@ pub mod errors;
 pub mod execute;
 pub mod logstore;
 pub mod storage;
-use deltalake_core::logstore::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
+use deltalake_core::logstore::{factories, url_prefix_handler, ObjectStoreRef, StorageConfig};
 use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
 use deltalake_core::{DeltaResult, Path};
 pub use execute::LakeFSCustomExecuteHandler;
@@ -29,9 +29,9 @@ impl LogStoreFactory for LakeFSLogStoreFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        config: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let options = self.with_env_s3(options);
+        let options = StorageConfig::parse_options(self.with_env_s3(&config.raw.clone().into()))?;
         let store = url_prefix_handler(store, Path::parse(location.path())?);
         debug!("LakeFSLogStoreFactory has been asked to create a LogStore");
         lakefs_logstore(store, location, &options)

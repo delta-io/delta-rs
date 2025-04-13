@@ -12,7 +12,7 @@ use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::{commit_uri_from_version, StorageOptions};
+use deltalake_core::logstore::{commit_uri_from_version, StorageConfig};
 use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
@@ -162,7 +162,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "repair_needed").await?;
-    let options: StorageOptions = OPTIONS.clone().into();
+    let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
         options.clone(),
@@ -237,7 +237,7 @@ async fn test_abort_commit_entry() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "abort_entry").await?;
-    let options: StorageOptions = OPTIONS.clone().into();
+    let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
         options.clone(),
@@ -284,7 +284,7 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "abort_entry_fail").await?;
-    let options: StorageOptions = OPTIONS.clone().into();
+    let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
         options.clone(),

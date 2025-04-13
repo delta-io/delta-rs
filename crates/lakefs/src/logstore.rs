@@ -1,20 +1,13 @@
 //! Default implementation of [`LakeFSLogStore`] for LakeFS
-
 use std::sync::{Arc, OnceLock};
 
-use crate::client::LakeFSConfig;
-use crate::errors::LakeFSConfigError;
-
-use super::client::LakeFSClient;
 use bytes::Bytes;
 use deltalake_core::logstore::{
     commit_uri_from_version, DefaultObjectStoreRegistry, ObjectStoreRegistry,
 };
 use deltalake_core::logstore::{url_prefix_handler, DeltaIOStorageBackend, IORuntime};
 use deltalake_core::{
-    kernel::transaction::TransactionError,
-    logstore::{ObjectStoreRef, StorageOptions},
-    DeltaResult,
+    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
 };
 use deltalake_core::{logstore::*, DeltaTableError, Path};
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
@@ -22,24 +15,28 @@ use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
+use super::client::LakeFSClient;
+use crate::client::LakeFSConfig;
+use crate::errors::LakeFSConfigError;
+
 /// Return the [LakeFSLogStore] implementation with the provided configuration options
 pub fn lakefs_logstore(
     store: ObjectStoreRef,
     location: &Url,
-    options: &StorageOptions,
+    options: &StorageConfig,
 ) -> DeltaResult<Arc<dyn LogStore>> {
     let host = options
-        .0
+        .raw
         .get("aws_endpoint")
         .ok_or(LakeFSConfigError::EndpointMissing)?
         .to_string();
     let username = options
-        .0
+        .raw
         .get("aws_access_key_id")
         .ok_or(LakeFSConfigError::UsernameCredentialMissing)?
         .to_string();
     let password = options
-        .0
+        .raw
         .get("aws_secret_access_key")
         .ok_or(LakeFSConfigError::PasswordCredentialMissing)?
         .to_string();
@@ -90,9 +87,7 @@ impl LakeFSLogStore {
         if let Some(entry) = deltalake_core::logstore::factories().get(&scheme) {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
 
-            let (store, _prefix) = entry
-                .value()
-                .parse_url_opts(url, &self.config().options.clone())?;
+            let (store, _prefix) = entry.value().parse_url_opts(url, &self.config().options)?;
             return Ok(store);
         }
         Err(DeltaTableError::InvalidTableLocation(url.to_string()))
