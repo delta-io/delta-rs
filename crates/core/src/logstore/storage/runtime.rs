@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -15,7 +15,7 @@ use object_store::{MultipartUpload, PutMultipartOpts};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
 
-use super::{super::config, ObjectStoreRef};
+use crate::logstore::config;
 use crate::DeltaResult;
 
 /// Creates static IO Runtime with optional configuration
@@ -89,6 +89,20 @@ impl config::TryUpdateKey for RuntimeConfig {
     }
 }
 
+impl RuntimeConfig {
+    pub fn decorate<T: ObjectStore + Clone>(
+        &self,
+        store: T,
+        handle: Option<Handle>,
+    ) -> DeltaIOStorageBackend<T> {
+        let handle = handle.unwrap_or_else(|| io_rt(Some(&self)).handle().clone());
+        DeltaIOStorageBackend {
+            inner: store,
+            rt_handle: handle,
+        }
+    }
+}
+
 /// Provide custom Tokio RT or a runtime config
 #[derive(Debug, Clone)]
 pub enum IORuntime {
@@ -116,37 +130,25 @@ impl IORuntime {
 }
 
 /// Wraps any object store and runs IO in it's own runtime [EXPERIMENTAL]
-pub struct DeltaIOStorageBackend {
-    inner: ObjectStoreRef,
-    rt_handle: Handle,
+#[derive(Clone)]
+pub struct DeltaIOStorageBackend<T: ObjectStore + Clone> {
+    pub(crate) inner: T,
+    pub(crate) rt_handle: Handle,
 }
 
-impl DeltaIOStorageBackend {
-    /// create wrapped object store which spawns tasks in own runtime
-    pub fn new(storage: ObjectStoreRef, rt_handle: Handle) -> Self {
-        Self {
-            inner: storage,
-            rt_handle,
-        }
-    }
-
+impl<T: ObjectStore + Clone> DeltaIOStorageBackend<T> {
     /// spawn tasks on IO runtime
     pub fn spawn_io_rt<F, O>(
         &self,
         f: F,
-        store: &Arc<dyn ObjectStore>,
+        store: &T,
         path: Path,
     ) -> BoxFuture<'_, ObjectStoreResult<O>>
     where
-        F: for<'a> FnOnce(
-                &'a Arc<dyn ObjectStore>,
-                &'a Path,
-            ) -> BoxFuture<'a, ObjectStoreResult<O>>
-            + Send
-            + 'static,
+        F: for<'a> FnOnce(&'a T, &'a Path) -> BoxFuture<'a, ObjectStoreResult<O>> + Send + 'static,
         O: Send + 'static,
     {
-        let store = Arc::clone(store);
+        let store = store.clone();
         let fut = self.rt_handle.spawn(async move { f(&store, &path).await });
         fut.unwrap_or_else(|e| match e.try_into_panic() {
             Ok(p) => std::panic::resume_unwind(p),
@@ -159,21 +161,17 @@ impl DeltaIOStorageBackend {
     pub fn spawn_io_rt_from_to<F, O>(
         &self,
         f: F,
-        store: &Arc<dyn ObjectStore>,
+        store: &T,
         from: Path,
         to: Path,
     ) -> BoxFuture<'_, ObjectStoreResult<O>>
     where
-        F: for<'a> FnOnce(
-                &'a Arc<dyn ObjectStore>,
-                &'a Path,
-                &'a Path,
-            ) -> BoxFuture<'a, ObjectStoreResult<O>>
+        F: for<'a> FnOnce(&'a T, &'a Path, &'a Path) -> BoxFuture<'a, ObjectStoreResult<O>>
             + Send
             + 'static,
         O: Send + 'static,
     {
-        let store = Arc::clone(store);
+        let store = store.clone();
         let fut = self
             .rt_handle
             .spawn(async move { f(&store, &from, &to).await });
@@ -185,20 +183,20 @@ impl DeltaIOStorageBackend {
     }
 }
 
-impl std::fmt::Debug for DeltaIOStorageBackend {
+impl<T: ObjectStore + Clone> std::fmt::Debug for DeltaIOStorageBackend<T> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "DeltaIOStorageBackend")
+        write!(fmt, "DeltaIOStorageBackend({:?})", self.inner)
     }
 }
 
-impl std::fmt::Display for DeltaIOStorageBackend {
+impl<T: ObjectStore + Clone> std::fmt::Display for DeltaIOStorageBackend<T> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "DeltaIOStorageBackend")
+        write!(fmt, "DeltaIOStorageBackend({})", self.inner)
     }
 }
 
 #[async_trait::async_trait]
-impl ObjectStore for DeltaIOStorageBackend {
+impl<T: ObjectStore + Clone> ObjectStore for DeltaIOStorageBackend<T> {
     async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.spawn_io_rt(
             |store, path| store.put(path, bytes),

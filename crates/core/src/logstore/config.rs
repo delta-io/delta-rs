@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-#[cfg(feature = "cloud")]
 use ::object_store::RetryConfig;
+use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
+use tokio::runtime::Handle;
 
 #[cfg(feature = "delta-cache")]
 use super::storage::cache::LogCacheConfig;
@@ -104,14 +105,54 @@ pub struct StorageConfig {
     /// Configuration to set up a dedicated IO runtime to execute IO related operations.
     pub runtime: Option<RuntimeConfig>,
 
-    #[cfg(feature = "cloud")]
     pub retry: ::object_store::RetryConfig,
 
+    /// Limit configuration.
+    ///
+    /// Configuration to limit the number of concurrent requests to the object store.
     pub limit: Option<LimitConfig>,
 
     pub unknown_properties: HashMap<String, String>,
 
     pub raw: HashMap<String, String>,
+}
+
+impl StorageConfig {
+    /// Wrap an object store with additional layers of functionality.
+    ///
+    /// Depending on the configuration, the following layers may be added:
+    /// - Retry layer: Adds retry logic to the object store.
+    /// - Limit layer: Limits the number of concurrent requests to the object store.
+    /// - Runtime layer: Executes IO related operations on a dedicated runtime.
+    pub fn decorate_store<T: ObjectStore + Clone>(
+        &self,
+        store: T,
+        table_root: &url::Url,
+        handle: Option<Handle>,
+    ) -> DeltaResult<Box<dyn ObjectStore>> {
+        let inner = if let Some(runtime) = &self.runtime {
+            Box::new(runtime.decorate(store, handle)) as Box<dyn ObjectStore>
+        } else {
+            Box::new(store) as Box<dyn ObjectStore>
+        };
+
+        let prefix = if table_root.scheme() == "file" {
+            Path::from_filesystem_path(
+                table_root
+                    .to_file_path()
+                    .map_err(|_| DeltaTableError::generic("failed to convert fs"))?,
+            )?
+        } else {
+            Path::from_url_path(table_root.path())?
+        };
+        let inner = if prefix != Path::from("/") {
+            Box::new(PrefixStore::new(inner, prefix)) as Box<dyn ObjectStore>
+        } else {
+            Box::new(inner) as Box<dyn ObjectStore>
+        };
+
+        Ok(inner)
+    }
 }
 
 impl<K, V> FromIterator<(K, V)> for StorageConfig
