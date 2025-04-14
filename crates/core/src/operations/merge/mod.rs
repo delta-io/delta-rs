@@ -84,7 +84,7 @@ use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
-    add_generated_columns, add_missing_generated_columns, should_gc,
+    able_to_gc, add_generated_columns, add_missing_generated_columns,
 };
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
@@ -783,7 +783,7 @@ async fn execute(
     let mut missing_generated_col = None;
     let mut source_with_gc = None;
 
-    if should_gc(&snapshot)? {
+    if able_to_gc(&snapshot)? {
         let generated_col_expressions = snapshot
             .schema()
             .get_generated_columns()

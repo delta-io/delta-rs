@@ -6,8 +6,8 @@ use tracing::debug;
 
 use crate::{kernel::DataCheck, table::GeneratedColumn, DeltaResult};
 
-/// check whether not the g
-pub fn should_gc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
+/// check if the writer version is able to write generated columns
+pub fn able_to_gc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
     if let Some(features) = &snapshot.protocol().writer_features {
         if snapshot.protocol().min_writer_version < 4 {
             return Ok(false);
