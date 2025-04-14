@@ -58,7 +58,10 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
+use datafusion_expr::{
+    col, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
+    Volatility,
+};
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -539,6 +542,16 @@ impl<'a> DeltaScanBuilder<'a> {
             for idx in used_columns {
                 fields.push(logical_schema.field(*idx).to_owned());
             }
+            // partition filters with Exact pushdown were removed from projection by DF optimizer,
+            // we need to add them back for the predicate pruning to work
+            if let Some(expr) = &self.filter {
+                for c in expr.column_refs() {
+                    let idx = logical_schema.index_of(c.name.as_str())?;
+                    if !used_columns.contains(&idx) {
+                        fields.push(logical_schema.field(idx).to_owned());
+                    }
+                }
+            }
             Arc::new(ArrowSchema::new(fields))
         } else {
             logical_schema
@@ -757,15 +770,81 @@ impl TableProvider for DeltaTable {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(filter
-            .iter()
-            .map(|_| TableProviderFilterPushDown::Inexact)
-            .collect())
+        let partition_cols = self.snapshot()?.metadata().partition_columns.clone();
+        Ok(get_pushdown_filters(filter, partition_cols))
     }
 
     fn statistics(&self) -> Option<Statistics> {
         self.snapshot().ok()?.datafusion_table_statistics()
     }
+}
+
+fn get_pushdown_filters(
+    filter: &[&Expr],
+    partition_cols: Vec<String>,
+) -> Vec<TableProviderFilterPushDown> {
+    let partition_cols: Vec<_> = partition_cols.iter().map(|s| s.as_str()).collect();
+
+    filter
+        .iter()
+        .cloned()
+        .map(|expr| {
+            let applicable = expr_is_exact_predicate_for_cols(&partition_cols, expr);
+            if !expr.column_refs().is_empty() && applicable {
+                TableProviderFilterPushDown::Exact
+            } else {
+                TableProviderFilterPushDown::Inexact
+            }
+        })
+        .collect()
+}
+
+// inspired from datafusion::listing::helpers, but adapted to only stats based pruning
+pub fn expr_is_exact_predicate_for_cols(partition_cols: &[&str], expr: &Expr) -> bool {
+    let mut is_applicable = true;
+    expr.apply(|expr| match expr {
+        Expr::Column(Column { ref name, .. }) => {
+            is_applicable &= partition_cols.contains(&name.as_str());
+
+            // TODO: decide if we should constrain this to Utf8 columns (including views, dicts etc)
+
+            if is_applicable {
+                Ok(TreeNodeRecursion::Jump)
+            } else {
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+        Expr::BinaryExpr(BinaryExpr { ref op, .. }) => {
+            is_applicable &= matches!(
+                op,
+                Operator::And
+                    | Operator::Or
+                    | Operator::NotEq
+                    | Operator::Eq
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+            );
+            if is_applicable {
+                Ok(TreeNodeRecursion::Continue)
+            } else {
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+        Expr::Literal(_)
+        | Expr::Not(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::Between(_)
+        | Expr::InList(_) => Ok(TreeNodeRecursion::Continue),
+        _ => {
+            is_applicable = false;
+            Ok(TreeNodeRecursion::Stop)
+        }
+    })
+    .unwrap();
+    is_applicable
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
@@ -849,10 +928,8 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(filter
-            .iter()
-            .map(|_| TableProviderFilterPushDown::Inexact)
-            .collect())
+        let partition_cols = self.snapshot.metadata().partition_columns.clone();
+        Ok(get_pushdown_filters(filter, partition_cols))
     }
 
     fn statistics(&self) -> Option<Statistics> {
