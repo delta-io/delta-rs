@@ -60,17 +60,15 @@ impl ObjectStoreFactory for MountFactory {
                 }
                 // We need to convert the dbfs url to a file url
                 let new_url = Url::parse(&format!("file:///dbfs{}", url.path())).unwrap();
-                let store = Arc::new(file::MountFileStorageBackend::try_new(
-                    new_url.to_file_path().unwrap(),
-                )?) as ObjectStoreRef;
+                let store = Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef;
                 Ok((store, Path::from("/")))
             }
             "file" => {
                 if allow_unsafe_rename {
-                    let store = Arc::new(file::MountFileStorageBackend::try_new(
-                        url.to_file_path().unwrap(),
-                    )?) as ObjectStoreRef;
-                    Ok((store, Path::from("/")))
+                    let store =
+                        Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef;
+                    let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
+                    Ok((store, prefix))
                 } else {
                     let store = Arc::new(LocalFileSystem::new()) as ObjectStoreRef;
                     let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;

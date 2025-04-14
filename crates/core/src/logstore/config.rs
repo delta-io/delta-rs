@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ::object_store::RetryConfig;
-use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
+use object_store::{path::Path, prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
 use tokio::runtime::Handle;
 
 #[cfg(feature = "delta-cache")]
@@ -141,18 +141,14 @@ impl StorageConfig {
         Ok(inner)
     }
 
-    fn decorate_prefix<T: ObjectStore>(
+    pub(crate) fn decorate_prefix<T: ObjectStore>(
         store: T,
         table_root: &url::Url,
     ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let prefix = if table_root.scheme() == "file" {
-            Path::from_filesystem_path(
-                table_root
-                    .to_file_path()
-                    .map_err(|_| DeltaTableError::generic("failed to convert fs"))?,
-            )?
-        } else {
-            Path::parse(table_root.path())?
+        let prefix = match ObjectStoreScheme::parse(table_root) {
+            Ok((ObjectStoreScheme::AmazonS3, _)) => Path::parse(table_root.path())?,
+            Ok((_, path)) => path,
+            _ => Path::parse(table_root.path())?,
         };
         Ok(if prefix != Path::from("/") {
             Box::new(PrefixStore::new(store, prefix)) as Box<dyn ObjectStore>
