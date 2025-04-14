@@ -8,8 +8,8 @@ pub mod errors;
 pub mod execute;
 pub mod logstore;
 pub mod storage;
-use deltalake_core::logstore::{factories, ObjectStoreRef, StorageConfig};
-use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
+use deltalake_core::logstore::{logstore_factories, LogStore, LogStoreFactory};
+use deltalake_core::logstore::{object_store_factories, ObjectStoreRef, StorageConfig};
 use deltalake_core::DeltaResult;
 pub use execute::LakeFSCustomExecuteHandler;
 use logstore::lakefs_logstore;
@@ -43,6 +43,6 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let log_stores = Arc::new(LakeFSLogStoreFactory::default());
     let scheme = "lakefs";
     let url = Url::parse(&format!("{scheme}://")).unwrap();
-    factories().insert(url.clone(), object_stores.clone());
-    logstores().insert(url.clone(), log_stores.clone());
+    object_store_factories().insert(url.clone(), object_stores.clone());
+    logstore_factories().insert(url.clone(), log_stores.clone());
 }

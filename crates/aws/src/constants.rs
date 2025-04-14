@@ -74,19 +74,19 @@ pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
 /// The web identity token file to use when using a web identity provider.
 ///
 /// NOTE: web identity related options are set in the environment when
-/// creating an instance of [crate::storage::s3::S3StorageOptions].
+/// creating an instance of [S3StorageOptions](crate::storage::S3StorageOptions).
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 /// The role name to use for web identity.
 ///
 /// NOTE: web identity related options are set in the environment when
-/// creating an instance of [crate::storage::s3::S3StorageOptions].
+/// creating an instance of [S3StorageOptions](crate::storage::S3StorageOptions).
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_ROLE_ARN: &str = "AWS_ROLE_ARN";
 /// The role session name to use for web identity.
 ///
 /// NOTE: web identity related options are set in the environment when
-/// creating an instance of [crate::storage::s3::S3StorageOptions].
+/// creating an instance of [S3StorageOptions](crate::storage::S3StorageOptions).
 /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
 pub const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
 /// Allow http connections - mainly useful for integration tests
@@ -109,7 +109,7 @@ pub const AWS_FORCE_CREDENTIAL_LOAD: &str = "AWS_FORCE_CREDENTIAL_LOAD";
 
 /// The list of option keys owned by the S3 module.
 /// Option keys not contained in this list will be added to the `extra_opts`
-/// field of [crate::storage::s3::S3StorageOptions].
+/// field of [S3StorageOptions](crate::storage::S3StorageOptions).
 #[allow(deprecated)]
 pub const S3_OPTS: &[&str] = &[
     AWS_ENDPOINT_URL,

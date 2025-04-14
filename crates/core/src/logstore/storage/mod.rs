@@ -1,13 +1,12 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use dashmap::DashMap;
 use object_store::path::Path;
-use object_store::{DynObjectStore, ObjectStore, RetryConfig};
+use object_store::{DynObjectStore, ObjectStore};
 use url::Url;
 
-use super::{config, StorageConfig};
+use super::config;
 use crate::{DeltaResult, DeltaTableError};
 
 pub use retry_ext::ObjectStoreRetryExt;
@@ -23,44 +22,6 @@ static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"
 
 /// Sharable reference to [`ObjectStore`]
 pub type ObjectStoreRef = Arc<DynObjectStore>;
-
-/// Factory trait for creating [ObjectStoreRef] instances at runtime
-pub trait ObjectStoreFactory: Send + Sync {
-    /// Parse URL options and create an object store instance.
-    ///
-    /// The object store instance returned by this method must point at the root of the storage location.
-    /// Root in this case means scheme, authority/host and maybe port.
-    /// The path segment is returned as second element of the tuple. It must point at the path
-    /// corresponding to the path segment of the URL.
-    ///
-    /// The store should __NOT__ apply the decorations via the passed `StorageConfig`
-    fn parse_url_opts(
-        &self,
-        url: &Url,
-        options: &HashMap<String, String>,
-        retry: &RetryConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)>;
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct DefaultObjectStoreFactory {}
-
-impl ObjectStoreFactory for DefaultObjectStoreFactory {
-    fn parse_url_opts(
-        &self,
-        url: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        match url.scheme() {
-            "memory" | "file" => {
-                let (store, path) = object_store::parse_url_opts(url, options)?;
-                Ok((Arc::new(store), path))
-            }
-            _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
-        }
-    }
-}
 
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static + Clone {
     /// If a store with the same key existed before, it is replaced and returned
@@ -136,47 +97,6 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 
     fn all_stores(&self) -> &DashMap<String, Arc<dyn ObjectStore>> {
         &self.object_stores
-    }
-}
-
-/// TODO
-pub type FactoryRegistry = Arc<DashMap<Url, Arc<dyn ObjectStoreFactory>>>;
-
-/// TODO
-pub fn factories() -> FactoryRegistry {
-    static REGISTRY: OnceLock<FactoryRegistry> = OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry = FactoryRegistry::default();
-            registry.insert(
-                Url::parse("memory://").unwrap(),
-                Arc::new(DefaultObjectStoreFactory::default()),
-            );
-            registry.insert(
-                Url::parse("file://").unwrap(),
-                Arc::new(DefaultObjectStoreFactory::default()),
-            );
-            registry
-        })
-        .clone()
-}
-
-/// Simpler access pattern for the [FactoryRegistry] to get a single store
-pub fn store_for<K, V, I>(url: &Url, options: I) -> DeltaResult<ObjectStoreRef>
-where
-    I: IntoIterator<Item = (K, V)>,
-    K: AsRef<str> + Into<String>,
-    V: AsRef<str> + Into<String>,
-{
-    let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
-    let storage_config = StorageConfig::parse_options(options)?;
-    if let Some(factory) = factories().get(&scheme) {
-        let (store, _prefix) =
-            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry)?;
-        let store = storage_config.decorate_store(store, url, None)?;
-        Ok(Arc::new(store))
-    } else {
-        Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
     }
 }
 

@@ -136,6 +136,15 @@ impl StorageConfig {
             Box::new(store) as Box<dyn ObjectStore>
         };
 
+        let inner = Self::decorate_prefix(inner, table_root)?;
+
+        Ok(inner)
+    }
+
+    fn decorate_prefix<T: ObjectStore>(
+        store: T,
+        table_root: &url::Url,
+    ) -> DeltaResult<Box<dyn ObjectStore>> {
         let prefix = if table_root.scheme() == "file" {
             Path::from_filesystem_path(
                 table_root
@@ -143,15 +152,13 @@ impl StorageConfig {
                     .map_err(|_| DeltaTableError::generic("failed to convert fs"))?,
             )?
         } else {
-            Path::from_url_path(table_root.path())?
+            Path::parse(table_root.path())?
         };
-        let inner = if prefix != Path::from("/") {
-            Box::new(PrefixStore::new(inner, prefix)) as Box<dyn ObjectStore>
+        Ok(if prefix != Path::from("/") {
+            Box::new(PrefixStore::new(store, prefix)) as Box<dyn ObjectStore>
         } else {
-            Box::new(inner) as Box<dyn ObjectStore>
-        };
-
-        Ok(inner)
+            Box::new(store) as Box<dyn ObjectStore>
+        })
     }
 }
 

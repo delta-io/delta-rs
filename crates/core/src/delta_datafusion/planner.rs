@@ -6,7 +6,7 @@
 //! #[derive(Clone)]
 //! struct MergeMetricExtensionPlanner {}
 //!
-//! #[async_trait]
+//! #[macro@async_trait]
 //! impl ExtensionPlanner for MergeMetricExtensionPlanner {
 //!     async fn plan_extension(
 //!         &self,
