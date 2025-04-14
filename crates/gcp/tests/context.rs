@@ -129,6 +129,7 @@ pub mod gs_cli {
             .wait()
     }
 
+    #[allow(unused)]
     pub fn delete_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
             .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
