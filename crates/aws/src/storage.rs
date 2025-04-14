@@ -23,6 +23,7 @@ use tracing::log::*;
 use url::Url;
 
 use crate::constants;
+use crate::credentials::AWSForObjectStore;
 use crate::errors::DynamoDbConfigError;
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
@@ -42,12 +43,19 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         let options = self.with_env_s3(storage_options);
 
         // All S3-likes should start their builder the same way
-        let mut builder = AmazonS3Builder::new().with_url(url.to_string());
-
+        let mut builder = AmazonS3Builder::new()
+            .with_url(url.to_string())
+            .with_retry(retry.clone());
         for (key, value) in options.iter() {
             if let Ok(key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
                 builder = builder.with_config(key, value.clone());
             }
+        }
+
+        let s3_options = S3StorageOptions::from_map(&options)?;
+        if let Some(ref sdk_config) = s3_options.sdk_config {
+            builder =
+                builder.with_credentials(Arc::new(AWSForObjectStore::new(sdk_config.clone())));
         }
 
         let (_, path) =
@@ -56,16 +64,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             })?;
         let prefix = Path::parse(path)?;
 
-        let s3_options: S3StorageOptions = S3StorageOptions::from_map(&options)?;
-
-        if let Some(ref sdk_config) = s3_options.sdk_config {
-            builder = builder.with_credentials(Arc::new(
-                crate::credentials::AWSForObjectStore::new(sdk_config.clone()),
-            ));
-        }
-
-        let inner = builder.with_retry(retry.clone()).build()?;
-        let store = aws_storage_handler(inner, &s3_options)?;
+        let store = aws_storage_handler(builder.build()?, &s3_options)?;
         debug!("Initialized the object store: {store:?}");
 
         Ok((store, prefix))
@@ -154,7 +153,7 @@ impl PartialEq for S3StorageOptions {
 }
 
 impl S3StorageOptions {
-    /// Creates an instance of S3StorageOptions from the given HashMap.
+    /// Creates an instance of [`S3StorageOptions`] from the given HashMap.
     pub fn from_map(options: &HashMap<String, String>) -> DeltaResult<S3StorageOptions> {
         let extra_opts: HashMap<String, String> = options
             .iter()
@@ -407,7 +406,7 @@ impl ObjectStore for S3StorageBackend {
     }
 }
 
-/// Storage option keys to use when creating [crate::storage::s3::S3StorageOptions].
+/// Storage option keys to use when creating [`S3StorageOptions`].
 ///
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
 /// Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.

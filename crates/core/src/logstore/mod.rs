@@ -1,11 +1,58 @@
-//! Delta log store.
-use std::cmp::min;
+//! # DeltaLake storage system
+//!
+//! Interacting with storage systems is a crucial part of any table format.
+//! On one had the storage abstractions need to provide certain guarantees
+//! (e.g. atomic rename, ...) and meet certain assumptions (e.g. sorted list results)
+//! on the other hand can we exploit our knowledge about the general file layout
+//! and access patterns to optimize our operations in terms of cost and performance.
+//!
+//! Two distinct phases are involved in querying a Delta table:
+//! - **Metadata**: Fetching metadata about the table, such as schema, partitioning, and statistics.
+//! - **Data**: Reading and processing data files based on the metadata.
+//!
+//! When writing to a table, we see the same phases, just in inverse order:
+//! - **Data**: Writing data files that should become part of the table.
+//! - **Metadata**: Updating table metadata to incorporate updates.
+//!
+//! Two main abstractions govern the file operations [`LogStore`] and [`ObjectStore`].
+//!
+//! [`LogStore`]s are scoped to individual tables and are responsible for maintaining proper
+//! behaviours and ensuring consistency during the metadata phase. The correctness is predicated
+//! on the atomicity and durability guarantees of the implementation of this interface.
+//!
+//! - Atomic visibility: Partial writes must not be visible to readers.
+//! - Mutual exclusion: Only one writer must be able to write to a specific log file.
+//! - Consistent listing: Once a file has been written, any future list files operation must return
+//!   the underlying file system entry must immediately.
+//!
+//! <div class="warning">
+//!
+//! While most object stores today provide the required guarantees, the specific
+//! locking mechanics are a table level responsibility. Specific implementations may
+//! decide to refer to a central catalog or other mechanisms for coordination.
+//!
+//! </div>
+//!
+//! [`ObjectStore`]s are responsible for direct interactions with storage systems. Either
+//! during the data phase, where additional requirements are imposed on the storage system,
+//! or by specific LogStore implementations for their internal object store interactions.
+//!
+//! ## Managing LogStores and ObjectStores.
+//!
+//! Aside from very basic implementations (i.e. in-memory and local file system) we rely
+//! on external integrations to provide [`ObjectStore`] and/or [`LogStore`] implementations.
+//!
+//! At runtime, deltalake needs to produce appropriate [`ObjectStore`]s to access the files
+//! discovered in a table. This is done via
+//!
+//! ## Configuration
+//!
+use std::cmp::{max, min};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor};
-use std::sync::{LazyLock, OnceLock};
-use std::{cmp::max, collections::HashMap, sync::Arc};
+use std::sync::{Arc, LazyLock};
 
 use bytes::Bytes;
-use dashmap::DashMap;
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use delta_kernel::AsAny;
@@ -26,29 +73,25 @@ use crate::kernel::Action;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
 use crate::{DeltaResult, DeltaTableError};
 
-mod config;
-pub(crate) mod default_logstore;
-pub(crate) mod storage;
-
+pub use self::config::StorageConfig;
+pub use self::factories::{
+    logstore_factories, object_store_factories, store_for, LogStoreFactory,
+    LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
+};
 pub use self::storage::utils::{commit_uri_from_version, str_is_truthy};
 pub use self::storage::{
-    factories, store_for, DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime,
-    ObjectStoreFactory, ObjectStoreRef, ObjectStoreRegistry, ObjectStoreRetryExt,
+    DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
+    ObjectStoreRegistry, ObjectStoreRetryExt,
 };
+/// Convenience re-export of the object store crate
 pub use ::object_store;
-pub use config::StorageConfig;
 
-/// Trait for generating [LogStore] implementations
-pub trait LogStoreFactory: Send + Sync {
-    /// Create a new [LogStore]
-    fn with_options(
-        &self,
-        store: ObjectStoreRef,
-        location: &Url,
-        options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>>;
-}
+mod config;
+pub(crate) mod default_logstore;
+pub(crate) mod factories;
+pub(crate) mod storage;
 
+/// Internal trait to handle object store configuration and initialization.
 trait LogStoreFactoryExt {
     fn with_options_internal(
         &self,
@@ -99,41 +142,6 @@ pub fn default_logstore(
     ))
 }
 
-#[derive(Clone, Debug, Default)]
-struct DefaultLogStoreFactory {}
-impl LogStoreFactory for DefaultLogStoreFactory {
-    fn with_options(
-        &self,
-        store: ObjectStoreRef,
-        location: &Url,
-        options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(store, location, options))
-    }
-}
-
-/// Registry of [LogStoreFactory] instances
-pub type FactoryRegistry = Arc<DashMap<Url, Arc<dyn LogStoreFactory>>>;
-
-/// TODO
-pub fn logstores() -> FactoryRegistry {
-    static REGISTRY: OnceLock<FactoryRegistry> = OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry = FactoryRegistry::default();
-            registry.insert(
-                Url::parse("memory://").unwrap(),
-                Arc::new(DefaultLogStoreFactory::default()),
-            );
-            registry.insert(
-                Url::parse("file://").unwrap(),
-                Arc::new(DefaultLogStoreFactory::default()),
-            );
-            registry
-        })
-        .clone()
-}
-
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
 
@@ -166,7 +174,7 @@ where
 
     let storage_options = StorageConfig::parse_options(options)?;
 
-    if let Some(entry) = self::storage::factories().get(&scheme) {
+    if let Some(entry) = object_store_factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
         let (store, _prefix) = entry.value().parse_url_opts(
             &location,
@@ -195,7 +203,7 @@ where
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
     let config = StorageConfig::parse_options(options)?;
-    if let Some(factory) = logstores().get(&scheme) {
+    if let Some(factory) = logstore_factories().get(&scheme) {
         debug!("Found a logstore provider for {scheme}");
         return factory
             .value()
@@ -247,8 +255,8 @@ impl LogStoreConfig {
         self.options.decorate_store(store, table_url, handle)
     }
 
-    pub fn object_store_factory(&self) -> self::storage::FactoryRegistry {
-        self::storage::factories()
+    pub fn object_store_factory(&self) -> ObjectStoreFactoryRegistry {
+        self::factories::object_store_factories()
     }
 }
 
@@ -839,7 +847,7 @@ pub(crate) mod tests {
     async fn test_peek_with_invalid_json() -> DeltaResult<()> {
         use crate::logstore::object_store::memory::InMemory;
         let memory_store = Arc::new(InMemory::new());
-        let log_path = Path::from("_delta_log/00000000000000000001.json");
+        let log_path = Path::from("delta-table/_delta_log/00000000000000000001.json");
 
         let log_content = r#"{invalid_json"#;
 
@@ -855,8 +863,8 @@ pub(crate) mod tests {
             .with_storage_backend(memory_store, Url::parse(table_uri).unwrap())
             .build()?;
 
-        // let result = table.log_store().peek_next_commit(0).await;
-        // assert!(result.is_err());
+        let result = table.log_store().peek_next_commit(0).await;
+        assert!(result.is_err());
         Ok(())
     }
 

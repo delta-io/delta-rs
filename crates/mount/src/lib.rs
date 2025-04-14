@@ -3,9 +3,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    default_logstore, logstores, LogStore, LogStoreFactory, StorageConfig,
+    default_logstore, logstore_factories, LogStore, LogStoreFactory, StorageConfig,
 };
-use deltalake_core::logstore::{factories, str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
+use deltalake_core::logstore::{
+    object_store_factories, str_is_truthy, ObjectStoreFactory, ObjectStoreRef,
+};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
 use object_store::RetryConfig;
@@ -96,7 +98,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(MountFactory {});
     for scheme in ["dbfs", "file"].iter() {
         let url = Url::parse(&format!("{scheme}://")).unwrap();
-        factories().insert(url.clone(), factory.clone());
-        logstores().insert(url.clone(), factory.clone());
+        object_store_factories().insert(url.clone(), factory.clone());
+        logstore_factories().insert(url.clone(), factory.clone());
     }
 }

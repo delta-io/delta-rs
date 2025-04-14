@@ -9,7 +9,7 @@ compile_error!(
 
 use datafusion_common::DataFusionError;
 use deltalake_core::logstore::{
-    default_logstore, logstores, object_store::RetryConfig, LogStore, LogStoreFactory,
+    default_logstore, logstore_factories, object_store::RetryConfig, LogStore, LogStoreFactory,
     StorageConfig,
 };
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
@@ -35,7 +35,7 @@ use deltalake_core::{
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef,
+    object_store_factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef,
 };
 pub mod client;
 pub mod credential;
@@ -879,10 +879,9 @@ impl LogStoreFactory for UnityCatalogFactory {
 /// Register an [ObjectStoreFactory] for common UnityCatalogFactory [Url] schemes
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(UnityCatalogFactory::default());
-    let scheme = "uc";
-    let url = Url::parse(&format!("{scheme}://")).unwrap();
-    factories().insert(url.clone(), factory.clone());
-    logstores().insert(url.clone(), factory.clone());
+    let url = Url::parse(&format!("uc://")).unwrap();
+    object_store_factories().insert(url.clone(), factory.clone());
+    logstore_factories().insert(url.clone(), factory.clone());
 }
 
 #[async_trait::async_trait]

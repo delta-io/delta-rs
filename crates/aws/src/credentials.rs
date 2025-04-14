@@ -255,7 +255,7 @@ fn assume_session_name(options: &HashMap<String, String>) -> String {
 }
 
 /// Take a set of [StorageOptions] and produce an appropriate AWS SDK [SdkConfig]
-/// for use with various AWS SDK APIs, such as in our [crate::logstore::S3DynamoDbLogStore]
+/// for use with various AWS SDK APIs, such as in our [S3DynamoDbLogStore](crate::logstore::S3DynamoDbLogStore)
 pub async fn resolve_credentials(options: &HashMap<String, String>) -> DeltaResult<SdkConfig> {
     let default_provider = DefaultCredentialsChain::builder().build().await;
 

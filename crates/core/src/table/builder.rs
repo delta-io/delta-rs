@@ -10,33 +10,9 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
 
-use super::DeltaTable;
-use crate::errors::{DeltaResult, DeltaTableError};
-use crate::logstore::storage::{factories, IORuntime};
-use crate::logstore::LogStoreRef;
-
-#[allow(dead_code)]
-#[derive(Debug, thiserror::Error)]
-enum BuilderError {
-    #[error("Store {backend} requires host in storage url, got: {url}")]
-    MissingHost { backend: String, url: String },
-    #[error("Missing configuration {0}")]
-    Required(String),
-    #[error("Failed to find valid credential.")]
-    MissingCredential,
-    #[error("Failed to decode SAS key: {0}\nSAS keys must be percent-encoded. They come encoded in the Azure portal and Azure Storage Explorer.")]
-    Decode(String),
-    #[error("Delta-rs must be build with feature '{feature}' to support url: {url}.")]
-    MissingFeature { feature: &'static str, url: String },
-    #[error("Failed to parse table uri")]
-    TableUri(#[from] url::ParseError),
-}
-
-impl From<BuilderError> for DeltaTableError {
-    fn from(err: BuilderError) -> Self {
-        DeltaTableError::Generic(err.to_string())
-    }
-}
+use crate::logstore::storage::IORuntime;
+use crate::logstore::{object_store_factories, LogStoreRef};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -328,7 +304,7 @@ enum UriType {
 /// Will return an error if the path is not valid.
 fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
     let table_uri = table_uri.as_ref();
-    let known_schemes: Vec<_> = factories()
+    let known_schemes: Vec<_> = object_store_factories()
         .iter()
         .map(|v| v.key().scheme().to_owned())
         .collect();
@@ -420,11 +396,11 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logstore::storage::DefaultObjectStoreFactory;
+    use crate::logstore::factories::DefaultObjectStoreFactory;
 
     #[test]
     fn test_ensure_table_uri() {
-        factories().insert(
+        object_store_factories().insert(
             Url::parse("s3://").unwrap(),
             Arc::new(DefaultObjectStoreFactory::default()),
         );

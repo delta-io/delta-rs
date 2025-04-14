@@ -1,7 +1,7 @@
 //! AWS S3 and similar tooling for delta-rs
 //!
-//! This module also contains the [S3DynamoDbLogStore] implementation for concurrent writer support
-//! with AWS S3 specifically.
+//! This module also contains the [S3DynamoDbLogStore](crate::logstore::S3DynamoDbLogStore)
+//! implementation for concurrent writer support with AWS S3 specifically.
 
 pub mod constants;
 mod credentials;
@@ -10,6 +10,7 @@ pub mod logstore;
 #[cfg(feature = "native-tls")]
 mod native;
 pub mod storage;
+
 use aws_config::Region;
 use aws_config::SdkConfig;
 pub use aws_credential_types::provider::SharedCredentialsProvider;
@@ -26,8 +27,10 @@ use aws_sdk_dynamodb::{
     Client,
 };
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::logstore::{factories, ObjectStoreRef, StorageConfig};
+use deltalake_core::logstore::{
+    default_logstore, logstore_factories, object_store_factories, LogStore, LogStoreFactory,
+    ObjectStoreRef, StorageConfig,
+};
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
 use regex::Regex;
@@ -83,14 +86,16 @@ impl LogStoreFactory for S3LogStoreFactory {
     }
 }
 
-/// Register an [ObjectStoreFactory] for common S3 [Url] schemes
+/// Register an [ObjectStoreFactory] for common S3 url schemes.
+///
+/// [ObjectStoreFactory]: deltalake_core::logstore::ObjectStoreFactory
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let object_stores = Arc::new(S3ObjectStoreFactory::default());
     let log_stores = Arc::new(S3LogStoreFactory::default());
     for scheme in ["s3", "s3a"].iter() {
         let url = Url::parse(&format!("{scheme}://")).unwrap();
-        factories().insert(url.clone(), object_stores.clone());
-        logstores().insert(url.clone(), log_stores.clone());
+        object_store_factories().insert(url.clone(), object_stores.clone());
+        logstore_factories().insert(url.clone(), log_stores.clone());
     }
 }
 
