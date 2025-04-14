@@ -46,7 +46,6 @@ async fn test_concurrency_azure() -> TestResult {
 // comment](https://github.com/delta-io/delta-rs/pull/1564#issuecomment-1721048753) and we should
 // figure out a way to re-enable this test at least in the GitHub Actions CI environment
 #[ignore]
-#[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
 async fn test_object_store_onelake() -> TestResult {
@@ -60,7 +59,6 @@ async fn test_object_store_onelake() -> TestResult {
 // comment](https://github.com/delta-io/delta-rs/pull/1564#issuecomment-1721048753) and we should
 // figure out a way to re-enable this test at least in the GitHub Actions CI environment
 #[ignore]
-#[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
 async fn test_object_store_onelake_abfs() -> TestResult {

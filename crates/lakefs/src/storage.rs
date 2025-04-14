@@ -63,15 +63,13 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         storage_config: &HashMap<String, String>,
         retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(storage_config);
-
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
-
         let s3_url = Url::parse(&s3_url)
             .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
 
         // All S3-likes should start their builder the same way
+        let options = self.with_env_s3(storage_config);
         let config = options
             .clone()
             .into_iter()

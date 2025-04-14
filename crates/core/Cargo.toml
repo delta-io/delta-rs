@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.docs.rs]
-features = ["datafusion", "json", "unity-experimental"]
+features = ["datafusion", "json"]
 
 [dependencies]
 delta_kernel.workspace = true
