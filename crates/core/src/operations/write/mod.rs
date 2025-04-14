@@ -34,7 +34,7 @@ pub mod writer;
 use arrow_schema::Schema;
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
-use generated_columns::{add_generated_columns, add_missing_generated_columns, should_gc};
+use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
 use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -450,7 +450,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut missing_gen_col = None;
             let mut source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
             if let Some(snapshot) = &this.snapshot {
-                if should_gc(snapshot)? {
+                if able_to_gc(snapshot)? {
                     let generated_col_expressions = this
                         .snapshot
                         .as_ref()
