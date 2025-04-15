@@ -99,23 +99,19 @@ impl config::TryUpdateKey for LogCacheConfig {
 
 async fn get_default_cache(
     config: LogCacheConfig,
-) -> DeltaResult<(DeltaLogCache, Option<TempDir>), CachedStoreError> {
-    let dir = tempfile::tempdir()?;
-
-    Ok((
-        Arc::new(
-            HybridCacheBuilder::new()
-                .memory(config.max_size_memory_mb * 1024 * 1024)
-                .storage(Engine::Large)
-                .with_device_options(
-                    DirectFsDeviceOptions::new(dir.path())
-                        .with_capacity(config.max_size_disk_mb * 1024 * 1024),
-                )
-                .build()
-                .await
-                .map_err(|_| CachedStoreError::CacheInitialization)?,
-        ),
-        Some(dir),
+    cache_dir: std::path::PathBuf,
+) -> DeltaResult<DeltaLogCache, CachedStoreError> {
+    Ok(Arc::new(
+        HybridCacheBuilder::new()
+            .memory(config.max_size_memory_mb * 1024 * 1024)
+            .storage(Engine::Large)
+            .with_device_options(
+                DirectFsDeviceOptions::new(cache_dir.as_path())
+                    .with_capacity(config.max_size_disk_mb * 1024 * 1024),
+            )
+            .build()
+            .await
+            .map_err(|_| CachedStoreError::CacheInitialization)?,
     ))
 }
 
@@ -181,7 +177,7 @@ impl std::fmt::Display for CommitCacheObjectStore {
     }
 }
 
-fn cache_delta(path: &Url) -> bool {
+fn is_delta_commit(path: &Url) -> bool {
     let Ok(Some(log_path)) = ParsedLogPath::try_from(path.clone()) else {
         return false;
     };
@@ -212,7 +208,14 @@ impl CommitCacheObjectStore {
         root_url: url::Url,
         config: LogCacheConfig,
     ) -> DeltaResult<Self> {
-        let (cache, cache_dir) = get_default_cache(config).await?;
+        let (path, cache_dir) = if let Some(dir) = &config.cache_directory {
+            let path = std::fs::canonicalize(dir)?;
+            (path, None)
+        } else {
+            let tmp_dir = tempfile::tempdir()?;
+            (tmp_dir.path().to_path_buf(), Some(tmp_dir))
+        };
+        let cache = get_default_cache(config, path).await?;
         Ok(Self::new(inner, root_url, cache, cache_dir))
     }
 
@@ -231,7 +234,7 @@ impl CommitCacheObjectStore {
     ) -> ObjectStoreResult<GetResult> {
         let cache_key = self.cache_key(location)?;
 
-        if options.range.is_some() || !cache_delta(&cache_key) || options.head {
+        if options.range.is_some() || !is_delta_commit(&cache_key) || options.head {
             return self.inner.get_opts(location, options).await;
         }
 

@@ -68,10 +68,15 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
 /// Configuration for Tokio runtime
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeConfig {
+    /// Whether to use a multi-threaded runtime
     pub(crate) multi_threaded: Option<bool>,
+    /// Number of worker threads to use
     pub(crate) worker_threads: Option<usize>,
+    /// Name of the thread
     pub(crate) thread_name: Option<String>,
+    /// Whether to enable IO
     pub(crate) enable_io: Option<bool>,
+    /// Whether to enable time
     pub(crate) enable_time: Option<bool>,
 }
 

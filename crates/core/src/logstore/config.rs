@@ -1,3 +1,11 @@
+//! Configuration for the Delta Log Store.
+//!
+//! This module manages the various pieces of configuration for the Delta Log Store.
+//! It provides methods for parsing and updating configuration settings. All configuration
+//! is parsed from String -> String mappings.
+//!
+//! Specific pieces of configuration must implement the `TryUpdateKey` trait which
+//! defines how to update internal fields based on key-value pairs.
 use std::collections::HashMap;
 
 use ::object_store::RetryConfig;
@@ -42,10 +50,15 @@ where
     }
 }
 
+/// Generic container for parsing configuration
 pub(super) struct ParseResult<T> {
+    /// Parsed configuration
     pub config: T,
+    /// Unrecognized key value pairs.
     pub unparsed: HashMap<String, String>,
+    /// Errors encountered during parsing
     pub errors: Vec<(String, String)>,
+    /// Whether the configuration is defaults only - i.e. no custom values were provided
     pub is_default: bool,
 }
 
@@ -112,8 +125,15 @@ pub struct StorageConfig {
     /// Configuration to limit the number of concurrent requests to the object store.
     pub limit: Option<LimitConfig>,
 
+    /// Properties that are not recognized by the storage configuration.
+    ///
+    /// These properties are ignored by the storage configuration and can be used for custom purposes.
     pub unknown_properties: HashMap<String, String>,
 
+    /// Original unprocessed properties.
+    ///
+    /// Since we remove properties during processing, but downstream integrations may
+    /// use them for their own purposes, we keep a copy of the original properties.
     pub raw: HashMap<String, String>,
 }
 
@@ -202,6 +222,15 @@ impl StorageConfig {
         self.raw.iter()
     }
 
+    /// Parse options into a StorageConfig.
+    ///
+    /// This method will raise if it cannot parse a value. StorageConfig can also
+    /// be constructed from an iterator of key-value pairs which will ignore any
+    /// parsing errors.
+    ///
+    /// # Raises
+    ///
+    /// Raises a `DeltaError` if any of the options are invalid - i.e. cannot be parsed into target type.
     pub fn parse_options<K, V, I>(options: I) -> DeltaResult<Self>
     where
         I: IntoIterator<Item = (K, V)>,
