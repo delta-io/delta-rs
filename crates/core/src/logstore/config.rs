@@ -12,8 +12,6 @@ use ::object_store::RetryConfig;
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
 use tokio::runtime::Handle;
 
-#[cfg(feature = "delta-cache")]
-use super::storage::cache::LogCacheConfig;
 use super::storage::runtime::RuntimeConfig;
 use super::storage::LimitConfig;
 use crate::{DeltaResult, DeltaTableError};
@@ -30,17 +28,6 @@ pub(super) trait TryUpdateKey {
 }
 
 impl<K, V> FromIterator<(K, V)> for RuntimeConfig
-where
-    K: AsRef<str> + Into<String>,
-    V: AsRef<str> + Into<String>,
-{
-    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        ParseResult::from_iter(iter).config
-    }
-}
-
-#[cfg(feature = "delta-cache")]
-impl<K, V> FromIterator<(K, V)> for LogCacheConfig
 where
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
@@ -105,14 +92,6 @@ where
 
 #[derive(Default, Debug, Clone)]
 pub struct StorageConfig {
-    #[cfg(feature = "delta-cache")]
-    /// Log cache configuration.
-    ///
-    /// The log cache will selectively cache reads from the storage layer
-    /// that target known log files. Specifically JSON commit files
-    /// (including compacted commits) and deletion vectors.
-    pub cache: Option<LogCacheConfig>,
-
     /// Runtime configuration.
     ///
     /// Configuration to set up a dedicated IO runtime to execute IO related operations.
@@ -198,13 +177,6 @@ where
 
         let remainder = result.unparsed;
 
-        #[cfg(feature = "delta-cache")]
-        let remainder = {
-            let result = ParseResult::<LogCacheConfig>::from_iter(remainder);
-            config.cache = (!result.is_default).then_some(result.config);
-            result.unparsed
-        };
-
         #[cfg(feature = "cloud")]
         let remainder = {
             let result = ParseResult::<RetryConfig>::from_iter(remainder);
@@ -253,14 +225,6 @@ impl StorageConfig {
         result.raise_errors()?;
         props.limit = (!result.is_default).then_some(result.config);
         let remainder = result.unparsed;
-
-        #[cfg(feature = "delta-cache")]
-        let remainder = {
-            let result = ParseResult::<LogCacheConfig>::from_iter(remainder);
-            result.raise_errors()?;
-            props.cache = (!result.is_default).then_some(result.config);
-            result.unparsed
-        };
 
         #[cfg(feature = "cloud")]
         let remainder = {
