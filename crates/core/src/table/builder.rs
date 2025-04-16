@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use deltalake_derive::DeltaConfig;
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -27,7 +28,7 @@ pub enum DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, DeltaConfig)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether DeltaTable should track files.
@@ -51,6 +52,7 @@ pub struct DeltaTableConfig {
     pub log_batch_size: usize,
 
     #[serde(skip_serializing, skip_deserializing)]
+    #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
 }

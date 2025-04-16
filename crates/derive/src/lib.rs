@@ -1,4 +1,5 @@
 use convert_case::{Case, Casing};
+use itertools::Itertools;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -7,7 +8,7 @@ use syn::{
     parse_macro_input, punctuated::Punctuated, Data, DeriveInput, Field, Fields, Lit, Meta,
     MetaNameValue, Token, Type,
 };
-use syn::{Attribute, Expr, Ident};
+use syn::{Attribute, Error, Expr, Ident, Result};
 
 /// Derive macro for implementing the TryUpdateKey trait
 ///
@@ -40,11 +41,18 @@ pub fn derive_delta_config(input: TokenStream) -> TokenStream {
     .collect::<Vec<_>>();
 
     // Generate the implementation for TryUpdateKey trait
-    let try_update_key = generate_try_update_key(&name, &fields);
+    let try_update_key = match generate_try_update_key(&name, &fields) {
+        Ok(try_update_key) => try_update_key,
+        Err(err) => return syn::Error::into_compile_error(err).into(),
+    };
 
-    // generate an enum with all c9onfiguration keys
-    let config_keys = generate_config_keys(&name, &fields);
+    // generate an enum with all configuration keys
+    let config_keys = match generate_config_keys(&name, &fields) {
+        Ok(config_keys) => config_keys,
+        Err(err) => return syn::Error::into_compile_error(err).into(),
+    };
 
+    // generate a FromIterator implementation
     let from_iter = generate_from_iterator(&name);
 
     let expanded = quote! {
@@ -58,38 +66,46 @@ pub fn derive_delta_config(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn generate_config_keys(name: &Ident, fields: &[&Field]) -> proc_macro2::TokenStream {
+fn generate_config_keys(name: &Ident, fields: &[&Field]) -> Result<proc_macro2::TokenStream> {
     let enum_name = Ident::new(&format!("{}Key", name.to_string()), Span::call_site());
-    let variants = fields.iter().map(|field| {
-        let field_name = &field.ident.as_ref().unwrap().to_string();
-        let pascal_case = Ident::new(&field_name.to_case(Case::Pascal), Span::call_site());
+    let variants: Vec<_> = fields
+        .iter()
+        .map(|field| {
+            let field_name = &field
+                .ident
+                .as_ref()
+                .ok_or_else(|| syn::Error::new_spanned(field, "expected name"))?
+                .to_string();
+            let pascal_case = Ident::new(&field_name.to_case(Case::Pascal), Span::call_site());
+            let attributes = extract_field_attributes(&field.attrs)?;
 
-        let attributes = extract_field_attributes(&field.attrs);
+            // Generate doc attribute if documentation exists
+            let doc_attr = if let Some(doc_string) = attributes.docs {
+                // Create a doc attribute for the enum variant
+                quote! { #[doc = #doc_string] }
+            } else {
+                // No documentation
+                quote! {}
+            };
 
-        // Generate doc attribute if documentation exists
-        let doc_attr = if let Some(doc_string) = attributes.docs {
-            // Create a doc attribute for the enum variant
-            quote! { #[doc = #doc_string] }
-        } else {
-            // No documentation
-            quote! {}
-        };
-
-        // Return the variant with its documentation
-        quote! {
-            #doc_attr
-            #pascal_case
-        }
-    });
-    quote! {
+            // Return the variant with its documentation
+            Ok(quote! {
+                #doc_attr
+                #pascal_case
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(quote! {
+        #[automatically_derived]
         pub enum #enum_name {
             #(#variants),*
         }
-    }
+    })
 }
 
 fn generate_from_iterator(name: &Ident) -> proc_macro2::TokenStream {
     quote! {
+        #[automatically_derived]
         impl<K, V> FromIterator<(K, V)> for #name
         where
             K: AsRef<str> + Into<String>,
@@ -102,37 +118,52 @@ fn generate_from_iterator(name: &Ident) -> proc_macro2::TokenStream {
     }
 }
 
-fn generate_try_update_key(name: &Ident, fields: &[&Field]) -> proc_macro2::TokenStream {
-    let match_arms = fields.iter().map(|field| {
-        let field_name = &field.ident.as_ref().unwrap();
-        let field_name_str = field_name.to_string();
+fn generate_try_update_key(name: &Ident, fields: &[&Field]) -> Result<proc_macro2::TokenStream> {
+    let match_arms: Vec<_> = fields
+        .iter()
+        .filter_map(|field| {
+            let field_name = &field.ident.as_ref().unwrap();
+            let field_name_str = field_name.to_string();
 
-        // Determine parser based on field type
-        let (parser, is_option) = determine_parser(&field.ty);
-
-        // Extract aliases from attributes
-        let attributes = extract_field_attributes(&field.attrs);
-
-        // Build the match conditions: field name and all aliases
-        let mut match_conditions = vec![quote! { #field_name_str }];
-        for alias in attributes.aliases {
-            match_conditions.push(quote! { #alias });
-        }
-
-        if is_option {
-            quote! {
-                #(#match_conditions)|* => self.#field_name = Some(#parser(v)?),
+            // Extract aliases from attributes
+            let attributes = match extract_field_attributes(&field.attrs) {
+                Ok(attributes) => attributes,
+                Err(e) => return Some(Err(e)),
+            };
+            if attributes.skip {
+                return None;
             }
-        } else {
-            quote! {
-                #(#match_conditions)|* => self.#field_name = #parser(v)?,
+
+            // Determine parser based on field type
+            let (parser, is_option) = match determine_parser(&field.ty) {
+                Ok((parser, is_option)) => (parser, is_option),
+                Err(e) => return Some(Err(e)),
+            };
+
+            // Build the match conditions: field name and all aliases
+            let mut match_conditions = vec![quote! { #field_name_str }];
+            for alias in attributes.aliases {
+                match_conditions.push(quote! { #alias });
             }
-        }
-    });
 
-    let env_setters = generate_load_from_env(fields);
+            let match_arm = if is_option {
+                quote! {
+                    #(#match_conditions)|* => self.#field_name = Some(#parser(v)?),
+                }
+            } else {
+                quote! {
+                    #(#match_conditions)|* => self.#field_name = #parser(v)?,
+                }
+            };
 
-    quote! {
+            Some(Ok(match_arm))
+        })
+        .try_collect()?;
+
+    let env_setters = generate_load_from_env(fields)?;
+
+    Ok(quote! {
+        #[automatically_derived]
         impl crate::logstore::config::TryUpdateKey for #name {
             fn try_update_key(&mut self, key: &str, v: &str) -> crate::DeltaResult<Option<()>> {
                 match key {
@@ -148,19 +179,24 @@ fn generate_try_update_key(name: &Ident, fields: &[&Field]) -> proc_macro2::Toke
                 Ok(())
             }
         }
-    }
+    })
 }
 
-fn generate_load_from_env(fields: &[&Field]) -> Vec<proc_macro2::TokenStream> {
+fn generate_load_from_env(fields: &[&Field]) -> Result<Vec<proc_macro2::TokenStream>> {
     fields.iter().filter_map(|field| {
         let field_name = &field.ident.as_ref().unwrap();
-        let attributes = extract_field_attributes(&field.attrs);
-
-        if attributes.env_variable_names.is_empty() {
+        let attributes = match extract_field_attributes(&field.attrs) {
+            Ok(attributes) => attributes,
+            Err(e) => return Some(Err(e)),
+        };
+        if attributes.skip || attributes.env_variable_names.is_empty() {
             return None;
         }
 
-        let (parser, is_option) = determine_parser(&field.ty);
+        let (parser, is_option) = match determine_parser(&field.ty) {
+            Ok((parser, is_option)) => (parser, is_option),
+            Err(e) => return Some(Err(e))
+        };
 
         let env_checks = attributes.env_variable_names.iter().map(|env_var| {
             if is_option {
@@ -191,14 +227,14 @@ fn generate_load_from_env(fields: &[&Field]) -> Vec<proc_macro2::TokenStream> {
             }
         });
 
-        Some(quote! {
+        Some(Ok(quote! {
             #(#env_checks)*
-        })
-    }).collect()
+        }))
+    }).try_collect()
 }
 
 // Helper function to determine the appropriate parser based on field type
-fn determine_parser(ty: &Type) -> (proc_macro2::TokenStream, bool) {
+fn determine_parser(ty: &Type) -> Result<(proc_macro2::TokenStream, bool)> {
     match ty {
         Type::Path(type_path) => {
             let type_str = quote! { #type_path }.to_string();
@@ -215,14 +251,12 @@ fn determine_parser(ty: &Type) -> (proc_macro2::TokenStream, bool) {
             } else if type_str.contains("String") {
                 quote! { crate::logstore::config::parse_string }
             } else {
-                // For other types, provide a compile error
-                panic!(
-                    "Unsupported field type: {}. Consider implementing a custom parser.",
-                    type_str
-                );
+                return Err(Error::new_spanned(ty,
+                    format!("Unsupported field type: {type_str}. Consider implementing a custom parser.")
+                ));
             };
 
-            (caller, is_option)
+            Ok((caller, is_option))
         }
         _ => panic!("Unsupported field type for TryUpdateKey"),
     }
@@ -232,51 +266,78 @@ struct FieldAttributes {
     aliases: Vec<String>,
     env_variable_names: Vec<String>,
     docs: Option<String>,
+    skip: bool,
 }
 
-// Extract aliases from field attributes
-fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
+/// Extract aliases from field attributes
+///
+/// Parse the annotations from individual fields into a convenient structure.
+/// The field is annotated via `#[delta(...)]`. The following attributes are supported:
+/// - `alias = "alias_name"`: Specifies an alias for the field.
+/// - `env = "env_name"`: Specifies an environment variable name for the field.
+/// - `skip`: Specifies whether the field should be skipped during parsing.
+fn extract_field_attributes(attrs: &[Attribute]) -> Result<FieldAttributes> {
     let mut aliases = Vec::new();
     let mut environments = Vec::new();
     let mut docs = None;
     let mut doc_strings = Vec::new();
+    let mut skip = false;
 
     for attr in attrs {
         if attr.path().is_ident("doc") {
             // Handle doc comments
-            if let Ok(meta) = attr.meta.clone().require_name_value() {
-                if let Expr::Lit(expr_lit) = &meta.value {
-                    if let Lit::Str(lit_str) = &expr_lit.lit {
-                        // Collect all doc strings - they might span multiple lines
-                        doc_strings.push(lit_str.value().trim().to_string());
-                    }
+            let meta = attr.meta.require_name_value()?;
+            if let Expr::Lit(expr_lit) = &meta.value {
+                if let Lit::Str(lit_str) = &expr_lit.lit {
+                    // Collect all doc strings - they might span multiple lines
+                    doc_strings.push(lit_str.value().trim().to_string());
                 }
             }
         }
         if attr.path().is_ident("delta") {
             match &attr.meta {
                 Meta::List(list) => {
-                    let parser = Punctuated::<MetaNameValue, Token![,]>::parse_terminated;
-                    let parsed = parser.parse(list.tokens.clone().into()).unwrap();
+                    let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+                    let parsed = parser.parse(list.tokens.clone().into())?;
+
                     for val in parsed {
-                        let MetaNameValue { path, value, .. } = val;
-                        if path.is_ident("alias") {
-                            if let Expr::Lit(lit_expr) = &value {
-                                if let Lit::Str(lit_str) = &lit_expr.lit {
-                                    aliases.push(lit_str.value());
+                        match val {
+                            Meta::NameValue(MetaNameValue { path, value, .. }) => {
+                                if path.is_ident("alias") {
+                                    if let Expr::Lit(lit_expr) = &value {
+                                        if let Lit::Str(lit_str) = &lit_expr.lit {
+                                            aliases.push(lit_str.value());
+                                        }
+                                    }
+                                }
+                                if path.is_ident("environment") || path.is_ident("env") {
+                                    if let Expr::Lit(lit_expr) = &value {
+                                        if let Lit::Str(lit_str) = &lit_expr.lit {
+                                            environments.push(lit_str.value());
+                                        }
+                                    }
                                 }
                             }
-                        }
-                        if path.is_ident("environment") || path.is_ident("env") {
-                            if let Expr::Lit(lit_expr) = &value {
-                                if let Lit::Str(lit_str) = &lit_expr.lit {
-                                    environments.push(lit_str.value());
+                            Meta::Path(path) => {
+                                if path.is_ident("skip") {
+                                    skip = true;
                                 }
+                            }
+                            _ => {
+                                return Err(Error::new_spanned(
+                                    &attr.meta,
+                                    "only NameValue and Path parameters are supported",
+                                ));
                             }
                         }
                     }
                 }
-                _ => panic!("expected list"),
+                _ => {
+                    return Err(Error::new_spanned(
+                        &attr.meta,
+                        "expected a list-style attribute",
+                    ));
+                }
             }
         }
     }
@@ -286,9 +347,10 @@ fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
         docs = Some(doc_strings.join("\n"));
     }
 
-    FieldAttributes {
+    Ok(FieldAttributes {
         aliases,
         env_variable_names: environments,
         docs,
-    }
+        skip,
+    })
 }
