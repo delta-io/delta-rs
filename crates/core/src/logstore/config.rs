@@ -163,11 +163,13 @@ where
     V: AsRef<str> + Into<String>,
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        let mut config = Self::default();
-        config.raw = iter
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect();
+        let mut config = StorageConfig {
+            raw: iter
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+            ..Default::default()
+        };
 
         let result = ParseResult::<RuntimeConfig>::from_iter(&config.raw);
         config.runtime = (!result.is_default).then_some(result.config);
@@ -209,11 +211,13 @@ impl StorageConfig {
         K: AsRef<str> + Into<String>,
         V: AsRef<str> + Into<String>,
     {
-        let mut props = StorageConfig::default();
-        props.raw = options
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect();
+        let mut props = StorageConfig {
+            raw: options
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+            ..Default::default()
+        };
 
         let (runtime, remainder): (RuntimeConfig, _) = try_parse_impl(&props.raw)?;
         // NOTE: we only want to assign an actual runtime config we consumed an option
