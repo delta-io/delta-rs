@@ -12,7 +12,6 @@ use object_store::{
 use object_store::{MultipartUpload, PutMode, PutMultipartOpts, PutPayload};
 use std::ops::Range;
 use std::sync::Arc;
-use url::Url;
 
 pub(crate) const STORE_NAME: &str = "MountObjectStore";
 
@@ -240,19 +239,6 @@ impl ObjectStore for MountFileStorageBackend {
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }
-}
-
-fn path_to_root_url(path: &std::path::Path) -> ObjectStoreResult<Url> {
-    let root_path = std::fs::canonicalize(path).map_err(|e| object_store::Error::InvalidPath {
-        source: object_store::path::Error::Canonicalize {
-            path: path.into(),
-            source: e,
-        },
-    })?;
-
-    Url::from_file_path(root_path).map_err(|_| object_store::Error::InvalidPath {
-        source: object_store::path::Error::InvalidPath { path: path.into() },
-    })
 }
 
 /// Regular renames `from` to `to`.

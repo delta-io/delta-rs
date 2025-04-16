@@ -70,7 +70,7 @@ async fn test_object_store_onelake_abfs() -> TestResult {
 
 #[allow(dead_code)]
 async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> TestResult {
-    let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
+    let delta_store = DeltaTableBuilder::from_uri(context.root_uri())
         .with_allow_http(true)
         .build_storage()?
         .object_store(None);
@@ -104,7 +104,7 @@ fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestR
 
     let storage_options = HashMap::<String, String>::new();
     if let Err(read_error) =
-        ListingSchemaProvider::try_new(&context.root_uri(), Some(storage_options))
+        ListingSchemaProvider::try_new(context.root_uri(), Some(storage_options))
     {
         assert_eq!(read_error.to_string(), "Failed to read delta log object: Generic MicrosoftAzure error: Account must be specified".to_string());
     };
@@ -123,7 +123,7 @@ async fn list_delta_tables_using_listing_provider_with_account_name() -> TestRes
 
     let mut storage_options = HashMap::<String, String>::new();
     storage_options.insert("account_name".to_string(), "test_account".to_string());
-    let schema = ListingSchemaProvider::try_new(&context.root_uri(), Some(storage_options));
+    let schema = ListingSchemaProvider::try_new(context.root_uri(), Some(storage_options));
     assert!(
         schema.is_ok(),
         "Capable of reading the storage options. Fails if e.g. `account_name` is missing"
