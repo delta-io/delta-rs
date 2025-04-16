@@ -13,7 +13,7 @@ use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::logstore::{str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
+use deltalake_core::logstore::{config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;

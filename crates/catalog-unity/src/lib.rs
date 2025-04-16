@@ -35,7 +35,7 @@ use deltalake_core::{
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    object_store_factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef,
+    config::str_is_truthy, object_store_factories, IORuntime, ObjectStoreFactory, ObjectStoreRef,
 };
 pub mod client;
 pub mod credential;
