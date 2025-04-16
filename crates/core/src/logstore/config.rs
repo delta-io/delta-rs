@@ -16,7 +16,7 @@ use super::storage::runtime::RuntimeConfig;
 use super::storage::LimitConfig;
 use crate::{DeltaResult, DeltaTableError};
 
-pub(crate) trait TryUpdateKey: Default {
+pub trait TryUpdateKey: Default {
     /// Update an internal field in the configuration.
     ///
     /// ## Returns
