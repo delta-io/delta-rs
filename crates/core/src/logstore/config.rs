@@ -253,23 +253,44 @@ pub(super) fn parse_usize(value: &str) -> DeltaResult<usize> {
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as usize")))
 }
 
-pub(super) fn parse_f64(value: &str) -> DeltaResult<f64> {
+pub fn parse_f64(value: &str) -> DeltaResult<f64> {
     value
         .parse::<f64>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as f64")))
 }
 
-pub(super) fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
+pub fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
     humantime::parse_duration(value)
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
 }
 
-pub(super) fn parse_bool(value: &str) -> DeltaResult<bool> {
-    Ok(super::storage::utils::str_is_truthy(value))
+pub fn parse_bool(value: &str) -> DeltaResult<bool> {
+    Ok(str_is_truthy(value))
 }
 
-pub(super) fn parse_string(value: &str) -> DeltaResult<String> {
+pub fn parse_string(value: &str) -> DeltaResult<String> {
     Ok(value.to_string())
+}
+
+/// Return true for all the stringly values typically associated with true
+///
+/// aka YAML booleans
+///
+/// ```rust
+/// # use deltalake_core::logstore::*;
+/// for value in ["1", "true", "on", "YES", "Y"] {
+///     assert!(str_is_truthy(value));
+/// }
+/// for value in ["0", "FALSE", "off", "NO", "n", "bork"] {
+///     assert!(!str_is_truthy(value));
+/// }
+/// ```
+pub fn str_is_truthy(val: &str) -> bool {
+    val.eq_ignore_ascii_case("1")
+        | val.eq_ignore_ascii_case("true")
+        | val.eq_ignore_ascii_case("on")
+        | val.eq_ignore_ascii_case("yes")
+        | val.eq_ignore_ascii_case("y")
 }
 
 #[cfg(all(test, feature = "cloud"))]

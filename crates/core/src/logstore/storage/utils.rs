@@ -7,27 +7,6 @@ use object_store::ObjectMeta;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 
-/// Return true for all the stringly values typically associated with true
-///
-/// aka YAML booleans
-///
-/// ```rust
-/// # use deltalake_core::logstore::*;
-/// for value in ["1", "true", "on", "YES", "Y"] {
-///     assert!(str_is_truthy(value));
-/// }
-/// for value in ["0", "FALSE", "off", "NO", "n", "bork"] {
-///     assert!(!str_is_truthy(value));
-/// }
-/// ```
-pub fn str_is_truthy(val: &str) -> bool {
-    val.eq_ignore_ascii_case("1")
-        | val.eq_ignore_ascii_case("true")
-        | val.eq_ignore_ascii_case("on")
-        | val.eq_ignore_ascii_case("yes")
-        | val.eq_ignore_ascii_case("y")
-}
-
 /// Return the uri of commit version.
 ///
 /// ```rust

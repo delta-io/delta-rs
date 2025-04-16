@@ -3,10 +3,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, LogStore, LogStoreFactory, StorageConfig,
-};
-use deltalake_core::logstore::{
-    object_store_factories, str_is_truthy, ObjectStoreFactory, ObjectStoreRef,
+    config::str_is_truthy, default_logstore, logstore_factories, object_store_factories, LogStore,
+    LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
