@@ -16,7 +16,7 @@ use super::storage::runtime::RuntimeConfig;
 use super::storage::LimitConfig;
 use crate::{DeltaResult, DeltaTableError};
 
-pub(super) trait TryUpdateKey {
+pub(crate) trait TryUpdateKey: Default {
     /// Update an internal field in the configuration.
     ///
     /// ## Returns
@@ -25,20 +25,17 @@ pub(super) trait TryUpdateKey {
     /// - `Err(_)` if the update failed. Failed updates may include finding a known key,
     ///   but failing to parse the value into the expected type.
     fn try_update_key(&mut self, key: &str, value: &str) -> DeltaResult<Option<()>>;
-}
 
-impl<K, V> FromIterator<(K, V)> for RuntimeConfig
-where
-    K: AsRef<str> + Into<String>,
-    V: AsRef<str> + Into<String>,
-{
-    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        ParseResult::from_iter(iter).config
-    }
+    /// Load configuration values from environment variables
+    ///
+    /// For Option<T> fields, this will only set values that are None
+    /// For non-optional fields, environment variables will update the
+    /// value if the current value corresponds to the default value.
+    fn load_from_environment(&mut self) -> DeltaResult<()>;
 }
 
 /// Generic container for parsing configuration
-pub(super) struct ParseResult<T> {
+pub struct ParseResult<T> {
     /// Parsed configuration
     pub config: T,
     /// Unrecognized key value pairs.
@@ -63,7 +60,7 @@ impl<T> ParseResult<T> {
 
 impl<T, K, V> FromIterator<(K, V)> for ParseResult<T>
 where
-    T: TryUpdateKey + Default,
+    T: TryUpdateKey,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
 {
@@ -247,7 +244,7 @@ where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
-    T: TryUpdateKey + Default,
+    T: TryUpdateKey,
 {
     let result = ParseResult::from_iter(options);
     result.raise_errors()?;
@@ -273,6 +270,10 @@ pub(super) fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
 
 pub(super) fn parse_bool(value: &str) -> DeltaResult<bool> {
     Ok(super::storage::utils::str_is_truthy(value))
+}
+
+pub(super) fn parse_string(value: &str) -> DeltaResult<String> {
+    Ok(value.to_string())
 }
 
 #[cfg(all(test, feature = "cloud"))]
