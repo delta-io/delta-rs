@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use deltalake_aws::storage::S3StorageBackend;
-use deltalake_core::storage::object_store::{
+use deltalake_core::logstore::object_store::{
     DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId,
     ObjectMeta, PutOptions, PutResult, Result as ObjectStoreResult,
 };

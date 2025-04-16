@@ -58,7 +58,6 @@ use tracing::log::*;
 
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
-use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
@@ -68,6 +67,7 @@ use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::register_store;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{Action, ActionType, Metadata, StructType, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::merge_arrow_schema;

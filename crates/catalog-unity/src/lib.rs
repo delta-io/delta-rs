@@ -31,7 +31,7 @@ use deltalake_core::{
 };
 
 use crate::client::retry::*;
-use deltalake_core::storage::{
+use deltalake_core::logstore::{
     factories, str_is_truthy, IORuntime, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse,
     StorageOptions,
 };
@@ -845,8 +845,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),
-        )?
-        .map_err(UnityCatalogError::from)?;
+        )??;
 
         let mut storage_options = options.0.clone();
         storage_options.extend(temp_creds);

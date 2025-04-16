@@ -609,8 +609,8 @@ pub(super) mod tests {
 
     use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
+    use crate::kernel::transaction::CommitData;
     use crate::kernel::{models::ActionType, StructType};
-    use crate::operations::transaction::CommitData;
     use crate::protocol::DeltaOperation;
     use crate::table::config::TableConfig;
     use crate::test_utils::{ActionFactory, TestResult, TestSchemas};

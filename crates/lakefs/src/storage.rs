@@ -1,7 +1,7 @@
 //! LakeFS storage backend (internally S3).
 
-use deltalake_core::storage::object_store::aws::AmazonS3ConfigKey;
-use deltalake_core::storage::{
+use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
+use deltalake_core::logstore::{
     limit_store_handler, ObjectStoreFactory, ObjectStoreRef, RetryConfigParse, StorageOptions,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};

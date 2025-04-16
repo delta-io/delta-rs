@@ -1,6 +1,8 @@
 use std::sync::{Arc, OnceLock};
 
-use deltalake::storage::{ListResult, ObjectStore, ObjectStoreError, ObjectStoreResult, Path};
+use deltalake::logstore::object_store::{
+    path::Path, Error as ObjectStoreError, ListResult, ObjectStore, Result as ObjectStoreResult,
+};
 use futures::future::{join_all, BoxFuture, FutureExt};
 use futures::StreamExt;
 use pyo3::types::{IntoPyDict, PyAnyMethods, PyModule};
@@ -18,7 +20,7 @@ pub fn rt() -> &'static Runtime {
             "Forked process detected - current PID is {pid} but the tokio runtime was created by {runtime_pid}. The tokio \
             runtime does not support forked processes https://github.com/tokio-rs/tokio/issues/4301. If you are \
             seeing this message while using Python multithreading make sure to use the `spawn` or `forkserver` \
-            mode.", 
+            mode.",
         );
     }
     TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))

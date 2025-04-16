@@ -1965,8 +1965,8 @@ impl From<Column> for DeltaColumn {
 mod tests {
     use crate::kernel::log_segment::PathExt;
     use crate::logstore::default_logstore::DefaultLogStore;
+    use crate::logstore::ObjectStoreRef;
     use crate::operations::write::SchemaMode;
-    use crate::storage::ObjectStoreRef;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};

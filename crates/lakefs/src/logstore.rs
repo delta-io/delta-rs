@@ -7,16 +7,16 @@ use crate::errors::LakeFSConfigError;
 
 use super::client::LakeFSClient;
 use bytes::Bytes;
-use deltalake_core::storage::{
+use deltalake_core::logstore::{
     commit_uri_from_version, DefaultObjectStoreRegistry, ObjectStoreRegistry,
 };
-use deltalake_core::storage::{url_prefix_handler, DeltaIOStorageBackend, IORuntime};
-use deltalake_core::{logstore::*, DeltaTableError, Path};
+use deltalake_core::logstore::{url_prefix_handler, DeltaIOStorageBackend, IORuntime};
 use deltalake_core::{
-    operations::transaction::TransactionError,
-    storage::{ObjectStoreRef, StorageOptions},
+    kernel::transaction::TransactionError,
+    logstore::{ObjectStoreRef, StorageOptions},
     DeltaResult,
 };
+use deltalake_core::{logstore::*, DeltaTableError, Path};
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use tracing::debug;
 use url::Url;
@@ -87,7 +87,7 @@ impl LakeFSLogStore {
         let scheme = Url::parse(&format!("{}://", url.scheme()))
             .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
 
-        if let Some(entry) = deltalake_core::storage::factories().get(&scheme) {
+        if let Some(entry) = deltalake_core::logstore::factories().get(&scheme) {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
 
             let (store, _prefix) = entry

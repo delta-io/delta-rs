@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::parse;
+use crate::kernel::transaction::CommitData;
 use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
 use crate::logstore::LogStore;
-use crate::operations::transaction::CommitData;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
@@ -188,10 +188,28 @@ impl LogSegment {
         segment.version = segment
             .file_version()
             .unwrap_or(end_version.unwrap_or(start_version));
+
+        segment.validate()?;
+
         Ok(segment)
     }
 
     pub fn validate(&self) -> DeltaResult<()> {
+        let is_contiguous = self
+            .commit_files
+            .iter()
+            .collect_vec()
+            .windows(2)
+            .all(|cfs| {
+                cfs[0].location.commit_version().unwrap() - 1
+                    == cfs[1].location.commit_version().unwrap()
+            });
+        if !is_contiguous {
+            return Err(DeltaTableError::Generic(
+                "non-contiguous log segment".into(),
+            ));
+        }
+
         let checkpoint_version = self
             .checkpoint_files
             .iter()
@@ -559,15 +577,15 @@ pub(super) async fn list_log_files(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+    use delta_kernel::table_features::{ReaderFeature, WriterFeature};
     use deltalake_test::utils::*;
     use maplit::hashset;
     use tokio::task::JoinHandle;
 
     use crate::{
         checkpoints::{create_checkpoint_for, create_checkpoint_from_table_uri_and_cleanup},
+        kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, Add, Format, Remove},
-        operations::transaction::{CommitBuilder, TableReference},
         protocol::{DeltaOperation, SaveMode},
         DeltaTableBuilder,
     };
@@ -665,8 +683,8 @@ pub(super) mod tests {
         let expected = Protocol {
             min_reader_version: 3,
             min_writer_version: 7,
-            reader_features: Some(hashset! {ReaderFeatures::DeletionVectors}),
-            writer_features: Some(hashset! {WriterFeatures::DeletionVectors}),
+            reader_features: Some(hashset! {ReaderFeature::DeletionVectors}),
+            writer_features: Some(hashset! {WriterFeature::DeletionVectors}),
         };
         assert_eq!(protocol, expected);
 
@@ -782,7 +800,7 @@ pub(super) mod tests {
     pub fn is_commit_file_only_matches_commits() {
         for path in [0, 1, 5, 10, 100, i64::MAX]
             .into_iter()
-            .map(crate::storage::commit_uri_from_version)
+            .map(crate::logstore::commit_uri_from_version)
         {
             assert!(path.is_commit_file());
         }

@@ -14,8 +14,8 @@ use url::Url;
 
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    operations::transaction::TransactionError,
-    storage::{ObjectStoreRef, StorageOptions},
+    kernel::transaction::TransactionError,
+    logstore::{ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError,
 };
 use uuid::Uuid;

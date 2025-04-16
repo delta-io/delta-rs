@@ -10,9 +10,9 @@ use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -144,12 +144,7 @@ impl CreateBuilder {
                     if let Value::Number(n) = v {
                         n.as_i64().map_or_else(
                             || MetadataValue::String(v.to_string()),
-                            |i| {
-                                i32::try_from(i)
-                                    .ok()
-                                    .map(MetadataValue::Number)
-                                    .unwrap_or_else(|| MetadataValue::String(v.to_string()))
-                            },
+                            MetadataValue::Number,
                         )
                     } else {
                         MetadataValue::String(v.to_string())

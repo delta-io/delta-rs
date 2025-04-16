@@ -14,11 +14,11 @@ use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::{future, ProvideCredentials};
 use aws_credential_types::Credentials;
 
-use deltalake_core::storage::object_store::aws::{AmazonS3ConfigKey, AwsCredential};
-use deltalake_core::storage::object_store::{
+use deltalake_core::logstore::object_store::aws::{AmazonS3ConfigKey, AwsCredential};
+use deltalake_core::logstore::object_store::{
     CredentialProvider, Error as ObjectStoreError, Result as ObjectStoreResult,
 };
-use deltalake_core::storage::StorageOptions;
+use deltalake_core::logstore::StorageOptions;
 use deltalake_core::DeltaResult;
 use tokio::sync::Mutex;
 use tracing::log::*;

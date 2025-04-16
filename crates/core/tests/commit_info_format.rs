@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 mod fs_common;
 
+use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::Action;
-use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;

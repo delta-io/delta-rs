@@ -1,7 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
-use delta_kernel::table_features::{ReaderFeatures, WriterFeatures};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
@@ -73,12 +73,7 @@ impl DeletionVectorDescriptor {
                         })?
                         .clone();
                 }
-                "offset" => {
-                    re.offset = match record.get_int(i) {
-                        Ok(x) => Some(x),
-                        _ => None,
-                    }
-                }
+                "offset" => re.offset = record.get_int(i).ok(),
                 "sizeInBytes" => {
                     re.size_in_bytes = record.get_int(i).map_err(|_| {
                         gen_action_type_error("add", "deletionVector.sizeInBytes", "int")
@@ -627,7 +622,7 @@ impl Protocol {
                                 .iter()
                                 .filter_map(|v| match v {
                                     Field::Str(feature) => {
-                                        ReaderFeatures::try_from(feature.as_str()).ok()
+                                        ReaderFeature::try_from(feature.as_str()).ok()
                                     }
                                     _ => None,
                                 })
@@ -643,7 +638,7 @@ impl Protocol {
                                 .iter()
                                 .filter_map(|v| match v {
                                     Field::Str(feature) => {
-                                        WriterFeatures::try_from(feature.as_str()).ok()
+                                        WriterFeature::try_from(feature.as_str()).ok()
                                     }
                                     _ => None,
                                 })

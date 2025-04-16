@@ -12,8 +12,8 @@ use url::Url;
 
 use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::logstore::storage::{factories, IORuntime, StorageOptions};
 use crate::logstore::LogStoreRef;
-use crate::storage::{factories, IORuntime, StorageOptions};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -432,7 +432,7 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::DefaultObjectStoreFactory;
+    use crate::logstore::storage::DefaultObjectStoreFactory;
 
     #[test]
     fn test_ensure_table_uri() {

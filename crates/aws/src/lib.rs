@@ -25,9 +25,9 @@ use aws_sdk_dynamodb::{
     },
     Client,
 };
+use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::storage::object_store::aws::AmazonS3ConfigKey;
-use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
+use deltalake_core::logstore::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
 use regex::Regex;

@@ -2,7 +2,7 @@
 use chrono::{DateTime, Utc};
 use object_store::Error as ObjectStoreError;
 
-use crate::operations::transaction::{CommitBuilderError, TransactionError};
+use crate::kernel::transaction::{CommitBuilderError, TransactionError};
 use crate::protocol::ProtocolError;
 
 /// A result returned by delta-rs

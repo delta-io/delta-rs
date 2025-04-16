@@ -6,8 +6,8 @@ use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::transaction::{CommitBuilder, CommitProperties};
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::merge_delta_struct;
