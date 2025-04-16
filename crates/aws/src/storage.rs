@@ -190,12 +190,12 @@ impl S3StorageOptions {
             .map(|val| str_is_truthy(&val))
             .unwrap_or(false);
 
-        let sdk_config = match is_aws(&options) {
+        let sdk_config = match is_aws(options) {
             false => None,
             true => {
                 debug!("Detected AWS S3 Storage options, resolving AWS credentials");
                 Some(execute_sdk_future(
-                    crate::credentials::resolve_credentials(&options),
+                    crate::credentials::resolve_credentials(options),
                 )??)
             }
         };

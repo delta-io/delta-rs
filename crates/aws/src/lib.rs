@@ -58,7 +58,7 @@ impl LogStoreFactory for S3LogStoreFactory {
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let s3_options = self.with_env_s3(&options.raw.clone().into());
+        let s3_options = self.with_env_s3(&options.raw.clone());
         if s3_options.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
@@ -82,7 +82,7 @@ impl LogStoreFactory for S3LogStoreFactory {
                 store,
             )?));
         }
-        Ok(default_logstore(store, location, &options))
+        Ok(default_logstore(store, location, options))
     }
 }
 
