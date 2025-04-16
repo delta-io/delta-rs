@@ -86,7 +86,7 @@ pub use self::storage::{
 /// Convenience re-export of the object store crate
 pub use ::object_store;
 
-mod config;
+pub mod config;
 pub(crate) mod default_logstore;
 pub(crate) mod factories;
 pub(crate) mod storage;
