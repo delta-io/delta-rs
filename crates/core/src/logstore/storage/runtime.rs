@@ -100,7 +100,7 @@ impl RuntimeConfig {
         store: T,
         handle: Option<Handle>,
     ) -> DeltaIOStorageBackend<T> {
-        let handle = handle.unwrap_or_else(|| io_rt(Some(&self)).handle().clone());
+        let handle = handle.unwrap_or_else(|| io_rt(Some(self)).handle().clone());
         DeltaIOStorageBackend {
             inner: store,
             rt_handle: handle,
