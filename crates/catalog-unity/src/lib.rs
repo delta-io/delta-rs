@@ -879,7 +879,7 @@ impl LogStoreFactory for UnityCatalogFactory {
 /// Register an [ObjectStoreFactory] for common UnityCatalogFactory [Url] schemes
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(UnityCatalogFactory::default());
-    let url = Url::parse(&format!("uc://")).unwrap();
+    let url = Url::parse("uc://").unwrap();
     object_store_factories().insert(url.clone(), factory.clone());
     logstore_factories().insert(url.clone(), factory.clone());
 }

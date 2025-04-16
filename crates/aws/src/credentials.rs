@@ -259,13 +259,13 @@ fn assume_session_name(options: &HashMap<String, String>) -> String {
 pub async fn resolve_credentials(options: &HashMap<String, String>) -> DeltaResult<SdkConfig> {
     let default_provider = DefaultCredentialsChain::builder().build().await;
 
-    let credentials_provider = match assume_role_arn(&options) {
+    let credentials_provider = match assume_role_arn(options) {
         Some(arn) => {
             debug!("Configuring AssumeRoleProvider with role arn: {arn}");
             CredentialsProviderChain::first_try(
                 "AssumeRoleProvider",
                 AssumeRoleProvider::builder(arn)
-                    .session_name(assume_session_name(&options))
+                    .session_name(assume_session_name(options))
                     .build()
                     .await,
             )

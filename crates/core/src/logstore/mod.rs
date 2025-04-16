@@ -78,7 +78,7 @@ pub use self::factories::{
     logstore_factories, object_store_factories, store_for, LogStoreFactory,
     LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
 };
-pub use self::storage::utils::{commit_uri_from_version, str_is_truthy};
+pub use self::storage::utils::commit_uri_from_version;
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
     ObjectStoreRegistry, ObjectStoreRetryExt,
@@ -123,7 +123,7 @@ impl<T: LogStoreFactory> LogStoreFactoryExt for Arc<T> {
         options: &StorageConfig,
         io_runtime: Option<IORuntime>,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        T::with_options_internal(&self, store, location, options, io_runtime)
+        T::with_options_internal(self, store, location, options, io_runtime)
     }
 }
 
@@ -494,11 +494,10 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
                 let options: HashMap<String, String> = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let location = Url::parse(&location_str).map_err(|e| A::Error::custom(e))?;
+                let location = Url::parse(&location_str).map_err(A::Error::custom)?;
                 Ok(LogStoreConfig {
                     location,
-                    options: StorageConfig::parse_options(options)
-                        .map_err(|e| A::Error::custom(e))?,
+                    options: StorageConfig::parse_options(options).map_err(A::Error::custom)?,
                 })
             }
         }
