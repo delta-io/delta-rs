@@ -251,7 +251,7 @@ where
     Ok((result.config, result.unparsed))
 }
 
-pub(super) fn parse_usize(value: &str) -> DeltaResult<usize> {
+pub fn parse_usize(value: &str) -> DeltaResult<usize> {
     value
         .parse::<usize>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as usize")))
@@ -281,7 +281,7 @@ pub fn parse_string(value: &str) -> DeltaResult<String> {
 /// aka YAML booleans
 ///
 /// ```rust
-/// # use deltalake_core::logstore::*;
+/// # use deltalake_core::logstore::config::*;
 /// for value in ["1", "true", "on", "YES", "Y"] {
 ///     assert!(str_is_truthy(value));
 /// }

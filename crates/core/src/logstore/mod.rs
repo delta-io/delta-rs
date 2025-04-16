@@ -78,7 +78,7 @@ pub use self::factories::{
     logstore_factories, object_store_factories, store_for, LogStoreFactory,
     LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
 };
-pub use self::storage::utils::{commit_uri_from_version, str_is_truthy};
+pub use self::storage::utils::commit_uri_from_version;
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
     ObjectStoreRegistry, ObjectStoreRetryExt,
