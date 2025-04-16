@@ -96,4 +96,8 @@ impl config::TryUpdateKey for object_store::RetryConfig {
         }
         Ok(Some(()))
     }
+
+    fn load_from_environment(&mut self) -> crate::DeltaResult<()> {
+        Ok(())
+    }
 }
