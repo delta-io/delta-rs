@@ -41,19 +41,19 @@ pub fn derive_delta_config(input: TokenStream) -> TokenStream {
     .collect::<Vec<_>>();
 
     // Generate the implementation for TryUpdateKey trait
-    let try_update_key = match generate_try_update_key(&name, &fields) {
+    let try_update_key = match generate_try_update_key(name, &fields) {
         Ok(try_update_key) => try_update_key,
         Err(err) => return syn::Error::into_compile_error(err).into(),
     };
 
     // generate an enum with all configuration keys
-    let config_keys = match generate_config_keys(&name, &fields) {
+    let config_keys = match generate_config_keys(name, &fields) {
         Ok(config_keys) => config_keys,
         Err(err) => return syn::Error::into_compile_error(err).into(),
     };
 
     // generate a FromIterator implementation
-    let from_iter = generate_from_iterator(&name);
+    let from_iter = generate_from_iterator(name);
 
     let expanded = quote! {
         #try_update_key
@@ -67,7 +67,7 @@ pub fn derive_delta_config(input: TokenStream) -> TokenStream {
 }
 
 fn generate_config_keys(name: &Ident, fields: &[&Field]) -> Result<proc_macro2::TokenStream> {
-    let enum_name = Ident::new(&format!("{}Key", name.to_string()), Span::call_site());
+    let enum_name = Ident::new(&format!("{}Key", name), Span::call_site());
     let variants: Vec<_> = fields
         .iter()
         .map(|field| {
