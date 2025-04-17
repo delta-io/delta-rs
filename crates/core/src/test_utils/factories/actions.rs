@@ -86,7 +86,7 @@ impl ActionFactory {
         let data = get_parquet_bytes(&batch).unwrap();
         let meta = ObjectMeta {
             location: path.clone(),
-            size: data.len(),
+            size: data.len() as u64,
             last_modified: Utc::now(),
             e_tag: None,
             version: None,

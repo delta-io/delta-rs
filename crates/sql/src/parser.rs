@@ -167,7 +167,7 @@ impl<'a> DeltaParser<'a> {
             Token::Word(w) => match w.keyword {
                 Keyword::RETAIN => {
                     self.parser.next_token();
-                    let retention_hours = match self.parser.parse_number_value()? {
+                    let retention_hours = match self.parser.parse_number_value()?.value {
                         Value::Number(value_str, _) => value_str
                             .parse()
                             .map_err(|_| ParserError::ParserError(format!("Unexpected token {w}"))),
@@ -223,7 +223,7 @@ impl<'a> DeltaParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_sql::sqlparser::ast::Ident;
+    use datafusion_sql::sqlparser::ast::{Ident, ObjectNamePart};
     use datafusion_sql::sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
@@ -240,44 +240,44 @@ mod tests {
     #[test]
     fn test_parse_vacuum() {
         let stmt = Statement::Vacuum(VacuumStatement {
-            table: ObjectName(vec![Ident {
+            table: ObjectName(vec![ObjectNamePart::Identifier(Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
                 span: Span::empty(),
-            }]),
+            })]),
             retention_hours: None,
             dry_run: false,
         });
         assert!(expect_parse_ok("VACUUM data_table", stmt).is_ok());
 
         let stmt = Statement::Vacuum(VacuumStatement {
-            table: ObjectName(vec![Ident {
+            table: ObjectName(vec![ObjectNamePart::Identifier(Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
                 span: Span::empty(),
-            }]),
+            })]),
             retention_hours: Some(10),
             dry_run: false,
         });
         assert!(expect_parse_ok("VACUUM data_table RETAIN 10 HOURS", stmt).is_ok());
 
         let stmt = Statement::Vacuum(VacuumStatement {
-            table: ObjectName(vec![Ident {
+            table: ObjectName(vec![ObjectNamePart::Identifier(Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
                 span: Span::empty(),
-            }]),
+            })]),
             retention_hours: Some(10),
             dry_run: true,
         });
         assert!(expect_parse_ok("VACUUM data_table RETAIN 10 HOURS DRY RUN", stmt).is_ok());
 
         let stmt = Statement::Vacuum(VacuumStatement {
-            table: ObjectName(vec![Ident {
+            table: ObjectName(vec![ObjectNamePart::Identifier(Ident {
                 value: "data_table".to_string(),
                 quote_style: None,
                 span: Span::empty(),
-            }]),
+            })]),
             retention_hours: None,
             dry_run: true,
         });

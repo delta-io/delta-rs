@@ -16,7 +16,10 @@ use std::time::SystemTime;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
-use datafusion::datasource::physical_plan::{FileScanConfig, FileSource, ParquetSource};
+use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
+};
 use datafusion::execution::SessionState;
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::TableParquetOptions;
@@ -374,32 +377,43 @@ impl CdfLoadBuilder {
                 parquet_source.with_predicate(Arc::clone(&cdc_file_schema), Arc::clone(filters));
         }
         let parquet_source: Arc<dyn FileSource> = Arc::new(parquet_source);
-        let cdc_scan: Arc<dyn ExecutionPlan> = FileScanConfig::new(
-            self.log_store.object_store_url(),
-            Arc::clone(&cdc_file_schema),
-            Arc::clone(&parquet_source),
-        )
-        .with_file_groups(cdc_file_groups.into_values().collect())
-        .with_table_partition_cols(cdc_partition_cols)
-        .build();
+        let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
+            FileScanConfigBuilder::new(
+                self.log_store.object_store_url(),
+                Arc::clone(&cdc_file_schema),
+                Arc::clone(&parquet_source),
+            )
+            .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
+            .with_table_partition_cols(cdc_partition_cols)
+            .build(),
+        );
 
-        let add_scan: Arc<dyn ExecutionPlan> = FileScanConfig::new(
-            self.log_store.object_store_url(),
-            Arc::clone(&add_remove_file_schema),
-            Arc::clone(&parquet_source),
-        )
-        .with_file_groups(add_file_groups.into_values().collect())
-        .with_table_partition_cols(add_remove_partition_cols.clone())
-        .build();
+        let add_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
+            FileScanConfigBuilder::new(
+                self.log_store.object_store_url(),
+                Arc::clone(&add_remove_file_schema),
+                Arc::clone(&parquet_source),
+            )
+            .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
+            .with_table_partition_cols(add_remove_partition_cols.clone())
+            .build(),
+        );
 
-        let remove_scan: Arc<dyn ExecutionPlan> = FileScanConfig::new(
-            self.log_store.object_store_url(),
-            Arc::clone(&add_remove_file_schema),
-            parquet_source,
-        )
-        .with_file_groups(remove_file_groups.into_values().collect())
-        .with_table_partition_cols(add_remove_partition_cols)
-        .build();
+        let remove_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
+            FileScanConfigBuilder::new(
+                self.log_store.object_store_url(),
+                Arc::clone(&add_remove_file_schema),
+                parquet_source,
+            )
+            .with_file_groups(
+                remove_file_groups
+                    .into_values()
+                    .map(FileGroup::from)
+                    .collect(),
+            )
+            .with_table_partition_cols(add_remove_partition_cols)
+            .build(),
+        );
 
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
         // being for development. I plan to parallelize the reads once the base idea is correct.

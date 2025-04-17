@@ -192,7 +192,7 @@ impl ObjectStore for SlowStore {
     async fn get_range(
         &self,
         location: &StorePath,
-        range: std::ops::Range<usize>,
+        range: std::ops::Range<u64>,
     ) -> ObjectStoreResult<bytes::Bytes> {
         self.inner.get_range(location, range).await
     }
@@ -214,7 +214,7 @@ impl ObjectStore for SlowStore {
     fn list(
         &self,
         prefix: Option<&StorePath>,
-    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -226,7 +226,7 @@ impl ObjectStore for SlowStore {
         &self,
         prefix: Option<&StorePath>,
         offset: &StorePath,
-    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

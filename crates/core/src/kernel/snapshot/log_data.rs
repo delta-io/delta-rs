@@ -391,7 +391,7 @@ impl<'a> TryFrom<&LogicalFile<'a>> for ObjectMeta {
     fn try_from(file_stats: &LogicalFile<'a>) -> Result<Self, Self::Error> {
         Ok(ObjectMeta {
             location: file_stats.object_store_path(),
-            size: file_stats.size() as usize,
+            size: file_stats.size() as u64,
             last_modified: file_stats.modification_datetime()?,
             version: None,
             e_tag: None,

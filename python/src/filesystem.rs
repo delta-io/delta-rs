@@ -463,15 +463,15 @@ impl ObjectInputFile {
         self.check_closed()?;
         let range = match nbytes {
             Some(len) => {
-                let end = i64::min(self.pos + len, self.content_length) as usize;
+                let end = i64::min(self.pos + len, self.content_length) as u64;
                 std::ops::Range {
-                    start: self.pos as usize,
+                    start: self.pos as u64,
                     end,
                 }
             }
             _ => std::ops::Range {
-                start: self.pos as usize,
-                end: self.content_length as usize,
+                start: self.pos as u64,
+                end: self.content_length as u64,
             },
         };
         let nbytes = (range.end - range.start) as i64;

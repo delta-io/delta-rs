@@ -43,7 +43,7 @@ impl TryFrom<&Add> for ObjectMeta {
             // TODO this won't work for absolute paths, since Paths are always relative to store.
             location: Path::parse(value.path.as_str())?,
             last_modified,
-            size: value.size as usize,
+            size: value.size as u64,
             e_tag: None,
             version: None,
         })

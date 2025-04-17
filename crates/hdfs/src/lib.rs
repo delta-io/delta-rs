@@ -20,10 +20,15 @@ impl ObjectStoreFactory for HdfsFactory {
         options: &HashMap<String, String>,
         _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
+        /*
+        Needs a new hdfs object store release
+
         let store: ObjectStoreRef =
             Arc::new(HdfsObjectStore::with_config(url.as_str(), options.clone())?);
         let prefix = Path::parse(url.path())?;
         Ok((store, prefix))
+         */
+        todo!()
     }
 }
 
