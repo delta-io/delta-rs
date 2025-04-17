@@ -39,16 +39,19 @@ use serial_test::serial;
 use url::Url;
 
 mod local {
+    use super::*;
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::{common::stats::Precision, datasource::provider_as_source};
-    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::{
+        LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
+    };
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
     use itertools::Itertools;
     use object_store::local::LocalFileSystem;
-
-    use super::*;
+    use TableProviderFilterPushDown::{Exact, Inexact};
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
@@ -184,6 +187,128 @@ mod local {
             batch.column(0).as_ref(),
             Arc::new(Int32Array::from(vec![4, 5, 20, 20])).as_ref(),
         );
+
+        Ok(())
+    }
+
+    struct PruningTestCase {
+        sql: String,
+        push_down: Vec<TableProviderFilterPushDown>,
+    }
+
+    impl PruningTestCase {
+        fn new(sql: &str) -> Self {
+            Self {
+                sql: sql.to_string(),
+                push_down: vec![Exact],
+            }
+        }
+
+        fn with_push_down(sql: &str, push_down: Vec<TableProviderFilterPushDown>) -> Self {
+            Self {
+                sql: sql.to_string(),
+                push_down,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_query_partitioned_pushdown() -> Result<()> {
+        let ctx = SessionContext::new();
+        let table = open_table("../test/tests/data/delta-0.8.0-partitioned").await?;
+        ctx.register_table("demo", Arc::new(table.clone()))?;
+
+        let pruning_predicates = [
+            PruningTestCase::new("year > '2020'"),
+            PruningTestCase::new("year != '2020'"),
+            PruningTestCase::new("year = '2021'"),
+            PruningTestCase::with_push_down(
+                "year = '2021' AND day IS NOT NULL",
+                vec![Exact, Exact],
+            ),
+            PruningTestCase::new("year IN ('2021', '2022')"),
+            // NOT IN (a, b) is rewritten as (col != a AND col != b)
+            PruningTestCase::with_push_down("year NOT IN ('2020', '2022')", vec![Exact, Exact]),
+            // BETWEEN a AND b is rewritten as (col >= a AND col < b)
+            PruningTestCase::with_push_down("year BETWEEN '2021' AND '2022'", vec![Exact, Exact]),
+            PruningTestCase::new("year NOT BETWEEN '2019' AND '2020'"),
+            PruningTestCase::with_push_down(
+                "year = '2021' AND day IN ('4', '5', '20')",
+                vec![Exact, Exact],
+            ),
+            PruningTestCase::with_push_down(
+                "year = '2021' AND cast(day as int) <= 20",
+                vec![Exact, Inexact],
+            ),
+        ];
+
+        fn find_scan_filters(plan: &LogicalPlan) -> Vec<&Expr> {
+            let mut result = vec![];
+
+            plan.apply(|node| {
+                if let LogicalPlan::TableScan(TableScan { ref filters, .. }) = node {
+                    result = filters.iter().collect();
+                    Ok(TreeNodeRecursion::Stop) // Stop traversal once found
+                } else {
+                    Ok(TreeNodeRecursion::Continue) // Continue traversal
+                }
+            })
+            .expect("Traversal should not fail");
+
+            result
+        }
+
+        for pp in pruning_predicates {
+            let pred = pp.sql;
+            let sql = format!("SELECT CAST( day as int ) as my_day FROM demo WHERE {pred} ORDER BY CAST( day as int ) ASC");
+            println!("\nExecuting query: {}", sql);
+
+            let df = ctx.sql(sql.as_str()).await?;
+
+            // validate that we are correctly qualifying filters as Exact or Inexact
+            let plan = df.clone().into_optimized_plan()?;
+            let filters = find_scan_filters(&plan);
+            let push_down = table.supports_filters_pushdown(&filters)?;
+
+            assert_eq!(push_down, pp.push_down);
+
+            let batches = df.collect().await?;
+
+            let batch = &batches[0];
+
+            assert_eq!(
+                batch.column(0).as_ref(),
+                Arc::new(Int32Array::from(vec![4, 5, 20, 20])).as_ref(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_files_scanned_pushdown_limit() -> Result<()> {
+        use datafusion::prelude::*;
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let table = open_table("../test/tests/data/delta-0.8.0")
+            .await?;
+
+        // Simple Equality test, we only exercise the limit in this test
+        let e = col("value").eq(lit(2));
+        let metrics = get_scan_metrics(&table, &state, &[e.clone()]).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 0);
+
+        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(1)).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 1);
+
+        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(3)).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 0);
 
         Ok(())
     }
@@ -416,13 +541,14 @@ mod local {
         Ok(())
     }
 
-    async fn get_scan_metrics(
+    async fn get_scan_metrics_with_limit(
         table: &DeltaTable,
         state: &SessionState,
         e: &[Expr],
+        limit: Option<usize>,
     ) -> Result<ExecutionMetricsCollector> {
         let mut metrics = ExecutionMetricsCollector::default();
-        let scan = table.scan(state, None, e, None).await?;
+        let scan = table.scan(state, None, e, limit).await?;
         if scan.properties().output_partitioning().partition_count() > 0 {
             let plan = CoalescePartitionsExec::new(scan);
             let task_ctx = Arc::new(TaskContext::from(state));
@@ -435,6 +561,14 @@ mod local {
         }
 
         Ok(metrics)
+    }
+
+    async fn get_scan_metrics(
+        table: &DeltaTable,
+        state: &SessionState,
+        e: &[Expr],
+    ) -> Result<ExecutionMetricsCollector> {
+        get_scan_metrics_with_limit(table, state, e, None).await
     }
 
     fn create_all_types_batch(
