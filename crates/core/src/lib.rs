@@ -68,7 +68,6 @@
 // #![deny(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
-
 pub mod data_catalog;
 pub mod errors;
 pub mod kernel;
@@ -86,6 +85,7 @@ pub mod delta_datafusion;
 pub mod writer;
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
@@ -96,14 +96,14 @@ pub use self::table::config::TableProperty;
 pub use self::table::DeltaTable;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;
-use std::sync::OnceLock;
+
+pub use protocol::checkpoints;
 
 // convenience exports for consumers to avoid aligning crate versions
 pub use arrow;
 #[cfg(feature = "datafusion")]
 pub use datafusion;
 pub use parquet;
-pub use protocol::checkpoints;
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.

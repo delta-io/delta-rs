@@ -177,7 +177,7 @@ macro_rules! arrow_defs {
 /// * `table_schema` - The arrow schema representing the table backed by the delta log
 /// * `partition_columns` - The list of partition columns of the table.
 /// * `use_extended_remove_schema` - Whether to include extended file metadata in remove action schema.
-///    Required for compatibility with different versions of Databricks runtime.
+///   Required for compatibility with different versions of Databricks runtime.
 pub(crate) fn delta_log_schema_for_table(
     table_schema: ArrowSchema,
     partition_columns: &[String],

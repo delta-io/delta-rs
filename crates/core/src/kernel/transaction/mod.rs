@@ -926,7 +926,7 @@ impl std::future::IntoFuture for PostCommit {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
     use super::*;
     use crate::logstore::{commit_uri_from_version, default_logstore::DefaultLogStore, LogStore};
@@ -949,7 +949,7 @@ mod tests {
             store.clone(),
             crate::logstore::LogStoreConfig {
                 location: url,
-                options: HashMap::new().into(),
+                options: Default::default(),
             },
         );
         let version_path = Path::from("_delta_log/00000000000000000000.json");

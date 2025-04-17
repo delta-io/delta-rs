@@ -1,7 +1,8 @@
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use bytes::Bytes;
+use deltalake_derive::DeltaConfig;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::FutureExt;
@@ -11,12 +12,9 @@ use object_store::{
     Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,
     PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
+use object_store::{MultipartUpload, PutMultipartOpts};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
-
-use object_store::{MultipartUpload, PutMultipartOpts};
-
-use super::ObjectStoreRef;
 
 /// Creates static IO Runtime with optional configuration
 fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
@@ -24,24 +22,30 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
     IO_RT.get_or_init(|| {
         let rt = match config {
             Some(config) => {
-                let mut builder = if config.multi_threaded {
+                let mut builder = if let Some(true) = config.multi_threaded {
                     RuntimeBuilder::new_multi_thread()
                 } else {
                     RuntimeBuilder::new_current_thread()
                 };
-                let builder = builder.worker_threads(config.worker_threads);
-                #[allow(unused_mut)]
-                let mut builder = if config.enable_io && config.enable_time {
-                    builder.enable_all()
-                } else if !config.enable_io && config.enable_time {
-                    builder.enable_time()
-                } else {
-                    builder
+
+                if let Some(threads) = config.worker_threads {
+                    builder.worker_threads(threads);
+                }
+
+                match (config.enable_io, config.enable_time) {
+                    (Some(true), Some(true)) => {
+                        builder.enable_all();
+                    }
+                    (Some(false), Some(true)) => {
+                        builder.enable_time();
+                    }
+                    _ => (),
                 };
+
                 #[cfg(unix)]
                 {
-                    if config.enable_io && !config.enable_time {
-                        builder = builder.enable_io();
+                    if let (Some(true), Some(false)) = (config.enable_io, config.enable_time) {
+                        builder.enable_io();
                     }
                 }
                 builder
@@ -60,13 +64,32 @@ fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
 }
 
 /// Configuration for Tokio runtime
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeltaConfig)]
 pub struct RuntimeConfig {
-    multi_threaded: bool,
-    worker_threads: usize,
-    thread_name: Option<String>,
-    enable_io: bool,
-    enable_time: bool,
+    /// Whether to use a multi-threaded runtime
+    pub(crate) multi_threaded: Option<bool>,
+    /// Number of worker threads to use
+    pub(crate) worker_threads: Option<usize>,
+    /// Name of the thread
+    pub(crate) thread_name: Option<String>,
+    /// Whether to enable IO
+    pub(crate) enable_io: Option<bool>,
+    /// Whether to enable time
+    pub(crate) enable_time: Option<bool>,
+}
+
+impl RuntimeConfig {
+    pub fn decorate<T: ObjectStore + Clone>(
+        &self,
+        store: T,
+        handle: Option<Handle>,
+    ) -> DeltaIOStorageBackend<T> {
+        let handle = handle.unwrap_or_else(|| io_rt(Some(self)).handle().clone());
+        DeltaIOStorageBackend {
+            inner: store,
+            rt_handle: handle,
+        }
+    }
 }
 
 /// Provide custom Tokio RT or a runtime config
@@ -96,37 +119,25 @@ impl IORuntime {
 }
 
 /// Wraps any object store and runs IO in it's own runtime [EXPERIMENTAL]
-pub struct DeltaIOStorageBackend {
-    inner: ObjectStoreRef,
-    rt_handle: Handle,
+#[derive(Clone)]
+pub struct DeltaIOStorageBackend<T: ObjectStore + Clone> {
+    pub(crate) inner: T,
+    pub(crate) rt_handle: Handle,
 }
 
-impl DeltaIOStorageBackend {
-    /// create wrapped object store which spawns tasks in own runtime
-    pub fn new(storage: ObjectStoreRef, rt_handle: Handle) -> Self {
-        Self {
-            inner: storage,
-            rt_handle,
-        }
-    }
-
+impl<T: ObjectStore + Clone> DeltaIOStorageBackend<T> {
     /// spawn tasks on IO runtime
     pub fn spawn_io_rt<F, O>(
         &self,
         f: F,
-        store: &Arc<dyn ObjectStore>,
+        store: &T,
         path: Path,
     ) -> BoxFuture<'_, ObjectStoreResult<O>>
     where
-        F: for<'a> FnOnce(
-                &'a Arc<dyn ObjectStore>,
-                &'a Path,
-            ) -> BoxFuture<'a, ObjectStoreResult<O>>
-            + Send
-            + 'static,
+        F: for<'a> FnOnce(&'a T, &'a Path) -> BoxFuture<'a, ObjectStoreResult<O>> + Send + 'static,
         O: Send + 'static,
     {
-        let store = Arc::clone(store);
+        let store = store.clone();
         let fut = self.rt_handle.spawn(async move { f(&store, &path).await });
         fut.unwrap_or_else(|e| match e.try_into_panic() {
             Ok(p) => std::panic::resume_unwind(p),
@@ -139,21 +150,17 @@ impl DeltaIOStorageBackend {
     pub fn spawn_io_rt_from_to<F, O>(
         &self,
         f: F,
-        store: &Arc<dyn ObjectStore>,
+        store: &T,
         from: Path,
         to: Path,
     ) -> BoxFuture<'_, ObjectStoreResult<O>>
     where
-        F: for<'a> FnOnce(
-                &'a Arc<dyn ObjectStore>,
-                &'a Path,
-                &'a Path,
-            ) -> BoxFuture<'a, ObjectStoreResult<O>>
+        F: for<'a> FnOnce(&'a T, &'a Path, &'a Path) -> BoxFuture<'a, ObjectStoreResult<O>>
             + Send
             + 'static,
         O: Send + 'static,
     {
-        let store = Arc::clone(store);
+        let store = store.clone();
         let fut = self
             .rt_handle
             .spawn(async move { f(&store, &from, &to).await });
@@ -165,20 +172,20 @@ impl DeltaIOStorageBackend {
     }
 }
 
-impl std::fmt::Debug for DeltaIOStorageBackend {
+impl<T: ObjectStore + Clone> std::fmt::Debug for DeltaIOStorageBackend<T> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "DeltaIOStorageBackend")
+        write!(fmt, "DeltaIOStorageBackend({:?})", self.inner)
     }
 }
 
-impl std::fmt::Display for DeltaIOStorageBackend {
+impl<T: ObjectStore + Clone> std::fmt::Display for DeltaIOStorageBackend<T> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "DeltaIOStorageBackend")
+        write!(fmt, "DeltaIOStorageBackend({})", self.inner)
     }
 }
 
 #[async_trait::async_trait]
-impl ObjectStore for DeltaIOStorageBackend {
+impl<T: ObjectStore + Clone> ObjectStore for DeltaIOStorageBackend<T> {
     async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.spawn_io_rt(
             |store, path| store.put(path, bytes),

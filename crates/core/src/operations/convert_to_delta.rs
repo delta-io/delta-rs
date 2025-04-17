@@ -470,11 +470,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{
-        kernel::{DataType, PrimitiveType},
-        logstore::StorageOptions,
-        open_table, Path,
-    };
+    use crate::kernel::{DataType, PrimitiveType};
+    use crate::{open_table, Path};
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {
         StructField::new(key.to_string(), DataType::Primitive(primitive), nullable)
@@ -501,7 +498,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, StorageOptions::default(), None)
+        crate::logstore::logstore_for(location, HashMap::<String, String>::new(), None)
             .expect("Failed to create an object store")
     }
 

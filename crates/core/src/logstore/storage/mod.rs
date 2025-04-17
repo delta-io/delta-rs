@@ -1,70 +1,25 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use dashmap::DashMap;
-use object_store::limit::LimitStore;
-use object_store::local::LocalFileSystem;
-use object_store::memory::InMemory;
-use object_store::prefix::PrefixStore;
-use serde::{Deserialize, Serialize};
+use object_store::path::Path;
+use object_store::{DynObjectStore, ObjectStore};
 use url::Url;
 
 use crate::{DeltaResult, DeltaTableError};
+use deltalake_derive::DeltaConfig;
 
-use object_store::path::Path;
-use object_store::{DynObjectStore, ObjectStore};
 pub use retry_ext::ObjectStoreRetryExt;
-#[cfg(feature = "cloud")]
-pub use retry_ext::RetryConfigParse;
 pub use runtime::{DeltaIOStorageBackend, IORuntime};
 
-pub mod retry_ext;
-mod runtime;
-pub mod utils;
+pub(super) mod retry_ext;
+pub(super) mod runtime;
+pub(super) mod utils;
 
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Sharable reference to [`ObjectStore`]
 pub type ObjectStoreRef = Arc<DynObjectStore>;
-
-/// Factory trait for creating [ObjectStoreRef] instances at runtime
-pub trait ObjectStoreFactory: Send + Sync {
-    #[allow(missing_docs)]
-    fn parse_url_opts(
-        &self,
-        url: &Url,
-        options: &StorageOptions,
-    ) -> DeltaResult<(ObjectStoreRef, Path)>;
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct DefaultObjectStoreFactory {}
-
-impl ObjectStoreFactory for DefaultObjectStoreFactory {
-    fn parse_url_opts(
-        &self,
-        url: &Url,
-        options: &StorageOptions,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        match url.scheme() {
-            "memory" => {
-                let path = Path::from_url_path(url.path())?;
-                let inner = Arc::new(InMemory::new()) as ObjectStoreRef;
-                let store = limit_store_handler(url_prefix_handler(inner, path.clone()), options);
-                Ok((store, path))
-            }
-            "file" => {
-                let inner = Arc::new(LocalFileSystem::new_with_prefix(
-                    url.to_file_path().unwrap(),
-                )?) as ObjectStoreRef;
-                let store = limit_store_handler(inner, options);
-                Ok((store, Path::from("/")))
-            }
-            _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
-        }
-    }
-}
 
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static + Clone {
     /// If a store with the same key existed before, it is replaced and returned
@@ -143,121 +98,88 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-/// TODO
-pub type FactoryRegistry = Arc<DashMap<Url, Arc<dyn ObjectStoreFactory>>>;
-
-/// TODO
-pub fn factories() -> FactoryRegistry {
-    static REGISTRY: OnceLock<FactoryRegistry> = OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry = FactoryRegistry::default();
-            registry.insert(
-                Url::parse("memory://").unwrap(),
-                Arc::new(DefaultObjectStoreFactory::default()),
-            );
-            registry.insert(
-                Url::parse("file://").unwrap(),
-                Arc::new(DefaultObjectStoreFactory::default()),
-            );
-            registry
-        })
-        .clone()
-}
-
-/// Simpler access pattern for the [FactoryRegistry] to get a single store
-pub fn store_for(url: &Url, storage_options: &StorageOptions) -> DeltaResult<ObjectStoreRef> {
-    let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
-    if let Some(factory) = factories().get(&scheme) {
-        let (store, _prefix) = factory.parse_url_opts(url, storage_options)?;
-        Ok(store)
-    } else {
-        Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
-    }
-}
-
-/// Options used for configuring backend storage
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct StorageOptions(pub HashMap<String, String>);
-
-impl From<HashMap<String, String>> for StorageOptions {
-    fn from(value: HashMap<String, String>) -> Self {
-        Self(value)
-    }
-}
-
-/// Simple function to wrap the given [ObjectStore] in a [PrefixStore] if necessary
-///
-/// This simplifies the use of the storage since it ensures that list/get/etc operations
-/// start from the prefix in the object storage rather than from the root configured URI of the
-/// [ObjectStore]
-pub fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> ObjectStoreRef {
-    if prefix != Path::from("/") {
-        Arc::new(PrefixStore::new(store, prefix))
-    } else {
-        Arc::new(store)
-    }
-}
-
-/// Simple function to wrap the given [ObjectStore] in a [LimitStore] if configured
-///
-/// Limits the number of concurrent connections the underlying object store
-/// Reference [LimitStore](https://docs.rs/object_store/latest/object_store/limit/struct.LimitStore.html) for more information
-pub fn limit_store_handler<T: ObjectStore>(store: T, options: &StorageOptions) -> ObjectStoreRef {
-    let concurrency_limit = options
-        .0
-        .get(storage_constants::OBJECT_STORE_CONCURRENCY_LIMIT)
-        .and_then(|v| v.parse().ok());
-
-    if let Some(limit) = concurrency_limit {
-        Arc::new(LimitStore::new(store, limit))
-    } else {
-        Arc::new(store)
-    }
-}
-
-/// Storage option keys to use when creating [ObjectStore].
-///
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-/// Must be implemented for a given storage provider
-pub mod storage_constants {
-
-    /// The number of concurrent connections the underlying object store can create
-    /// Reference [LimitStore](https://docs.rs/object_store/latest/object_store/limit/struct.LimitStore.html) for more information
-    pub const OBJECT_STORE_CONCURRENCY_LIMIT: &str = "OBJECT_STORE_CONCURRENCY_LIMIT";
+#[derive(Debug, Clone, Default, DeltaConfig)]
+pub struct LimitConfig {
+    #[delta(alias = "concurrency_limit", env = "OBJECT_STORE_CONCURRENCY_LIMIT")]
+    pub max_concurrency: Option<usize>,
 }
 
 #[cfg(test)]
+#[allow(drop_bounds, unused)]
 mod tests {
+    use std::collections::HashMap;
+    use std::env;
+
+    use rstest::*;
+
     use super::*;
+    use crate::logstore::config::TryUpdateKey;
 
-    #[test]
-    fn test_url_prefix_handler() {
-        let store = InMemory::new();
-        let path = Path::parse("/databases/foo/bar").expect("Failed to parse path");
+    #[fixture]
+    pub fn with_env(#[default(vec![])] vars: Vec<(&str, &str)>) -> impl Drop {
+        // Store the original values before modifying
+        let original_values: HashMap<String, Option<String>> = vars
+            .iter()
+            .map(|(key, _)| (key.to_string(), std::env::var(key).ok()))
+            .collect();
 
-        let prefixed = url_prefix_handler(store, path.clone());
+        // Set all the new environment variables
+        for (key, value) in vars {
+            std::env::set_var(key, value);
+        }
 
-        assert_eq!(
-            String::from("PrefixObjectStore(databases/foo/bar)"),
-            format!("{prefixed}")
-        );
+        // Create a cleanup struct that will restore original values when dropped
+        struct EnvCleanup(HashMap<String, Option<String>>);
+
+        impl Drop for EnvCleanup {
+            fn drop(&mut self) {
+                for (key, maybe_value) in self.0.iter() {
+                    match maybe_value {
+                        Some(value) => env::set_var(key, value),
+                        None => env::remove_var(key),
+                    }
+                }
+            }
+        }
+
+        EnvCleanup(original_values)
+    }
+
+    #[rstest]
+    fn test_api_with_env(
+        #[with(vec![("API_KEY", "test_key"), ("API_URL", "http://test.example.com")])]
+        with_env: impl Drop,
+    ) {
+        // Test code using these environment variables
+        assert_eq!(env::var("API_KEY").unwrap(), "test_key");
+        assert_eq!(env::var("API_URL").unwrap(), "http://test.example.com");
+
+        drop(with_env);
+
+        assert!(env::var("API_KEY").is_err());
+        assert!(env::var("API_URL").is_err());
     }
 
     #[test]
-    fn test_limit_store_handler() {
-        let store = InMemory::new();
+    fn test_limit_config() {
+        let mut config = LimitConfig::default();
+        assert!(config.max_concurrency.is_none());
 
-        let options = StorageOptions(HashMap::from_iter(vec![(
-            "OBJECT_STORE_CONCURRENCY_LIMIT".into(),
-            "500".into(),
-        )]));
+        config.try_update_key("concurrency_limit", "10").unwrap();
+        assert_eq!(config.max_concurrency, Some(10));
 
-        let limited = limit_store_handler(store, &options);
+        config.try_update_key("max_concurrency", "20").unwrap();
+        assert_eq!(config.max_concurrency, Some(20));
+    }
 
-        assert_eq!(
-            String::from("LimitStore(500, InMemory)"),
-            format!("{limited}")
-        );
+    #[rstest]
+    fn test_limit_config_env(
+        #[with(vec![("OBJECT_STORE_CONCURRENCY_LIMIT", "100")])] with_env: impl Drop,
+    ) {
+        let mut config = LimitConfig::default();
+        assert!(config.max_concurrency.is_none());
+
+        config.load_from_environment().unwrap();
+        assert_eq!(config.max_concurrency, Some(100));
     }
 }

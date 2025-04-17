@@ -3,8 +3,8 @@
 use bytes::Bytes;
 use deltalake_aws::storage::S3StorageBackend;
 use deltalake_core::logstore::object_store::{
-    DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, PutOptions, PutResult, Result as ObjectStoreResult,
+    DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta,
+    PutOptions, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
@@ -13,7 +13,6 @@ use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use serial_test::serial;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncWrite;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
