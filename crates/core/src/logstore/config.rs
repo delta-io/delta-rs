@@ -8,6 +8,7 @@
 //! defines how to update internal fields based on key-value pairs.
 use std::collections::HashMap;
 
+#[cfg(feature = "cloud")]
 use ::object_store::RetryConfig;
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
 use tokio::runtime::Handle;
