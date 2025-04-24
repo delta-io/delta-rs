@@ -95,6 +95,7 @@ pub struct StorageConfig {
     /// Configuration to set up a dedicated IO runtime to execute IO related operations.
     pub runtime: Option<RuntimeConfig>,
 
+    #[cfg(feature = "cloud")]
     pub retry: ::object_store::RetryConfig,
 
     /// Limit configuration.

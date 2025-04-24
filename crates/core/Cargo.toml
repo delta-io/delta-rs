@@ -32,7 +32,7 @@ arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
 parquet = { workspace = true, features = ["async", "object_store"] }
-object_store = { workspace = true, features = ["cloud"] }
+object_store = { workspace = true }
 pin-project-lite = "^0.2.7"
 
 # datafusion

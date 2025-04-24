@@ -4,7 +4,9 @@ use std::{
 };
 
 use dashmap::DashMap;
-use object_store::{path::Path, RetryConfig};
+use object_store::path::Path;
+#[cfg(feature = "cloud")]
+use object_store::RetryConfig;
 use url::Url;
 
 use super::{default_logstore, LogStore, ObjectStoreRef, StorageConfig};
@@ -23,11 +25,19 @@ pub trait ObjectStoreFactory: Send + Sync {
     /// corresponding to the path segment of the URL.
     ///
     /// The store should __NOT__ apply the decorations via the passed `StorageConfig`
+    #[cfg(feature = "cloud")]
     fn parse_url_opts(
         &self,
         url: &Url,
         options: &HashMap<String, String>,
         retry: &RetryConfig,
+    ) -> DeltaResult<(ObjectStoreRef, Path)>;
+
+    #[cfg(not(feature = "cloud"))]
+    fn parse_url_opts(
+        &self,
+        url: &Url,
+        options: &HashMap<String, String>,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
@@ -35,22 +45,37 @@ pub trait ObjectStoreFactory: Send + Sync {
 pub(crate) struct DefaultObjectStoreFactory {}
 
 impl ObjectStoreFactory for DefaultObjectStoreFactory {
+    #[cfg(not(feature = "cloud"))]
+    fn parse_url_opts(
+        &self,
+        url: &Url,
+        options: &HashMap<String, String>,
+    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+        default_parse_url_opts(url, options)
+    }
+
+    #[cfg(feature = "cloud")]
     fn parse_url_opts(
         &self,
         url: &Url,
         options: &HashMap<String, String>,
         _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        match url.scheme() {
-            "memory" | "file" => {
-                let (store, path) = object_store::parse_url_opts(url, options)?;
-                tracing::debug!(
-                    "building store with:\n\tParsed URL: {url}\n\tPath in store: {path}"
-                );
-                Ok((Arc::new(store), path))
-            }
-            _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
+        default_parse_url_opts(url, options)
+    }
+}
+
+fn default_parse_url_opts(
+    url: &Url,
+    options: &HashMap<String, String>,
+) -> DeltaResult<(ObjectStoreRef, Path)> {
+    match url.scheme() {
+        "memory" | "file" => {
+            let (store, path) = object_store::parse_url_opts(url, options)?;
+            tracing::debug!("building store with:\n\tParsed URL: {url}\n\tPath in store: {path}");
+            Ok((Arc::new(store), path))
         }
+        _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
     }
 }
 
@@ -78,8 +103,11 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
+        #[cfg(feature = "cloud")]
         let (store, _prefix) =
             factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry)?;
+        #[cfg(not(feature = "cloud"))]
+        let (store, _prefix) = factory.parse_url_opts(url, &storage_config.raw)?;
         let store = storage_config.decorate_store(store, url, None)?;
         Ok(Arc::new(store))
     } else {
