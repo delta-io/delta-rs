@@ -176,11 +176,16 @@ where
 
     if let Some(entry) = object_store_factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
+        #[cfg(feature = "cloud")]
         let (store, _prefix) = entry.value().parse_url_opts(
             &location,
             &storage_options.raw,
             &storage_options.retry,
         )?;
+        #[cfg(not(feature = "cloud"))]
+        let (store, _prefix) = entry
+            .value()
+            .parse_url_opts(&location, &storage_options.raw)?;
         return logstore_with(store, location, storage_options.raw, io_runtime);
     }
 
