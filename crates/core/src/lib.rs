@@ -105,6 +105,9 @@ pub use arrow;
 pub use datafusion;
 pub use parquet;
 
+#[cfg(not(any(feature = "rustls", feature = "native-tls")))]
+compile_error!("You must enable at least one of the features: `rustls` or `native-tls`.");
+
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
 ///
