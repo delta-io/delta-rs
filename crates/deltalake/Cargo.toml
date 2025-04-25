@@ -25,7 +25,7 @@ features = [
 ]
 
 [dependencies]
-deltalake-core = { version = "0.25.0", path = "../core" }
+deltalake-core = { version = "0.25.0", path = "../core", default-features = false }
 deltalake-aws = { version = "0.8.0", path = "../aws", default-features = false, optional = true }
 deltalake-azure = { version = "0.8.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.9.0", path = "../gcp", optional = true }
