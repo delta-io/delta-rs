@@ -290,13 +290,13 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
                                 _ => panic!("unexpected scalar type"),
                             })),
                         ) as ArrayRef,
-                        PrimitiveType::Decimal(p, s) => Arc::new(
+                        PrimitiveType::Decimal(decimal) => Arc::new(
                             Decimal128Array::from_iter(values.iter().map(|v| match v {
-                                Scalar::Decimal(d, _, _) => Some(*d),
+                                Scalar::Decimal(decimal) => Some(decimal.bits()),
                                 Scalar::Null(_) => None,
                                 _ => panic!("unexpected scalar type"),
                             }))
-                            .with_precision_and_scale(*p, *s as i8)?,
+                            .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
                         ) as ArrayRef,
                     };
                     Ok(arr)
