@@ -1910,7 +1910,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             let date = py_date.call_method1("fromisoformat", (value.serialize(),))?;
             date.into_py_any(py)?
         }
-        Decimal(_, _, _) => value.serialize().into_py_any(py)?,
+        Decimal(_) => value.serialize().into_py_any(py)?,
         Struct(data) => {
             let py_struct = PyDict::new(py);
             for (field, value) in data.fields().iter().zip(data.values().iter()) {
