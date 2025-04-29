@@ -53,12 +53,14 @@ impl PartialOrd for ScalarHelper<'_> {
             (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
             (Date(a), Date(b)) => a.partial_cmp(b),
             (Binary(a), Binary(b)) => a.partial_cmp(b),
-            (Decimal(a, p1, s1), Decimal(b, p2, s2)) => {
+            (Decimal(decimal1), Decimal(decimal2)) => {
                 // TODO implement proper decimal comparison
-                if p1 != p2 || s1 != s2 {
+                if decimal1.precision() != decimal2.precision()
+                    || decimal1.scale() != decimal2.scale()
+                {
                     return None;
                 };
-                a.partial_cmp(b)
+                decimal1.bits().partial_cmp(&decimal2.bits())
             }
             // TODO should we make an assumption about the ordering of nulls?
             // rigth now this is only used for internal purposes.

@@ -638,7 +638,7 @@ mod test {
             ),
             StructField::new(
                 "money".to_string(),
-                DataType::Primitive(PrimitiveType::Decimal(12, 2)),
+                DataType::Primitive(PrimitiveType::decimal(12, 2).unwrap()),
                 true,
             ),
             StructField::new(
@@ -663,7 +663,7 @@ mod test {
             ),
             StructField::new(
                 "_decimal".to_string(),
-                DataType::Primitive(PrimitiveType::Decimal(2, 2)),
+                DataType::Primitive(PrimitiveType::decimal(2, 2).unwrap()),
                 true,
             ),
             StructField::new(
