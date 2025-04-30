@@ -1823,7 +1823,7 @@ class TableOptimizer:
             partition_filters: the partition filters that will be used for getting the matched files
             target_size: desired file size after bin-packing files, in bytes. If not
                             provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-                            If that value isn't set, will use default value of 256MB.
+                            If that value isn't set, will use default value of 100MB.
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
@@ -1890,7 +1890,7 @@ class TableOptimizer:
             partition_filters: the partition filters that will be used for getting the matched files
             target_size: desired file size after bin-packing files, in bytes. If not
                             provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-                            If that value isn't set, will use default value of 256MB.
+                            If that value isn't set, will use default value of 100MB.
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
