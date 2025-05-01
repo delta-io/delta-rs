@@ -82,12 +82,9 @@ tempfile = { version = "3.19.1", optional = true }
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
-errno = "0.3"
 either = "1.8"
-fix-hidden-lifetime-bug = "0.2"
 indexmap = "2.2.1"
 itertools = "0.14"
-libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
 parking_lot = "0.12"
