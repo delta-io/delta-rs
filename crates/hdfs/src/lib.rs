@@ -20,15 +20,10 @@ impl ObjectStoreFactory for HdfsFactory {
         options: &HashMap<String, String>,
         _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        /*
-        Needs a new hdfs object store release
-
         let store: ObjectStoreRef =
             Arc::new(HdfsObjectStore::with_config(url.as_str(), options.clone())?);
         let prefix = Path::parse(url.path())?;
         Ok((store, prefix))
-         */
-        todo!()
     }
 }
 
@@ -50,5 +45,21 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
         let url = Url::parse(&format!("{scheme}://")).unwrap();
         object_store_factories().insert(url.clone(), factory.clone());
         logstore_factories().insert(url.clone(), factory.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_url_opts() -> DeltaResult<()> {
+        let factory = HdfsFactory::default();
+        let _ = factory.parse_url_opts(
+            &Url::parse("hdfs://localhost:9000").expect("Failed to parse hdfs://"),
+            &HashMap::default(),
+            &RetryConfig::default(),
+        )?;
+        Ok(())
     }
 }
