@@ -2,7 +2,7 @@
 
 set -xe
 
-for crate in "core" "mount" "catalog-glue" "catalog-unity" "hdfs" "lakefs" "azure" "aws" "gcp" "deltalake"; do
+for crate in "derive" "core" "mount" "catalog-glue" "catalog-unity" "hdfs" "lakefs" "azure" "aws" "gcp" "deltalake"; do
         echo ">> Dry-run publishing ${crate}"
         (cd crates/${crate} && \
                 cargo publish \
