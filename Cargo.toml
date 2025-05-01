@@ -26,9 +26,9 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.9.0", features = [
-    "arrow_54",
-    "developer-visibility",
+delta_kernel = { version = "0.10.0", features = [
+    "arrow-54",
+    "internal-api",
 ] }
 
 # arrow
@@ -61,11 +61,11 @@ datafusion-sql = "46"
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "0.26" }
+strum = { version = "0.27" }
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "=0.4.39", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "2" }
