@@ -28,6 +28,7 @@ impl AsyncShareableBuffer {
     }
 
     /// Returns a clone of the underlying buffer as a `Vec`.
+    #[allow(dead_code)]
     pub async fn to_vec(&self) -> Vec<u8> {
         let inner = self.buffer.read().await;
         inner.clone()
@@ -40,12 +41,14 @@ impl AsyncShareableBuffer {
     }
 
     /// Returns `true` if the underlying buffer is empty.
+    #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
         let inner = self.buffer.read().await;
         inner.is_empty()
     }
 
     /// Creates a new instance with the buffer initialized from the provided bytes.
+    #[allow(dead_code)]
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             buffer: Arc::new(TokioRwLock::new(bytes.to_vec())),

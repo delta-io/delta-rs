@@ -20,7 +20,7 @@ use super::async_utils::AsyncShareableBuffer;
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
-use crate::storage::ObjectStoreRef;
+use crate::logstore::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -486,7 +486,7 @@ impl PartitionWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::utils::flatten_list_stream as list;
+    use crate::logstore::tests::flatten_list_stream as list;
     use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::*;
     use crate::DeltaTableBuilder;
@@ -534,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_partition() {
-        let log_store = DeltaTableBuilder::from_uri("memory://")
+        let log_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap();
         let object_store = log_store.object_store(None);
@@ -553,7 +553,7 @@ mod tests {
             .head(&Path::from(adds[0].path.clone()))
             .await
             .unwrap();
-        assert_eq!(head.size, adds[0].size as usize)
+        assert_eq!(head.size, adds[0].size as u64)
     }
 
     #[tokio::test]
@@ -566,7 +566,7 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -597,7 +597,7 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -624,7 +624,7 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory://")
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -639,7 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_mismatched_schema() {
-        let log_store = DeltaTableBuilder::from_uri("memory://")
+        let log_store = DeltaTableBuilder::from_uri("memory:///")
             .build_storage()
             .unwrap();
         let object_store = log_store.object_store(None);

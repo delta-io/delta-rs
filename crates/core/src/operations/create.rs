@@ -10,9 +10,9 @@ use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -144,12 +144,7 @@ impl CreateBuilder {
                     if let Value::Number(n) = v {
                         n.as_i64().map_or_else(
                             || MetadataValue::String(v.to_string()),
-                            |i| {
-                                i32::try_from(i)
-                                    .ok()
-                                    .map(MetadataValue::Number)
-                                    .unwrap_or_else(|| MetadataValue::String(v.to_string()))
-                            },
+                            MetadataValue::Number,
                         )
                     } else {
                         MetadataValue::String(v.to_string())
@@ -465,7 +460,7 @@ mod tests {
     async fn test_create_table_metadata() {
         let schema = get_delta_schema();
         let table = CreateBuilder::new()
-            .with_location("memory://")
+            .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
@@ -488,7 +483,7 @@ mod tests {
             reader_features: None,
         };
         let table = CreateBuilder::new()
-            .with_location("memory://")
+            .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .with_actions(vec![Action::Protocol(protocol)])
             .await
@@ -497,7 +492,7 @@ mod tests {
         assert_eq!(table.protocol().unwrap().min_writer_version, 0);
 
         let table = CreateBuilder::new()
-            .with_location("memory://")
+            .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .with_configuration_property(TableProperty::AppendOnly, Some("true"))
             .await
@@ -615,7 +610,7 @@ mod tests {
 
         // Fail to create table with unknown Delta key
         let table = CreateBuilder::new()
-            .with_location("memory://")
+            .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .with_configuration(config.clone())
             .await;
@@ -623,7 +618,7 @@ mod tests {
 
         // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
         let table = CreateBuilder::new()
-            .with_location("memory://")
+            .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .with_raise_if_key_not_exists(false)
             .with_configuration(config)

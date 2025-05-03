@@ -391,7 +391,7 @@ impl<'a> TryFrom<&LogicalFile<'a>> for ObjectMeta {
     fn try_from(file_stats: &LogicalFile<'a>) -> Result<Self, Self::Error> {
         Ok(ObjectMeta {
             location: file_stats.object_store_path(),
-            size: file_stats.size() as usize,
+            size: file_stats.size() as u64,
             last_modified: file_stats.modification_datetime()?,
             version: None,
             e_tag: None,
@@ -565,7 +565,7 @@ mod datafusion {
     use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
-    use delta_kernel::{ExpressionEvaluator, ExpressionHandler};
+    use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
 
     use super::*;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
@@ -795,7 +795,7 @@ mod datafusion {
             } else {
                 Expression::column(["add", "stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER.get_evaluator(
+            let evaluator = ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
                 expression,
                 field.data_type().clone(),
@@ -867,7 +867,7 @@ mod datafusion {
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER.get_evaluator(
+                ARROW_HANDLER.new_expression_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
                     Expression::column(["add", "stats_parsed", "numRecords"]),
                     DataType::Primitive(PrimitiveType::Long),

@@ -10,13 +10,12 @@ use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
+use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
+use deltalake_core::logstore::{commit_uri_from_version, StorageConfig};
 use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
 use deltalake_core::operations::create::CreateBuilder;
-use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::commit_uri_from_version;
-use deltalake_core::storage::StorageOptions;
 use deltalake_core::table::builder::ensure_table_uri;
 use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
@@ -65,13 +64,10 @@ fn client_configs_via_env_variables() -> TestResult<()> {
         deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME,
         "64",
     );
-    std::env::set_var(
-        deltalake_aws::constants::LOCK_TABLE_KEY_NAME,
-        "some_table".to_owned(),
-    );
+    std::env::set_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME, "some_table");
     std::env::set_var(
         deltalake_aws::constants::BILLING_MODE_KEY_NAME,
-        "PAY_PER_REQUEST".to_owned(),
+        "PAY_PER_REQUEST",
     );
     let client = make_client()?;
     let config = client.get_dynamodb_config();
@@ -163,10 +159,10 @@ async fn test_repair_commit_entry() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "repair_needed").await?;
-    let options: StorageOptions = OPTIONS.clone().into();
+    let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
-        options.clone(),
+        &options,
         &S3_OPTIONS,
         std::sync::Arc::new(table.object_store()),
     )?;
@@ -238,10 +234,10 @@ async fn test_abort_commit_entry() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "abort_entry").await?;
-    let options: StorageOptions = OPTIONS.clone().into();
+    let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
-        options.clone(),
+        &options,
         &S3_OPTIONS,
         std::sync::Arc::new(table.object_store()),
     )?;
@@ -285,10 +281,10 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
     let table = prepare_table(&context, "abort_entry_fail").await?;
-    let options: StorageOptions = OPTIONS.clone().into();
+    let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
         ensure_table_uri(table.table_uri())?,
-        options.clone(),
+        &options,
         &S3_OPTIONS,
         std::sync::Arc::new(table.object_store()),
     )?;
@@ -301,16 +297,14 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
         .await?;
 
     // Abort will fail since we marked the entry as complete
-    assert!(matches!(
-        log_store
-            .abort_commit_entry(
-                entry.version,
-                CommitOrBytes::TmpCommit(entry.temp_path.clone()),
-                Uuid::new_v4(),
-            )
-            .await,
-        Err(_),
-    ));
+    assert!(log_store
+        .abort_commit_entry(
+            entry.version,
+            CommitOrBytes::TmpCommit(entry.temp_path.clone()),
+            Uuid::new_v4(),
+        )
+        .await
+        .is_err());
 
     // Check temp commit file still exists
     assert!(log_store
@@ -504,7 +498,7 @@ async fn validate_lock_table_state(table: &DeltaTable, expected_version: i64) ->
     let latest = client
         .get_latest_entries(&table.table_uri(), WORKERS * COMMITS)
         .await?;
-    let max_version = latest.get(0).unwrap().version;
+    let max_version = latest.first().unwrap().version;
     assert_eq!(max_version, expected_version);
 
     // Pull out pairs of consecutive commit entries and verify invariants.

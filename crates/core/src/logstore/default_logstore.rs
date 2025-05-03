@@ -6,12 +6,10 @@ use bytes::Bytes;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use uuid::Uuid;
 
+use super::storage::{utils::commit_uri_from_version, ObjectStoreRef};
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
-use crate::{
-    operations::transaction::TransactionError,
-    storage::{commit_uri_from_version, ObjectStoreRef},
-    DeltaResult,
-};
+use crate::kernel::transaction::TransactionError;
+use crate::DeltaResult;
 
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
@@ -19,6 +17,7 @@ fn put_options() -> &'static PutOptions {
         mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
         tags: TagSet::default(),
         attributes: Attributes::default(),
+        extensions: Default::default(),
     })
 }
 

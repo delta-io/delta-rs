@@ -52,6 +52,24 @@ write_deltalake(
 )
 ```
 
-## Using Local Authentication
+## Using Azure CLI
 
-If your local session is authenticated using the Azure CLI then you can write Delta tables directly to ADLS. Read more about this in the [Azure CLI documentation](https://learn.microsoft.com/en-us/cli/azure/).
+If your local session is authenticated using the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/) then you can read and write Delta tables directly to ADLS.
+
+```python
+from deltalake import write_deltalake
+
+# build path
+storage_account_name = "<STORAGE_ACCOUNT_NAME>"
+container_name = "<CONTAINER_NAME>"
+table_name = "<TABLE_NAME>" 
+abfs_path = f"abfss://{container_name}@{storage_account_name}.dfs.core.windows.net/{table_name}/"
+
+# define credentials
+storage_options = {
+    "azure_tenant_id": "<TENANT_ID>",
+    "azure_use_azure_cli": "true",
+}
+
+dt = DeltaTable(abfs_path,storage_options=storage_options)
+```

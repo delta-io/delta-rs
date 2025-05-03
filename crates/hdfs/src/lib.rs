@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::storage::{
-    factories, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef, StorageOptions,
+use deltalake_core::logstore::{
+    default_logstore, logstore_factories, LogStore, LogStoreFactory, StorageConfig,
 };
+use deltalake_core::logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, Path};
 use hdfs_native_object_store::HdfsObjectStore;
+use object_store::RetryConfig;
 use url::Url;
 
 #[derive(Clone, Default, Debug)]
@@ -15,14 +17,13 @@ impl ObjectStoreFactory for HdfsFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        options: &HashMap<String, String>,
+        _retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let store: ObjectStoreRef = Arc::new(HdfsObjectStore::with_config(
-            url.as_str(),
-            options.0.clone(),
-        )?);
+        let store: ObjectStoreRef =
+            Arc::new(HdfsObjectStore::with_config(url.as_str(), options.clone())?);
         let prefix = Path::parse(url.path())?;
-        Ok((url_prefix_handler(store, prefix.clone()), prefix))
+        Ok((store, prefix))
     }
 }
 
@@ -31,7 +32,7 @@ impl LogStoreFactory for HdfsFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }
@@ -42,7 +43,23 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(HdfsFactory {});
     for scheme in ["hdfs", "viewfs"].iter() {
         let url = Url::parse(&format!("{scheme}://")).unwrap();
-        factories().insert(url.clone(), factory.clone());
-        logstores().insert(url.clone(), factory.clone());
+        object_store_factories().insert(url.clone(), factory.clone());
+        logstore_factories().insert(url.clone(), factory.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_url_opts() -> DeltaResult<()> {
+        let factory = HdfsFactory::default();
+        let _ = factory.parse_url_opts(
+            &Url::parse("hdfs://localhost:9000").expect("Failed to parse hdfs://"),
+            &HashMap::default(),
+            &RetryConfig::default(),
+        )?;
+        Ok(())
     }
 }

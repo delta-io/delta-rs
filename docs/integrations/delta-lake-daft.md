@@ -85,7 +85,7 @@ You can use `write_deltalake` to write a Daft DataFrame to a Delta table:
 df.write_deltalake("tmp/daft-table", mode="overwrite")
 ```
 
-Daft supports multiple write modes. See the [Daft documentation](https://www.getdaft.io/projects/docs/en/latest/api_docs/doc_gen/dataframe_methods/daft.DataFrame.write_deltalake.html#daft.DataFrame.write_deltalake) for more information.
+Daft supports multiple write modes. See the [Daft documentation](https://www.getdaft.io/projects/docs/en/stable/api/dataframe/?h=write+delta#daft.DataFrame.write_deltalake) for more information.
 
 ## What can I do with a Daft DataFrame?
 
@@ -198,7 +198,7 @@ Read [High-Performance Querying on Massive Delta Lake Tables with Daft](https://
 
 Daft has a rich multimodal type-system with support for Python objects, Images, URLs, Tensors and more.
 
-The [Expressions API](https://www.getdaft.io/projects/docs/en/latest/api_docs/expressions.html) provides useful tools to work with these data types. By combining multimodal data support with the [User-Defined Functions API](https://www.getdaft.io/projects/docs/en/latest/api_docs/udf.html) you can run ML workloads right within your DataFrame.
+The [Expressions API](https://www.getdaft.io/projects/docs/en/stable/api/expressions) provides useful tools to work with these data types. By combining multimodal data support with the [User-Defined Functions API](https://www.getdaft.io/projects/docs/en/stable/api/udf) you can run ML workloads right within your DataFrame.
 
 Take a look at the notebook in the [`delta-examples` Github repository](https://github.com/delta-io/delta-examples) for a closer look at how Daft handles URLs, images and ML applications.
 

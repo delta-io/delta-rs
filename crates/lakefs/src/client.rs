@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use deltalake_core::operations::transaction::TransactionError;
+use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::DeltaResult;
 use reqwest::Client;
 use reqwest::StatusCode;

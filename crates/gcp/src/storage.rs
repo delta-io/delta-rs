@@ -1,13 +1,13 @@
 //! GCP GCS storage backend.
 
 use bytes::Bytes;
-use deltalake_core::storage::ObjectStoreRef;
+use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::Path;
 use futures::stream::BoxStream;
 use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use std::ops::Range;
 
-use deltalake_core::storage::object_store::{
+use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
@@ -57,7 +57,7 @@ impl ObjectStore for GcsStorageBackend {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -69,7 +69,7 @@ impl ObjectStore for GcsStorageBackend {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -77,7 +77,7 @@ impl ObjectStore for GcsStorageBackend {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

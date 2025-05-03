@@ -602,8 +602,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::kernel::transaction::{CommitBuilder, TableReference};
     use crate::kernel::StructType;
-    use crate::operations::transaction::{CommitBuilder, TableReference};
     use crate::operations::DeltaOps;
     use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;

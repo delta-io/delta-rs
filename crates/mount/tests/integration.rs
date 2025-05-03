@@ -11,7 +11,7 @@ static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 
 #[tokio::test]
 #[serial]
-async fn test_integration_local() -> TestResult {
+async fn test_integration_mount() -> TestResult {
     let context = IntegrationContext::new(Box::<MountIntegration>::default())?;
 
     test_read_tables(&context).await?;

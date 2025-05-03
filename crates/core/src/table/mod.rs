@@ -18,9 +18,11 @@ use self::state::DeltaTableState;
 use crate::kernel::{
     CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
 };
-use crate::logstore::{extract_version_from_filename, LogStoreConfig, LogStoreRef};
+use crate::logstore::{
+    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreRef,
+    ObjectStoreRef,
+};
 use crate::partitions::PartitionFilter;
-use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{DeltaResult, DeltaTableError};
 
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
@@ -282,7 +284,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
                 let log_store = crate::logstore::logstore_for(
                     storage_config.location,
-                    storage_config.options,
+                    storage_config.options.raw,
                     None,
                 )
                 .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;

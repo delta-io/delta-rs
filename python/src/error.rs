@@ -66,7 +66,7 @@ impl<T: Error + 'static> Display for DisplaySourceChain<T> {
             for err_part in err_msg.split(": ").flat_map(|s| s.split("\ncaused by\n")) {
                 if !err_part.is_empty()
                     && !out_parts.contains(&err_part)
-                    && !out_parts.iter().map(|p| p.contains(&err_part)).any(|v| v)
+                    && !out_parts.iter().any(|p| p.contains(err_part))
                 {
                     out_parts.push(err_part);
                 }
@@ -74,13 +74,12 @@ impl<T: Error + 'static> Display for DisplaySourceChain<T> {
         }
         for (i, part) in out_parts.iter().enumerate() {
             if i == 0 {
-                write!(f, "{}\n", part)?;
+                writeln!(f, "{}", part)?;
             } else {
-                write!(
+                writeln!(
                     f,
-                    "{}\x1b[31m{}\x1b[0m {}\n",
+                    "{}\x1b[31m↳\x1b[0m {}",
                     " ".repeat(self.error_name.len() + ": ".len() + i),
-                    "↳",
                     part
                 )?;
             }

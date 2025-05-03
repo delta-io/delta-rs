@@ -162,7 +162,7 @@ impl UnitySchemaProvider {
         {
             ListTableSummariesResponse::Success { tables, .. } => tables
                 .into_iter()
-                .filter_map(|t| t.full_name.split('.').last().map(|n| n.into()))
+                .filter_map(|t| t.full_name.split('.').next_back().map(|n| n.into()))
                 .collect(),
             ListTableSummariesResponse::Error(_) => vec![],
         };

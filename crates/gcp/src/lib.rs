@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use deltalake_core::logstore::{default_logstore, logstores, LogStore, LogStoreFactory};
-use deltalake_core::storage::{
-    factories, limit_store_handler, url_prefix_handler, ObjectStoreFactory, ObjectStoreRef,
-    RetryConfigParse, StorageOptions,
+use deltalake_core::logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use deltalake_core::logstore::object_store::{ObjectStoreScheme, RetryConfig};
+use deltalake_core::logstore::{default_logstore, logstore_factories, LogStore, LogStoreFactory};
+use deltalake_core::logstore::{
+    object_store_factories, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
-use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
-use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
@@ -20,10 +19,9 @@ trait GcpOptions {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String>;
 }
 
-impl GcpOptions for StorageOptions {
+impl GcpOptions for HashMap<String, String> {
     fn as_gcp_options(&self) -> HashMap<GoogleConfigKey, String> {
-        self.0
-            .iter()
+        self.iter()
             .filter_map(|(key, value)| {
                 Some((
                     GoogleConfigKey::from_str(&key.to_ascii_lowercase()).ok()?,
@@ -37,13 +35,12 @@ impl GcpOptions for StorageOptions {
 #[derive(Clone, Default, Debug)]
 pub struct GcpFactory {}
 
-impl RetryConfigParse for GcpFactory {}
-
 impl ObjectStoreFactory for GcpFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &StorageOptions,
+        options: &HashMap<String, String>,
+        retry: &RetryConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::GcpConfigHelper::try_new(options.as_gcp_options())?.build()?;
 
@@ -59,13 +56,10 @@ impl ObjectStoreFactory for GcpFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let inner = builder
-            .with_retry(self.parse_retry_config(options)?)
-            .build()?;
+        let inner = builder.with_retry(retry.clone()).build()?;
+        let store = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
 
-        let gcs_backend = crate::storage::GcsStorageBackend::try_new(Arc::new(inner))?;
-        let store = limit_store_handler(url_prefix_handler(gcs_backend, prefix.clone()), options);
-        Ok((store, prefix))
+        Ok((Arc::new(store), prefix))
     }
 }
 
@@ -74,7 +68,7 @@ impl LogStoreFactory for GcpFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         Ok(default_logstore(store, location, options))
     }
@@ -85,6 +79,6 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let factory = Arc::new(GcpFactory {});
     let scheme = &"gs";
     let url = Url::parse(&format!("{scheme}://")).unwrap();
-    factories().insert(url.clone(), factory.clone());
-    logstores().insert(url.clone(), factory.clone());
+    object_store_factories().insert(url.clone(), factory.clone());
+    logstore_factories().insert(url.clone(), factory.clone());
 }

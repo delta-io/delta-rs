@@ -1,11 +1,11 @@
 use chrono::Utc;
+use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
 };
+use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::operations::create::CreateBuilder;
-use deltalake_core::operations::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::storage::{GetResult, ObjectStoreResult, StorageOptions};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
@@ -147,12 +147,9 @@ impl std::fmt::Display for SlowStore {
 
 impl SlowStore {
     #[allow(dead_code)]
-    pub fn new(
-        location: Url,
-        _options: impl Into<deltalake_core::storage::StorageOptions> + Clone,
-    ) -> deltalake_core::DeltaResult<Self> {
+    pub fn new(location: Url) -> deltalake_core::DeltaResult<Self> {
         Ok(Self {
-            inner: deltalake_core::storage::store_for(&location, &StorageOptions::default())?,
+            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
         })
     }
 }
@@ -195,7 +192,7 @@ impl ObjectStore for SlowStore {
     async fn get_range(
         &self,
         location: &StorePath,
-        range: std::ops::Range<usize>,
+        range: std::ops::Range<u64>,
     ) -> ObjectStoreResult<bytes::Bytes> {
         self.inner.get_range(location, range).await
     }
@@ -217,7 +214,7 @@ impl ObjectStore for SlowStore {
     fn list(
         &self,
         prefix: Option<&StorePath>,
-    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -229,7 +226,7 @@ impl ObjectStore for SlowStore {
         &self,
         prefix: Option<&StorePath>,
         offset: &StorePath,
-    ) -> futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>> {
+    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

@@ -3,6 +3,9 @@
  */
 pub use deltalake_core::*;
 
+#[cfg(not(any(feature = "rustls", feature = "native-tls")))]
+compile_error!("You must enable at least one of the features: `rustls` or `native-tls`.");
+
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub use deltalake_aws as aws;
 #[cfg(feature = "azure")]

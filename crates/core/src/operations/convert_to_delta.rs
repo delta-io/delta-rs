@@ -16,6 +16,8 @@ use percent_encoding::percent_decode_str;
 use tracing::debug;
 use uuid::Uuid;
 
+use super::{CustomExecuteHandler, Operation};
+use crate::kernel::transaction::CommitProperties;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
     kernel::{scalars::ScalarExt, Add, DataType, Schema, StructField},
@@ -27,9 +29,6 @@ use crate::{
     writer::stats::stats_from_parquet_metadata,
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
-
-use super::transaction::CommitProperties;
-use super::{CustomExecuteHandler, Operation};
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]
@@ -352,11 +351,11 @@ impl ConvertToDeltaBuilder {
                 subpath = iter.next();
             }
 
-            let batch_builder = ParquetRecordBatchStreamBuilder::new(ParquetObjectReader::new(
-                object_store.clone(),
-                file.clone(),
-            ))
-            .await?;
+            let object_reader =
+                ParquetObjectReader::new(object_store.clone(), file.location.clone())
+                    .with_file_size(file.size);
+
+            let batch_builder = ParquetRecordBatchStreamBuilder::new(object_reader).await?;
 
             // Fetch the stats
             let parquet_metadata = batch_builder.metadata();
@@ -471,12 +470,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{
-        kernel::{DataType, PrimitiveType},
-        open_table,
-        storage::StorageOptions,
-        Path,
-    };
+    use crate::kernel::{DataType, PrimitiveType};
+    use crate::{open_table, Path};
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {
         StructField::new(key.to_string(), DataType::Primitive(primitive), nullable)
@@ -503,7 +498,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, StorageOptions::default(), None)
+        crate::logstore::logstore_for(location, HashMap::<String, String>::new(), None)
             .expect("Failed to create an object store")
     }
 

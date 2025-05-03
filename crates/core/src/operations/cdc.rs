@@ -70,7 +70,7 @@ pub(crate) fn should_write_cdc(snapshot: &DeltaTableState) -> DeltaResult<bool> 
         // the Option<HashSet<T>> can get filled with an empty set, checking for the value
         // explicitly
         if snapshot.protocol().min_writer_version == 7
-            && !features.contains(&delta_kernel::table_features::WriterFeatures::ChangeDataFeed)
+            && !features.contains(&delta_kernel::table_features::WriterFeature::ChangeDataFeed)
         {
             // If the writer feature has not been set, then the table should not have CDC written
             // to it. Otherwise fallback to the configured table configuration
@@ -95,7 +95,7 @@ mod tests {
     use arrow_schema::Schema;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::{MemTable, TableProvider};
-    use delta_kernel::table_features::WriterFeatures;
+    use delta_kernel::table_features::WriterFeature;
 
     /// A simple test which validates primitive writer version 1 tables should
     /// not write Change Data Files
@@ -175,7 +175,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_with_writer_feature() {
         let protocol =
-            Protocol::new(1, 7).append_writer_features(vec![WriterFeatures::ChangeDataFeed]);
+            Protocol::new(1, 7).append_writer_features(vec![WriterFeature::ChangeDataFeed]);
         let actions = vec![Action::Protocol(protocol)];
         let mut table: DeltaTable = DeltaOps::new_in_memory()
             .create()

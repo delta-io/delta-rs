@@ -36,9 +36,9 @@ use super::{
     Transaction,
 };
 use crate::kernel::parse::read_cdf_adds;
+use crate::kernel::transaction::{CommitData, PROTOCOL};
 use crate::kernel::{ActionType, StructType};
 use crate::logstore::LogStore;
-use crate::operations::transaction::CommitData;
 use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -81,6 +81,9 @@ impl Snapshot {
         };
         let (metadata, protocol) = (metadata.unwrap(), protocol.unwrap());
         let schema = serde_json::from_str(&metadata.schema_string)?;
+
+        PROTOCOL.can_read_from_protocol(&protocol)?;
+
         Ok(Self {
             log_segment,
             config,

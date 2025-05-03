@@ -5,14 +5,14 @@ use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use deltalake_core::errors::DeltaTableError;
+use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
+use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
-use deltalake_core::operations::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::DeltaOperation;
-use deltalake_core::storage::ObjectStoreRef;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
@@ -872,7 +872,8 @@ async fn read_parquet_file(
     object_store: ObjectStoreRef,
 ) -> Result<RecordBatch, Box<dyn Error>> {
     let file = object_store.head(path).await?;
-    let file_reader = ParquetObjectReader::new(object_store, file);
+    let file_reader =
+        ParquetObjectReader::new(object_store, file.location).with_file_size(file.size);
     let batches = ParquetRecordBatchStreamBuilder::new(file_reader)
         .await?
         .build()?

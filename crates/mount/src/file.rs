@@ -12,7 +12,6 @@ use object_store::{
 use object_store::{MultipartUpload, PutMode, PutMultipartOpts, PutPayload};
 use std::ops::Range;
 use std::sync::Arc;
-use url::Url;
 
 pub(crate) const STORE_NAME: &str = "MountObjectStore";
 
@@ -108,42 +107,20 @@ impl From<LocalFileSystemError> for ObjectStoreError {
 #[derive(Debug)]
 pub struct MountFileStorageBackend {
     inner: Arc<LocalFileSystem>,
-    root_url: Arc<Url>,
 }
 
 impl MountFileStorageBackend {
     /// Creates a new MountFileStorageBackend.
-    pub fn try_new(path: impl AsRef<std::path::Path>) -> ObjectStoreResult<Self> {
+    pub fn try_new() -> ObjectStoreResult<Self> {
         Ok(Self {
-            root_url: Arc::new(Self::path_to_root_url(path.as_ref())?),
-            inner: Arc::new(LocalFileSystem::new_with_prefix(path)?),
-        })
-    }
-
-    fn path_to_root_url(path: &std::path::Path) -> ObjectStoreResult<Url> {
-        let root_path =
-            std::fs::canonicalize(path).map_err(|e| object_store::Error::InvalidPath {
-                source: object_store::path::Error::Canonicalize {
-                    path: path.into(),
-                    source: e,
-                },
-            })?;
-
-        Url::from_file_path(root_path).map_err(|_| object_store::Error::InvalidPath {
-            source: object_store::path::Error::InvalidPath { path: path.into() },
+            inner: Arc::new(LocalFileSystem::new()),
         })
     }
 
     /// Return an absolute filesystem path of the given location
     fn path_to_filesystem(&self, location: &ObjectStorePath) -> String {
-        let mut url = self.root_url.as_ref().clone();
-        url.path_segments_mut()
-            .expect("url path")
-            // technically not necessary as Path ignores empty segments
-            // but avoids creating paths with "//" which look odd in error messages.
-            .pop_if_empty()
-            .extend(location.parts());
-
+        let mut url = url::Url::parse("file:///").unwrap();
+        url.set_path(location.as_ref());
         url.to_file_path().unwrap().to_str().unwrap().to_owned()
     }
 }
@@ -191,7 +168,7 @@ impl ObjectStore for MountFileStorageBackend {
     async fn get_range(
         &self,
         location: &ObjectStorePath,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> ObjectStoreResult<Bytes> {
         self.inner.get_range(location, range).await
     }
@@ -207,7 +184,7 @@ impl ObjectStore for MountFileStorageBackend {
     fn list(
         &self,
         prefix: Option<&ObjectStorePath>,
-    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -215,7 +192,7 @@ impl ObjectStore for MountFileStorageBackend {
         &self,
         prefix: Option<&ObjectStorePath>,
         offset: &ObjectStorePath,
-    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

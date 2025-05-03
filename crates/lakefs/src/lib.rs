@@ -8,9 +8,9 @@ pub mod errors;
 pub mod execute;
 pub mod logstore;
 pub mod storage;
-use deltalake_core::logstore::{logstores, LogStore, LogStoreFactory};
-use deltalake_core::storage::{factories, url_prefix_handler, ObjectStoreRef, StorageOptions};
-use deltalake_core::{DeltaResult, Path};
+use deltalake_core::logstore::{logstore_factories, LogStore, LogStoreFactory};
+use deltalake_core::logstore::{object_store_factories, ObjectStoreRef, StorageConfig};
+use deltalake_core::DeltaResult;
 pub use execute::LakeFSCustomExecuteHandler;
 use logstore::lakefs_logstore;
 use std::sync::Arc;
@@ -29,10 +29,9 @@ impl LogStoreFactory for LakeFSLogStoreFactory {
         &self,
         store: ObjectStoreRef,
         location: &Url,
-        options: &StorageOptions,
+        config: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        let options = self.with_env_s3(options);
-        let store = url_prefix_handler(store, Path::parse(location.path())?);
+        let options = StorageConfig::parse_options(self.with_env_s3(&config.raw.clone()))?;
         debug!("LakeFSLogStoreFactory has been asked to create a LogStore");
         lakefs_logstore(store, location, &options)
     }
@@ -44,6 +43,6 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     let log_stores = Arc::new(LakeFSLogStoreFactory::default());
     let scheme = "lakefs";
     let url = Url::parse(&format!("{scheme}://")).unwrap();
-    factories().insert(url.clone(), object_stores.clone());
-    logstores().insert(url.clone(), log_stores.clone());
+    object_store_factories().insert(url.clone(), object_stores.clone());
+    logstore_factories().insert(url.clone(), log_stores.clone());
 }

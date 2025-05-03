@@ -15,7 +15,7 @@ use itertools::Itertools;
 
 use crate::delta_datafusion::execute_plan_to_batch;
 use crate::table::state::DeltaTableState;
-use crate::DeltaResult;
+use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug)]
 enum ReferenceTableCheck {
@@ -382,9 +382,9 @@ pub(crate) async fn try_construct_early_filter(
                             .map(|placeholder| {
                                 let col = items.column_by_name(placeholder).unwrap();
                                 let value = ScalarValue::try_from_array(col, i)?;
-                                DeltaResult::Ok((placeholder.to_owned(), value))
+                                Ok((placeholder.clone(), value))
                             })
-                            .try_collect()?;
+                            .try_collect::<_, _, DeltaTableError>()?;
                         Ok(replace_placeholders(filter.clone(), &replacements))
                     })
                     .collect::<DeltaResult<Vec<_>>>()?

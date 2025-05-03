@@ -1,8 +1,10 @@
 use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree, warn};
 use crate::RawDeltaTable;
-use deltalake::storage::object_store::{MultipartUpload, PutPayloadMut};
-use deltalake::storage::{DynObjectStore, ListResult, ObjectStoreError, Path};
+use deltalake::logstore::object_store::{
+    path::Path, DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload,
+    PutPayloadMut,
+};
 use deltalake::DeltaTableBuilder;
 use parking_lot::Mutex;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
@@ -275,13 +277,14 @@ impl DeltaFileSystemHandler {
         };
 
         let path = Self::parse_path(&path);
-        let file = rt()
-            .block_on(ObjectInputFile::try_new(
+        let file = tokio::task::block_in_place(|| {
+            rt().block_on(ObjectInputFile::try_new(
                 self.inner.clone(),
                 path,
                 size.copied(),
             ))
-            .map_err(PythonError::from)?;
+        })
+        .map_err(PythonError::from)?;
         Ok(file)
     }
 
@@ -460,15 +463,15 @@ impl ObjectInputFile {
         self.check_closed()?;
         let range = match nbytes {
             Some(len) => {
-                let end = i64::min(self.pos + len, self.content_length) as usize;
+                let end = i64::min(self.pos + len, self.content_length) as u64;
                 std::ops::Range {
-                    start: self.pos as usize,
+                    start: self.pos as u64,
                     end,
                 }
             }
             _ => std::ops::Range {
-                start: self.pos as usize,
-                end: self.content_length as usize,
+                start: self.pos as u64,
+                end: self.content_length as u64,
             },
         };
         let nbytes = (range.end - range.start) as i64;

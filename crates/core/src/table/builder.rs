@@ -5,38 +5,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use deltalake_derive::DeltaConfig;
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
 
-use super::DeltaTable;
-use crate::errors::{DeltaResult, DeltaTableError};
-use crate::logstore::LogStoreRef;
-use crate::storage::{factories, IORuntime, StorageOptions};
-
-#[allow(dead_code)]
-#[derive(Debug, thiserror::Error)]
-enum BuilderError {
-    #[error("Store {backend} requires host in storage url, got: {url}")]
-    MissingHost { backend: String, url: String },
-    #[error("Missing configuration {0}")]
-    Required(String),
-    #[error("Failed to find valid credential.")]
-    MissingCredential,
-    #[error("Failed to decode SAS key: {0}\nSAS keys must be percent-encoded. They come encoded in the Azure portal and Azure Storage Explorer.")]
-    Decode(String),
-    #[error("Delta-rs must be build with feature '{feature}' to support url: {url}.")]
-    MissingFeature { feature: &'static str, url: String },
-    #[error("Failed to parse table uri")]
-    TableUri(#[from] url::ParseError),
-}
-
-impl From<BuilderError> for DeltaTableError {
-    fn from(err: BuilderError) -> Self {
-        DeltaTableError::Generic(err.to_string())
-    }
-}
+use crate::logstore::storage::IORuntime;
+use crate::logstore::{object_store_factories, LogStoreRef};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -51,23 +28,16 @@ pub enum DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, DeltaConfig)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
-    /// Indicates whether our use case requires tracking tombstones.
-    /// This defaults to `true`
-    ///
-    /// Read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    pub require_tombstones: bool,
-
     /// Indicates whether DeltaTable should track files.
     /// This defaults to `true`
     ///
     /// Some append-only applications might have no need of tracking any files.
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
+
     /// Controls how many files to buffer from the commit log when updating the table.
     /// This defaults to 4 * number of cpus
     ///
@@ -76,10 +46,13 @@ pub struct DeltaTableConfig {
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
+
     /// Control the number of records to read / process from the commit / checkpoint files
     /// when processing record batches.
     pub log_batch_size: usize,
+
     #[serde(skip_serializing, skip_deserializing)]
+    #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
 }
@@ -87,7 +60,6 @@ pub struct DeltaTableConfig {
 impl Default for DeltaTableConfig {
     fn default() -> Self {
         Self {
-            require_tombstones: true,
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
@@ -98,8 +70,7 @@ impl Default for DeltaTableConfig {
 
 impl PartialEq for DeltaTableConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.require_tombstones == other.require_tombstones
-            && self.require_files == other.require_files
+        self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
     }
@@ -168,12 +139,6 @@ impl DeltaTableBuilder {
         })
     }
 
-    /// Sets `require_tombstones=false` to the builder
-    pub fn without_tombstones(mut self) -> Self {
-        self.table_config.require_tombstones = false;
-        self
-    }
-
     /// Sets `require_files=false` to the builder
     pub fn without_files(mut self) -> Self {
         self.table_config.require_files = false;
@@ -217,7 +182,8 @@ impl DeltaTableBuilder {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with
+    ///   "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storagle location of `storage`.
     pub fn with_storage_backend(mut self, storage: Arc<DynObjectStore>, location: Url) -> Self {
         self.storage_backend = Some((storage, location));
@@ -271,7 +237,7 @@ impl DeltaTableBuilder {
     }
 
     /// Storage options for configuring backend object store
-    pub fn storage_options(&self) -> StorageOptions {
+    pub fn storage_options(&self) -> HashMap<String, String> {
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
         if let Some(allow) = self.allow_http {
             storage_options.insert(
@@ -279,7 +245,7 @@ impl DeltaTableBuilder {
                 if allow { "true" } else { "false" }.into(),
             );
         };
-        storage_options.into()
+        storage_options
     }
 
     /// Build a delta storage backend for the given config
@@ -340,7 +306,7 @@ enum UriType {
 /// Will return an error if the path is not valid.
 fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
     let table_uri = table_uri.as_ref();
-    let known_schemes: Vec<_> = factories()
+    let known_schemes: Vec<_> = object_store_factories()
         .iter()
         .map(|v| v.key().scheme().to_owned())
         .collect();
@@ -432,11 +398,11 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::DefaultObjectStoreFactory;
+    use crate::logstore::factories::DefaultObjectStoreFactory;
 
     #[test]
     fn test_ensure_table_uri() {
-        factories().insert(
+        object_store_factories().insert(
             Url::parse("s3://").unwrap(),
             Arc::new(DefaultObjectStoreFactory::default()),
         );
@@ -597,7 +563,7 @@ mod tests {
 
             let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(storage_opts);
             let found_opts = table.storage_options();
-            assert_eq!(expected, found_opts.0.get(key).unwrap());
+            assert_eq!(expected, found_opts.get(key).unwrap());
         }
     }
 }

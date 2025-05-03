@@ -20,16 +20,15 @@ use std::time::UNIX_EPOCH;
 
 use futures::future::BoxFuture;
 use futures::StreamExt;
-pub use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 use url::{ParseError, Url};
 use uuid::Uuid;
 
-use super::transaction::{CommitBuilder, CommitProperties};
 use super::CustomExecuteHandler;
 use super::Operation;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;

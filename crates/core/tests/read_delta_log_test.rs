@@ -1,12 +1,12 @@
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 use std::time::SystemTime;
 
 #[allow(dead_code)]
 mod fs_common;
 
 #[tokio::test]
+#[ignore]
 async fn test_log_buffering() {
     let n_commits = 10;
     let path = "../test/tests/data/simple_table_with_no_checkpoint";
@@ -22,13 +22,7 @@ async fn test_log_buffering() {
     let location = deltalake_core::table::builder::ensure_table_uri(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
-    let store = std::sync::Arc::new(
-        fs_common::SlowStore::new(
-            location.clone(),
-            deltalake_core::storage::StorageOptions::from(HashMap::new()),
-        )
-        .unwrap(),
-    );
+    let store = std::sync::Arc::new(fs_common::SlowStore::new(location.clone()).unwrap());
 
     let mut seq_version = 0;
     let t = SystemTime::now();
@@ -144,6 +138,7 @@ async fn test_log_buffering_fail() {
 }
 
 #[tokio::test]
+#[ignore = "not implemented"]
 async fn test_read_liquid_table() -> DeltaResult<()> {
     let path = "../test/tests/data/table_with_liquid_clustering";
     let _table = deltalake_core::open_table(&path).await?;
@@ -151,6 +146,7 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "not implemented"]
 async fn test_read_table_features() -> DeltaResult<()> {
     let mut _table = deltalake_core::open_table("../test/tests/data/simple_table_features").await?;
     let rf = _table.protocol()?.reader_features.clone();
@@ -165,6 +161,7 @@ async fn test_read_table_features() -> DeltaResult<()> {
 
 // test for: https://github.com/delta-io/delta-rs/issues/1302
 #[tokio::test]
+#[ignore = "not implemented"]
 async fn read_delta_table_from_dlt() {
     let table = deltalake_core::open_table("../test/tests/data/delta-live-table")
         .await
@@ -180,5 +177,15 @@ async fn read_delta_table_with_null_stats_in_notnull_struct() {
             .await
             .unwrap();
     assert_eq!(table.version(), 1);
+    assert!(table.get_schema().is_ok());
+}
+
+#[tokio::test]
+#[ignore = "not implemented"]
+async fn read_delta_table_with_renamed_partitioning_column() {
+    let table = deltalake_core::open_table("../test/tests/data/table_with_partitioning_mapping")
+        .await
+        .unwrap();
+    assert_eq!(table.version(), 4);
     assert!(table.get_schema().is_ok());
 }

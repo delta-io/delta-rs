@@ -42,21 +42,18 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializ
 use tracing::*;
 use uuid::Uuid;
 
-use super::transaction::PROTOCOL;
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
+use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::Add;
-use crate::kernel::{scalars::ScalarExt, Action, PartitionsExt, Remove};
-use crate::logstore::LogStoreRef;
-use crate::operations::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
+use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
+use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
-use crate::storage::ObjectStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
-use crate::delta_datafusion::DeltaTableProvider;
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -485,11 +482,7 @@ impl MergePlan {
         let mut partial_actions = files
             .iter()
             .map(|file_meta| {
-                create_remove(
-                    file_meta.path.as_ref(),
-                    &partition_values,
-                    file_meta.size as i64,
-                )
+                create_remove(file_meta.path.as_ref(), &partition_values, file_meta.size)
             })
             .collect::<Result<Vec<_>, DeltaTableError>>()?;
 
@@ -497,9 +490,9 @@ impl MergePlan {
             .iter()
             .fold(MetricDetails::default(), |mut curr, file| {
                 curr.total_files += 1;
-                curr.total_size += file.size as i64;
-                curr.max = std::cmp::max(curr.max, file.size as i64);
-                curr.min = std::cmp::min(curr.min, file.size as i64);
+                curr.total_size += file.size;
+                curr.max = std::cmp::max(curr.max, file.size);
+                curr.min = std::cmp::min(curr.min, file.size);
                 curr
             });
 
@@ -538,7 +531,7 @@ impl MergePlan {
                 true,
             )?;
             partial_metrics.num_batches += 1;
-            writer.write(&batch).await.map_err(DeltaTableError::from)?;
+            writer.write(&batch).await?;
         }
 
         let add_actions = writer.close().await?.into_iter().map(|mut add| {
@@ -629,11 +622,11 @@ impl MergePlan {
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
+                            let meta = ObjectMeta::try_from(file).unwrap();
                             async move {
-                                let file_reader = ParquetObjectReader::new(
-                                    object_store_ref,
-                                    ObjectMeta::try_from(file).unwrap(),
-                                );
+                                let file_reader =
+                                    ParquetObjectReader::new(object_store_ref, meta.location)
+                                        .with_file_size(meta.size);
                                 ParquetRecordBatchStreamBuilder::new(file_reader)
                                     .await?
                                     .build()
@@ -670,7 +663,7 @@ impl MergePlan {
                 let scan_config = DeltaScanConfigBuilder::default()
                     .with_file_column(false)
                     .with_schema(snapshot.input_schema()?)
-                    .build(&snapshot)?;
+                    .build(snapshot)?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
@@ -855,7 +848,7 @@ impl MergeBin {
     }
 
     fn add(&mut self, add: Add) {
-        self.size_bytes += add.size as i64;
+        self.size_bytes += add.size;
         self.files.push(add);
     }
 
@@ -913,7 +906,7 @@ fn build_compaction_plan(
 
         'files: for file in files {
             for bin in merge_bins.iter_mut() {
-                if bin.total_file_size() + file.size as i64 <= target_size {
+                if bin.total_file_size() + file.size <= target_size {
                     bin.add(file);
                     // Move to next file
                     continue 'files;
@@ -1050,7 +1043,8 @@ pub(super) mod zorder {
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
         use datafusion_expr::{
-            ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+            ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
+            Volatility,
         };
         use itertools::Itertools;
         use std::any::Any;
@@ -1106,8 +1100,11 @@ pub(super) mod zorder {
                 Ok(DataType::Binary)
             }
 
-            fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-                zorder_key_datafusion(args)
+            fn invoke_with_args(
+                &self,
+                args: ScalarFunctionArgs,
+            ) -> datafusion_common::Result<ColumnarValue> {
+                zorder_key_datafusion(&args.args)
             }
         }
 

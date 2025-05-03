@@ -40,7 +40,6 @@ use serde::Serialize;
 
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
-use super::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use super::Operation;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
@@ -51,6 +50,7 @@ use crate::delta_datafusion::{
     DeltaTableProvider,
 };
 use crate::errors::DeltaResult;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};

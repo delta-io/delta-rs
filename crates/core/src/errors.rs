@@ -2,11 +2,11 @@
 use chrono::{DateTime, Utc};
 use object_store::Error as ObjectStoreError;
 
-use crate::operations::transaction::{CommitBuilderError, TransactionError};
+use crate::kernel::transaction::{CommitBuilderError, TransactionError};
 use crate::protocol::ProtocolError;
 
 /// A result returned by delta-rs
-pub type DeltaResult<T> = Result<T, DeltaTableError>;
+pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
 
 /// Delta Table specific error
 #[allow(missing_docs)]

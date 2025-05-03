@@ -2,9 +2,9 @@
 
 use bytes::Bytes;
 use deltalake_aws::storage::S3StorageBackend;
-use deltalake_core::storage::object_store::{
-    DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, PutOptions, PutResult, Result as ObjectStoreResult,
+use deltalake_core::logstore::object_store::{
+    DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta,
+    PutOptions, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
@@ -13,7 +13,6 @@ use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
 use serial_test::serial;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncWrite;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
@@ -188,7 +187,7 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -200,7 +199,7 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -208,7 +207,7 @@ impl ObjectStore for DelayedObjectStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

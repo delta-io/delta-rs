@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.25.0"
+version = "0.26.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,9 +12,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.docs.rs]
-features = ["datafusion", "json", "unity-experimental"]
+features = ["datafusion", "json"]
 
 [dependencies]
+deltalake-derive = { version = "0.25.0", path = "../derive" }
+
 delta_kernel.workspace = true
 
 # arrow
@@ -29,10 +31,8 @@ arrow-ord = { workspace = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
-parquet = { workspace = true, features = [
-    "async",
-    "object_store",
-] }
+parquet = { workspace = true, features = ["async", "object_store"] }
+object_store = { workspace = true }
 pin-project-lite = "^0.2.7"
 
 # datafusion
@@ -49,7 +49,7 @@ datafusion-functions-aggregate = { workspace = true, optional = true }
 # serde
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-strum = { workspace =  true}
+strum = { workspace = true }
 
 # "stdlib"
 bytes = { workspace = true }
@@ -75,18 +75,18 @@ tokio = { workspace = true, features = [
     "parking_lot",
 ] }
 
+# caching
+foyer = { version = "0.16.1", optional = true, features = ["serde"] }
+tempfile = { version = "3.19.1", optional = true }
+
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
-errno = "0.3"
 either = "1.8"
-fix-hidden-lifetime-bug = "0.2"
 indexmap = "2.2.1"
 itertools = "0.14"
-libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = { workspace = true }
 parking_lot = "0.12"
 percent-encoding = "2"
 roaring = "0.10.1"
@@ -107,13 +107,13 @@ maplit = "1"
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rand = "0.8"
+rstest = { version = "0.25.0" }
 serial_test = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
-cdf = []
-default = ["cdf"]
+default = ["rustls"]
 datafusion = [
     "dep:datafusion",
     "datafusion-expr",
@@ -128,4 +128,9 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
+native-tls = ["delta_kernel/default-engine"]
+rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud"]
+
+# enable caching some file I/O operations when scanning delta logs
+delta-cache = ["foyer", "tempfile", "url/serde"]
