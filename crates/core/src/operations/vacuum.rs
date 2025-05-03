@@ -31,6 +31,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
+use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -76,6 +77,20 @@ pub trait Clock: Debug + Send + Sync {
     fn current_timestamp_millis(&self) -> i64;
 }
 
+/// Type of Vacuum operation to perform
+#[derive(Debug, Default, Clone, PartialEq)]
+pub enum VacuumMode {
+    /// The `lite` mode will only remove files which are referenced in the `_delta_log` associated
+    /// with `remove` action
+    #[default]
+    Lite,
+    /// A `full` mode vacuum will remove _all_ data files no longer actively referenced in the
+    /// `_delta_log` table. For example, if parquet files exist in the table directory but are no
+    /// longer mentioned as `add` actions in the transaction log, then this mode will scan storage
+    /// and remove those files.
+    Full,
+}
+
 /// Vacuum a Delta table with the given options
 /// See this module's documentation for more information
 pub struct VacuumBuilder {
@@ -89,6 +104,8 @@ pub struct VacuumBuilder {
     enforce_retention_duration: bool,
     /// Don't delete the files. Just determine which files can be deleted
     dry_run: bool,
+    /// Mode of vacuum that should be run
+    mode: VacuumMode,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
     /// Additional information to add to the commit
@@ -144,6 +161,7 @@ impl VacuumBuilder {
             retention_period: None,
             enforce_retention_duration: true,
             dry_run: false,
+            mode: VacuumMode::Lite,
             clock: None,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
@@ -153,6 +171,12 @@ impl VacuumBuilder {
     /// Override the default rention period for which files are deleted.
     pub fn with_retention_period(mut self, retention_period: Duration) -> Self {
         self.retention_period = Some(retention_period);
+        self
+    }
+
+    /// Override the default vacuum mode (lite)
+    pub fn with_mode(mut self, mode: VacuumMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -189,6 +213,10 @@ impl VacuumBuilder {
 
     /// Determine which files can be deleted. Does not actually perform the deletion
     async fn create_vacuum_plan(&self) -> Result<VacuumPlan, VacuumError> {
+        if self.mode == VacuumMode::Full {
+            info!("Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!");
+        }
+
         let min_retention = Duration::milliseconds(
             self.snapshot
                 .table_config()
@@ -228,11 +256,23 @@ impl VacuumBuilder {
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
             let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-            if valid_files.contains(&obj_meta.location) // file is still being tracked in table
-            || !expired_tombstones.contains(obj_meta.location.as_ref()) // file is not an expired tombstone
-            || is_hidden_directory(partition_columns, &obj_meta.location)?
-            {
+            // file is still being tracked in table
+            if valid_files.contains(&obj_meta.location) {
                 continue;
+            }
+            if is_hidden_directory(partition_columns, &obj_meta.location)? {
+                continue;
+            }
+            // file is not an expired tombstone _and_ this is a "Lite" vacuum
+            // If the file is not an expired tombstone and we have gotten to here with a
+            // VacuumMode::Full then it should be added to the deletion plan
+            if !expired_tombstones.contains(obj_meta.location.as_ref()) {
+                if self.mode == VacuumMode::Lite {
+                    debug!("The file {:?} was not referenced in a log file, but VacuumMode::Lite means it will not be vacuumed", &obj_meta.location);
+                    continue;
+                } else {
+                    debug!("The file {:?} was not referenced in a log file, but VacuumMode::Full means it *will be vacuumed*", &obj_meta.location);
+                }
             }
 
             files_to_delete.push(obj_meta.location);
@@ -436,7 +476,44 @@ mod tests {
     use std::time::SystemTime;
 
     #[tokio::test]
-    async fn vacuum_delta_8_0_table() {
+    async fn test_vacuum_full() -> DeltaResult<()> {
+        let table = open_table("../test/tests/data/simple_commit").await?;
+
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Lite)
+            .with_enforce_retention_duration(false)
+            .await?;
+        // When running lite, this table with superfluous parquet files should not have anything to
+        // delete
+        assert!(result.files_deleted.is_empty());
+
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        let mut files_deleted = result.files_deleted.clone();
+        files_deleted.sort();
+        // When running with full, these superfluous parquet files which are not actually
+        // referenced in the _delta_log commits should be considered for the
+        // low-orbit ion-cannon
+        assert_eq!(
+            files_deleted,
+            vec![
+                "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet",
+                "part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
+                "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
+                "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn vacuum_delta_8_0_table() -> DeltaResult<()> {
         let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
 
         let result = VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())
@@ -453,8 +530,7 @@ mod tests {
                 .with_retention_period(Duration::hours(0))
                 .with_dry_run(true)
                 .with_enforce_retention_duration(false)
-                .await
-                .unwrap();
+                .await?;
         // do not enforce retention duration check with 0 hour will purge all files
         assert_eq!(
             result.files_deleted,
@@ -465,8 +541,7 @@ mod tests {
             VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())
                 .with_retention_period(Duration::hours(169))
                 .with_dry_run(true)
-                .await
-                .unwrap();
+                .await?;
 
         assert_eq!(
             result.files_deleted,
@@ -483,9 +558,9 @@ mod tests {
             VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())
                 .with_retention_period(Duration::hours(retention_hours as i64))
                 .with_dry_run(true)
-                .await
-                .unwrap();
+                .await?;
 
         assert_eq!(result.files_deleted, empty);
+        Ok(())
     }
 }
