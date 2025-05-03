@@ -104,6 +104,7 @@ class RawDeltaTable:
         enforce_retention_duration: bool,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        full: bool,
     ) -> list[str]: ...
     def compact_optimize(
         self,

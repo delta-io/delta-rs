@@ -53,7 +53,7 @@ use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
-use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::Compression;
@@ -477,7 +477,8 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, commit_properties=None, post_commithook_properties=None, full = false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn vacuum(
         &self,
         py: Python,
@@ -486,6 +487,7 @@ impl RawDeltaTable {
         enforce_retention_duration: bool,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
+        full: bool,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
             let snapshot = match self._table.lock() {
@@ -499,6 +501,11 @@ impl RawDeltaTable {
             let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot)
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
+
+            if full {
+                cmd = cmd.with_mode(VacuumMode::Full);
+            }
+
             if let Some(retention_period) = retention_hours {
                 cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
             }
