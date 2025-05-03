@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.26.0", path = "../core" }
+deltalake-core = { version = "0.26.0", path = "../core", features = ["cloud"] }
 hdfs-native-object-store = "0.14"
 
 # workspace dependecies
