@@ -14,7 +14,6 @@ rust-version.workspace = true
 [dependencies]
 deltalake-core = { version = "0.26.0", path = "../core", features = [
     "cloud",
-    "datafusion",
 ] }
 errno = "0.3"
 
