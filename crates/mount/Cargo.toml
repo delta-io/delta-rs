@@ -12,9 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.26.0", path = "../core", features = [
-    "cloud",
-] }
+deltalake-core = { version = "0.26.0", path = "../core" }
 errno = "0.3"
 
 # workspace depenndecies
