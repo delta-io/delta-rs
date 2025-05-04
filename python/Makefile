@@ -1,22 +1,11 @@
 .DEFAULT_GOAL := help
 
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
-DAT_VERSION := 0.0.2
 
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
 	uv sync --no-install-project --all-extras
-
-.PHONY: setup-dat
-setup-dat: ## Download DAT test files
-	mkdir -p dat-data
-	rm -rf dat-data/v$(DAT_VERSION)
-	curl -L --silent --output dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz \
-		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz
-	tar --no-same-permissions -xzf dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
-	mv out dat-data/v$(DAT_VERSION)
-	rm dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
 
 .PHONY: build
 build: setup ## Build Python binding of delta-rs
