@@ -371,7 +371,9 @@ async fn execute(
 
     //let updated_df = df_with_predicate_and_metrics.clone();
     // Disabling the select allows the coerce test to pass, still not sure why
-    let updated_df = df_with_predicate_and_metrics.select(expressions.clone())?;
+    let updated_df = df_with_predicate_and_metrics
+        .select(expressions.clone())?
+        .drop_columns(&[UPDATE_PREDICATE_COLNAME])?;
     let physical_plan = updated_df.clone().create_physical_plan().await?;
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -381,7 +383,7 @@ async fn execute(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let tracker = CDCTracker::new(df, updated_df.drop_columns(&[UPDATE_PREDICATE_COLNAME])?);
+    let tracker = CDCTracker::new(df, updated_df);
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
