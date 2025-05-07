@@ -13,7 +13,7 @@ pub fn able_to_gc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
             return Ok(false);
         }
         if snapshot.protocol().min_writer_version == 7
-            && !features.contains(&delta_kernel::table_features::WriterFeatures::GeneratedColumns)
+            && !features.contains(&delta_kernel::table_features::WriterFeature::GeneratedColumns)
         {
             return Ok(false);
         }
