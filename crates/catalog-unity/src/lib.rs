@@ -7,7 +7,6 @@ compile_error!(
     for this crate to function properly."
 );
 
-use datafusion_common::DataFusionError;
 use deltalake_core::logstore::{
     default_logstore, logstore_factories, object_store::RetryConfig, LogStore, LogStoreFactory,
     StorageConfig,
@@ -556,11 +555,9 @@ impl UnityCatalogBuilder {
             .get_temp_table_credentials(catalog_id, database_name, table_name)
             .await?;
         let credentials = match temp_creds_res {
-            TableTempCredentialsResponse::Success(temp_creds) => {
-                temp_creds.get_credentials().ok_or_else(|| {
-                    DataFusionError::External(UnityCatalogError::MissingCredential.into())
-                })?
-            }
+            TableTempCredentialsResponse::Success(temp_creds) => temp_creds
+                .get_credentials()
+                .ok_or_else(|| UnityCatalogError::MissingCredential)?,
             TableTempCredentialsResponse::Error(_error) => {
                 return Err(UnityCatalogError::TemporaryCredentialsFetchFailure)
             }
