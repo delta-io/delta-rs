@@ -259,6 +259,16 @@ mod tests {
             .with_status(StatusCode::CREATED.as_u16().into())
             .create();
 
+        let diff_mock = server
+            .mock(
+                "GET",
+                format!("/api/v1/repositories/repo/refs/delta-tx-{operation_id}/diff/branch")
+                    .as_str(),
+            )
+            .with_status(StatusCode::OK.as_u16().into())
+            .with_body(r#"{"results": [{"some": "change"}]}"#)
+            .create();
+
         let merge_branch_mock = server
             .mock(
                 "POST",
@@ -293,6 +303,7 @@ mod tests {
         });
 
         create_commit_mock.assert();
+        diff_mock.assert();
         merge_branch_mock.assert();
         delete_branch_mock.assert();
         assert!(result.is_ok());
