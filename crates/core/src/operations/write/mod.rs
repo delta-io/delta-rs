@@ -451,16 +451,11 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
             if let Some(snapshot) = &this.snapshot {
                 if able_to_gc(snapshot)? {
-                    let generated_col_expressions = this
-                        .snapshot
-                        .as_ref()
-                        .map(|v| v.schema().get_generated_columns().unwrap_or_default())
-                        .unwrap_or_default();
-
+                    let generated_col_expressions = snapshot.schema().get_generated_columns()?;
                     // Add missing generated columns to source_df
-                    let (new_source, missing_generated_columns) =
+                    let (source_with_gc, missing_generated_columns) =
                         add_missing_generated_columns(source, &generated_col_expressions)?;
-                    source = new_source;
+                    source = source_with_gc;
                     missing_gen_col = Some(missing_generated_columns);
                     generated_col_exp = Some(generated_col_expressions);
                 }
