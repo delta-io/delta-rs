@@ -480,6 +480,7 @@ async fn list_log_files_with_checkpoint(
     let version_prefix = format!("{:020}", cp.version);
     let start_from = log_root.child(version_prefix.as_str());
 
+    // QUESTION: DOES THIS NEED TO BE FILTERED TO ELIMINATE temp subdirs?
     let files = fs_client
         .list_with_offset(Some(log_root), &start_from)
         .try_collect::<Vec<_>>()
@@ -542,6 +543,8 @@ pub(super) async fn list_log_files(
     let mut commit_files = Vec::with_capacity(25);
     let mut checkpoint_files = Vec::with_capacity(10);
 
+    
+    // QUESTION: Does this need to be filtered to exclude subdirs?
     for meta in fs_client
         .list_with_offset(Some(log_root), &start_from)
         .try_collect::<Vec<_>>()
