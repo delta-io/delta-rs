@@ -371,7 +371,9 @@ async fn execute(
 
     //let updated_df = df_with_predicate_and_metrics.clone();
     // Disabling the select allows the coerce test to pass, still not sure why
-    let updated_df = df_with_predicate_and_metrics.select(expressions.clone())?;
+    let updated_df = df_with_predicate_and_metrics
+        .select(expressions.clone())?
+        .drop_columns(&[UPDATE_PREDICATE_COLNAME])?;
     let physical_plan = updated_df.clone().create_physical_plan().await?;
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -381,7 +383,7 @@ async fn execute(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let tracker = CDCTracker::new(df, updated_df.drop_columns(&[UPDATE_PREDICATE_COLNAME])?);
+    let tracker = CDCTracker::new(df, updated_df);
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
@@ -597,6 +599,55 @@ mod tests {
             .with_update("modified", lit("2023-05-14"))
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
+    }
+
+    // <https://github.com/delta-io/delta-rs/issues/3414>
+    #[tokio::test]
+    async fn test_update_predicate_left_in_data() -> DeltaResult<()> {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+            ],
+        )?;
+
+        let table = write_batch(table, batch).await;
+        assert_eq!(table.version(), 1);
+
+        let (table, _) = DeltaOps(table)
+            .update()
+            .with_update("modified", lit("2023-05-14"))
+            .with_predicate(col("value").eq(lit(10)))
+            .await?;
+
+        use parquet::arrow::async_reader::ParquetObjectReader;
+        use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
+
+        for pq in table.get_files_iter()? {
+            let store = table.log_store().object_store(None);
+            let reader = ParquetObjectReader::new(store, pq);
+            let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+            let schema = builder.schema();
+
+            assert!(
+                schema
+                    .field_with_name("__delta_rs_update_predicate")
+                    .is_err(),
+                "The schema contains __delta_rs_update_predicate which is incorrect!"
+            );
+            assert_eq!(schema.fields.len(), 3, "Expected the Parquet file to only have three fields in the schema, something is amiss!");
+        }
+        Ok(())
     }
 
     #[tokio::test]

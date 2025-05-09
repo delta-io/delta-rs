@@ -781,21 +781,25 @@ async fn execute(
 
     let mut generated_col_exp = None;
     let mut missing_generated_col = None;
-    let mut source = source;
+    let mut source_with_gc = None;
 
     if able_to_gc(&snapshot)? {
-        let generated_col_expressions = snapshot.schema().get_generated_columns()?;
-        let (source_with_gc, missing_generated_columns) =
-            add_missing_generated_columns(source, &generated_col_expressions)?;
+        let generated_col_expressions = snapshot
+            .schema()
+            .get_generated_columns()
+            .unwrap_or_default();
 
-        source = source_with_gc;
+        let (source, missing_generated_columns) =
+            add_missing_generated_columns(source.clone(), &generated_col_expressions)?;
+
+        source_with_gc = Some(source);
         generated_col_exp = Some(generated_col_expressions);
         missing_generated_col = Some(missing_generated_columns);
     }
     // This is only done to provide the source columns with a correct table reference. Just renaming the columns does not work
     let source = LogicalPlanBuilder::scan(
         source_name.clone(),
-        provider_as_source(source.into_view()),
+        provider_as_source(source_with_gc.unwrap_or(source).into_view()),
         None,
     )?
     .build()?;
