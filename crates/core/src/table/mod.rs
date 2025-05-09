@@ -561,13 +561,24 @@ impl DeltaTable {
     ) -> Result<(), DeltaTableError> {
         let mut min_version: i64 = -1;
         let log_store = self.log_store();
-        let prefix = Some(log_store.log_path());
+        let prefix = log_store.log_path();
         let offset_path = commit_uri_from_version(min_version);
         let object_store = log_store.object_store(None);
-        let mut files = object_store.list_with_offset(prefix, &offset_path);
+        let mut files = object_store.list_with_offset(Some(prefix), &offset_path);
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
+            let location_path: Path = obj_meta.location.clone();
+            let part_count = location_path.prefix_match(prefix).unwrap().count();
+            if part_count > 1 {
+                // Per the spec, ignore any files in subdirectories.
+                // Spark may create these as uncommited transactions which we don't want
+                //
+                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
+                // "Delta files are stored as JSON in a directory at the *root* of the table
+                // named _delta_log, and ... make up the log of all changes that have occurred to a table."
+                continue;
+            }
             if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
                 if min_version == -1 {
                     min_version = log_version
