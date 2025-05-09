@@ -34,7 +34,7 @@ pub mod writer;
 use arrow_schema::Schema;
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
-use generated_columns::{add_generated_columns, add_missing_generated_columns};
+use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
 use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -445,18 +445,21 @@ impl std::future::IntoFuture for WriteBuilder {
                     state
                 }
             };
-            let generated_col_expressions = this
-                .snapshot
-                .as_ref()
-                .map(|v| v.schema().get_generated_columns().unwrap_or_default())
-                .unwrap_or_default();
-
             let mut schema_drift = false;
-            let source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
-
-            // Add missing generated columns to source_df
-            let (mut source, missing_generated_columns) =
-                add_missing_generated_columns(source, &generated_col_expressions)?;
+            let mut generated_col_exp = None;
+            let mut missing_gen_col = None;
+            let mut source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
+            if let Some(snapshot) = &this.snapshot {
+                if able_to_gc(snapshot)? {
+                    let generated_col_expressions = snapshot.schema().get_generated_columns()?;
+                    // Add missing generated columns to source_df
+                    let (source_with_gc, missing_generated_columns) =
+                        add_missing_generated_columns(source, &generated_col_expressions)?;
+                    source = source_with_gc;
+                    missing_gen_col = Some(missing_generated_columns);
+                    generated_col_exp = Some(generated_col_expressions);
+                }
+            }
 
             let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
 
@@ -527,12 +530,16 @@ impl std::future::IntoFuture for WriteBuilder {
                 source = source.select(schema_evolution_projection)?;
             }
 
-            source = add_generated_columns(
-                source,
-                &generated_col_expressions,
-                &missing_generated_columns,
-                &state,
-            )?;
+            if let Some(generated_columns_exp) = generated_col_exp {
+                if let Some(missing_generated_col) = missing_gen_col {
+                    source = add_generated_columns(
+                        source,
+                        &generated_columns_exp,
+                        &missing_generated_col,
+                        &state,
+                    )?;
+                }
+            }
 
             let source = LogicalPlan::Extension(Extension {
                 node: Arc::new(MetricObserver {
