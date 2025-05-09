@@ -722,7 +722,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     predicate: Expression,
-    source: DataFrame,
+    mut source: DataFrame,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
     _state: SessionState,
@@ -781,7 +781,6 @@ async fn execute(
 
     let mut generated_col_exp = None;
     let mut missing_generated_col = None;
-    let mut source = source;
 
     if able_to_gc(&snapshot)? {
         let generated_col_expressions = snapshot.schema().get_generated_columns()?;
