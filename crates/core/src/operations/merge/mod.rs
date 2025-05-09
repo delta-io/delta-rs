@@ -784,11 +784,7 @@ async fn execute(
     let mut source_with_gc = None;
 
     if able_to_gc(&snapshot)? {
-        let generated_col_expressions = snapshot
-            .schema()
-            .get_generated_columns()
-            .unwrap_or_default();
-
+        let generated_col_expressions = snapshot.schema().get_generated_columns()?;
         let (source, missing_generated_columns) =
             add_missing_generated_columns(source.clone(), &generated_col_expressions)?;
 
