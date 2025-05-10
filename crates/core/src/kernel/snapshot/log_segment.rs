@@ -543,7 +543,6 @@ pub(super) async fn list_log_files(
     let mut commit_files = Vec::with_capacity(25);
     let mut checkpoint_files = Vec::with_capacity(10);
 
-    
     // QUESTION: Does this need to be filtered to exclude subdirs?
     for meta in fs_client
         .list_with_offset(Some(log_root), &start_from)
