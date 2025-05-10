@@ -549,7 +549,7 @@ pub async fn get_latest_version(
                 // Spark may create these as uncommited transactions which we don't want
                 //
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
-                // "Delta files are stored as JSON in a directory at the *root* of the table 
+                // "Delta files are stored as JSON in a directory at the *root* of the table
                 // named _delta_log, and ... make up the log of all changes that have occurred to a table."
                 continue;
             }
