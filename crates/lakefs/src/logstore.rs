@@ -155,7 +155,7 @@ impl LakeFSLogStore {
         // Check if there are any changes before attempting to merge
         let has_changes = self
             .client
-            .has_changes(&repo, &transaction_branch, &target_branch)
+            .has_changes(&repo, &target_branch, &transaction_branch)
             .await
             .map_err(|e| DeltaTableError::generic(format!("Failed to check for changes: {}", e)))?;
 

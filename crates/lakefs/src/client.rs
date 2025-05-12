@@ -195,7 +195,7 @@ impl LakeFSClient {
             "squash_merge": true,
         });
 
-        debug!("Merging LakeFS, source `{transaction_branch}` into target `{transaction_branch}` in repo: {repo}");
+        debug!("Merging LakeFS, source `{transaction_branch}` into target `{target_branch}` in repo: {repo}");
         let response = self
             .http_client
             .post(&request_url)
@@ -226,16 +226,16 @@ impl LakeFSClient {
     pub async fn has_changes(
         &self,
         repo: &str,
-        source_branch: &str,
-        target_branch: &str,
+        base_branch: &str,
+        compare_branch: &str,
     ) -> Result<bool, TransactionError> {
         let request_url = format!(
-            "{}/api/v1/repositories/{repo}/refs/{source_branch}/diff/{target_branch}",
+            "{}/api/v1/repositories/{repo}/refs/{base_branch}/diff/{compare_branch}",
             self.config.host
         );
 
         debug!(
-            "Checking for changes between `{source_branch}` and `{target_branch}` in repo: {repo}"
+            "Checking for changes from `{base_branch}` to `{compare_branch}` in repo: {repo}"
         );
         let response = self
             .http_client
@@ -501,7 +501,7 @@ mod tests {
             let mock = server
                 .mock(
                     "GET",
-                    "/api/v1/repositories/test_repo/refs/source_branch/diff/target_branch",
+                    "/api/v1/repositories/test_repo/refs/base_branch/diff/compare_branch",
                 )
                 .with_status(StatusCode::OK.as_u16().into())
                 .with_body(response_body)
@@ -516,7 +516,7 @@ mod tests {
 
             let result = rt().block_on(async {
                 client
-                    .has_changes("test_repo", "source_branch", "target_branch")
+                    .has_changes("test_repo", "base_branch", "compare_branch")
                     .await
             });
 
