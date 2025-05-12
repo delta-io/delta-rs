@@ -262,7 +262,7 @@ mod tests {
         let diff_mock = server
             .mock(
                 "GET",
-                format!("/api/v1/repositories/repo/refs/delta-tx-{operation_id}/diff/branch")
+                format!("/api/v1/repositories/repo/refs/branch/diff/delta-tx-{operation_id}")
                     .as_str(),
             )
             .with_status(StatusCode::OK.as_u16().into())
