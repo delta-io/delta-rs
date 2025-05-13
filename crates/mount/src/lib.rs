@@ -2,13 +2,16 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use deltalake_core::logstore::DeltaIOStorageBackend;
 use deltalake_core::logstore::{
     config::str_is_truthy, default_logstore, logstore_factories, object_store_factories, LogStore,
     LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
+use object_store::DynObjectStore;
 use object_store::RetryConfig;
+use tokio::runtime::Handle;
 use url::Url;
 
 mod config;
@@ -41,6 +44,7 @@ impl ObjectStoreFactory for MountFactory {
         url: &Url,
         options: &HashMap<String, String>,
         _retry: &RetryConfig,
+        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let config = config::MountConfigHelper::try_new(options.as_mount_options())?.build()?;
 
@@ -50,7 +54,7 @@ impl ObjectStoreFactory for MountFactory {
                 .unwrap_or(&String::new()),
         );
 
-        match url.scheme() {
+        let (mut store, prefix) = match url.scheme() {
             "dbfs" => {
                 if !allow_unsafe_rename {
                     // Just let the user know that they need to set the allow_unsafe_rename option
@@ -74,7 +78,12 @@ impl ObjectStoreFactory for MountFactory {
                 }
             }
             _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
+        }?;
+
+        if let Some(handle) = handle {
+            store = Arc::new(DeltaIOStorageBackend::new(store, handle)) as Arc<DynObjectStore>;
         }
+        Ok((store, prefix))
     }
 }
 

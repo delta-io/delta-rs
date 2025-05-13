@@ -107,7 +107,8 @@ async fn test_create_s3_table() -> TestResult<()> {
         deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into() => "true".into(),
         deltalake_aws::constants::AWS_ENDPOINT_URL.into()  => "http://localhost:4566".into(),
     };
-    let log_store = logstore_for(Url::parse(&table_uri)?, storage_options, None)?;
+    let storage_config = StorageConfig::parse_options(storage_options)?;
+    let log_store = logstore_for(Url::parse(&table_uri)?, storage_config)?;
 
     let payload = PutPayload::from_static(b"test-drivin");
     let _put = log_store

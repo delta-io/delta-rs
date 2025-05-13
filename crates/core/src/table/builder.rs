@@ -12,7 +12,7 @@ use tracing::debug;
 use url::Url;
 
 use crate::logstore::storage::IORuntime;
-use crate::logstore::{object_store_factories, LogStoreRef};
+use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
@@ -255,22 +255,18 @@ impl DeltaTableBuilder {
             DeltaTableError::NotATable(format!("Could not turn {} into a URL", self.table_uri))
         })?;
 
+        let mut storage_config = StorageConfig::parse_options(self.storage_options())?;
+        if let Some(io_runtime) = self.table_config.io_runtime.clone() {
+            storage_config = storage_config.with_io_runtime(io_runtime);
+        }
+
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(
-                store.clone(),
-                location,
-                self.storage_options(),
-                self.table_config.io_runtime.clone(),
-            )
+            crate::logstore::logstore_with(store.clone(), location, storage_config)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
             debug!("Loading a logstore based off the location: {location:?}");
-            crate::logstore::logstore_for(
-                location,
-                self.storage_options(),
-                self.table_config.io_runtime.clone(),
-            )
+            crate::logstore::logstore_for(location, storage_config)
         }
     }
 

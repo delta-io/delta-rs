@@ -4,11 +4,12 @@ use std::{
 };
 
 use dashmap::DashMap;
-use object_store::path::Path;
 use object_store::RetryConfig;
+use object_store::{path::Path, DynObjectStore};
+use tokio::runtime::Handle;
 use url::Url;
 
-use super::{default_logstore, LogStore, ObjectStoreRef, StorageConfig};
+use super::{default_logstore, DeltaIOStorageBackend, LogStore, ObjectStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTableError};
 
 /// Factory registry to manage [`ObjectStoreFactory`] instances
@@ -29,6 +30,7 @@ pub trait ObjectStoreFactory: Send + Sync {
         url: &Url,
         options: &HashMap<String, String>,
         retry: &RetryConfig,
+        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
@@ -41,8 +43,14 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
         url: &Url,
         options: &HashMap<String, String>,
         _retry: &RetryConfig,
+        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        default_parse_url_opts(url, options)
+        let (mut store, path) = default_parse_url_opts(url, options)?;
+
+        if let Some(handle) = handle {
+            store = Arc::new(DeltaIOStorageBackend::new(store, handle)) as Arc<DynObjectStore>;
+        }
+        Ok((store, path))
     }
 }
 
@@ -85,8 +93,8 @@ where
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
         let (store, _prefix) =
-            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry)?;
-        let store = storage_config.decorate_store(store, url, None)?;
+            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry, None)?;
+        let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
         Err(DeltaTableError::InvalidTableLocation(url.clone().into()))

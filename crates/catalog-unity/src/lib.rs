@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::runtime::Handle;
 
 use crate::credential::{
     AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, WorkspaceOAuthProvider,
@@ -840,6 +841,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         table_uri: &Url,
         options: &HashMap<String, String>,
         _retry: &RetryConfig,
+        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),
@@ -850,8 +852,11 @@ impl ObjectStoreFactory for UnityCatalogFactory {
 
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
-        let mut builder =
-            DeltaTableBuilder::from_uri(&table_path).with_io_runtime(IORuntime::default());
+        let mut builder = DeltaTableBuilder::from_uri(&table_path);
+
+        if let Some(handle) = handle {
+            builder = builder.with_io_runtime(IORuntime::RT(handle));
+        }
         if !storage_options.is_empty() {
             builder = builder.with_storage_options(storage_options.clone());
         }
