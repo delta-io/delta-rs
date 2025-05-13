@@ -234,9 +234,7 @@ impl LakeFSClient {
             self.config.host
         );
 
-        debug!(
-            "Checking for changes from `{base_branch}` to `{compare_branch}` in repo: {repo}"
-        );
+        debug!("Checking for changes from `{base_branch}` to `{compare_branch}` in repo: {repo}");
         let response = self
             .http_client
             .get(&request_url)
