@@ -78,7 +78,11 @@ impl LakeFSLogStore {
 
     /// Build a new object store for an URL using the existing storage options. After
     /// branch creation a new object store needs to be created for the branch uri
-    fn build_new_store(&self, url: &Url) -> DeltaResult<ObjectStoreRef> {
+    fn build_new_store(
+        &self,
+        url: &Url,
+        io_runtime: Option<IORuntime>,
+    ) -> DeltaResult<ObjectStoreRef> {
         // turn location into scheme
         let scheme = Url::parse(&format!("{}://", url.scheme()))
             .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
@@ -89,6 +93,7 @@ impl LakeFSLogStore {
                 url,
                 &self.config().options.raw,
                 &self.config().options.retry,
+                io_runtime.map(|rt| rt.get_handle()),
             )?;
             return Ok(store);
         }
@@ -121,9 +126,8 @@ impl LakeFSLogStore {
 
         // Build new object store store using the new lakefs url
         let txn_store = Arc::new(self.config.decorate_store(
-            self.build_new_store(&lakefs_url)?,
+            self.build_new_store(&lakefs_url, self.config().options.runtime.clone())?,
             Some(&lakefs_url),
-            None,
         )?);
 
         // Register transaction branch as ObjectStore in log_store storages
