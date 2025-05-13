@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::CommitProperties;
+use crate::logstore::StorageConfig;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
     kernel::{scalars::ScalarExt, Add, DataType, Schema, StructField},
@@ -252,10 +253,12 @@ impl ConvertToDeltaBuilder {
         self.log_store = if let Some(log_store) = self.log_store {
             Some(log_store)
         } else if let Some(location) = self.location.clone() {
+            let storage_config =
+                StorageConfig::parse_options(self.storage_options.clone().unwrap_or_default())?;
+
             Some(crate::logstore::logstore_for(
                 ensure_table_uri(location)?,
-                self.storage_options.clone().unwrap_or_default(),
-                None, // TODO: allow runtime to be passed into builder
+                storage_config,
             )?)
         } else {
             return Err(Error::MissingLocation);
@@ -498,7 +501,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, HashMap::<String, String>::new(), None)
+        crate::logstore::logstore_for(location, StorageConfig::default())
             .expect("Failed to create an object store")
     }
 

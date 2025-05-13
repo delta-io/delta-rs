@@ -18,7 +18,9 @@ use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
 use object_store::aws::AmazonS3;
+use object_store::client::SpawnedReqwestConnector;
 use object_store::RetryConfig;
+use tokio::runtime::Handle;
 use tracing::log::*;
 use url::Url;
 
@@ -39,6 +41,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         url: &Url,
         storage_options: &HashMap<String, String>,
         retry: &RetryConfig,
+        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(storage_options);
 
@@ -46,6 +49,11 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         let mut builder = AmazonS3Builder::new()
             .with_url(url.to_string())
             .with_retry(retry.clone());
+
+        if let Some(handle) = handle {
+            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
+        }
+
         for (key, value) in options.iter() {
             if let Ok(key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
                 builder = builder.with_config(key, value.clone());

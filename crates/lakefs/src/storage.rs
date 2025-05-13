@@ -4,11 +4,13 @@ use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::aws::AmazonS3Builder;
+use object_store::client::SpawnedReqwestConnector;
 use object_store::{ObjectStoreScheme, RetryConfig};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::runtime::Handle;
 use tracing::log::*;
 use url::Url;
 
@@ -62,6 +64,7 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         url: &Url,
         storage_config: &HashMap<String, String>,
         retry: &RetryConfig,
+        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
@@ -89,6 +92,11 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         let prefix = Path::parse(path)?;
 
         let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
+
+        if let Some(handle) = handle {
+            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
+        }
+
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());
         }

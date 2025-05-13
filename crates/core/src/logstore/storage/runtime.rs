@@ -78,20 +78,6 @@ pub struct RuntimeConfig {
     pub(crate) enable_time: Option<bool>,
 }
 
-impl RuntimeConfig {
-    pub fn decorate<T: ObjectStore + Clone>(
-        &self,
-        store: T,
-        handle: Option<Handle>,
-    ) -> DeltaIOStorageBackend<T> {
-        let handle = handle.unwrap_or_else(|| io_rt(Some(self)).handle().clone());
-        DeltaIOStorageBackend {
-            inner: store,
-            rt_handle: handle,
-        }
-    }
-}
-
 /// Provide custom Tokio RT or a runtime config
 #[derive(Debug, Clone)]
 pub enum IORuntime {
@@ -121,8 +107,20 @@ impl IORuntime {
 /// Wraps any object store and runs IO in it's own runtime [EXPERIMENTAL]
 #[derive(Clone)]
 pub struct DeltaIOStorageBackend<T: ObjectStore + Clone> {
-    pub(crate) inner: T,
-    pub(crate) rt_handle: Handle,
+    pub inner: T,
+    pub rt_handle: Handle,
+}
+
+impl<T> DeltaIOStorageBackend<T>
+where
+    T: ObjectStore + Clone,
+{
+    pub fn new(store: T, handle: Handle) -> Self {
+        Self {
+            inner: store,
+            rt_handle: handle,
+        }
+    }
 }
 
 impl<T: ObjectStore + Clone> DeltaIOStorageBackend<T> {

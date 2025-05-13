@@ -10,10 +10,9 @@ use std::collections::HashMap;
 
 use ::object_store::RetryConfig;
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
-use tokio::runtime::Handle;
 
-use super::storage::runtime::RuntimeConfig;
 use super::storage::LimitConfig;
+use super::{storage::runtime::RuntimeConfig, IORuntime};
 use crate::{DeltaResult, DeltaTableError};
 
 pub trait TryUpdateKey: Default {
@@ -91,8 +90,9 @@ where
 pub struct StorageConfig {
     /// Runtime configuration.
     ///
-    /// Configuration to set up a dedicated IO runtime to execute IO related operations.
-    pub runtime: Option<RuntimeConfig>,
+    /// Configuration to set up a dedicated IO runtime to execute IO related operations or
+    /// dedicated handle.
+    pub runtime: Option<IORuntime>,
 
     pub retry: ::object_store::RetryConfig,
 
@@ -119,21 +119,12 @@ impl StorageConfig {
     /// Depending on the configuration, the following layers may be added:
     /// - Retry layer: Adds retry logic to the object store.
     /// - Limit layer: Limits the number of concurrent requests to the object store.
-    /// - Runtime layer: Executes IO related operations on a dedicated runtime.
     pub fn decorate_store<T: ObjectStore + Clone>(
         &self,
         store: T,
         table_root: &url::Url,
-        handle: Option<Handle>,
     ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let inner = if let Some(runtime) = &self.runtime {
-            Box::new(runtime.decorate(store, handle)) as Box<dyn ObjectStore>
-        } else {
-            Box::new(store) as Box<dyn ObjectStore>
-        };
-
-        let inner = Self::decorate_prefix(inner, table_root)?;
-
+        let inner = Self::decorate_prefix(store, table_root)?;
         Ok(inner)
     }
 
@@ -169,7 +160,9 @@ where
         };
 
         let result = ParseResult::<RuntimeConfig>::from_iter(&config.raw);
-        config.runtime = (!result.is_default).then_some(result.config);
+        if let Some(runtime_config) = (!result.is_default).then_some(result.config) {
+            config.runtime = Some(IORuntime::Config(runtime_config));
+        };
 
         let result = ParseResult::<LimitConfig>::from_iter(result.unparsed);
         config.limit = (!result.is_default).then_some(result.config);
@@ -218,7 +211,7 @@ impl StorageConfig {
         let (runtime, remainder): (RuntimeConfig, _) = try_parse_impl(&props.raw)?;
         // NOTE: we only want to assign an actual runtime config we consumed an option
         if props.raw.len() > remainder.len() {
-            props.runtime = Some(runtime);
+            props.runtime = Some(IORuntime::Config(runtime));
         }
 
         let result = ParseResult::<LimitConfig>::from_iter(remainder);
@@ -234,6 +227,12 @@ impl StorageConfig {
 
         props.unknown_properties = remainder;
         Ok(props)
+    }
+
+    // Provide an IO Runtime directly
+    pub fn with_io_runtime(mut self, rt: IORuntime) -> Self {
+        self.runtime = Some(rt);
+        self
     }
 }
 
