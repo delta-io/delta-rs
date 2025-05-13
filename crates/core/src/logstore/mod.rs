@@ -152,7 +152,8 @@ static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"
 /// # use std::collections::HashMap;
 /// # use url::Url;
 /// let location = Url::parse("memory:///").expect("Failed to make location");
-/// let logstore = logstore_for(location, HashMap::<String, String>::new(), None).expect("Failed to get a logstore");
+/// let storage_config = StorageConfig::default();
+/// let logstore = logstore_for(location, storage_config).expect("Failed to get a logstore");
 /// ```
 pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult<LogStoreRef> {
     // turn location into scheme
