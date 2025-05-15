@@ -82,7 +82,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          # The coverage action actually is running the Linux-based test.
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
