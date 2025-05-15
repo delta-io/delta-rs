@@ -1,9 +1,25 @@
+use crate::table::state::DeltaTableState;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{col, when, Expr, ExprSchemable};
 use tracing::debug;
 
 use crate::{kernel::DataCheck, table::GeneratedColumn, DeltaResult};
+
+/// check if the writer version is able to write generated columns
+pub fn able_to_gc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
+    if let Some(features) = &snapshot.protocol().writer_features {
+        if snapshot.protocol().min_writer_version < 4 {
+            return Ok(false);
+        }
+        if snapshot.protocol().min_writer_version == 7
+            && !features.contains(&delta_kernel::table_features::WriterFeature::GeneratedColumns)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 /// Add generated column expressions to a dataframe
 pub fn add_missing_generated_columns(
