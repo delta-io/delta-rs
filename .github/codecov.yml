@@ -4,11 +4,13 @@ coverage:
     project:
       default:
         # allow some leniency on the deviation of pull requests
-        threshold: '1%'
-        informational: true
+        threshold: 1
+        if_ci_failed: error
+        informational: false
     patch:
       default:
-        informational: true
+        if_ci_failed: error
+        informational: false
 
 
 ignore:
