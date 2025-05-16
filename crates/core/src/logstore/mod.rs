@@ -513,14 +513,25 @@ pub async fn get_latest_version(
     // list files to find max version
     let version = async {
         let mut max_version: i64 = version_start;
-        let prefix = Some(log_store.log_path());
+        let prefix = log_store.log_path();
         let offset_path = commit_uri_from_version(max_version);
         let object_store = log_store.object_store(None);
-        let mut files = object_store.list_with_offset(prefix, &offset_path);
+        let mut files = object_store.list_with_offset(Some(prefix), &offset_path);
         let mut empty_stream = true;
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
+            let location_path: &Path = &obj_meta.location;
+            let part_count = location_path.prefix_match(prefix).unwrap().count();
+            if part_count > 1 {
+                // Per the spec, ignore any files in subdirectories.
+                // Spark may create these as uncommited transactions which we don't want
+                //
+                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
+                // "Delta files are stored as JSON in a directory at the *root* of the table
+                // named _delta_log, and ... make up the log of all changes that have occurred to a table."
+                continue;
+            }
             if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
                 max_version = max(max_version, log_version);
                 // also cache timestamp for version, for faster time-travel
