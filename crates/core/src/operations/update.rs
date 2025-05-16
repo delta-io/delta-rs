@@ -531,17 +531,17 @@ impl std::future::IntoFuture for UpdateBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
-    use crate::operations::load_cdf::*;
+    use crate::operations::table_changes::collect_batches;
+    use crate::operations::update::ScalarValue;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
+    use crate::DeltaResult;
     use crate::{DeltaTable, TableProperty};
     use arrow::array::{Int32Array, ListArray, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
@@ -1315,10 +1315,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
-            .await
+            .build()
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
@@ -1405,10 +1404,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
-            .await
+            .build()
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(

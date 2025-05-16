@@ -972,10 +972,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
-            .await
+            .build()
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
@@ -1056,10 +1055,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
-            .await
+            .build()
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(

@@ -8,6 +8,24 @@ mod schema;
 mod utils;
 mod writer;
 
+use std::cmp::min;
+use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
+use std::future::IntoFuture;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use std::time;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::error::{DeltaError, DeltaProtocolError, PythonError};
+use crate::features::TableFeatures;
+use crate::filesystem::FsConfig;
+use crate::merge::PyMergeBuilder;
+use crate::query::PyQueryBuilder;
+use crate::reader::convert_stream_to_reader;
+use crate::schema::{schema_to_pyobject, Field, PySchema};
+use crate::utils::rt;
+use crate::writer::to_lazy_table;
 use arrow::pyarrow::PyArrowType;
 use arrow_schema::SchemaRef;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
@@ -36,10 +54,10 @@ use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionSt
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
-use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
+use deltalake::operations::table_changes::TableChangesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
@@ -56,31 +74,12 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
-use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader, PySchema as PyArrowSchema};
-use schema::PySchema;
+use pyo3_arrow::export::Arro3RecordBatchReader;
+use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader};
 use serde_json::{Map, Value};
-use std::cmp::min;
-use std::collections::{HashMap, HashSet};
-use std::ffi::CString;
-use std::future::IntoFuture;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::log::*;
 use uuid::Uuid;
 use writer::maybe_lazy_cast_reader;
-
-use crate::error::{DeltaError, DeltaProtocolError, PythonError};
-use crate::features::TableFeatures;
-use crate::filesystem::FsConfig;
-use crate::merge::PyMergeBuilder;
-use crate::query::PyQueryBuilder;
-use crate::reader::convert_stream_to_reader;
-use crate::schema::{schema_to_pyobject, Field};
-use crate::utils::rt;
-use crate::writer::to_lazy_table;
 
 #[global_allocator]
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
@@ -852,7 +851,7 @@ impl RawDeltaTable {
         allow_out_of_range: bool,
     ) -> PyResult<Arro3RecordBatchReader> {
         let ctx = SessionContext::new();
-        let mut cdf_read = CdfLoadBuilder::new(self.log_store()?, self.cloned_state()?);
+        let mut cdf_read = TableChangesBuilder::new(self.log_store()?.root_uri());
 
         if let Some(sv) = starting_version {
             cdf_read = cdf_read.with_starting_version(sv);
@@ -1935,6 +1934,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
+        _ => unimplemented!(),
     };
 
     Ok(val.into_bound(py))
