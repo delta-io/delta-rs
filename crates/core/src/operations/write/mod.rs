@@ -759,7 +759,7 @@ impl std::future::IntoFuture for WriteBuilder {
 mod tests {
     use super::*;
     use crate::logstore::get_actions;
-    use crate::operations::load_cdf::collect_batches;
+    use crate::operations::table_changes::collect_batches;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
     use crate::test_utils::{TestResult, TestSchemas};
@@ -1804,10 +1804,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let cdf_scan = DeltaOps(table.clone())
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
-            .await
+            .build()
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
