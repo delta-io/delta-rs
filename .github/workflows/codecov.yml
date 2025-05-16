@@ -11,8 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
+      RUSTFLAGS: -C debuginfo=line-tables-only
+      CARGO_INCREMENTAL: 0
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v4
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install rust
         uses: actions-rs/toolchain@v1
         with:

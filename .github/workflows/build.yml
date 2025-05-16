@@ -14,12 +14,16 @@ env:
   # Disable incremental builds by cargo for CI which should save disk space
   # and hopefully avoid final link "No space left on device"
   CARGO_INCREMENTAL: 0
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   default_build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
@@ -27,24 +31,10 @@ jobs:
           profile: default
           toolchain: '1.82'
           override: true
-
-      - name: Build
-        run: (cd crates/deltalake && cargo build)
-
-  format:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install minimal stable with clippy and rustfmt
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: default
-          toolchain: '1.82'
-          override: true
-
       - name: Format
         run: cargo fmt -- --check
+      - name: Build
+        run: (cd crates/deltalake && cargo build)
 
   build:
     strategy:
@@ -57,7 +47,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -87,6 +78,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
@@ -118,6 +111,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
@@ -161,6 +156,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
