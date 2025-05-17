@@ -669,15 +669,15 @@ pub(crate) mod tests {
         assert!(store.is_err());
     }
 
-    #[test]
-    fn logstore_with_memory() {
+    #[tokio::test]
+    async fn logstore_with_memory() {
         let location = Url::parse("memory:///table").unwrap();
         let store = logstore_for(location, StorageConfig::default());
         assert!(store.is_ok());
     }
 
-    #[test]
-    fn logstore_with_memory_and_rt() {
+    #[tokio::test]
+    async fn logstore_with_memory_and_rt() {
         let location = Url::parse("memory:///table").unwrap();
         let store = logstore_for(
             location,
