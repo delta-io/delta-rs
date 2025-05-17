@@ -308,7 +308,7 @@ impl DeltaOps {
 
     /// Update table metadata
     pub fn update_table_metadata(self) -> UpdateTableMetadataBuilder {
-        UpdateTableMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
+        UpdateTableMetadataBuilder::new(self.0.log_store(), self.0.state.unwrap())
     }
 }
 

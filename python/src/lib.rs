@@ -243,12 +243,12 @@ impl RawDeltaTable {
     }
 
     pub(crate) fn has_files(&self) -> PyResult<bool> {
-        self.with_table(|t| Ok(t.config.require_files))
+        self.with_table(|t| Ok(t.config().require_files))
     }
 
     pub fn table_config(&self) -> PyResult<(bool, usize)> {
         self.with_table(|t| {
-            let config = t.config.clone();
+            let config = t.config().clone();
             // Require_files inverted to reflect without_files
             Ok((!config.require_files, config.log_buffer_size))
         })
@@ -1387,7 +1387,7 @@ impl RawDeltaTable {
                             Some(
                                 DeltaTableState::try_new(
                                     &table.log_store(),
-                                    table.config.clone(),
+                                    table.config().clone(),
                                     table.version(),
                                 )
                                 .await
