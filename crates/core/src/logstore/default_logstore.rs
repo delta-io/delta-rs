@@ -6,8 +6,9 @@ use bytes::Bytes;
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
-use delta_kernel::{engine::default::DefaultEngine, Engine};
+use delta_kernel::{engine::default::DefaultEngine, Engine, Table};
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
+use tracing::log::*;
 use uuid::Uuid;
 
 use super::storage::{utils::commit_uri_from_version, ObjectStoreRef};
@@ -33,6 +34,7 @@ pub struct DefaultLogStore {
     /// Implementation of the [delta_kernel::Engine] which this [LogStore] implementation can defer
     /// to when necessary
     engine: Option<Arc<dyn Engine>>,
+    table: Option<Table>,
 }
 
 impl std::fmt::Debug for DefaultLogStore {
@@ -78,10 +80,18 @@ impl DefaultLogStore {
             }
         };
 
+        let table = match engine {
+            None => None,
+            Some(_) => Some(Table::new(
+                url::Url::parse("nonexistent:///").expect("Failed to parse a contrived URL"),
+            )),
+        };
+
         Self {
             engine,
             storage,
             config,
+            table,
         }
     }
 }
@@ -142,6 +152,12 @@ impl LogStore for DefaultLogStore {
     }
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+        if let (Some(engine), Some(table)) = (self.engine.as_ref(), self.table.as_ref()) {
+            if let Ok(snapshot) = table.snapshot(engine.as_ref(), None) {
+                return Ok(snapshot.version() as i64);
+            }
+        }
+        warn!("The kernel-based retrieval of get_latest_version() was not possible for some reason, falling back");
         super::get_latest_version(self, current_version).await
     }
 
@@ -161,6 +177,7 @@ impl LogStore for DefaultLogStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::local::LocalFileSystem;
     use object_store::memory::InMemory;
     use url::Url;
 
@@ -173,5 +190,20 @@ mod tests {
         };
         let logstore = DefaultLogStore::new(store, config);
         assert_eq!(logstore.name(), "DefaultLogStore");
+    }
+
+    /// This is a silly sanity check to make sure that the latest version can be gotten by the
+    /// default log store under normal conditions
+    #[tokio::test]
+    async fn test_get_latest_version() -> DeltaResult<()> {
+        let location = "../test/tests/data/simple_table";
+        let store = Arc::new(LocalFileSystem::new_with_prefix(&location)?);
+        let config = LogStoreConfig {
+            location: Url::from_file_path(std::fs::canonicalize(location).unwrap()).unwrap(),
+            options: crate::logstore::StorageConfig::default(),
+        };
+        let logstore = DefaultLogStore::new(store, config);
+        assert_eq!(logstore.get_latest_version(0).await?, 4);
+        Ok(())
     }
 }
