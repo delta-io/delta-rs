@@ -73,11 +73,11 @@ impl ObjectStoreFactory for GcpFactory {
 impl LogStoreFactory for GcpFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(prefixed_store, location, options))
     }
 }
 
