@@ -106,7 +106,7 @@ def test_write_with_invalid_gc(tmp_path, invalid_gc_data):
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc = 10 OR (gc IS NULL AND 10 IS NULL)) violated by value in row: [5]"]'
+            'Invariant violations: ["Check or Invariant (gc <=> 10) violated by value in row: [5]"]'
         ),
     ):
         write_deltalake(tmp_path, mode="append", data=invalid_gc_data)
@@ -118,7 +118,7 @@ def test_write_with_invalid_gc_to_table(table_with_gc, invalid_gc_data):
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc = 5 OR (gc IS NULL AND 5 IS NULL)) violated by value in row: [10]"]'
+            'Invariant violations: ["Check or Invariant (gc <=> 5) violated by value in row: [10]"]'
         ),
     ):
         write_deltalake(table_with_gc, mode="append", data=invalid_gc_data)
@@ -259,7 +259,7 @@ def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
     with pytest.raises(
         DeltaError,
         match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc = 5 OR (gc IS NULL AND 5 IS NULL)) violated by value in row: [10]"]'
+            'Invariant violations: ["Check or Invariant (gc <=> 5) violated by value in row: [10]"]'
         ),
     ):
         (
