@@ -54,7 +54,7 @@ impl S3StorageOptionsConversion for S3LogStoreFactory {}
 impl LogStoreFactory for S3LogStoreFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
@@ -69,7 +69,11 @@ impl LogStoreFactory for S3LogStoreFactory {
         }) {
             debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
             warn!("Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put.");
-            return Ok(logstore::default_s3_logstore(store, location, options));
+            return Ok(logstore::default_s3_logstore(
+                prefixed_store,
+                location,
+                options,
+            ));
         }
 
         let s3_options = S3StorageOptions::from_map(&s3_options)?;
@@ -79,10 +83,10 @@ impl LogStoreFactory for S3LogStoreFactory {
                 location.clone(),
                 options,
                 &s3_options,
-                store,
+                prefixed_store,
             )?));
         }
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(prefixed_store, location, options))
     }
 }
 
