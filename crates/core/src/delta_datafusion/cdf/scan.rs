@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_schema::{Schema, SchemaRef};
+use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableProvider;
@@ -15,12 +15,9 @@ use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::ExecutionPlan;
 
+use crate::operations::table_changes::TableChangesBuilder;
+use crate::DeltaResult;
 use crate::DeltaTableError;
-use crate::{
-    delta_datafusion::DataFusionMixins, operations::load_cdf::CdfLoadBuilder, DeltaResult,
-};
-
-use super::ADD_PARTITION_SCHEMA;
 
 fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
     session
@@ -31,21 +28,16 @@ fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&Sessio
 
 #[derive(Debug)]
 pub struct DeltaCdfTableProvider {
-    cdf_builder: CdfLoadBuilder,
+    plan: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
 }
 
 impl DeltaCdfTableProvider {
     /// Build a DeltaCDFTableProvider
-    pub fn try_new(cdf_builder: CdfLoadBuilder) -> DeltaResult<Self> {
-        let mut fields = cdf_builder.snapshot.input_schema()?.fields().to_vec();
-        for f in ADD_PARTITION_SCHEMA.clone() {
-            fields.push(f.into());
-        }
-        Ok(DeltaCdfTableProvider {
-            cdf_builder,
-            schema: Schema::new(fields).into(),
-        })
+    pub fn try_new(cdf_builder: TableChangesBuilder) -> DeltaResult<Self> {
+        let plan: Arc<dyn ExecutionPlan> = cdf_builder.build()?;
+        let schema = plan.schema();
+        Ok(DeltaCdfTableProvider { plan, schema })
     }
 }
 
@@ -75,13 +67,10 @@ impl TableProvider for DeltaCdfTableProvider {
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
             let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
-            let plan = self
-                .cdf_builder
-                .build(session_state, Some(&physical_expr))
-                .await?;
-            Arc::new(FilterExec::try_new(physical_expr, plan)?)
+
+            Arc::new(FilterExec::try_new(physical_expr, self.plan.clone())?)
         } else {
-            self.cdf_builder.build(session_state, None).await?
+            self.plan.clone()
         };
 
         let df_schema: DFSchema = plan.schema().try_into()?;
