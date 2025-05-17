@@ -352,7 +352,7 @@ impl std::future::IntoFuture for CreateBuilder {
             let (mut table, mut actions, operation, operation_id) =
                 this.clone().into_table_and_actions().await?;
 
-            let table_state = if table.log_store.is_delta_table_location().await? {
+            let table_state = if table.log_store().is_delta_table_location().await? {
                 match mode {
                     SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
                     SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
@@ -381,7 +381,7 @@ impl std::future::IntoFuture for CreateBuilder {
                 .with_post_commit_hook_handler(handler.clone())
                 .build(
                     table_state.map(|f| f as &dyn TableReference),
-                    table.log_store.clone(),
+                    table.log_store(),
                     operation,
                 )
                 .await?
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(table.version(), Some(0));
         let first_id = table.metadata().unwrap().id.clone();
 
-        let log_store = table.log_store;
+        let log_store = table.log_store();
 
         // Check an error is raised when a table exists at location
         let table = CreateBuilder::new()

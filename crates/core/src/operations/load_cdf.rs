@@ -895,7 +895,7 @@ pub(crate) mod tests {
         ], &batches }
 
         let snapshot_bytes = table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");

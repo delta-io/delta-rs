@@ -159,7 +159,7 @@ impl RawDeltaTable {
     }
 
     fn log_store(&self) -> PyResult<LogStoreRef> {
-        self.with_table(|t| Ok(t.log_store().clone()))
+        self.with_table(|t| Ok(t.log_store()))
     }
 
     fn set_state(&self, state: Option<DeltaTableState>) -> PyResult<()> {
@@ -424,7 +424,7 @@ impl RawDeltaTable {
         &self,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
-        if !self.with_table(|t| Ok(t.config.require_files))? {
+        if !self.with_table(|t| Ok(t.config().require_files))? {
             return Err(DeltaError::new_err("Table is initiated without files."));
         }
 
