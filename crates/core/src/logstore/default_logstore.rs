@@ -3,6 +3,10 @@
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
+use delta_kernel::engine::default::executor::tokio::{
+    TokioBackgroundExecutor, TokioMultiThreadExecutor,
+};
+use delta_kernel::{engine::default::DefaultEngine, Engine};
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use uuid::Uuid;
 
@@ -22,10 +26,22 @@ fn put_options() -> &'static PutOptions {
 }
 
 /// Default [`LogStore`] implementation
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultLogStore {
     pub(crate) storage: ObjectStoreRef,
     config: LogStoreConfig,
+    /// Implementation of the [delta_kernel::Engine] which this [LogStore] implementation can defer
+    /// to when necessary
+    engine: Option<Arc<dyn Engine>>,
+}
+
+impl std::fmt::Debug for DefaultLogStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("DefaultLogStore")
+            .field("storage", &self.storage)
+            .field("config", &self.config)
+            .finish()
+    }
 }
 
 impl DefaultLogStore {
@@ -36,7 +52,37 @@ impl DefaultLogStore {
     /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: ObjectStoreRef, config: LogStoreConfig) -> Self {
-        Self { storage, config }
+        // NOTE: There are a number of "sync" code paths currently in delta-rs which will cause
+        // Handle::current() to panic. The synchronous poaths make it impossible to construct
+        // an engine at the [DefaultLogStore] creation time, thus the Option<>
+        //
+        // The codepaths to logstores should likely be all async in the future since they are
+        // unusable without an async runtime anyways
+        let engine = match tokio::runtime::Handle::try_current() {
+            Err(_) => None,
+            Ok(handle) => {
+                let engine: Arc<dyn Engine> = match handle.runtime_flavor() {
+                    tokio::runtime::RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new(
+                        storage.clone(),
+                        Arc::new(TokioMultiThreadExecutor::new(handle)),
+                    )),
+                    tokio::runtime::RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new(
+                        storage.clone(),
+                        Arc::new(TokioBackgroundExecutor::new()),
+                    )),
+                    err => panic!(
+                        "Unsupported runtime flavor from tokio, this is fatal sorry! {err:?}"
+                    ),
+                };
+                Some(engine)
+            }
+        };
+
+        Self {
+            engine,
+            storage,
+            config,
+        }
     }
 }
 
@@ -109,5 +155,23 @@ impl LogStore for DefaultLogStore {
 
     fn config(&self) -> &LogStoreConfig {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+    use url::Url;
+
+    #[tokio::test]
+    async fn test_initialize_default_logstore() {
+        let store = Arc::new(InMemory::default());
+        let config = LogStoreConfig {
+            location: Url::parse("s3://example").expect("Failed to parse a URL"),
+            options: crate::logstore::StorageConfig::default(),
+        };
+        let logstore = DefaultLogStore::new(store, config);
+        assert_eq!(logstore.name(), "DefaultLogStore");
     }
 }
