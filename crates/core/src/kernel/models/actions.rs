@@ -7,7 +7,6 @@ use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
-use url::Url;
 
 use super::schema::StructType;
 use super::StructTypeExt;
@@ -668,92 +667,6 @@ pub struct DeletionVectorDescriptor {
     pub cardinality: i64,
 }
 
-impl DeletionVectorDescriptor {
-    /// get the absolute path of the deletion vector
-    pub fn absolute_path(&self, parent: &Url) -> DeltaResult<Option<Url>> {
-        match &self.storage_type {
-            StorageType::UuidRelativePath => {
-                let prefix_len = self.path_or_inline_dv.len() as i32 - 20;
-                if prefix_len < 0 {
-                    return Err(Error::DeletionVector("Invalid length".to_string()));
-                }
-                let decoded = z85::decode(&self.path_or_inline_dv[(prefix_len as usize)..])
-                    .map_err(|_| Error::DeletionVector("Failed to decode DV uuid".to_string()))?;
-                let uuid = uuid::Uuid::from_slice(&decoded)
-                    .map_err(|err| Error::DeletionVector(err.to_string()))?;
-                let mut dv_suffix = format!("deletion_vector_{uuid}.bin");
-                if prefix_len > 0 {
-                    dv_suffix = format!(
-                        "{}/{dv_suffix}",
-                        &self.path_or_inline_dv[..(prefix_len as usize)],
-                    );
-                }
-                let dv_path = parent
-                    .join(&dv_suffix)
-                    .map_err(|_| Error::DeletionVector(format!("invalid path: {dv_suffix}")))?;
-                Ok(Some(dv_path))
-            }
-            StorageType::AbsolutePath => {
-                Ok(Some(Url::parse(&self.path_or_inline_dv).map_err(|_| {
-                    Error::DeletionVector(format!("invalid path: {}", self.path_or_inline_dv))
-                })?))
-            }
-            StorageType::Inline => Ok(None),
-        }
-    }
-
-    // TODO read only required byte ranges
-    // pub fn read(
-    //     &self,
-    //     fs_client: Arc<dyn FileSystemClient>,
-    //     parent: Url,
-    // ) -> DeltaResult<RoaringTreemap> {
-    //     match self.absolute_path(&parent)? {
-    //         None => {
-    //             let bytes = z85::decode(&self.path_or_inline_dv)
-    //                 .map_err(|_| Error::DeletionVector("Failed to decode DV".to_string()))?;
-    //             RoaringTreemap::deserialize_from(&bytes[12..])
-    //                 .map_err(|err| Error::DeletionVector(err.to_string()))
-    //         }
-    //         Some(path) => {
-    //             let offset = self.offset;
-    //             let size_in_bytes = self.size_in_bytes;
-    //
-    //             let dv_data = fs_client
-    //                 .read_files(vec![(path, None)])?
-    //                 .next()
-    //                 .ok_or(Error::MissingData("No deletion Vector data".to_string()))??;
-    //
-    //             let mut cursor = Cursor::new(dv_data);
-    //             if let Some(offset) = offset {
-    //                 // TODO should we read the datasize from the DV file?
-    //                 // offset plus datasize bytes
-    //                 cursor.set_position((offset + 4) as u64);
-    //             }
-    //
-    //             let mut buf = vec![0; 4];
-    //             cursor
-    //                 .read(&mut buf)
-    //                 .map_err(|err| Error::DeletionVector(err.to_string()))?;
-    //             let magic =
-    //                 i32::from_le_bytes(buf.try_into().map_err(|_| {
-    //                     Error::DeletionVector("filed to read magic bytes".to_string())
-    //                 })?);
-    //             println!("magic  --> : {magic}");
-    //             // assert!(magic == 1681511377);
-    //
-    //             let mut buf = vec![0; size_in_bytes as usize];
-    //             cursor
-    //                 .read(&mut buf)
-    //                 .map_err(|err| Error::DeletionVector(err.to_string()))?;
-    //
-    //             RoaringTreemap::deserialize_from(Cursor::new(buf))
-    //                 .map_err(|err| Error::DeletionVector(err.to_string()))
-    //         }
-    //     }
-    // }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 /// Defines an add action
@@ -1140,80 +1053,8 @@ pub(crate) mod serde_path {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
     use crate::kernel::PrimitiveType;
-
-    fn dv_relateive() -> DeletionVectorDescriptor {
-        DeletionVectorDescriptor {
-            storage_type: "u".parse().unwrap(),
-            path_or_inline_dv: "ab^-aqEH.-t@S}K{vb[*k^".to_string(),
-            offset: Some(4),
-            size_in_bytes: 40,
-            cardinality: 6,
-        }
-    }
-
-    fn dv_absolute() -> DeletionVectorDescriptor {
-        DeletionVectorDescriptor {
-            storage_type: "p".parse().unwrap(),
-            path_or_inline_dv:
-                "s3://mytable/deletion_vector_d2c639aa-8816-431a-aaf6-d3fe2512ff61.bin".to_string(),
-            offset: Some(4),
-            size_in_bytes: 40,
-            cardinality: 6,
-        }
-    }
-
-    fn dv_inline() -> DeletionVectorDescriptor {
-        DeletionVectorDescriptor {
-            storage_type: "i".parse().unwrap(),
-            path_or_inline_dv: "wi5b=000010000siXQKl0rr91000f55c8Xg0@@D72lkbi5=-{L".to_string(),
-            offset: None,
-            size_in_bytes: 40,
-            cardinality: 6,
-        }
-    }
-
-    fn dv_example() -> DeletionVectorDescriptor {
-        DeletionVectorDescriptor {
-            storage_type: "u".parse().unwrap(),
-            path_or_inline_dv: "vBn[lx{q8@P<9BNH/isA".to_string(),
-            offset: Some(1),
-            size_in_bytes: 36,
-            cardinality: 2,
-        }
-    }
-
-    #[test]
-    fn test_deletion_vector_absolute_path() {
-        let parent = Url::parse("s3://mytable/").unwrap();
-
-        let relative = dv_relateive();
-        let expected =
-            Url::parse("s3://mytable/ab/deletion_vector_d2c639aa-8816-431a-aaf6-d3fe2512ff61.bin")
-                .unwrap();
-        assert_eq!(expected, relative.absolute_path(&parent).unwrap().unwrap());
-
-        let absolute = dv_absolute();
-        let expected =
-            Url::parse("s3://mytable/deletion_vector_d2c639aa-8816-431a-aaf6-d3fe2512ff61.bin")
-                .unwrap();
-        assert_eq!(expected, absolute.absolute_path(&parent).unwrap().unwrap());
-
-        let inline = dv_inline();
-        assert_eq!(None, inline.absolute_path(&parent).unwrap());
-
-        let path = std::fs::canonicalize(PathBuf::from("../test/tests/data/table-with-dv-small/"))
-            .unwrap();
-        let parent = url::Url::from_directory_path(path).unwrap();
-        let dv_url = parent
-            .join("deletion_vector_61d16c75-6994-46b7-a15b-8b538852e50e.bin")
-            .unwrap();
-        let example = dv_example();
-        assert_eq!(dv_url, example.absolute_path(&parent).unwrap().unwrap());
-    }
 
     #[test]
     fn test_primitive() {
