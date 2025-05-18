@@ -21,6 +21,7 @@ use crate::errors::LakeFSConfigError;
 /// Return the [LakeFSLogStore] implementation with the provided configuration options
 pub fn lakefs_logstore(
     store: ObjectStoreRef,
+    root_store: ObjectStoreRef,
     location: &Url,
     options: &StorageConfig,
 ) -> DeltaResult<Arc<dyn LogStore>> {
@@ -43,6 +44,7 @@ pub fn lakefs_logstore(
     let client = LakeFSClient::with_config(LakeFSConfig::new(host, username, password));
     Ok(Arc::new(LakeFSLogStore::new(
         store,
+        root_store,
         LogStoreConfig {
             location: location.clone(),
             options: options.clone(),
@@ -55,6 +57,7 @@ pub fn lakefs_logstore(
 #[derive(Debug, Clone)]
 pub(crate) struct LakeFSLogStore {
     pub(crate) storage: DefaultObjectStoreRegistry,
+    root_registry: DefaultObjectStoreRegistry,
     pub(crate) config: LogStoreConfig,
     pub(crate) client: LakeFSClient,
 }
@@ -66,11 +69,19 @@ impl LakeFSLogStore {
     ///
     /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
-    pub fn new(storage: ObjectStoreRef, config: LogStoreConfig, client: LakeFSClient) -> Self {
+    pub fn new(
+        storage: ObjectStoreRef,
+        root_store: ObjectStoreRef,
+        config: LogStoreConfig,
+        client: LakeFSClient,
+    ) -> Self {
         let registry = DefaultObjectStoreRegistry::new();
         registry.register_store(&config.location, storage);
+        let root_registry = DefaultObjectStoreRegistry::new();
+        root_registry.register_store(&config.location, root_store);
         Self {
             storage: registry,
+            root_registry,
             config,
             client,
         }
@@ -104,17 +115,25 @@ impl LakeFSLogStore {
         self.storage.register_store(url, store);
     }
 
+    fn register_root_object_store(&self, url: &Url, store: ObjectStoreRef) {
+        self.root_registry.register_store(url, store);
+    }
+
     fn get_transaction_objectstore(
         &self,
         operation_id: Uuid,
-    ) -> DeltaResult<(String, ObjectStoreRef)> {
+    ) -> DeltaResult<(String, ObjectStoreRef, ObjectStoreRef)> {
         let (repo, _, table) = self.client.decompose_url(self.config.location.to_string());
         let string_url = format!(
             "lakefs://{repo}/{}/{table}",
             self.client.get_transaction(operation_id)?,
         );
         let transaction_url = Url::parse(&string_url).unwrap();
-        Ok((string_url, self.storage.get_store(&transaction_url)?))
+        Ok((
+            string_url,
+            self.storage.get_store(&transaction_url)?,
+            self.root_registry.get_store(&transaction_url)?,
+        ))
     }
 
     pub async fn pre_execute(&self, operation_id: Uuid) -> DeltaResult<()> {
@@ -125,12 +144,15 @@ impl LakeFSLogStore {
             .await?;
 
         // Build new object store store using the new lakefs url
-        let txn_store = Arc::new(self.config.decorate_store(
-            self.build_new_store(&lakefs_url, self.config().options.runtime.clone())?,
-            Some(&lakefs_url),
-        )?);
+        let txn_root_store =
+            self.build_new_store(&lakefs_url, self.config().options.runtime.clone())?;
+        let txn_store = Arc::new(
+            self.config
+                .decorate_store(txn_root_store.clone(), Some(&lakefs_url))?,
+        );
 
         // Register transaction branch as ObjectStore in log_store storages
+        self.register_root_object_store(&lakefs_url, txn_root_store);
         self.register_object_store(&lakefs_url, txn_store);
 
         // set transaction in client for easy retrieval
@@ -139,7 +161,7 @@ impl LakeFSLogStore {
     }
 
     pub async fn commit_merge(&self, operation_id: Uuid) -> DeltaResult<()> {
-        let (transaction_url, _) = self.get_transaction_objectstore(operation_id)?;
+        let (transaction_url, _, _) = self.get_transaction_objectstore(operation_id)?;
 
         // Do LakeFS Commit
         let (repo, transaction_branch, table) = self.client.decompose_url(transaction_url);
@@ -228,12 +250,12 @@ impl LogStore for LakeFSLogStore {
         commit_or_bytes: CommitOrBytes,
         operation_id: Uuid,
     ) -> Result<(), TransactionError> {
-        let (transaction_url, store) =
-            self.get_transaction_objectstore(operation_id)
-                .map_err(|e| TransactionError::LogStoreError {
-                    msg: e.to_string(),
-                    source: Box::new(e),
-                })?;
+        let (transaction_url, store, _root_store) = self
+            .get_transaction_objectstore(operation_id)
+            .map_err(|e| TransactionError::LogStoreError {
+                msg: e.to_string(),
+                source: Box::new(e),
+            })?;
 
         match commit_or_bytes {
             CommitOrBytes::LogBytes(log_bytes) => {
@@ -330,10 +352,20 @@ impl LogStore for LakeFSLogStore {
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
         match operation_id {
             Some(id) => {
-                let (_, store) = self.get_transaction_objectstore(id).unwrap_or_else(|_| panic!("The object_store registry inside LakeFSLogstore didn't have a store for operation_id {id} Something went wrong."));
+                let (_, store, _) = self.get_transaction_objectstore(id).unwrap_or_else(|_| panic!("The object_store registry inside LakeFSLogstore didn't have a store for operation_id {id} Something went wrong."));
                 store
             }
             _ => self.storage.get_store(&self.config.location).unwrap(),
+        }
+    }
+
+    fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+        match operation_id {
+            Some(id) => {
+                let (_, _, root_store) = self.get_transaction_objectstore(id).unwrap_or_else(|_| panic!("The object_store registry inside LakeFSLogstore didn't have a store for operation_id {id} Something went wrong."));
+                root_store
+            }
+            _ => self.root_registry.get_store(&self.config.location).unwrap(),
         }
     }
 

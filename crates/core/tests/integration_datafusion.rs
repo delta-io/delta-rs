@@ -1250,13 +1250,14 @@ mod local {
     #[tokio::test]
     async fn test_issue_2105() -> Result<()> {
         use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-        let path = tempfile::tempdir().unwrap();
-        let path = path.into_path();
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path();
 
-        let file_store = LocalFileSystem::new_with_prefix(path.clone()).unwrap();
+        let file_store = LocalFileSystem::new_with_prefix(path).unwrap();
         let log_store = default_logstore(
             Arc::new(file_store),
-            &Url::from_file_path(path.clone()).unwrap(),
+            Arc::new(LocalFileSystem::new()),
+            &Url::from_file_path(path).unwrap(),
             &Default::default(),
         );
 

@@ -119,6 +119,7 @@ pub trait LogStoreFactory: Send + Sync {
     fn with_options(
         &self,
         prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>>;
@@ -131,10 +132,16 @@ impl LogStoreFactory for DefaultLogStoreFactory {
     fn with_options(
         &self,
         prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(prefixed_store, location, options))
+        Ok(default_logstore(
+            prefixed_store,
+            root_store,
+            location,
+            options,
+        ))
     }
 }
 
