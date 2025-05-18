@@ -55,13 +55,18 @@ use std::sync::{Arc, LazyLock};
 use bytes::Bytes;
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use delta_kernel::AsAny;
+use delta_kernel::engine::default::executor::tokio::{
+    TokioBackgroundExecutor, TokioMultiThreadExecutor,
+};
+use delta_kernel::engine::default::DefaultEngine;
+use delta_kernel::{AsAny, Engine};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
+use tokio::runtime::RuntimeFlavor;
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -105,40 +110,44 @@ trait LogStoreFactoryExt {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>>;
+    ) -> DeltaResult<LogStoreRef>;
 }
 
 impl<T: LogStoreFactory + ?Sized> LogStoreFactoryExt for T {
     fn with_options_internal(
         &self,
-        store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
-        let store = options.decorate_store(store, location)?;
-        self.with_options(Arc::new(store), location, options)
+    ) -> DeltaResult<LogStoreRef> {
+        let prefixed_store = options.decorate_store(root_store.clone(), location)?;
+        let log_store =
+            self.with_options(Arc::new(prefixed_store), root_store, location, options)?;
+        Ok(log_store)
     }
 }
 
 impl<T: LogStoreFactory> LogStoreFactoryExt for Arc<T> {
     fn with_options_internal(
         &self,
-        store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
-        T::with_options_internal(self, store, location, options)
+    ) -> DeltaResult<LogStoreRef> {
+        T::with_options_internal(self, root_store, location, options)
     }
 }
 
 /// Return the [DefaultLogStore] implementation with the provided configuration options
 pub fn default_logstore(
-    store: ObjectStoreRef,
+    prefixed_store: ObjectStoreRef,
+    root_store: ObjectStoreRef,
     location: &Url,
     options: &StorageConfig,
 ) -> Arc<dyn LogStore> {
     Arc::new(default_logstore::DefaultLogStore::new(
-        store,
+        prefixed_store,
+        root_store,
         LogStoreConfig {
             location: location.clone(),
             options: options.clone(),
@@ -170,13 +179,13 @@ pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult
 
     if let Some(entry) = object_store_factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
-        let (store, _prefix) = entry.value().parse_url_opts(
+        let (root_store, _prefix) = entry.value().parse_url_opts(
             &location,
             &storage_config.raw,
             &storage_config.retry,
             storage_config.runtime.clone().map(|rt| rt.get_handle()),
         )?;
-        return logstore_with(store, location, storage_config);
+        return logstore_with(root_store, location, storage_config);
     }
 
     Err(DeltaTableError::InvalidTableLocation(location.into()))
@@ -184,7 +193,7 @@ pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult
 
 /// Return the [LogStoreRef] using the given [ObjectStoreRef]
 pub fn logstore_with(
-    store: ObjectStoreRef,
+    root_store: ObjectStoreRef,
     location: Url,
     storage_config: StorageConfig,
 ) -> DeltaResult<LogStoreRef> {
@@ -195,7 +204,7 @@ pub fn logstore_with(
         debug!("Found a logstore provider for {scheme}");
         return factory
             .value()
-            .with_options_internal(store, &location, &storage_config);
+            .with_options_internal(root_store, &location, &storage_config);
     }
 
     error!("Could not find a logstore for the scheme {scheme}");
@@ -311,6 +320,13 @@ pub trait LogStore: Send + Sync + AsAny {
     /// Get object store, can pass operation_id for object stores linked to an operation
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
+    fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
+
+    async fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
+        let store = self.root_object_store(operation_id);
+        get_engine(store).await
+    }
+
     /// [Path] to Delta log
     fn to_uri(&self, location: &Path) -> String {
         let root = &self.config().location;
@@ -372,6 +388,21 @@ pub trait LogStore: Send + Sync + AsAny {
 
     /// Get configuration representing configured log store.
     fn config(&self) -> &LogStoreConfig;
+}
+
+async fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
+    let handle = tokio::runtime::Handle::current();
+    match handle.runtime_flavor() {
+        RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new(
+            store,
+            Arc::new(TokioMultiThreadExecutor::new(handle)),
+        )),
+        RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new(
+            store,
+            Arc::new(TokioBackgroundExecutor::new()),
+        )),
+        _ => panic!("unsupported runtime flavor"),
+    }
 }
 
 #[cfg(feature = "datafusion")]
@@ -666,8 +697,6 @@ pub async fn abort_commit_entry(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-
-    type Opts = HashMap<String, String>;
 
     #[test]
     fn logstore_with_invalid_url() {
