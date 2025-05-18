@@ -24,7 +24,8 @@ fn put_options() -> &'static PutOptions {
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
 pub struct DefaultLogStore {
-    pub(crate) storage: ObjectStoreRef,
+    prefixed_store: ObjectStoreRef,
+    root_store: ObjectStoreRef,
     config: LogStoreConfig,
 }
 
@@ -33,10 +34,21 @@ impl DefaultLogStore {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `prefixed_store` - A shared reference to an [`object_store::ObjectStore`] with "/"
+    ///   pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `root_store` - A shared reference to an [`object_store::ObjectStore`] with "/"
+    ///   pointing at root of the storage system.
     /// * `location` - A url corresponding to the storage location of `storage`.
-    pub fn new(storage: ObjectStoreRef, config: LogStoreConfig) -> Self {
-        Self { storage, config }
+    pub fn new(
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
+        config: LogStoreConfig,
+    ) -> Self {
+        Self {
+            prefixed_store,
+            root_store,
+            config,
+        }
     }
 }
 
@@ -104,7 +116,11 @@ impl LogStore for DefaultLogStore {
     }
 
     fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
-        self.storage.clone()
+        self.prefixed_store.clone()
+    }
+
+    fn root_object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
+        self.root_store.clone()
     }
 
     fn config(&self) -> &LogStoreConfig {

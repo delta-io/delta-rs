@@ -70,8 +70,6 @@ pub struct DeltaTable {
     pub state: Option<DeltaTableState>,
     /// the load options used during load
     pub config: DeltaTableConfig,
-    /// Kernel engine sitting under the [DeltaTable]
-    //engine: Arc<dyn delta_kernel::Engine>,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
