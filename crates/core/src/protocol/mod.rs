@@ -98,6 +98,12 @@ pub enum ProtocolError {
         #[from]
         source: crate::kernel::Error,
     },
+
+    #[error("DeltaKernel: {source}")]
+    DeltaKernel {
+        #[from]
+        source: delta_kernel::Error,
+    },
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.

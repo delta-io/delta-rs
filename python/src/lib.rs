@@ -1404,7 +1404,7 @@ impl RawDeltaTable {
                             Some(
                                 DeltaTableState::try_new(
                                     &table.state.clone().unwrap().snapshot().table_root(),
-                                    table.object_store(),
+                                    table.log_store().root_object_store(None),
                                     table.config.clone(),
                                     Some(table.version()),
                                 )
@@ -1926,6 +1926,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
+        Map(_val) => todo!("how should this be converted!"),
     };
 
     Ok(val.into_bound(py))

@@ -76,6 +76,7 @@ impl ScalarExt for Scalar {
             Self::Null(_) => "null".to_string(),
             Self::Struct(_) => self.to_string(),
             Self::Array(_) => self.to_string(),
+            Self::Map(_) => unimplemented!(),
         }
     }
 
@@ -282,6 +283,7 @@ impl ScalarExt for Scalar {
             Self::Null(_) => Value::Null,
             Self::Struct(_) => unimplemented!(),
             Self::Array(_) => unimplemented!(),
+            Self::Map(_) => unimplemented!(),
         }
     }
 }

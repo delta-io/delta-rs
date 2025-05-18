@@ -868,8 +868,7 @@ impl PostCommit {
 
         let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
-            create_checkpoint_for(version, table_state, log_store.as_ref(), Some(operation_id))
-                .await?;
+            create_checkpoint_for(version, log_store.clone(), Some(operation_id)).await?;
             Ok(true)
         } else {
             Ok(false)
