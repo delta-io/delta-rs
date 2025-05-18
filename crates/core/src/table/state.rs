@@ -29,14 +29,14 @@ pub struct DeltaTableState {
 impl DeltaTableState {
     /// Create a new DeltaTableState
     pub async fn try_new(
-        table_root: &Path,
-        store: Arc<dyn ObjectStore>,
+        table_root: &url::Url,
+        root_store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let snapshot = EagerSnapshot::try_new_with_visitor(
             table_root,
-            store.clone(),
+            root_store,
             config,
             version,
             HashSet::from([ActionType::Txn]),
@@ -102,12 +102,12 @@ impl DeltaTableState {
     /// Full list of tombstones (remove actions) representing files removed from table state).
     pub async fn all_tombstones(
         &self,
-        store: Arc<dyn ObjectStore>,
+        root_store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<impl Iterator<Item = Remove>> {
         Ok(self
             .snapshot
             .snapshot()
-            .tombstones(store)?
+            .tombstones(root_store)?
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()

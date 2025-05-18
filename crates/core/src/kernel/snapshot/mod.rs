@@ -21,13 +21,15 @@ use std::sync::Arc;
 
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
+use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tracing::warn;
+use url::Url;
 
-use self::log_segment::{LogSegment, PathExt};
+use self::log_segment::LogSegment;
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use self::visitors::*;
@@ -59,21 +61,27 @@ pub struct Snapshot {
     protocol: Protocol,
     metadata: Metadata,
     schema: StructType,
-    // TODO make this an URL
     /// path of the table root within the object store
-    table_url: String,
+    table_url: Url,
 }
 
 impl Snapshot {
     /// Create a new [`Snapshot`] instance
     pub async fn try_new(
-        table_root: &Path,
-        store: Arc<dyn ObjectStore>,
+        table_root: &Url,
+        root_store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let log_segment = LogSegment::try_new(table_root, version, store.as_ref()).await?;
-        let (protocol, metadata) = log_segment.read_metadata(store.clone(), &config).await?;
+        let mut table_url = table_root.clone();
+        if !table_url.path().ends_with("/") {
+            table_url.set_path(&format!("{}/", table_url.path()));
+        }
+
+        let log_segment = LogSegment::try_new(&table_url, version, root_store.as_ref()).await?;
+        let (protocol, metadata) = log_segment
+            .read_metadata(root_store.clone(), &config)
+            .await?;
         if metadata.is_none() || protocol.is_none() {
             return Err(DeltaTableError::Generic(
                 "Cannot read metadata from log segment".into(),
@@ -90,7 +98,7 @@ impl Snapshot {
             protocol,
             metadata,
             schema,
-            table_url: table_root.to_string(),
+            table_url,
         })
     }
 
@@ -112,7 +120,7 @@ impl Snapshot {
                 protocol,
                 metadata,
                 schema,
-                table_url: Path::default().to_string(),
+                table_url: Url::parse("dummy:///").unwrap(),
             },
             batch,
         ))
@@ -203,8 +211,8 @@ impl Snapshot {
     }
 
     /// Get the table root of the snapshot
-    pub fn table_root(&self) -> Path {
-        Path::from(self.table_url.clone())
+    pub fn table_root(&self) -> &Url {
+        &self.table_url
     }
 
     /// Well known table configuration
@@ -244,8 +252,9 @@ impl Snapshot {
         store: Arc<dyn ObjectStore>,
         limit: Option<usize>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
-        let log_root = self.table_root().child("_delta_log");
-        let start_from = log_root.child(
+        let log_root = self.table_root().join("_delta_log/").unwrap();
+        let log_root_path = Path::from_url_path(log_root.path())?;
+        let start_from = log_root_path.child(
             format!(
                 "{:020}",
                 limit
@@ -255,14 +264,20 @@ impl Snapshot {
             .as_str(),
         );
 
+        let dummy_url = url::Url::parse("memory:///").unwrap();
+
         let mut commit_files = Vec::new();
         for meta in store
-            .list_with_offset(Some(&log_root), &start_from)
+            .list_with_offset(Some(&log_root_path), &start_from)
             .try_collect::<Vec<_>>()
             .await?
         {
-            if meta.location.is_commit_file() {
-                commit_files.push(meta);
+            // safety: object store path are always valid urls paths.
+            let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
+            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
+                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
+                    commit_files.push(meta);
+                }
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
@@ -287,16 +302,18 @@ impl Snapshot {
 
     pub(crate) fn tombstones(
         &self,
-        store: Arc<dyn ObjectStore>,
+        root_store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
         let log_stream = self.log_segment.commit_stream(
-            store.clone(),
+            root_store.clone(),
             &log_segment::TOMBSTONE_SCHEMA,
             &self.config,
         )?;
-        let checkpoint_stream =
-            self.log_segment
-                .checkpoint_stream(store, &log_segment::TOMBSTONE_SCHEMA, &self.config);
+        let checkpoint_stream = self.log_segment.checkpoint_stream(
+            root_store,
+            &log_segment::TOMBSTONE_SCHEMA,
+            &self.config,
+        );
 
         Ok(log_stream
             .chain(checkpoint_stream)
@@ -343,7 +360,7 @@ pub struct EagerSnapshot {
 impl EagerSnapshot {
     /// Create a new [`EagerSnapshot`] instance
     pub async fn try_new(
-        table_root: &Path,
+        table_root: &Url,
         store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
@@ -353,8 +370,8 @@ impl EagerSnapshot {
 
     /// Create a new [`EagerSnapshot`] instance
     pub async fn try_new_with_visitor(
-        table_root: &Path,
-        store: Arc<dyn ObjectStore>,
+        table_root: &Url,
+        root_store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
         tracked_actions: HashSet<ActionType>,
@@ -364,10 +381,15 @@ impl EagerSnapshot {
             .flat_map(get_visitor)
             .collect::<Vec<_>>();
         let snapshot =
-            Snapshot::try_new(table_root, store.clone(), config.clone(), version).await?;
+            Snapshot::try_new(table_root, root_store.clone(), config.clone(), version).await?;
 
         let files = match config.require_files {
-            true => snapshot.files(store, &mut visitors)?.try_collect().await?,
+            true => {
+                snapshot
+                    .files(root_store, &mut visitors)?
+                    .try_collect()
+                    .await?
+            }
             false => vec![],
         };
 
@@ -521,7 +543,7 @@ impl EagerSnapshot {
     }
 
     /// Get the table root of the snapshot
-    pub fn table_root(&self) -> Path {
+    pub fn table_root(&self) -> &Url {
         self.snapshot.table_root()
     }
 
@@ -604,9 +626,10 @@ impl EagerSnapshot {
             visitors.iter().flat_map(|v| v.required_actions()).collect();
         schema_actions.extend([ActionType::Add, ActionType::Remove]);
         let read_schema = StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
+        let root_path = Path::from_url_path(self.table_root().path())?;
         let actions = self.snapshot.log_segment.advance(
             send,
-            &self.table_root(),
+            &root_path,
             &read_schema,
             &self.snapshot.config,
         )?;
@@ -852,13 +875,12 @@ mod tests {
     }
 
     async fn test_snapshot(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store(None);
+        let log_store = context.table_builder(TestTables::Simple).build_storage()?;
+        let store = log_store.root_object_store(None);
+        let table_url = log_store.table_url();
 
         let snapshot =
-            Snapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
+            Snapshot::try_new(&table_url, store.clone(), Default::default(), None).await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual: Snapshot = serde_json::from_slice(&bytes).unwrap();
@@ -900,19 +922,16 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
-        let store = context
+        let log_store = context
             .table_builder(TestTables::Checkpoints)
-            .build_storage()?
-            .object_store(None);
+            .build_storage()?;
+        let store = log_store.root_object_store(None);
+        let table_url = log_store.table_url();
 
         for version in 0..=12 {
-            let snapshot = Snapshot::try_new(
-                &Path::default(),
-                store.clone(),
-                Default::default(),
-                Some(version),
-            )
-            .await?;
+            let snapshot =
+                Snapshot::try_new(&table_url, store.clone(), Default::default(), Some(version))
+                    .await?;
             let batches = snapshot
                 .files(store.clone(), &mut vec![])?
                 .try_collect::<Vec<_>>()
@@ -925,14 +944,12 @@ mod tests {
     }
 
     async fn test_eager_snapshot(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store(None);
+        let log_store = context.table_builder(TestTables::Simple).build_storage()?;
+        let store = log_store.root_object_store(None);
+        let table_url = log_store.table_url();
 
         let snapshot =
-            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
-                .await?;
+            EagerSnapshot::try_new(&table_url, store.clone(), Default::default(), None).await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual: EagerSnapshot = serde_json::from_slice(&bytes).unwrap();
@@ -942,14 +959,15 @@ mod tests {
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
-        let store = context
+        let log_store = context
             .table_builder(TestTables::Checkpoints)
-            .build_storage()?
-            .object_store(None);
+            .build_storage()?;
+        let store = log_store.root_object_store(None);
+        let table_url = log_store.table_url();
 
         for version in 0..=12 {
             let snapshot = EagerSnapshot::try_new(
-                &Path::default(),
+                &table_url,
                 store.clone(),
                 Default::default(),
                 Some(version),
@@ -967,14 +985,12 @@ mod tests {
         let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
         context.load_table(TestTables::Simple).await?;
 
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store(None);
+        let log_store = context.table_builder(TestTables::Simple).build_storage()?;
+        let store = log_store.root_object_store(None);
+        let table_url = log_store.table_url();
 
         let mut snapshot =
-            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
-                .await?;
+            EagerSnapshot::try_new(&table_url, store.clone(), Default::default(), None).await?;
 
         let version = snapshot.version();
 
@@ -1064,7 +1080,7 @@ mod tests {
             protocol: protocol.clone(),
             metadata,
             schema: schema.clone(),
-            table_url: "table".to_string(),
+            table_url: Url::parse("dummy:///").unwrap(),
             config: Default::default(),
         };
 
@@ -1093,7 +1109,7 @@ mod tests {
             protocol: protocol.clone(),
             metadata,
             schema: schema.clone(),
-            table_url: "table".to_string(),
+            table_url: Url::parse("dummy:///").unwrap(),
         };
 
         assert_eq!(snapshot.partitions_schema(None).unwrap(), None);

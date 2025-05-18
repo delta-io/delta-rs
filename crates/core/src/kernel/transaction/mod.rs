@@ -812,7 +812,7 @@ impl PostCommit {
                 if num_log_files_cleaned_up > 0 {
                     state = DeltaTableState::try_new(
                         &state.snapshot().table_root(),
-                        self.log_store.object_store(None),
+                        self.log_store.root_object_store(None),
                         state.load_config().clone(),
                         Some(self.version),
                     )
@@ -839,8 +839,8 @@ impl PostCommit {
             ))
         } else {
             let state = DeltaTableState::try_new(
-                &Path::default(),
-                self.log_store.object_store(None),
+                &self.log_store.table_url(),
+                self.log_store.root_object_store(None),
                 Default::default(),
                 Some(self.version),
             )

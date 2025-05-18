@@ -59,6 +59,7 @@ use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
 use delta_kernel::engine::default::DefaultEngine;
+use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::{AsAny, Engine};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
@@ -67,11 +68,10 @@ use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::RuntimeFlavor;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
-use crate::kernel::log_segment::PathExt;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::Action;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
@@ -343,30 +343,42 @@ pub trait LogStore: Send + Sync + AsAny {
         &DELTA_LOG_PATH
     }
 
+    fn table_url(&self) -> Url {
+        let mut url = self.config().location.clone();
+        if !url.path().ends_with("/") {
+            url.set_path(&format!("{}/", url.path()));
+        }
+        url
+    }
+
+    fn log_url(&self) -> Url {
+        self.table_url().join("_delta_log/").unwrap()
+    }
+
     /// Check if the location is a delta table location
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
         let object_store = self.object_store(None);
-        let mut stream = object_store.list(Some(self.log_path()));
+        let table_url = self.table_url();
+        let log_path = Path::from("_delta_log");
+
+        let mut stream = object_store.list(Some(&log_path));
         while let Some(res) = stream.next().await {
             match res {
                 Ok(meta) => {
-                    // Valid but optional files.
-                    if meta.location.is_crc_file()
-                        || meta.location.is_last_checkpoint_file()
-                        || meta.location.is_last_vacuum_info_file()
-                        || meta.location.is_deletion_vector_file()
-                    {
-                        continue;
+                    let file_url = table_url.join(meta.location.as_ref()).unwrap();
+                    if let Ok(Some(parsed_path)) = ParsedLogPath::try_from(file_url) {
+                        if matches!(
+                            parsed_path.file_type,
+                            LogPathFileType::Commit
+                                | LogPathFileType::SinglePartCheckpoint
+                                | LogPathFileType::UuidCheckpoint(_)
+                                | LogPathFileType::MultiPartCheckpoint { .. }
+                                | LogPathFileType::CompactedCommit { .. }
+                        ) {
+                            return Ok(true);
+                        }
                     }
-                    let is_valid =
-                        meta.location.is_commit_file() || meta.location.is_checkpoint_file();
-                    if !is_valid {
-                        warn!(
-                            "Expected a valid delta file. Found {}",
-                            meta.location.filename().unwrap_or("<empty>")
-                        )
-                    }
-                    return Ok(is_valid);
+                    continue;
                 }
                 Err(ObjectStoreError::NotFound { .. }) => return Ok(false),
                 Err(err) => return Err(err.into()),
@@ -770,7 +782,7 @@ pub(crate) mod tests {
         let _put = store
             .object_store(None)
             .put_opts(
-                &Path::from("_delta_log/0.json"),
+                &Path::from("_delta_log/00000000000000000000.json"),
                 payload,
                 PutOptions::default(),
             )
@@ -800,7 +812,7 @@ pub(crate) mod tests {
         let _put = store
             .object_store(None)
             .put_opts(
-                &Path::from("_delta_log/0.checkpoint.parquet"),
+                &Path::from("_delta_log/00000000000000000000.checkpoint.parquet"),
                 payload,
                 PutOptions::default(),
             )
@@ -831,7 +843,7 @@ pub(crate) mod tests {
         let _put = store
             .object_store(None)
             .put_opts(
-                &Path::from("_delta_log/.0.crc.crc"),
+                &Path::from("_delta_log/.00000000000000000000.crc.crc"),
                 payload.clone(),
                 PutOptions::default(),
             )
@@ -841,7 +853,7 @@ pub(crate) mod tests {
         let _put = store
             .object_store(None)
             .put_opts(
-                &Path::from("_delta_log/.0.json.crc"),
+                &Path::from("_delta_log/.00000000000000000000.json.crc"),
                 payload.clone(),
                 PutOptions::default(),
             )
@@ -851,7 +863,7 @@ pub(crate) mod tests {
         let _put = store
             .object_store(None)
             .put_opts(
-                &Path::from("_delta_log/0.crc"),
+                &Path::from("_delta_log/00000000000000000000.crc"),
                 payload.clone(),
                 PutOptions::default(),
             )
@@ -862,7 +874,7 @@ pub(crate) mod tests {
         let _put = store
             .object_store(None)
             .put_opts(
-                &Path::from("_delta_log/0.json"),
+                &Path::from("_delta_log/00000000000000000000.json"),
                 payload.clone(),
                 PutOptions::default(),
             )

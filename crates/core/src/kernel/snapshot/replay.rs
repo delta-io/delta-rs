@@ -605,7 +605,6 @@ pub(super) mod tests {
     use delta_kernel::schema::DataType;
     use deltalake_test::utils::*;
     use futures::TryStreamExt;
-    use object_store::path::Path;
 
     use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
@@ -621,12 +620,13 @@ pub(super) mod tests {
             ActionType::Remove.schema_field().clone(),
         ]));
 
-        let store = context
+        let log_store = context
             .table_builder(TestTables::SimpleWithCheckpoint)
-            .build_storage()?
-            .object_store(None);
+            .build_storage()?;
+        let table_url = log_store.table_url();
+        let store = log_store.root_object_store(None);
 
-        let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
+        let segment = LogSegment::try_new(&table_url, Some(9), store.as_ref()).await?;
         let mut scanner = LogReplayScanner::new();
 
         let batches = segment
@@ -643,11 +643,10 @@ pub(super) mod tests {
         let filtered = scanner.process_files_batch(&batch, true)?;
         assert_eq!(filtered.schema().fields().len(), 1);
 
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store(None);
-        let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
+        let log_store = context.table_builder(TestTables::Simple).build_storage()?;
+        let table_url = log_store.table_url();
+        let store = log_store.root_object_store(None);
+        let segment = LogSegment::try_new(&table_url, None, store.as_ref()).await?;
         let batches = segment
             .commit_stream(store.clone(), &log_schema, &Default::default())?
             .try_collect::<Vec<_>>()

@@ -213,8 +213,8 @@ impl DeltaTable {
             Some(state) => state.update(self.log_store.clone(), max_version).await,
             _ => {
                 let state = DeltaTableState::try_new(
-                    &Path::default(),
-                    self.log_store.object_store(None),
+                    &self.log_store.table_url(),
+                    self.log_store.root_object_store(None),
                     self.config.clone(),
                     max_version,
                 )
@@ -262,7 +262,7 @@ impl DeltaTable {
             .snapshot()?
             .snapshot
             .snapshot()
-            .commit_infos(self.object_store(), limit)
+            .commit_infos(self.log_store().root_object_store(None), limit)
             .await?
             .try_collect::<Vec<_>>()
             .await?;

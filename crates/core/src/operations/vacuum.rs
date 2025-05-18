@@ -61,6 +61,9 @@ enum VacuumError {
 
     #[error(transparent)]
     Protocol(#[from] crate::protocol::ProtocolError),
+
+    #[error(transparent)]
+    ObjectStore(#[from] object_store::Error),
 }
 
 impl From<VacuumError> for DeltaTableError {
@@ -242,15 +245,14 @@ impl VacuumBuilder {
             &self.snapshot,
             retention_period,
             now_millis,
-            self.log_store.object_store(None).clone(),
+            self.log_store.root_object_store(None),
         )
         .await?;
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
 
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
-        let object_store = self.log_store.object_store(None);
-        let mut all_files = object_store.list(None);
+        let mut all_files = self.log_store.object_store(None).list(None);
         let partition_columns = &self.snapshot.metadata().partition_columns;
 
         while let Some(obj_meta) = all_files.next().await {
