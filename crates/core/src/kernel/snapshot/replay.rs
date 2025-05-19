@@ -603,7 +603,6 @@ pub(super) mod tests {
 
     use arrow_select::concat::concat_batches;
     use delta_kernel::schema::DataType;
-    use deltalake_test::utils::*;
     use futures::TryStreamExt;
     use object_store::path::Path;
 
@@ -613,16 +612,16 @@ pub(super) mod tests {
     use crate::kernel::{models::ActionType, StructType};
     use crate::protocol::DeltaOperation;
     use crate::table::config::TableConfig;
-    use crate::test_utils::{ActionFactory, TestResult, TestSchemas};
+    use crate::test_utils::{ActionFactory, TestResult, TestSchemas, TestTables};
 
-    pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
+    pub(crate) async fn test_log_replay() -> TestResult {
         let log_schema = Arc::new(StructType::new(vec![
             ActionType::Add.schema_field().clone(),
             ActionType::Remove.schema_field().clone(),
         ]));
 
-        let store = context
-            .table_builder(TestTables::SimpleWithCheckpoint)
+        let store = TestTables::SimpleWithCheckpoint
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -643,8 +642,8 @@ pub(super) mod tests {
         let filtered = scanner.process_files_batch(&batch, true)?;
         assert_eq!(filtered.schema().fields().len(), 1);
 
-        let store = context
-            .table_builder(TestTables::Simple)
+        let store = TestTables::Simple
+            .table_builder()
             .build_storage()?
             .object_store(None);
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;

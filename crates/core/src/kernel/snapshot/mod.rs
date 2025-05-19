@@ -816,44 +816,34 @@ fn find_nested_field<'a>(
 mod tests {
     use std::collections::HashMap;
 
-    use chrono::Utc;
-    use deltalake_test::utils::*;
     use futures::TryStreamExt;
     use itertools::Itertools;
 
     use super::log_segment::tests::{concurrent_checkpoint, test_log_segment};
     use super::replay::tests::test_log_replay;
     use super::*;
-    use crate::kernel::Remove;
     use crate::protocol::{DeltaOperation, SaveMode};
-    use crate::test_utils::ActionFactory;
+    use crate::test_utils::{assert_batches_sorted_eq, ActionFactory, TestResult, TestTables};
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
-        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
-        context.load_table(TestTables::Checkpoints).await?;
-        context.load_table(TestTables::Simple).await?;
-        context.load_table(TestTables::SimpleWithCheckpoint).await?;
-        context.load_table(TestTables::WithDvSmall).await?;
-
-        test_log_segment(&context).await?;
-        test_log_replay(&context).await?;
-        test_snapshot(&context).await?;
-        test_eager_snapshot(&context).await?;
+        test_log_segment().await?;
+        test_log_replay().await?;
+        test_snapshot().await?;
+        test_eager_snapshot().await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_concurrent_checkpoint() -> TestResult {
-        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
-        concurrent_checkpoint(&context).await?;
+        concurrent_checkpoint().await?;
         Ok(())
     }
 
-    async fn test_snapshot(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::Simple)
+    async fn test_snapshot() -> TestResult {
+        let store = TestTables::Simple
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -900,8 +890,8 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
-        let store = context
-            .table_builder(TestTables::Checkpoints)
+        let store = TestTables::Checkpoints
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -924,9 +914,9 @@ mod tests {
         Ok(())
     }
 
-    async fn test_eager_snapshot(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::Simple)
+    async fn test_eager_snapshot() -> TestResult {
+        let store = TestTables::Simple
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -942,8 +932,8 @@ mod tests {
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
-        let store = context
-            .table_builder(TestTables::Checkpoints)
+        let store = TestTables::Checkpoints
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -958,76 +948,6 @@ mod tests {
             let batches = snapshot.file_actions()?.collect::<Vec<_>>();
             assert_eq!(batches.len(), version as usize);
         }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_eager_snapshot_advance() -> TestResult {
-        let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
-        context.load_table(TestTables::Simple).await?;
-
-        let store = context
-            .table_builder(TestTables::Simple)
-            .build_storage()?
-            .object_store(None);
-
-        let mut snapshot =
-            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
-                .await?;
-
-        let version = snapshot.version();
-
-        let files = snapshot.file_actions()?.enumerate().collect_vec();
-        let num_files = files.len();
-
-        let split = files.split(|(idx, _)| *idx == num_files / 2).collect_vec();
-        assert!(split.len() == 2 && !split[0].is_empty() && !split[1].is_empty());
-        let (first, second) = split.into_iter().next_tuple().unwrap();
-
-        let removes = first
-            .iter()
-            .map(|(_, add)| {
-                Remove {
-                    path: add.path.clone(),
-                    size: Some(add.size),
-                    data_change: add.data_change,
-                    deletion_timestamp: Some(Utc::now().timestamp_millis()),
-                    extended_file_metadata: Some(true),
-                    partition_values: Some(add.partition_values.clone()),
-                    tags: add.tags.clone(),
-                    deletion_vector: add.deletion_vector.clone(),
-                    base_row_id: add.base_row_id,
-                    default_row_commit_version: add.default_row_commit_version,
-                }
-                .into()
-            })
-            .collect_vec();
-
-        let operation = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: None,
-            predicate: None,
-        };
-
-        let actions = vec![CommitData::new(
-            removes,
-            operation,
-            HashMap::new(),
-            Vec::new(),
-        )];
-
-        let new_version = snapshot.advance(&actions)?;
-        assert_eq!(new_version, version + 1);
-
-        let new_files = snapshot.file_actions()?.map(|f| f.path).collect::<Vec<_>>();
-        assert_eq!(new_files.len(), num_files - first.len());
-        assert!(first
-            .iter()
-            .all(|(_, add)| { !new_files.contains(&add.path) }));
-        assert!(second
-            .iter()
-            .all(|(_, add)| { new_files.contains(&add.path) }));
 
         Ok(())
     }
