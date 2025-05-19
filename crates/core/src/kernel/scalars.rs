@@ -9,7 +9,7 @@ use delta_kernel::{
     schema::StructField,
 };
 use object_store::path::Path;
-#[cfg(test)]
+#[cfg(any(test, feature = "integration_test"))]
 use serde_json::Value;
 use urlencoding::encode;
 
@@ -24,7 +24,7 @@ pub trait ScalarExt: Sized {
     /// Create a [`Scalar`] from an arrow array row
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
     /// Serialize as serde_json::Value
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration_test"))]
     fn to_json(&self) -> serde_json::Value;
 }
 
@@ -235,7 +235,7 @@ impl ScalarExt for Scalar {
     }
 
     /// Serializes this scalar as a serde_json::Value.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration_test"))]
     fn to_json(&self) -> serde_json::Value {
         match self {
             Self::String(s) => Value::String(s.to_owned()),
