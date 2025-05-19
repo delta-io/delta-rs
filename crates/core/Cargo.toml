@@ -99,7 +99,7 @@ humantime = { version = "2.1.0" }
 criterion = "0.5"
 ctor = "0"
 datatest-stable = "0.2"
-deltalake-test = { path = "../test", features = ["datafusion"] }
+deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
 maplit = "1"
@@ -132,6 +132,8 @@ cloud = ["object_store/cloud"]
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
+
+integration_test = []
 
 [[test]]
 name = "dat"

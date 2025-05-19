@@ -579,7 +579,6 @@ pub(super) async fn list_log_files(
 #[cfg(test)]
 pub(super) mod tests {
     use delta_kernel::table_features::{ReaderFeature, WriterFeature};
-    use deltalake_test::utils::*;
     use maplit::hashset;
     use tokio::task::JoinHandle;
 
@@ -588,22 +587,23 @@ pub(super) mod tests {
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, Add, Format, Remove},
         protocol::{DeltaOperation, SaveMode},
+        test_utils::{TestResult, TestTables},
         DeltaTableBuilder,
     };
 
     use super::*;
 
-    pub(crate) async fn test_log_segment(context: &IntegrationContext) -> TestResult {
-        read_log_files(context).await?;
-        read_metadata(context).await?;
-        log_segment_serde(context).await?;
+    pub(crate) async fn test_log_segment() -> TestResult {
+        read_log_files().await?;
+        read_metadata().await?;
+        log_segment_serde().await?;
 
         Ok(())
     }
 
-    async fn log_segment_serde(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::Simple)
+    async fn log_segment_serde() -> TestResult {
+        let store = TestTables::Simple
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -620,9 +620,9 @@ pub(super) mod tests {
         Ok(())
     }
 
-    async fn read_log_files(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::SimpleWithCheckpoint)
+    async fn read_log_files() -> TestResult {
+        let store = TestTables::SimpleWithCheckpoint
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -654,8 +654,8 @@ pub(super) mod tests {
         assert_eq!(segment.commit_files.len(), 9);
         assert_eq!(segment.checkpoint_files.len(), 0);
 
-        let store = context
-            .table_builder(TestTables::Simple)
+        let store = TestTables::Simple
+            .table_builder()
             .build_storage()?
             .object_store(None);
 
@@ -670,9 +670,9 @@ pub(super) mod tests {
         Ok(())
     }
 
-    async fn read_metadata(context: &IntegrationContext) -> TestResult {
-        let store = context
-            .table_builder(TestTables::WithDvSmall)
+    async fn read_metadata() -> TestResult {
+        let store = TestTables::WithDvSmall
+            .table_builder()
             .build_storage()?
             .object_store(None);
         let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
@@ -692,16 +692,13 @@ pub(super) mod tests {
         Ok(())
     }
 
-    pub(crate) async fn concurrent_checkpoint(context: &IntegrationContext) -> TestResult {
-        context
-            .load_table(TestTables::LatestNotCheckpointed)
-            .await?;
-        let table_to_checkpoint = context
-            .table_builder(TestTables::LatestNotCheckpointed)
+    pub(crate) async fn concurrent_checkpoint() -> TestResult {
+        let table_to_checkpoint = TestTables::LatestNotCheckpointed
+            .table_builder()
             .load()
             .await?;
-        let store = context
-            .table_builder(TestTables::LatestNotCheckpointed)
+        let store = TestTables::LatestNotCheckpointed
+            .table_builder()
             .build_storage()?
             .object_store(None);
         let slow_list_store = Arc::new(slow_store::SlowListStore { store });
