@@ -360,7 +360,7 @@ mod checkpoints_with_tombstones {
             table
                 .snapshot()
                 .unwrap()
-                .all_tombstones(table.object_store().clone())
+                .all_tombstones(&table.log_store())
                 .await
                 .unwrap()
                 .collect::<HashSet<_>>(),
@@ -377,7 +377,7 @@ mod checkpoints_with_tombstones {
             table
                 .snapshot()
                 .unwrap()
-                .all_tombstones(table.object_store().clone())
+                .all_tombstones(&table.log_store())
                 .await
                 .unwrap()
                 .count(),

@@ -178,7 +178,7 @@ pub async fn create_checkpoint_for(
 
     debug!("Writing parquet bytes to checkpoint buffer.");
     let tombstones = state
-        .unexpired_tombstones(log_store.object_store(None).clone())
+        .unexpired_tombstones(log_store)
         .await
         .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
         .collect::<Vec<_>>();
@@ -629,7 +629,8 @@ mod tests {
         // Look at the "files" and verify that the _last_checkpoint has the right version
         let path = Path::from("_delta_log/_last_checkpoint");
         let last_checkpoint = table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .get(&path)
             .await
             .expect("Failed to get the _last_checkpoint")
@@ -715,7 +716,8 @@ mod tests {
         // Look at the "files" and verify that the _last_checkpoint has the right version
         let path = Path::from("_delta_log/_last_checkpoint");
         let last_checkpoint = table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .get(&path)
             .await
             .expect("Failed to get the _last_checkpoint")

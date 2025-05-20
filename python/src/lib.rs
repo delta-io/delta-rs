@@ -142,7 +142,7 @@ impl RawDeltaTable {
     }
 
     fn object_store(&self) -> PyResult<ObjectStoreRef> {
-        self.with_table(|t| Ok(t.object_store().clone()))
+        self.with_table(|t| Ok(t.log_store().object_store(None).clone()))
     }
 
     fn cloned_state(&self) -> PyResult<DeltaTableState> {
@@ -1403,8 +1403,7 @@ impl RawDeltaTable {
                         let new_state = if result > 0 {
                             Some(
                                 DeltaTableState::try_new(
-                                    &table.state.clone().unwrap().snapshot().table_root(),
-                                    table.object_store(),
+                                    &table.log_store(),
                                     table.config.clone(),
                                     Some(table.version()),
                                 )

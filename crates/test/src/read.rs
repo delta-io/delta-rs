@@ -55,7 +55,7 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     );
     let tombstones = table
         .snapshot()?
-        .all_tombstones(table.object_store().clone())
+        .all_tombstones(&table.log_store())
         .await?
         .collect::<Vec<_>>();
     assert_eq!(tombstones.len(), 31);
@@ -100,7 +100,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     );
     let tombstones = table
         .snapshot()?
-        .all_tombstones(table.object_store().clone())
+        .all_tombstones(&table.log_store())
         .await?
         .collect::<Vec<_>>();
     assert_eq!(tombstones.len(), 29);

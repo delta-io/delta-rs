@@ -1,11 +1,10 @@
 //! The module for delta table state.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use chrono::Utc;
 use futures::TryStreamExt;
-use object_store::{path::Path, ObjectStore};
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
@@ -29,14 +28,12 @@ pub struct DeltaTableState {
 impl DeltaTableState {
     /// Create a new DeltaTableState
     pub async fn try_new(
-        table_root: &Path,
-        store: Arc<dyn ObjectStore>,
+        log_store: &dyn LogStore,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let snapshot = EagerSnapshot::try_new_with_visitor(
-            table_root,
-            store.clone(),
+            log_store,
             config,
             version,
             HashSet::from([ActionType::Txn]),
@@ -102,12 +99,12 @@ impl DeltaTableState {
     /// Full list of tombstones (remove actions) representing files removed from table state).
     pub async fn all_tombstones(
         &self,
-        store: Arc<dyn ObjectStore>,
+        log_store: &dyn LogStore,
     ) -> DeltaResult<impl Iterator<Item = Remove>> {
         Ok(self
             .snapshot
             .snapshot()
-            .tombstones(store)?
+            .tombstones(log_store)?
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
@@ -118,14 +115,14 @@ impl DeltaTableState {
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
     pub async fn unexpired_tombstones(
         &self,
-        store: Arc<dyn ObjectStore>,
+        log_store: &dyn LogStore,
     ) -> DeltaResult<impl Iterator<Item = Remove>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_config()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
-        let tombstones = self.all_tombstones(store).await?.collect::<Vec<_>>();
+        let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
         Ok(tombstones
             .into_iter()
             .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
@@ -199,7 +196,7 @@ impl DeltaTableState {
     /// Update the state of the table to the given version.
     pub async fn update(
         &mut self,
-        log_store: Arc<dyn LogStore>,
+        log_store: &dyn LogStore,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         self.snapshot.update(log_store, version).await?;
