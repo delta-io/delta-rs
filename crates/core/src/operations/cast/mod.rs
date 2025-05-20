@@ -178,11 +178,17 @@ pub fn cast_record_batch(
         ..Default::default()
     };
 
-    let s = StructArray::new(
-        batch.schema().as_ref().to_owned().fields,
-        batch.columns().to_owned(),
-        None,
-    );
+    let col_arrays = batch.columns().to_owned();
+    let s = if col_arrays.is_empty() {
+        StructArray::new_empty_fields(batch.num_rows(), None)
+    } else {
+        StructArray::new(
+            batch.schema().as_ref().to_owned().fields,
+            col_arrays,
+            None,
+        )
+    };
+
     let struct_array = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
 
     Ok(RecordBatch::try_new_with_options(
