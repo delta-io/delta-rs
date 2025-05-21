@@ -138,3 +138,15 @@ integration_test = []
 [[test]]
 name = "dat"
 harness = false
+
+[[test]]
+name = "command_optimize"
+required-features = ["datafusion"]
+
+[[test]]
+name = "command_merge"
+required-features = ["datafusion"]
+
+[[test]]
+name = "command_restore"
+required-features = ["datafusion"]
