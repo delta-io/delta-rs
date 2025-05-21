@@ -6,11 +6,12 @@
 //!
 //! Specific pieces of configuration must implement the `TryUpdateKey` trait which
 //! defines how to update internal fields based on key-value pairs.
-#[cfg(feature = "cloud")]
-use ::object_store::RetryConfig;
+
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use super::storage::file_cache::{self, FileCacheConfig};
 use super::storage::LimitConfig;
 use super::{storage::runtime::RuntimeConfig, IORuntime};
 use crate::{DeltaResult, DeltaTableError};
@@ -103,6 +104,11 @@ pub struct StorageConfig {
     /// Configuration to limit the number of concurrent requests to the object store.
     pub limit: Option<LimitConfig>,
 
+    /// File cache configuration.
+    ///
+    /// Configuration to enable file cache for the Delta Log Store.
+    pub file_cache: Option<FileCacheConfig>,
+
     /// Properties that are not recognized by the storage configuration.
     ///
     /// These properties are ignored by the storage configuration and can be used for custom purposes.
@@ -121,12 +127,27 @@ impl StorageConfig {
     /// Depending on the configuration, the following layers may be added:
     /// - Retry layer: Adds retry logic to the object store.
     /// - Limit layer: Limits the number of concurrent requests to the object store.
+    /// - File cache layer: Adds a file cache to the object store.
     pub fn decorate_store<T: ObjectStore + Clone>(
         &self,
         store: T,
         table_root: &url::Url,
     ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let inner = Self::decorate_prefix(store, table_root)?;
+        let inner = self.decorate_root_store(store)?;
+        let inner = Self::decorate_prefix(inner, table_root)?;
+        Ok(inner)
+    }
+
+    /// Wraps an object store with additional layers of functionality without prefix.
+    pub(crate) fn decorate_root_store<T: ObjectStore>(
+        &self,
+        store: T,
+    ) -> DeltaResult<Box<dyn ObjectStore>> {
+        let inner = if let Some(file_cache) = self.file_cache.as_ref() {
+            file_cache::decorate_store(Arc::new(store), file_cache)?
+        } else {
+            Box::new(store)
+        };
         Ok(inner)
     }
 
@@ -169,7 +190,7 @@ where
 
         #[cfg(feature = "cloud")]
         let remainder = {
-            let result = ParseResult::<RetryConfig>::from_iter(remainder);
+            let result = ParseResult::<object_store::RetryConfig>::from_iter(remainder);
             config.retry = result.config;
             result.unparsed
         };
@@ -224,6 +245,11 @@ impl StorageConfig {
             props.retry = retry;
             remainder
         };
+
+        let result = ParseResult::<FileCacheConfig>::from_iter(remainder);
+        result.raise_errors()?;
+        props.file_cache = (!result.is_default).then_some(result.config);
+        let remainder = result.unparsed;
 
         props.unknown_properties = remainder;
         Ok(props)
@@ -402,5 +428,37 @@ mod tests {
         let config =
             StorageConfig::default().with_io_runtime(IORuntime::Config(RuntimeConfig::default()));
         assert!(config.runtime.is_some());
+    }
+
+    #[test]
+    fn test_file_cache_config_from_options() {
+        let options = hashmap! {
+            "file_cache_path".to_string() => "/tmp/file_cache".to_string(),
+        };
+
+        let (file_cache_config, remainder): (FileCacheConfig, _) =
+            super::try_parse_impl(options).unwrap();
+        assert!(remainder.is_empty());
+
+        assert_eq!(file_cache_config.path, "/tmp/file_cache");
+        assert!(file_cache_config.last_checkpoint_valid_duration.is_none());
+    }
+
+    #[test]
+    fn test_file_cache_config_from_options_with_last_checkpoint_valid_duration() {
+        let options = hashmap! {
+            "file_cache_path".to_string() => "/tmp/file_cache".to_string(),
+            "file_cache_last_checkpoint_valid_duration".to_string() => "1h".to_string(),
+        };
+
+        let (file_cache_config, remainder): (FileCacheConfig, _) =
+            super::try_parse_impl(options).unwrap();
+        assert!(remainder.is_empty());
+
+        assert_eq!(file_cache_config.path, "/tmp/file_cache");
+        assert_eq!(
+            file_cache_config.last_checkpoint_valid_duration,
+            Some(Duration::from_secs(3600))
+        );
     }
 }
