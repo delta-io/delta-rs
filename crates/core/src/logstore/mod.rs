@@ -120,7 +120,8 @@ impl<T: LogStoreFactory + ?Sized> LogStoreFactoryExt for T {
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<LogStoreRef> {
-        let prefixed_store = options.decorate_store(root_store.clone(), location)?;
+        let root_store = Arc::new(options.decorate_root_store(root_store)?) as ObjectStoreRef;
+        let prefixed_store = StorageConfig::decorate_prefix(root_store.clone(), location)?;
         let log_store =
             self.with_options(Arc::new(prefixed_store), root_store, location, options)?;
         Ok(log_store)
@@ -994,6 +995,42 @@ pub(crate) mod tests {
             .map_ok(|meta| meta.location)
             .try_collect::<Vec<Path>>()
             .await
+    }
+
+    #[tokio::test]
+    async fn test_file_cache_enable_by_storage_option() {
+        use object_store::memory::InMemory;
+        use tempfile::tempdir;
+        let memory_store = Arc::new(InMemory::new());
+        let log_path = Path::from("delta-table/_delta_log/00000000000000000001.json");
+
+        let payload = "test";
+        memory_store
+            .put(&log_path, payload.into())
+            .await
+            .expect("Failed to write log file");
+
+        // Enable file cache by setting the storage option
+        let cache_dir = tempdir().unwrap();
+        let storge_options = HashMap::from([(
+            "file_cache_path".to_string(),
+            cache_dir.path().to_str().unwrap().to_string(),
+        )]);
+
+        let table_uri = "memory:///delta-table";
+        let table = crate::DeltaTableBuilder::from_valid_uri(table_uri)
+            .unwrap()
+            .with_storage_backend(memory_store, Url::parse(table_uri).unwrap())
+            .with_storage_options(storge_options)
+            .build()
+            .unwrap();
+
+        // Intentially discarding result. We just want to verify cache is enabled
+        let _ = table.log_store().peek_next_commit(0).await;
+
+        // File should have been cached
+        let cache_path = cache_dir.path().join(log_path.as_ref());
+        assert!(cache_path.exists());
     }
 }
 
