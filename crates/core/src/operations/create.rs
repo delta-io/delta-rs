@@ -551,6 +551,7 @@ mod tests {
         assert_ne!(table.metadata().unwrap().id, first_id)
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_or_replace_existing_table() {
         let batch = get_record_batch(None, false);
@@ -576,6 +577,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "datafusion")]
     async fn test_create_or_replace_existing_table_partitioned() {
         let batch = get_record_batch(None, false);
         let schema = get_delta_schema();
