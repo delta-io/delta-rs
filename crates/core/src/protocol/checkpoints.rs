@@ -899,6 +899,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     async fn setup_table() -> DeltaTable {
         use arrow_schema::{DataType, Field};
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
@@ -923,6 +924,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_cleanup_no_checkpoints() {
         // Test that metadata clean up does not corrupt the table when no checkpoints exist
@@ -952,6 +954,7 @@ mod tests {
         assert!(res.is_ok());
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_cleanup_with_checkpoints() {
         let table = setup_table().await;
@@ -1081,6 +1084,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_struct_with_single_list_field() {
         // you need another column otherwise the entire stats struct is empty
@@ -1167,6 +1171,7 @@ mod tests {
     });
 
     #[ignore = "This test is only useful if the batch size has been made small"]
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_checkpoint_large_table() -> DeltaResult<()> {
         use crate::writer::test_utils::get_arrow_schema;
