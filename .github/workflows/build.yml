@@ -42,7 +42,7 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Default build
-        run: (cd crates/deltalake && cargo build)
+        run: (cd crates/deltalake && cargo build --tests)
 
       - name: build and lint with clippy
         run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
