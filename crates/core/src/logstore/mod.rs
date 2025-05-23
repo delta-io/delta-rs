@@ -646,7 +646,7 @@ pub async fn get_latest_version(
             let part_count = location_path.prefix_match(prefix).unwrap().count();
             if part_count > 1 {
                 // Per the spec, ignore any files in subdirectories.
-                // Spark may create these as uncommited transactions which we don't want
+                // Spark may create these as uncommitted transactions which we don't want
                 //
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
                 // "Delta files are stored as JSON in a directory at the *root* of the table

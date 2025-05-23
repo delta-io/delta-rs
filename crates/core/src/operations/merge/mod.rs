@@ -3324,7 +3324,7 @@ mod tests {
                 true,
             ),
             StructField::new(
-                "vAlue".to_string(),
+                "vAlue".to_string(), // spellchecker:disable-line
                 DataType::Primitive(PrimitiveType::Integer),
                 true,
             ),
@@ -3337,7 +3337,7 @@ mod tests {
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("Id", ArrowDataType::Utf8, true),
-            Field::new("vAlue", ArrowDataType::Int32, true),
+            Field::new("vAlue", ArrowDataType::Int32, true), // spellchecker:disable-line
             Field::new("mOdifieD", ArrowDataType::Utf8, true),
         ]));
 
@@ -3374,7 +3374,7 @@ mod tests {
             .when_not_matched_insert(|insert| {
                 insert
                     .set("Id", "source.Id")
-                    .set("vAlue", "source.vAlue + 1")
+                    .set("vAlue", "source.vAlue + 1") // spellchecker:disable-line
                     .set("mOdifieD", "source.mOdifieD")
             })
             .unwrap()
@@ -3383,7 +3383,7 @@ mod tests {
 
         let expected = vec![
             "+----+-------+------------+",
-            "| Id | vAlue | mOdifieD   |",
+            "| Id | vAlue | mOdifieD   |", // spellchecker:disable-line
             "+----+-------+------------+",
             "| A  | 1     | 2021-02-01 |",
             "| B  | 10    | 2021-02-01 |",
