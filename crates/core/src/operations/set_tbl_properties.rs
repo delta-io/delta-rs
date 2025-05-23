@@ -11,8 +11,8 @@ use crate::kernel::Action;
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::DeltaResult;
 use crate::DeltaTable;
+use crate::{DeltaResult, DeltaTableError};
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
@@ -89,16 +89,41 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             this.pre_execute(operation_id).await?;
 
             let mut metadata = this.snapshot.metadata().clone();
-
             let current_protocol = this.snapshot.protocol();
             let properties = this.properties;
 
+            if let Some(name) = properties.get("name") {
+                if name.len() > 255 {
+                    return Err(DeltaTableError::MetadataError(format!(
+                        "Table name cannot exceed 255 characters. Provided name has {} characters.",
+                        name.len()
+                    )));
+                }
+                metadata.name = Some(name.clone());
+            }
+
+            if let Some(description) = properties.get("description") {
+                if description.len() > 4000 {
+                    return Err(DeltaTableError::MetadataError(format!(
+                        "Table description cannot exceed 4,000 characters. Provided description has {} characters.",
+                        description.len()
+                    )));
+                }
+                metadata.description = Some(description.clone());
+            }
+
+            let protocol_properties: HashMap<String, String> = properties
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "name" | "description"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
             let new_protocol = current_protocol
                 .clone()
-                .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
+                .apply_properties_to_protocol(&protocol_properties, this.raise_if_not_exists)?;
 
             metadata.configuration.extend(
-                properties
+                protocol_properties
                     .clone()
                     .into_iter()
                     .map(|(k, v)| (k, Some(v)))
