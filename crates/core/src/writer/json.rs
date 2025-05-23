@@ -636,6 +636,7 @@ mod tests {
             }
         }
 
+        #[cfg(feature = "datafusion")]
         #[tokio::test]
         async fn test_json_write_mismatched_schema() {
             let table_dir = tempfile::tempdir().unwrap();
@@ -678,6 +679,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_json_write_checkpoint() {
         use std::fs;
@@ -726,6 +728,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_json_write_data_skipping_stats_columns() {
         let table_dir = tempfile::tempdir().unwrap();
@@ -774,6 +777,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_json_write_data_skipping_num_indexed_cols() {
         let table_dir = tempfile::tempdir().unwrap();

@@ -643,6 +643,7 @@ mod tests {
 
     /// This test validates that a checkpoint can be written and re-read with the minimum viable
     /// Metadata. There was a bug which didn't handle the optionality of createdTime.
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_checkpoint_with_metadata() {
         let table_schema = get_delta_schema();
