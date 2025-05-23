@@ -509,6 +509,7 @@ mod tests {
         assert_eq!(String::from("true"), append)
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_table_save_mode() {
         let tmp_dir = tempfile::tempdir().unwrap();
