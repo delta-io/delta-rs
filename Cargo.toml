@@ -26,10 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.10.0", features = [
-    "arrow-55",
-    "internal-api",
-] }
+delta_kernel = { version = "0.10.0", features = ["arrow-55", "internal-api"] }
 
 # arrow
 arrow = { version = "=55.0.0" }
@@ -78,3 +75,6 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+
+[workspace.metadata.typos]
+default.extend-ignore-re = ["(?Rm)^.*(#|//)\\s*spellchecker:disable-line$"]
