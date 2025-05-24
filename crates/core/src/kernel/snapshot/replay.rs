@@ -604,6 +604,7 @@ pub(super) mod tests {
     use arrow_select::concat::concat_batches;
     use delta_kernel::schema::DataType;
     use futures::TryStreamExt;
+    use object_store::path::Path;
 
     use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
@@ -680,7 +681,7 @@ pub(super) mod tests {
             app_metadata: Default::default(),
             app_transactions: Default::default(),
         };
-        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data], &Path::default())?;
 
         let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -743,7 +744,7 @@ pub(super) mod tests {
             app_metadata: Default::default(),
             app_transactions: Default::default(),
         };
-        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data], &Path::default())?;
 
         let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;

@@ -26,6 +26,9 @@ regex = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+deltalake-core = { version = "0.26.0", path = "../core", features = [
+    "datafusion",
+] }
 chrono = { workspace = true }
 serial_test = "3"
 deltalake-test = { path = "../test" }

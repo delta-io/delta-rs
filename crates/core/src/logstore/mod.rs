@@ -61,6 +61,7 @@ use delta_kernel::engine::default::executor::tokio::{
 use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::{AsAny, Engine};
 use futures::{StreamExt, TryStreamExt};
+use object_store::ObjectStoreScheme;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
@@ -338,6 +339,14 @@ pub trait LogStore: Send + Sync + AsAny {
         self.to_uri(&Path::from(""))
     }
 
+    fn table_root_url(&self) -> Url {
+        let mut base = self.config().location.clone();
+        if !base.path().ends_with("/") {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        base
+    }
+
     /// [Path] to Delta log
     fn log_path(&self) -> &Path {
         &DELTA_LOG_PATH
@@ -497,6 +506,16 @@ fn object_store_url(location: &Url) -> ObjectStoreUrl {
         location.path().replace(DELIMITER, "-").replace(':', "-")
     ))
     .expect("Invalid object store url.")
+}
+
+/// Parse the path from a URL accounting for special case witjh S3
+// TODO: find out why this is necessary
+pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
+    Ok(match ObjectStoreScheme::parse(table_root) {
+        Ok((ObjectStoreScheme::AmazonS3, _)) => Path::parse(table_root.path())?,
+        Ok((_, path)) => path,
+        _ => Path::parse(table_root.path())?,
+    })
 }
 
 /// TODO
