@@ -452,7 +452,7 @@ impl Model for AtomicRenameSys {
             }
             Action::CheckSourceObjectDeleted(wid) => {
                 let src = state.writer_ctx[wid].lock_data.src.as_str();
-                // HEAD objec to check for existence
+                // HEAD object to check for existence
                 if state.blob_store_deleted(src) {
                     let mut writer = &mut state.writer_ctx[wid];
                     // source object cleaned by up another worker's repair, it's not a real

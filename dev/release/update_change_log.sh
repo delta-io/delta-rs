@@ -10,7 +10,7 @@
 # GITHUB_API_TOKEN=<TOKEN> ./update_change_log.sh
 #
 # Please edit the resulting change log to remove remaining irrelevant changes
-# and to put interesting changes (features, bugfixes) above all the minor 
+# and to put interesting changes (features, bugfixes) above all the minor
 # changes (depandabot updates).
 
 set -e
@@ -32,12 +32,12 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
-HISTORIAL_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
+HISTORICAL_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
 
-cp $OUTPUT_PATH $HISTORIAL_PATH
+cp $OUTPUT_PATH $HISTORICAL_PATH
 
 # Remove header from historical change logs; will add back at the end.
-sed -i.bak '1d' "${HISTORIAL_PATH}"
+sed -i.bak '1d' "${HISTORICAL_PATH}"
 
 # use exclude-tags-regex to filter out tags used in the wrong language
 pushd "${SOURCE_TOP_DIR}"
@@ -59,7 +59,7 @@ LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
 sed -i.bak "$(( $LINE_COUNT-3 )),$ d" "${OUTPUT_PATH}"
 
 # Add historical change log back in
-cat $HISTORIAL_PATH >> $OUTPUT_PATH
+cat $HISTORICAL_PATH >> $OUTPUT_PATH
 
 # Remove temporary files
-rm $HISTORIAL_PATH
+rm $HISTORICAL_PATH

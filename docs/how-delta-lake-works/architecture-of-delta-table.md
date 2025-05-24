@@ -194,7 +194,7 @@ Here are the contents of the `_delta_log/0002.json` file:
 }
 ```
 
-This transaction adds a data file and marks the two exising data files for removal. Marking a file for removal in the transaction log is known as "tombstoning the file" or a "logical delete". This is different from a "physical delete" which actually removes the data file from storage.
+This transaction adds a data file and marks the two existing data files for removal. Marking a file for removal in the transaction log is known as "tombstoning the file" or a "logical delete". This is different from a "physical delete" which actually removes the data file from storage.
 
 ## How Delta table operations differ from data lakes
 
