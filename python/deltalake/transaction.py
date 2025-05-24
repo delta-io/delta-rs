@@ -4,8 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-import pyarrow as pa
-
+from deltalake import Schema
 from deltalake._internal import Transaction as Transaction
 from deltalake._internal import (
     create_table_with_add_actions as _create_table_with_add_actions,
@@ -67,7 +66,7 @@ class CommitProperties:
 
 def create_table_with_add_actions(
     table_uri: str,
-    schema: pa.Schema,
+    schema: Schema,
     add_actions: list[AddAction],
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     partition_by: list[str] | str | None = None,

@@ -67,7 +67,7 @@ test-cov: ## Create coverage report
 
 .PHONY: test-pyspark
 test-pyspark:
-	uv run --no-sync pytest -m 'pyspark and integration'
+	uv run --no-sync pytest -m 'pyarrow and pyspark and integration'
 
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx

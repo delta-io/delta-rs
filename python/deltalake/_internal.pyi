@@ -9,10 +9,15 @@ from typing import (
     Union,
 )
 
-import pyarrow
-import pyarrow.fs as fs
+from arro3.core import DataType as ArrowDataType
+from arro3.core import Field as ArrowField
+from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core import Schema as ArrowSchema
+from arro3.core.types import ArrowSchemaExportable
 
 if TYPE_CHECKING:
+    import pyarrow.fs as fs
+
     from deltalake.transaction import (
         AddAction,
         CommitProperties,
@@ -21,7 +26,6 @@ if TYPE_CHECKING:
     from deltalake.writer.properties import (
         WriterProperties,
     )
-
 __version__: str
 
 class TableFeatures(Enum):
@@ -170,10 +174,12 @@ class RawDeltaTable:
     def history(self, limit: int | None) -> list[str]: ...
     def update_incremental(self) -> None: ...
     def dataset_partitions(
-        self, schema: pyarrow.Schema, partition_filters: FilterConjunctionType | None
+        self,
+        schema: ArrowSchemaExportable,
+        partition_filters: FilterConjunctionType | None,
     ) -> list[Any]: ...
     def create_checkpoint(self) -> None: ...
-    def get_add_actions(self, flatten: bool) -> pyarrow.RecordBatch: ...
+    def get_add_actions(self, flatten: bool) -> RecordBatch: ...
     def delete(
         self,
         predicate: str | None,
@@ -198,7 +204,8 @@ class RawDeltaTable:
     ) -> str: ...
     def create_merge_builder(
         self,
-        source: pyarrow.RecordBatchReader,
+        source: RecordBatchReader,
+        batch_schema: ArrowSchema,
         predicate: str,
         source_alias: str | None,
         target_alias: str | None,
@@ -218,13 +225,13 @@ class RawDeltaTable:
         add_actions: list[AddAction],
         mode: str,
         partition_by: list[str],
-        schema: pyarrow.Schema,
+        schema: Schema,
         partitions_filters: FilterType | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def cleanup_metadata(self) -> None: ...
-    def check_can_write_timestamp_ntz(self, schema: pyarrow.Schema) -> None: ...
+    def check_can_write_timestamp_ntz(self, schema: Schema) -> None: ...
     def load_cdf(
         self,
         columns: list[str] | None = None,
@@ -234,7 +241,7 @@ class RawDeltaTable:
         starting_timestamp: str | None = None,
         ending_timestamp: str | None = None,
         allow_out_of_range: bool = False,
-    ) -> pyarrow.RecordBatchReader: ...
+    ) -> RecordBatchReader: ...
     def transaction_versions(self) -> dict[str, Transaction]: ...
     def set_column_metadata(
         self,
@@ -246,7 +253,8 @@ class RawDeltaTable:
     def __datafusion_table_provider__(self) -> Any: ...
     def write(
         self,
-        data: pyarrow.RecordBatchReader,
+        data: RecordBatchReader,
+        batch_schema: ArrowSchema,
         partition_by: list[str] | None,
         mode: str,
         schema_mode: str | None,
@@ -263,7 +271,7 @@ class RawDeltaTable:
 def rust_core_version() -> str: ...
 def create_table_with_add_actions(
     table_uri: str,
-    schema: pyarrow.Schema,
+    schema: Schema,
     add_actions: list[AddAction],
     mode: Literal["error", "append", "overwrite", "ignore"],
     partition_by: list[str],
@@ -276,7 +284,8 @@ def create_table_with_add_actions(
 ) -> None: ...
 def write_to_deltalake(
     table_uri: str,
-    data: pyarrow.RecordBatchReader,
+    data: RecordBatchReader,
+    batch_schema: ArrowSchema,
     partition_by: list[str] | None,
     mode: str,
     schema_mode: str | None,
@@ -292,7 +301,7 @@ def write_to_deltalake(
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
-    partition_schema: pyarrow.Schema | None,
+    partition_schema: Schema | None,
     partition_strategy: Literal["hive"] | None,
     name: str | None,
     description: str | None,
@@ -303,7 +312,7 @@ def convert_to_deltalake(
 ) -> None: ...
 def create_deltalake(
     table_uri: str,
-    schema: pyarrow.Schema,
+    schema: Schema,
     partition_by: list[str],
     mode: str,
     raise_if_key_not_exists: bool,
@@ -314,7 +323,6 @@ def create_deltalake(
     commit_properties: CommitProperties | None,
     post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
-def batch_distinct(batch: pyarrow.RecordBatch) -> pyarrow.RecordBatch: ...
 def get_num_idx_cols_and_stats_columns(
     table: RawDeltaTable | None, configuration: Mapping[str, str | None] | None
 ) -> tuple[int, list[str] | None]: ...
@@ -323,7 +331,7 @@ class PyMergeBuilder:
     source_alias: str
     target_alias: str
     merge_schema: bool
-    arrow_schema: pyarrow.Schema
+    arrow_schema: ArrowSchema
 
     def when_matched_update(
         self, updates: dict[str, str], predicate: str | None
@@ -366,7 +374,7 @@ class PrimitiveType:
      * "binary",
      * "date",
      * "timestamp",
-     * "timestampNtz",
+     * "timestamp_ntz",
      * "decimal(<precision>, <scale>)" Max: decimal(38,38)
 
     Args:
@@ -391,19 +399,31 @@ class PrimitiveType:
         Returns:
             a PrimitiveType type
         """
-    def to_pyarrow(self) -> pyarrow.DataType:
-        """Get the equivalent PyArrow type (pyarrow.DataType)"""
-    @staticmethod
-    def from_pyarrow(type: pyarrow.DataType) -> PrimitiveType:
-        """Create a PrimitiveType from a PyArrow datatype
+    def to_arrow(self) -> ArrowDataType:
+        """Get the equivalent arro3 DataType (arro3.core.DataType)"""
 
-        Will raise `TypeError` if the PyArrow type is not a primitive type.
+    @staticmethod
+    def from_arrow(type: ArrowSchemaExportable) -> PrimitiveType:
+        """Create a PrimitiveType from an object with an `__arrow_c_schema__`
+        datatype
+
+        Will raise `TypeError` if the arrow type is not a primitive type.
 
         Args:
-            type: A PyArrow DataType
+            type: an object with an `__arrow_c_schema__
 
         Returns:
             a PrimitiveType
+        """
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+
+        For example, you can call [`pyarrow.schema()`][pyarrow.schema] to convert this
+        array into a pyarrow schema, without copying memory.
         """
 
 class ArrayType:
@@ -468,21 +488,32 @@ class ArrayType:
             # Returns ArrayType(PrimitiveType("integer"), contains_null=False)
             ```
         """
-    def to_pyarrow(
+    def to_arrow(
         self,
-    ) -> pyarrow.ListType:
-        """Get the equivalent PyArrow type."""
+    ) -> ArrowDataType:
+        """Get the equivalent arro3 type."""
     @staticmethod
-    def from_pyarrow(type: pyarrow.ListType) -> ArrayType:
-        """Create an ArrayType from a pyarrow.ListType.
+    def from_arrow(type: ArrowSchemaExportable) -> ArrayType:
+        """Create an ArrayType from an object with an `__arrow_c_schema__`
+        datatype.
 
-        Will raise `TypeError` if a different PyArrow DataType is provided.
+        Will raise `TypeError` if a different arrow DataType is provided.
 
         Args:
-            type: The PyArrow ListType
+            type: an object with an `__arrow_c_schema__
 
         Returns:
             an ArrayType
+        """
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+
+        For example, you can call [`pyarrow.schema()`][pyarrow.schema] to convert this
+        array into a pyarrow schema, without copying memory.
         """
 
 class MapType:
@@ -566,19 +597,31 @@ class MapType:
             # Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
             ```
         """
-    def to_pyarrow(self) -> pyarrow.MapType:
-        """Get the equivalent PyArrow data type."""
+    def to_arrow(self) -> ArrowDataType:
+        """Get the equivalent arro3 data type."""
+
     @staticmethod
-    def from_pyarrow(type: pyarrow.MapType) -> MapType:
-        """Create a MapType from a PyArrow MapType.
+    def from_arrow(type: ArrowSchemaExportable) -> MapType:
+        """Create a MapType from an object with an `__arrow_c_schema__`
+        datatype.
 
         Will raise `TypeError` if passed a different type.
 
         Args:
-            type: the PyArrow MapType
+            type: an object with an `__arrow_c_schema__
 
         Returns:
             a MapType
+        """
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+
+        For example, you can call [`pyarrow.schema()`][pyarrow.schema] to convert this
+        array into a pyarrow schema, without copying memory.
         """
 
 class Field:
@@ -664,23 +707,35 @@ class Field:
             # Returns Field(col, PrimitiveType("integer"), nullable=True)
             ```
         """
-    def to_pyarrow(self) -> pyarrow.Field:
-        """Convert to an equivalent PyArrow field
+    def to_arrow(self) -> ArrowField:
+        """Convert to an equivalent arro3 field
         Note: This currently doesn't preserve field metadata.
 
         Returns:
-            a pyarrow Field
+            a arro3 Field
         """
     @staticmethod
-    def from_pyarrow(field: pyarrow.Field) -> Field:
-        """Create a Field from a PyArrow field
+    def from_arrow(field: ArrowSchemaExportable) -> Field:
+        """Create a Field from an object with an `__arrow_c_schema__`
+        field
+
         Note: This currently doesn't preserve field metadata.
 
         Args:
-            field: a PyArrow Field
+            field: a Field object with an `__arrow_c_schema__
 
         Returns:
             a Field
+        """
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+
+        For example, you can call [`pyarrow.schema()`][pyarrow.schema] to convert this
+        array into a pyarrow schema, without copying memory.
         """
 
 class StructType:
@@ -733,23 +788,31 @@ class StructType:
             # Returns StructType([Field(x, PrimitiveType("integer"), nullable=True)])
             ```
         """
-    def to_pyarrow(self) -> pyarrow.StructType:
-        """Get the equivalent PyArrow StructType
+    def to_arrow(self) -> ArrowDataType:
+        """Get the equivalent arro3 DataType (arro3.core.DataType)"""
 
-        Returns:
-            a PyArrow StructType
-        """
     @staticmethod
-    def from_pyarrow(type: pyarrow.StructType) -> StructType:
-        """Create a new StructType from a PyArrow struct type.
+    def from_arrow(type: ArrowSchemaExportable) -> StructType:
+        """Create a new StructType from an object with an `__arrow_c_schema__`
+        datatype.
 
         Will raise `TypeError` if a different data type is provided.
 
         Args:
-            type: a PyArrow struct type.
+            type: a struct type object with an `__arrow_c_schema__
 
         Returns:
             a StructType
+        """
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+
+        For example, you can call [`pyarrow.schema()`][pyarrow.schema] to convert this
+        array into a pyarrow schema, without copying memory.
         """
 
 class Schema:
@@ -791,27 +854,39 @@ class Schema:
             # Returns Schema([Field(x, PrimitiveType("integer"), nullable=True)])
             ```
         """
-    def to_pyarrow(self, as_large_types: bool = False) -> pyarrow.Schema:
-        """Return equivalent PyArrow schema
+    def to_arrow(self, as_large_types: bool = False) -> ArrowSchema:
+        """Return equivalent arro3 schema
 
         Args:
             as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
                 This is for compatibility with systems like Polars that only support the large versions of Arrow types.
 
         Returns:
-            a PyArrow Schema
+            an arro3 Schema
         """
-    @staticmethod
-    def from_pyarrow(type: pyarrow.Schema) -> Schema:
-        """Create a [Schema][deltalake.schema.Schema] from a PyArrow Schema type
 
-        Will raise `TypeError` if the PyArrow type is not a primitive type.
+    @staticmethod
+    def from_arrow(type: ArrowSchemaExportable) -> Schema:
+        """Create a [Schema][deltalake.schema.Schema] from a schema that implements Arrow C Data Interface.
+
+        Will raise `TypeError` if one of the Arrow type is not a primitive type.
 
         Args:
-            type: A PyArrow Schema
+            type: an object with an `__arrow_c_schema__
 
         Returns:
             a Schema
+        """
+
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+
+        For example, you can call [`pyarrow.schema()`][pyarrow.schema] to convert this
+        array into a pyarrow schema, without copying memory.
         """
 
 class ObjectInputFile:
@@ -916,11 +991,7 @@ class DeltaFileSystemHandler:
 class PyQueryBuilder:
     def __init__(self) -> None: ...
     def register(self, table_name: str, delta_table: RawDeltaTable) -> None: ...
-    def execute(self, sql: str) -> list[pyarrow.RecordBatch]: ...
-
-class DeltaDataChecker:
-    def __init__(self, invariants: list[tuple[str, str]]) -> None: ...
-    def check_batch(self, batch: pyarrow.RecordBatch) -> None: ...
+    def execute(self, sql: str) -> RecordBatchReader: ...
 
 class DeltaError(Exception):
     """The base class for Delta-specific errors."""
@@ -938,7 +1009,7 @@ class CommitFailedError(DeltaError):
     pass
 
 class DeltaProtocolError(DeltaError):
-    """Raised when a violation with the Delta protocol specs ocurred."""
+    """Raised when a violation with the Delta protocol specs occurred."""
 
     pass
 

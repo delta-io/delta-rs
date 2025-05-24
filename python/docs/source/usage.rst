@@ -265,11 +265,11 @@ from json, use `schema.Schema.from_json()`.
     >>> dt.schema().json()
     '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 
-Use `deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
+Use `deltalake.schema.Schema.to_arrow()` to retrieve the Arro3 schema:
 
 .. code-block:: python
 
-    >>> dt.schema().to_pyarrow()
+    >>> dt.schema().to_arrow()
     id: int64
 
 
@@ -351,7 +351,7 @@ support filtering partitions and selecting particular columns.
 
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
-    >>> dt.schema().to_pyarrow()
+    >>> dt.schema().to_arrow()
     value: string
     year: string
     month: string

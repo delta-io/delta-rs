@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 
-import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
@@ -8,6 +7,7 @@ from deltalake import DeltaTable, write_deltalake
 
 @pytest.mark.pandas
 @pytest.mark.polars
+@pytest.mark.pyarrow
 def test_stats_usage_3201(tmp_path):
     # https://github.com/delta-io/delta-rs/issues/3201
     # https://github.com/delta-io/delta-rs/issues/3173
@@ -71,8 +71,11 @@ def test_stats_usage_3201(tmp_path):
     assert_frame_equal(excepted, pl.from_arrow(data), check_row_order=False)
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("use_stats_struct", (True, False))
 def test_microsecond_truncation_parquet_stats(tmp_path, use_stats_struct):
+    import pyarrow as pa
+
     """In checkpoints the min,max value gets truncated to milliseconds precision.
     For min values this is not an issue, but for max values we need to round upwards.
 

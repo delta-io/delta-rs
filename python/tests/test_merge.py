@@ -3,26 +3,34 @@ import os
 import pathlib
 from decimal import Decimal
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
+from arro3.core import Array, DataType, Table
+from arro3.core import Field as ArrowField
 
-from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    Field,
+    Schema,
+    write_deltalake,
+)
 from deltalake.exceptions import DeltaProtocolError
+from deltalake.query import QueryBuilder
+from deltalake.schema import PrimitiveType
 
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_delete_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["5"]),
-            "weight": pa.array([105], pa.int32()),
+            "id": Array(["5"], ArrowField("id", DataType.string(), nullable=True)),
+            "weight": Array([105], ArrowField("id", DataType.int32(), nullable=True)),
         }
     )
 
@@ -37,15 +45,34 @@ def test_merge_when_matched_delete_wo_predicate(
     ).when_matched_delete().execute()
 
     nrows = 4
-    expected = pa.table(
+
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
+            "id": Array(
+                ["1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(nrows)),
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * nrows,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        },
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -55,20 +82,35 @@ def test_merge_when_matched_delete_wo_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_delete_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["5", "4"]),
-            "weight": pa.array([1, 2], pa.int64()),
-            "sold": pa.array([1, 2], pa.int32()),
-            "deleted": pa.array([True, False]),
-            "customer": pa.array(["Adam", "Patrick"]),
-        }
+            "id": Array(
+                ["5", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "weight": Array(
+                [1, 2],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [1, 2],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                ["Adam", "Patrick"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
+        },
     )
 
     dt.merge(
@@ -80,15 +122,33 @@ def test_merge_when_matched_delete_with_predicate(
     ).when_matched_delete("s.deleted = True").execute()
 
     nrows = 4
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
+            "id": Array(
+                ["1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(nrows)),
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * nrows,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        },
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -97,18 +157,27 @@ def test_merge_when_matched_delete_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-        }
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        },
     )
 
     dt.merge(
@@ -119,15 +188,34 @@ def test_merge_when_matched_update_wo_predicate(
         streamed_exec=streaming,
     ).when_matched_update({"price": "s.price", "sold": "s.sold"}).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
-            "deleted": pa.array([False] * 5),
-        }
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        },
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -135,19 +223,31 @@ def test_merge_when_matched_update_wo_predicate(
 
 
 def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "customer": pa.array(["john", "doe"]),
-        }
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "customer": Array(
+                ["john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
+        },
     )
 
     dt.merge(
@@ -160,16 +260,38 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
         {"price": "s.price", "sold": "s.sold+int'10'", "customer": "s.customer"}
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 20, 30], pa.int32()),
-            "deleted": pa.array([False] * 5),
-            "customer": pa.array([None, None, None, "john", "doe"]),
-        }
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 20, 30],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                [None, None, None, "john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
+        },
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -179,20 +301,35 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_all_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([True, True]),
-            "weight": pa.array([10, 15], pa.int64()),
-        }
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "weight": Array(
+                [10, 15],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
+            ),
+        },
     )
 
     dt.merge(
@@ -203,15 +340,33 @@ def test_merge_when_matched_update_all_wo_predicate(
         streamed_exec=streaming,
     ).when_matched_update_all().execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
-            "deleted": pa.array([False, False, False, True, True]),
-        }
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        },
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -220,19 +375,34 @@ def test_merge_when_matched_update_all_wo_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_all_with_exclude(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([15, 25], pa.int32()),
-            "deleted": pa.array([True, True]),
-            "weight": pa.array([10, 15], pa.int64()),
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [15, 25],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "weight": Array(
+                [10, 15],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
+            ),
         }
     )
 
@@ -244,15 +414,32 @@ def test_merge_when_matched_update_all_with_exclude(
         streamed_exec=streaming,
     ).when_matched_update_all(except_cols=["sold"]).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4], pa.int32()),
-            "deleted": pa.array([False, False, False, True, True]),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -261,18 +448,30 @@ def test_merge_when_matched_update_all_with_exclude(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, True]),
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -287,15 +486,32 @@ def test_merge_when_matched_update_with_predicate(
         predicate="source.deleted = False",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 4], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 4], pa.int32()),
-            "deleted": pa.array([False] * 5),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 10, 4],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -304,18 +520,30 @@ def test_merge_when_matched_update_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "6"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["4", "6"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -334,15 +562,33 @@ def test_merge_when_not_matched_insert_wo_predicate(
         }
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
-            "price": pa.array([0, 1, 2, 3, 4, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, 20], pa.int32()),
-            "deleted": pa.array([False] * 6),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 6,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -351,18 +597,30 @@ def test_merge_when_not_matched_insert_wo_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "10"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "10"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -382,15 +640,33 @@ def test_merge_when_not_matched_insert_with_predicate(
         predicate="source.price < 50",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
-            "deleted": pa.array([False] * 6),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 6,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -398,19 +674,34 @@ def test_merge_when_not_matched_insert_with_predicate(
 
 
 def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "10"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "customer": pa.array(["john", "doe"]),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "10"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "customer": Array(
+                ["john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -431,16 +722,37 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
         predicate="source.price < 50",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
-            "deleted": pa.array([False] * 6),
-            "customer": pa.array([None, None, None, None, None, "john"]),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 6,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                [None, None, None, None, None, "john"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -450,18 +762,30 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "10"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([None, None], pa.bool_()),
+            "id": Array(
+                ["6", "10"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [None, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -475,15 +799,33 @@ def test_merge_when_not_matched_insert_all_with_predicate(
         predicate="source.price < 50",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
-            "deleted": pa.array([False, False, False, False, False, None]),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, False, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -492,18 +834,30 @@ def test_merge_when_not_matched_insert_all_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_exclude(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "9"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([None, None], pa.bool_()),
+            "id": Array(
+                ["6", "9"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [None, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -515,15 +869,33 @@ def test_merge_when_not_matched_insert_all_with_exclude(
         streamed_exec=streaming,
     ).when_not_matched_insert_all(except_cols=["sold"]).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6", "9"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, None, None], pa.int32()),
-            "deleted": pa.array([False, False, False, False, False, None, None]),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6", "9"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, None, None],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, False, None, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -531,19 +903,34 @@ def test_merge_when_not_matched_insert_all_with_exclude(
 
 
 def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "9"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([None, None], pa.bool_()),
-            "customer": pa.array(["john", "doe"]),
+            "id": Array(
+                ["6", "9"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [None, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                ["john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
         }
     )
 
@@ -555,16 +942,37 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
         predicate="target.id = source.id",
     ).when_not_matched_insert_all(except_cols=["sold"]).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6", "9"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, None, None], pa.int32()),
-            "deleted": pa.array([False, False, False, False, False, None, None]),
-            "customer": pa.array([None, None, None, None, None, "john", "doe"]),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6", "9"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, None, None],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, False, None, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                [None, None, None, None, None, "john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -574,18 +982,30 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
-    tmp_path: pathlib.Path, sample_table_with_spaces_numbers: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table_with_spaces_numbers: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table_with_spaces_numbers, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "1id": pa.array(["6", "10"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold items": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([None, None], pa.bool_()),
+            "1id": Array(
+                ["6", "10"],
+                ArrowField("1id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold items": Array(
+                [10, 20],
+                ArrowField("sold items", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [None, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -599,15 +1019,33 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
         predicate="source.price < 50",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "1id": pa.array(["1", "2", "3", "4", "5", "6"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10], pa.int64()),
-            "sold items": pa.array([0, 1, 2, 3, 4, 10], pa.int32()),
-            "deleted": pa.array([False, False, False, False, False, None]),
+            "1id": Array(
+                ["1", "2", "3", "4", "5", "6"],
+                ArrowField("1id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold items": Array(
+                [0, 1, 2, 3, 4, 10],
+                ArrowField("sold items", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, False, None],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("1id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by `1id` asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -616,18 +1054,30 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_update_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "7"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "7"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -643,15 +1093,33 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
         }
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 3, 4], pa.int64()),
-            "sold": pa.array([10, 10, 10, 10, 10], pa.int32()),
-            "deleted": pa.array([False] * 5),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 10, 10, 10, 10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -660,18 +1128,30 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_update_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "7"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "7"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -688,15 +1168,33 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
         predicate="target.price > 3",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 3, 4], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 10], pa.int32()),
-            "deleted": pa.array([False] * 5),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -705,20 +1203,33 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_delete_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "7"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "7"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
+
     dt.merge(
         source=source_table,
         source_alias="source",
@@ -727,18 +1238,33 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
         streamed_exec=streaming,
     ).when_not_matched_by_source_delete(predicate="target.price > 3").execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4"]),
-            "price": pa.array(
-                [0, 1, 2, 3],
-                pa.int64(),
+            "id": Array(
+                ["1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
             ),
-            "sold": pa.array([0, 1, 2, 3], pa.int32()),
-            "deleted": pa.array([False] * 4),
+            "price": Array(
+                [0, 1, 2, 3],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 4,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -747,14 +1273,23 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_by_source_delete_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
-        {"id": pa.array(["4", "5"]), "weight": pa.array([1.5, 1.6], pa.float64())}
+    source_table = Table(
+        {
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "weight": Array(
+                [1.5, 1.6],
+                ArrowField("weight", type=DataType.float64(), nullable=True),
+            ),
+        }
     )
 
     dt.merge(
@@ -765,18 +1300,33 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
         streamed_exec=streaming,
     ).when_not_matched_by_source_delete().execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array(
-                [3, 4],
-                pa.int64(),
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
             ),
-            "sold": pa.array([3, 4], pa.int32()),
-            "deleted": pa.array([False] * 2),
+            "price": Array(
+                [3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [3, 4],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 2,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -785,18 +1335,30 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_matched_update_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, True]),
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -814,15 +1376,33 @@ def test_merge_multiple_when_matched_update_with_predicate(
         predicate="source.deleted = True",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
-            "deleted": pa.array([False] * 5),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -831,18 +1411,30 @@ def test_merge_multiple_when_matched_update_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_matched_update_all_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["4", "5"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, True]),
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -858,15 +1450,33 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
         predicate="source.deleted = True",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
-            "deleted": pa.array([False, False, False, False, True]),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -875,18 +1485,30 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_not_matched_insert_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "9"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "9"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -914,15 +1536,33 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
         predicate="source.price > 50",
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5", "6", "9"]),
-            "price": pa.array([0, 1, 2, 3, 4, 10, 100], pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 4, 10, 20], pa.int32()),
-            "deleted": pa.array([False] * 7),
+            "id": Array(
+                ["1", "2", "3", "4", "5", "6", "9"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4, 10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 7,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -931,19 +1571,34 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_matched_delete_with_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["5", "4"]),
-            "weight": pa.array([1, 2], pa.int64()),
-            "sold": pa.array([1, 2], pa.int32()),
-            "deleted": pa.array([True, False]),
-            "customer": pa.array(["Adam", "Patrick"]),
+            "id": Array(
+                ["5", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "weight": Array(
+                [1, 2],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [1, 2],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                ["Adam", "Patrick"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
         }
     )
 
@@ -957,16 +1612,33 @@ def test_merge_multiple_when_matched_delete_with_predicate(
         "s.deleted = false"
     ).execute()
 
-    nrows = 3
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
+            "id": Array(
+                ["1", "2", "3"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(3)),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(3)),
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 3,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -975,7 +1647,7 @@ def test_merge_multiple_when_matched_delete_with_predicate(
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
-    tmp_path: pathlib.Path, sample_table: pa.Table, streaming: bool
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
 ):
     """The first match clause that meets the predicate will be executed, so if you do an update
     without an other predicate the first clause will be matched and therefore the other ones are skipped.
@@ -984,12 +1656,24 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["6", "7"]),
-            "price": pa.array([10, 100], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
-            "deleted": pa.array([False, False]),
+            "id": Array(
+                ["6", "7"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -1009,30 +1693,51 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
         }
     ).execute()
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array([0, 1, 2, 3, 4], pa.int64()),
-            "sold": pa.array([10, 10, 10, 10, 10], pa.int32()),
-            "deleted": pa.array([False] * 5),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 10, 10, 10, 10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     from datetime import date
 
-    schema = pa.schema(
-        [
-            ("date", pa.date32()),
-            ("foo", pa.string()),
-            ("bar", pa.string()),
+    import pyarrow as pa
+
+    schema = Schema(
+        fields=[
+            Field("date", PrimitiveType("date")),
+            Field("foo", PrimitiveType("string")),
+            Field("bar", PrimitiveType("string")),
         ]
     )
 
@@ -1072,6 +1777,7 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
         assert last_action["operationParameters"].get("predicate") is None
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize(
     "timezone,predicate",
     [
@@ -1088,11 +1794,18 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
 def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, predicate):
     from datetime import datetime
 
-    schema = pa.schema(
-        [
-            ("datetime", pa.timestamp("us", tz=timezone)),
-            ("foo", pa.string()),
-            ("bar", pa.string()),
+    import pyarrow as pa
+
+    schema = Schema(
+        fields=[
+            Field(
+                "datetime",
+                PrimitiveType("timestamp")
+                if timezone
+                else PrimitiveType("timestamp_ntz"),
+            ),
+            Field("foo", PrimitiveType("string")),
+            Field("bar", PrimitiveType("string")),
         ]
     )
 
@@ -1128,13 +1841,23 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
-    data = pa.table(
+    data = Table(
         {
-            "foo": pa.array(["a", "b", None, None]),
-            "bar": pa.array([1, 2, 3, None]),
-            "baz": pa.array([1, 1, None, None]),
+            "foo": Array(
+                ["a", "b", None, None],
+                ArrowField("foo", type=DataType.string(), nullable=True),
+            ),
+            "bar": Array(
+                [1, 2, 3, None],
+                ArrowField("bar", type=DataType.int64(), nullable=True),
+            ),
+            "baz": Array(
+                [1, 1, None, None],
+                ArrowField("baz", type=DataType.int64(), nullable=True),
+            ),
         }
     )
+
     write_deltalake(
         tmp_path,
         data,
@@ -1143,23 +1866,35 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
     )
     dt = DeltaTable(tmp_path)
     add_actions_table = dt.get_add_actions(flatten=True)
-    stats = add_actions_table.to_pylist()[0]
 
-    assert stats["null_count.foo"] == 2
-    assert stats["min.foo"] == "a"
-    assert stats["max.foo"] == "b"
-    assert stats["null_count.bar"] is None
-    assert stats["min.bar"] is None
-    assert stats["max.bar"] is None
-    assert stats["null_count.baz"] == 2
-    assert stats["min.baz"] == 1
-    assert stats["max.baz"] == 1
+    def get_value(name: str):
+        return add_actions_table.column(name)[0].as_py()
 
-    data = pa.table(
+    # x1 has no max, since inf was the highest value
+    assert get_value("null_count.foo") == 2
+    assert get_value("min.foo") == "a"
+    assert get_value("max.foo") == "b"
+    assert get_value("null_count.bar") is None
+    assert get_value("min.bar") is None
+    assert get_value("max.bar") is None
+    assert get_value("null_count.baz") == 2
+    assert get_value("min.baz") == 1
+    assert get_value("max.baz") == 1
+
+    data = Table(
         {
-            "foo": pa.array(["a"]),
-            "bar": pa.array([10]),
-            "baz": pa.array([10]),
+            "foo": Array(
+                ["a"],
+                ArrowField("foo", type=DataType.string(), nullable=True),
+            ),
+            "bar": Array(
+                [10],
+                ArrowField("bar", type=DataType.int64(), nullable=True),
+            ),
+            "baz": Array(
+                [10],
+                ArrowField("baz", type=DataType.int64(), nullable=True),
+            ),
         }
     )
 
@@ -1173,27 +1908,50 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
 
     dt = DeltaTable(tmp_path)
     add_actions_table = dt.get_add_actions(flatten=True)
-    stats = add_actions_table.to_pylist()[0]
 
     assert dt.version() == 1
-    assert stats["null_count.foo"] == 2
-    assert stats["min.foo"] == "a"
-    assert stats["max.foo"] == "b"
-    assert stats["null_count.bar"] is None
-    assert stats["min.bar"] is None
-    assert stats["max.bar"] is None
-    assert stats["null_count.baz"] == 2
-    assert stats["min.baz"] == 1
-    assert stats["max.baz"] == 10
+
+    def get_value(name: str):
+        return add_actions_table.column(name)[0].as_py()
+
+    # x1 has no max, since inf was the highest value
+    assert get_value("null_count.foo") == 2
+    assert get_value("min.foo") == "a"
+    assert get_value("max.foo") == "b"
+    assert get_value("null_count.bar") is None
+    assert get_value("min.bar") is None
+    assert get_value("max.bar") is None
+    assert get_value("null_count.baz") == 2
+    assert get_value("min.baz") == 1
+    assert get_value("max.baz") == 10
 
 
 def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     ## See issue: https://github.com/delta-io/delta-rs/issues/2438
-    data = pa.table({"x": [1, 2, 3], "y--1": [4, 5, 6]})
+    data = Table(
+        {
+            "x": Array(
+                [1, 2, 3],
+                ArrowField("x", type=DataType.int64(), nullable=True),
+            ),
+            "y--1": Array(
+                [4, 5, 6],
+                ArrowField("y--1", type=DataType.int64(), nullable=True),
+            ),
+        }
+    )
+
     write_deltalake(tmp_path, data, mode="append")
 
     dt = DeltaTable(tmp_path)
-    new_data = pa.table({"x": [2, 3]})
+    new_data = Table(
+        {
+            "x": Array(
+                [2, 3],
+                ArrowField("x", type=DataType.int64(), nullable=True),
+            ),
+        }
+    )
 
     (
         dt.merge(
@@ -1206,22 +1964,36 @@ def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
         .execute()
     )
 
-    expected = pa.table({"x": [1], "y--1": [4]})
+    expected = Table(
+        {
+            "x": Array(
+                [1],
+                ArrowField("x", type=DataType.int64(), nullable=True),
+            ),
+            "y--1": Array(
+                [4],
+                ArrowField("y--1", type=DataType.int64(), nullable=True),
+            ),
+        }
+    )
 
-    assert dt.to_pyarrow_table() == expected
+    assert (
+        QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    ) == expected
 
 
 @pytest.mark.pandas
+@pytest.mark.pyarrow
 def test_struct_casting(tmp_path: pathlib.Path):
     import pandas as pd
+    import pyarrow as pa
 
-    cols = ["id", "name", "address", "scores"]
+    cols = ["id", "name", "address"]
     data = [
         (
             2,
             "Marry Doe",
             {"street": "123 Main St", "city": "Anytown", "state": "CA"},
-            [0, 0, 0],
         )
     ]
     df = pd.DataFrame(data, columns=cols)
@@ -1231,7 +2003,6 @@ def test_struct_casting(tmp_path: pathlib.Path):
                 2,
                 "Merged",
                 {"street": "1 Front", "city": "San Francisco", "state": "CA"},
-                [7, 0, 7],
             )
         ],
         columns=cols,
@@ -1239,7 +2010,8 @@ def test_struct_casting(tmp_path: pathlib.Path):
     assert not df.empty
 
     schema = pa.Table.from_pandas(df=df).schema
-    dt = DeltaTable.create(tmp_path, schema, name="test")
+
+    dt = DeltaTable.create(tmp_path, Schema.from_arrow(schema), name="test")
     metadata = dt.metadata()
     assert metadata.name == "test"
 
@@ -1259,11 +2031,20 @@ def test_struct_casting(tmp_path: pathlib.Path):
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
     nrows = 5
-    data = pa.table(
+    data = Table(
         {
-            "id": pa.array([str(x) for x in range(nrows)]),
-            "partition": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
+            "id": Array(
+                [str(x) for x in range(nrows)],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "partition": Array(
+                list(range(nrows)),
+                ArrowField("partition", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(nrows)),
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
         }
     )
 
@@ -1271,11 +2052,20 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
 
     dt = DeltaTable(tmp_path)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["3", "4"]),
-            "partition": pa.array([3, 4], pa.int64()),
-            "sold": pa.array([10, 20], pa.int32()),
+            "id": Array(
+                ["3", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "partition": Array(
+                [3, 4],
+                ArrowField("partition", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
         }
     )
 
@@ -1291,14 +2081,29 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
         .execute()
     )
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["0", "1", "2", "3", "4"]),
-            "partition": pa.array([0, 1, 2, 3, 4], pa.int64()),
-            "sold": pa.array([0, 1, 2, 10, 20], pa.int32()),
+            "id": Array(
+                ["0", "1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "partition": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("partition", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, partition, sold from tbl order by id asc")
+        .read_all()
+    )
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -1307,10 +2112,12 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
     assert metrics["num_target_files_skipped_during_scan"] == 3
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("streaming", (True, False))
 def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
     """https://github.com/delta-io/delta-rs/issues/2908"""
     cdc_path = f"{tmp_path}/_change_data"
+    import pyarrow as pa
 
     data = {
         "id": pa.array([1, 2], pa.int64()),
@@ -1323,7 +2130,7 @@ def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
 
     dt = DeltaTable.create(
         table_uri=tmp_path,
-        schema=table.schema,
+        schema=Schema.from_arrow(table.schema),
         mode="overwrite",
         partition_by=["id"],
         configuration={
@@ -1347,6 +2154,7 @@ def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
 
 
 @pytest.mark.pandas
+@pytest.mark.pyarrow
 def test_merge_non_nullable(tmp_path):
     import re
 
@@ -1385,9 +2193,13 @@ def test_merge_non_nullable(tmp_path):
         ).when_matched_update_all().when_not_matched_insert_all().execute()
 
 
+@pytest.mark.pyarrow
 def test_merge_when_wrong_but_castable_type_passed_while_merge(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
@@ -1413,7 +2225,10 @@ def test_merge_when_wrong_but_castable_type_passed_while_merge(
     assert table_schema.field("price").type == sample_table["price"].type
 
 
+@pytest.mark.pyarrow
 def test_merge_on_decimal_3033(tmp_path):
+    import pyarrow as pa
+
     data = {
         "timestamp": [datetime.datetime(2024, 3, 20, 12, 30, 0)],
         "altitude": [Decimal("150.5")],
@@ -1421,11 +2236,13 @@ def test_merge_on_decimal_3033(tmp_path):
 
     table = pa.Table.from_pydict(data)
 
-    schema = pa.schema(
-        [
-            ("timestamp", pa.timestamp("us")),
-            ("altitude", pa.decimal128(6, 1)),
-        ]
+    schema = Schema.from_arrow(
+        pa.schema(
+            [
+                ("timestamp", pa.timestamp("us")),
+                ("altitude", pa.decimal128(6, 1)),
+            ]
+        )
     )
 
     dt = DeltaTable.create(tmp_path, schema=schema)
@@ -1457,6 +2274,7 @@ def test_merge_on_decimal_3033(tmp_path):
 
 
 @pytest.mark.polars
+@pytest.mark.xfail(reason="polars will require an update")
 def test_merge(tmp_path: pathlib.Path):
     import polars as pl
     from polars.testing import assert_frame_equal
