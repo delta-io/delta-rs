@@ -20,6 +20,7 @@ use std::io::{BufRead, BufReader, Cursor};
 
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
+use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -27,7 +28,7 @@ use object_store::ObjectStore;
 use tracing::warn;
 use url::Url;
 
-use self::log_segment::{LogSegment, PathExt};
+use self::log_segment::LogSegment;
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use self::visitors::*;
@@ -254,14 +255,19 @@ impl Snapshot {
             .as_str(),
         );
 
+        let dummy_url = url::Url::parse("memory:///").unwrap();
         let mut commit_files = Vec::new();
         for meta in store
             .list_with_offset(Some(&log_root), &start_from)
             .try_collect::<Vec<_>>()
             .await?
         {
-            if meta.location.is_commit_file() {
-                commit_files.push(meta);
+            // safety: object store path are always valid urls paths.
+            let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
+            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
+                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
+                    commit_files.push(meta);
+                }
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
