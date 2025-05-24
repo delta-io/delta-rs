@@ -739,8 +739,8 @@ pub fn schema_to_pyobject(schema: DeltaStructType, py: Python<'_>) -> PyResult<B
 ///
 /// Or create from a PyArrow schema:
 ///
-/// >>> from arro3.core import DateType, Schema as ArrowSchema
-/// >>> Schema.from_pyarrow(ArrowSchema({"x": DateType.int32(), "y": DateType.string()}))
+/// >>> from arro3.core import DataType, Schema as ArrowSchema
+/// >>> Schema.from_pyarrow(ArrowSchema({"x": DataType.int32(), "y": DataType.string()}))
 /// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
 #[pyclass(extends = StructType, name = "Schema", module = "deltalake._internal")]
 pub struct PySchema;

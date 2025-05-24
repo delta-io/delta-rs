@@ -72,11 +72,11 @@ def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
 
     # Make a get request on an object
     with pytest.raises(Exception):
-        storage_handler.open_input_stream("nonexistant")
+        storage_handler.open_input_stream("nonexistent")
 
     # Try to write an object
     with pytest.raises(Exception):
-        storage_handler.open_output_stream("nonexistant")
+        storage_handler.open_output_stream("nonexistent")
 
 
 @pytest.mark.pyarrow
