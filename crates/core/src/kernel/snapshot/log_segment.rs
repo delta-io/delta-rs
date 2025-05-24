@@ -18,7 +18,7 @@ use tracing::debug;
 use super::parse;
 use crate::kernel::transaction::CommitData;
 use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
-use crate::logstore::LogStore;
+use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
@@ -110,18 +110,19 @@ impl LogSegment {
     ///
     /// This will list the entire log directory and find all relevant files for the given table version.
     pub async fn try_new(log_store: &dyn LogStore, version: Option<i64>) -> DeltaResult<Self> {
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
+        let log_url = log_store.log_root_url();
+        let log_path = crate::logstore::object_store_path(&log_url)?;
 
-        let log_url = Path::from("_delta_log");
-        let maybe_cp = read_last_checkpoint(&store, &log_url).await?;
+        let maybe_cp = read_last_checkpoint(&root_store, &log_path).await?;
 
         // List relevant files from log
         let (mut commit_files, checkpoint_files) = match (maybe_cp, version) {
-            (Some(cp), None) => list_log_files_with_checkpoint(&cp, &store, &log_url).await?,
+            (Some(cp), None) => list_log_files_with_checkpoint(&cp, &root_store, &log_path).await?,
             (Some(cp), Some(v)) if cp.version <= v => {
-                list_log_files_with_checkpoint(&cp, &store, &log_url).await?
+                list_log_files_with_checkpoint(&cp, &root_store, &log_path).await?
             }
-            _ => list_log_files(&store, &log_url, version, None).await?,
+            _ => list_log_files(&root_store, &log_path, version, None).await?,
         };
 
         // remove all files above requested version
@@ -159,17 +160,18 @@ impl LogSegment {
     /// This will create a new [`LogSegment`] from the log with all relevant log files
     /// starting at `start_version` and ending at `end_version`.
     pub async fn try_new_slice(
-        table_root: &Path,
         start_version: i64,
         end_version: Option<i64>,
         log_store: &dyn LogStore,
     ) -> DeltaResult<Self> {
         debug!("try_new_slice: start_version: {start_version}, end_version: {end_version:?}",);
         log_store.refresh().await?;
-        let log_url = table_root.child("_delta_log");
+        let log_url = log_store.log_root_url();
+        let log_path = crate::logstore::object_store_path(&log_url)?;
+
         let (mut commit_files, checkpoint_files) = list_log_files(
-            log_store.object_store(None).as_ref(),
-            &log_url,
+            &log_store.root_object_store(None),
+            &log_path,
             end_version,
             Some(start_version),
         )
@@ -240,6 +242,7 @@ impl LogSegment {
     #[cfg(test)]
     pub(super) fn new_test<'a>(
         commits: impl IntoIterator<Item = &'a CommitData>,
+        table_root: &Path,
     ) -> DeltaResult<(Self, Vec<Result<RecordBatch, DeltaTableError>>)> {
         let mut log = Self {
             version: -1,
@@ -249,7 +252,7 @@ impl LogSegment {
         let iter = log
             .advance(
                 commits,
-                &Path::default(),
+                table_root,
                 crate::kernel::models::fields::log_schema(),
                 &Default::default(),
             )?
@@ -275,13 +278,13 @@ impl LogSegment {
         read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
 
         let decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
         let stream = futures::stream::iter(self.commit_files.iter())
             .map(move |meta| {
-                let store = store.clone();
-                async move { store.get(&meta.location).await?.bytes().await }
+                let root_store = root_store.clone();
+                async move { root_store.get(&meta.location).await?.bytes().await }
             })
             .buffered(config.log_buffer_size);
         Ok(json::decode_stream(decoder, stream).boxed())
@@ -293,17 +296,17 @@ impl LogSegment {
         read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> BoxStream<'_, DeltaResult<RecordBatch>> {
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
 
         let batch_size = config.log_batch_size;
         let read_schema = Arc::new(read_schema.clone());
         futures::stream::iter(self.checkpoint_files.clone())
             .map(move |meta| {
-                let store = store.clone();
+                let root_store = root_store.clone();
                 let read_schema = read_schema.clone();
                 async move {
-                    let mut reader =
-                        ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
+                    let mut reader = ParquetObjectReader::new(root_store, meta.location)
+                        .with_file_size(meta.size);
                     let options = ArrowReaderOptions::new();
                     let reader_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
 
@@ -476,13 +479,13 @@ async fn read_last_checkpoint(
 /// List all log files after a given checkpoint.
 async fn list_log_files_with_checkpoint(
     cp: &CheckpointMetadata,
-    fs_client: &dyn ObjectStore,
+    root_store: &dyn ObjectStore,
     log_root: &Path,
 ) -> DeltaResult<(Vec<ObjectMeta>, Vec<ObjectMeta>)> {
     let version_prefix = format!("{:020}", cp.version);
     let start_from = log_root.child(version_prefix.as_str());
 
-    let files = fs_client
+    let files = root_store
         .list_with_offset(Some(log_root), &start_from)
         .try_collect::<Vec<_>>()
         .await?
@@ -532,7 +535,7 @@ async fn list_log_files_with_checkpoint(
 ///
 /// Relevant files are the max checkpoint found and all subsequent commits.
 pub(super) async fn list_log_files(
-    fs_client: &dyn ObjectStore,
+    root_store: &dyn ObjectStore,
     log_root: &Path,
     max_version: Option<i64>,
     start_version: Option<i64>,
@@ -544,7 +547,7 @@ pub(super) async fn list_log_files(
     let mut commit_files = Vec::with_capacity(25);
     let mut checkpoint_files = Vec::with_capacity(10);
 
-    for meta in fs_client
+    for meta in root_store
         .list_with_offset(Some(log_root), &start_from)
         .try_collect::<Vec<_>>()
         .await?
@@ -623,21 +626,22 @@ pub(super) mod tests {
         let log_store = TestTables::SimpleWithCheckpoint
             .table_builder()
             .build_storage()?;
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
+        let log_url = log_store.table_root_url().join("_delta_log/")?;
+        let log_path = Path::from_url_path(log_url.path())?;
 
-        let log_path = Path::from("_delta_log");
-        let cp = read_last_checkpoint(&store, &log_path).await?.unwrap();
+        let cp = read_last_checkpoint(&root_store, &log_path).await?.unwrap();
         assert_eq!(cp.version, 10);
 
-        let (log, check) = list_log_files_with_checkpoint(&cp, &store, &log_path).await?;
+        let (log, check) = list_log_files_with_checkpoint(&cp, &root_store, &log_path).await?;
         assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(&store, &log_path, None, None).await?;
+        let (log, check) = list_log_files(&root_store, &log_path, None, None).await?;
         assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(&store, &log_path, Some(8), None).await?;
+        let (log, check) = list_log_files(&root_store, &log_path, Some(8), None).await?;
         assert_eq!(log.len(), 9);
         assert_eq!(check.len(), 0);
 
@@ -652,13 +656,15 @@ pub(super) mod tests {
         assert_eq!(segment.checkpoint_files.len(), 0);
 
         let log_store = TestTables::Simple.table_builder().build_storage()?;
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
+        let log_url = log_store.log_root_url();
+        let log_path = Path::from_url_path(log_url.path())?;
 
-        let (log, check) = list_log_files(&store, &log_path, None, None).await?;
+        let (log, check) = list_log_files(&root_store, &log_path, None, None).await?;
         assert_eq!(log.len(), 5);
         assert_eq!(check.len(), 0);
 
-        let (log, check) = list_log_files(&store, &log_path, Some(2), None).await?;
+        let (log, check) = list_log_files(&root_store, &log_path, Some(2), None).await?;
         assert_eq!(log.len(), 3);
         assert_eq!(check.len(), 0);
 
