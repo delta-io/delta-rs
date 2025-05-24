@@ -2151,7 +2151,6 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::log_segment::PathExt;
     use crate::logstore::default_logstore::DefaultLogStore;
     use crate::logstore::ObjectStoreRef;
     use crate::operations::write::SchemaMode;
@@ -2169,6 +2168,7 @@ mod tests {
     use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
+    use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use futures::{stream::BoxStream, StreamExt};
     use object_store::{
         path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
@@ -3227,9 +3227,14 @@ mod tests {
 
     impl From<&Path> for LocationType {
         fn from(value: &Path) -> Self {
-            if value.is_commit_file() {
-                LocationType::Commit
-            } else if value.to_string().starts_with("part-") {
+            let dummy_url = Url::parse("dummy:///").unwrap();
+            let parsed = ParsedLogPath::try_from(dummy_url.join(value.as_ref()).unwrap()).unwrap();
+            if let Some(parsed) = parsed {
+                if matches!(parsed.file_type, LogPathFileType::Commit) {
+                    return LocationType::Commit;
+                }
+            }
+            if value.to_string().starts_with("part-") {
                 LocationType::Data
             } else {
                 panic!("Unknown location type: {value:?}")
