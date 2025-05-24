@@ -57,7 +57,7 @@ chrono = { workspace = true, default-features = false, features = ["clock"] }
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
-url = { workspace = true }
+url = { workspace = true, features = ["serde"] }
 urlencoding = { workspace = true }
 
 # runtime
