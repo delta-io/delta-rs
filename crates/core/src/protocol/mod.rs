@@ -23,8 +23,9 @@ use crate::logstore::LogStore;
 use crate::table::CheckPoint;
 
 pub mod checkpoints;
-mod parquet_read;
 mod time_utils;
+
+pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
@@ -244,22 +245,12 @@ impl Eq for Add {}
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        match self.get_stats_parsed() {
-            Ok(Some(stats)) => Ok(Some(stats)),
-            Ok(None) => self.get_json_stats(),
-            Err(e) => {
-                error!(
-                    "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
-                    self.stats_parsed
-                );
-                self.get_json_stats()
-            }
-        }
+        self.get_json_stats()
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
             .map(|stats| serde_json::from_str(stats).map(|mut ps: PartialStats| ps.as_stats()))

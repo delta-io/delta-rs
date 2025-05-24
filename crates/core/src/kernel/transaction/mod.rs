@@ -90,13 +90,13 @@ use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
+use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
@@ -863,8 +863,7 @@ impl PostCommit {
 
         let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
-            create_checkpoint_for(version, table_state, log_store.as_ref(), Some(operation_id))
-                .await?;
+            create_checkpoint_for(version as u64, log_store.as_ref(), Some(operation_id)).await?;
             Ok(true)
         } else {
             Ok(false)
