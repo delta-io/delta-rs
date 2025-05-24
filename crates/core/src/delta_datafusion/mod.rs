@@ -80,6 +80,7 @@ use datafusion_physical_plan::{
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -215,13 +216,13 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
     let fields = schema
         .fields()
         .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
-        .map(|f| f.try_into())
+        .map(|f| f.try_into_arrow())
         .chain(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
             meta.partition_columns.iter().map(|partition_col| {
                 let f = schema.field(partition_col).unwrap();
-                let field = Field::try_from(f)?;
+                let field: Field = f.try_into_arrow()?;
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
@@ -2151,7 +2152,6 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::log_segment::PathExt;
     use crate::logstore::default_logstore::DefaultLogStore;
     use crate::logstore::ObjectStoreRef;
     use crate::operations::write::SchemaMode;
@@ -2169,6 +2169,7 @@ mod tests {
     use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
+    use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use futures::{stream::BoxStream, StreamExt};
     use object_store::{
         path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
@@ -3227,9 +3228,14 @@ mod tests {
 
     impl From<&Path> for LocationType {
         fn from(value: &Path) -> Self {
-            if value.is_commit_file() {
-                LocationType::Commit
-            } else if value.to_string().starts_with("part-") {
+            let dummy_url = Url::parse("dummy:///").unwrap();
+            let parsed = ParsedLogPath::try_from(dummy_url.join(value.as_ref()).unwrap()).unwrap();
+            if let Some(parsed) = parsed {
+                if matches!(parsed.file_type, LogPathFileType::Commit) {
+                    return LocationType::Commit;
+                }
+            }
+            if value.to_string().starts_with("part-") {
                 LocationType::Data
             } else {
                 panic!("Unknown location type: {value:?}")

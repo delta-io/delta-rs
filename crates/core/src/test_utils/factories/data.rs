@@ -5,6 +5,7 @@ use arrow_arith::aggregate::{max as arrow_max, max_string, min as arrow_min, min
 use arrow_array::*;
 use arrow_schema::DataType as ArrowDataType;
 use bytes::Bytes;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -64,7 +65,9 @@ fn generate_random_batch(
             )
         })
         .collect::<TestResult<Vec<_>>>()
-        .map(|columns| RecordBatch::try_new(Arc::new(schema.try_into().unwrap()), columns).unwrap())
+        .map(|columns| {
+            RecordBatch::try_new(Arc::new(schema.try_into_arrow().unwrap()), columns).unwrap()
+        })
 }
 
 pub fn generate_random_array(

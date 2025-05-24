@@ -56,7 +56,7 @@ impl DeltaTableState {
 
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
-    pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
+    pub fn from_actions(actions: Vec<Action>, table_root: &Path) -> DeltaResult<Self> {
         use crate::kernel::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -87,7 +87,7 @@ impl DeltaTableState {
             Vec::new(),
         )];
 
-        let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
+        let snapshot = EagerSnapshot::new_test(&commit_data, table_root).unwrap();
         Ok(Self { snapshot })
     }
 

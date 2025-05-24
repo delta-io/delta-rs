@@ -698,10 +698,12 @@ mod tests {
         actions: Vec<Action>,
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
+        use object_store::path::Path;
+
         use crate::table::state::DeltaTableState;
 
         let setup_actions = setup.unwrap_or_else(init_table_actions);
-        let state = DeltaTableState::from_actions(setup_actions).unwrap();
+        let state = DeltaTableState::from_actions(setup_actions, &Path::default()).unwrap();
         let snapshot = state.snapshot();
         let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {

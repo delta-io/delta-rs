@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use ::object_store::RetryConfig;
-use object_store::{path::Path, prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
+use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
 
 use super::storage::LimitConfig;
 use super::{storage::runtime::RuntimeConfig, IORuntime};
@@ -132,11 +132,7 @@ impl StorageConfig {
         store: T,
         table_root: &url::Url,
     ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let prefix = match ObjectStoreScheme::parse(table_root) {
-            Ok((ObjectStoreScheme::AmazonS3, _)) => Path::parse(table_root.path())?,
-            Ok((_, path)) => path,
-            _ => Path::parse(table_root.path())?,
-        };
+        let prefix = super::object_store_path(table_root)?;
         Ok(if prefix != Path::from("/") {
             Box::new(PrefixStore::new(store, prefix)) as Box<dyn ObjectStore>
         } else {
