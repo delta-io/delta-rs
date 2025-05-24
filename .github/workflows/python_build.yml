@@ -49,7 +49,7 @@ jobs:
         run: make unit-test
 
   test:
-    name: Python Build (Python 3.10 Optional latest pyarrow)
+    name: Python Build (Python 3.10 PyArrow latest)
     runs-on: ubuntu-latest
     env:
       SCCACHE_GHA_ENABLED: "true"
