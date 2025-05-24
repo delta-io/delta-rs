@@ -254,7 +254,7 @@ Here’s the output of the command:
  'preserveInsertionOrder': True}
 ```
 
-The optimize operation has added 5 new files and marked 100 exisitng files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.
+The optimize operation has added 5 new files and marked 100 existing files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.
 
 Let’s append some more data to the Delta table and see how we can selectively run optimize on the new data that’s added.
 
@@ -416,7 +416,7 @@ This optimize operation tombstones 21 small data files and adds one file with al
 }
 ```
 
-The trasaction log indicates that many files have been tombstoned and one file is added, as expected.
+The transaction log indicates that many files have been tombstoned and one file is added, as expected.
 
 The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log.  The optimize command doesn’t physically delete the Parquet file from storage.  Optimize performs a “logical remove” not a “physical remove”.
 

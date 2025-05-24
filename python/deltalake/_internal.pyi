@@ -938,7 +938,7 @@ class CommitFailedError(DeltaError):
     pass
 
 class DeltaProtocolError(DeltaError):
-    """Raised when a violation with the Delta protocol specs ocurred."""
+    """Raised when a violation with the Delta protocol specs occurred."""
 
     pass
 
