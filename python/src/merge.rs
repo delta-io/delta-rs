@@ -1,7 +1,4 @@
-use deltalake::arrow::array::RecordBatchReader;
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
-use deltalake::arrow::ffi_stream::ArrowArrayStreamReader;
-use deltalake::arrow::pyarrow::IntoPyArrow;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
@@ -11,16 +8,17 @@ use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::table::state::DeltaTableState;
-use deltalake::{DeltaResult, DeltaTable};
+use deltalake::{DeltaResult, DeltaTable, DeltaTableError};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
+use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
 use std::collections::HashMap;
-use std::fmt::{self};
 use std::future::IntoFuture;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::error::PythonError;
 use crate::utils::rt;
+use crate::writer::{maybe_lazy_cast_reader, ArrowStreamBatchGenerator};
 use crate::{
     maybe_create_commit_properties, set_writer_properties, PyCommitProperties,
     PyPostCommitHookProperties, PyWriterProperties,
@@ -37,53 +35,14 @@ pub(crate) struct PyMergeBuilder {
     merge_schema: bool,
     arrow_schema: Arc<ArrowSchema>,
 }
-#[derive(Debug)]
-struct ArrowStreamBatchGenerator {
-    pub array_stream: Arc<Mutex<ArrowArrayStreamReader>>,
-}
-
-impl fmt::Display for ArrowStreamBatchGenerator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ArrowStreamBatchGenerator {{ array_stream: {:?} }}",
-            self.array_stream
-        )
-    }
-}
-
-impl ArrowStreamBatchGenerator {
-    fn new(array_stream: Arc<Mutex<ArrowArrayStreamReader>>) -> Self {
-        Self { array_stream }
-    }
-}
-
-impl LazyBatchGenerator for ArrowStreamBatchGenerator {
-    fn generate_next_batch(
-        &mut self,
-    ) -> deltalake::datafusion::error::Result<Option<deltalake::arrow::array::RecordBatch>> {
-        let mut stream_reader = self.array_stream.lock().map_err(|_| {
-            deltalake::datafusion::error::DataFusionError::Execution(
-                "Failed to lock the ArrowArrayStreamReader".to_string(),
-            )
-        })?;
-
-        match stream_reader.next() {
-            Some(Ok(record_batch)) => Ok(Some(record_batch)),
-            Some(Err(err)) => Err(deltalake::datafusion::error::DataFusionError::ArrowError(
-                err, None,
-            )),
-            None => Ok(None), // End of stream
-        }
-    }
-}
 
 impl PyMergeBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        source: ArrowArrayStreamReader,
+        source: PyRecordBatchReader,
+        batch_schema: PyArrowSchema,
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
@@ -96,12 +55,19 @@ impl PyMergeBuilder {
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();
-        let schema = source.schema();
+        let schema = source
+            .schema_ref()
+            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+
+        let source = source
+            .into_reader()
+            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+
+        let source = maybe_lazy_cast_reader(source, batch_schema.into_inner());
 
         let source_df = if streamed_exec {
-            let arrow_stream: Arc<Mutex<ArrowArrayStreamReader>> = Arc::new(Mutex::new(source));
             let arrow_stream_batch_generator: Arc<RwLock<dyn LazyBatchGenerator>> =
-                Arc::new(RwLock::new(ArrowStreamBatchGenerator::new(arrow_stream)));
+                Arc::new(RwLock::new(ArrowStreamBatchGenerator::new(source)));
 
             let table_provider: Arc<dyn TableProvider> = Arc::new(LazyTableProvider::try_new(
                 schema.clone(),
@@ -161,8 +127,8 @@ impl PyMergeBuilder {
 #[pymethods]
 impl PyMergeBuilder {
     #[getter]
-    fn get_arrow_schema(&self, py: Python) -> PyResult<PyObject> {
-        <arrow_schema::Schema as Clone>::clone(&self.arrow_schema).into_pyarrow(py)
+    fn get_arrow_schema(&self) -> PyArrowSchema {
+        PyArrowSchema::new(self.arrow_schema.clone())
     }
 
     #[pyo3(signature=(

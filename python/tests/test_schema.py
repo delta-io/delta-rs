@@ -1,6 +1,5 @@
 import json
 
-import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, Field
@@ -10,10 +9,6 @@ from deltalake.schema import (
     PrimitiveType,
     Schema,
     StructType,
-)
-from deltalake.writer._conversion import (
-    ArrowSchemaConversionMode,
-    _convert_pa_schema_to_delta,
 )
 
 
@@ -39,30 +34,37 @@ def test_table_schema():
     )
 
 
+@pytest.mark.pyarrow
 def test_table_schema_pyarrow_simple():
+    import pyarrow as pa
+
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    schema = dt.schema().to_pyarrow()
+    schema = dt.schema().to_arrow()
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "id"
     assert field.type == pa.int64()
     assert field.nullable is True
-    assert field.metadata is None
+    assert field.metadata == {}
 
 
+@pytest.mark.pyarrow
 def test_table_schema_pyarrow_020():
+    import pyarrow as pa
+
     table_path = "../crates/test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
-    schema = dt.schema().to_pyarrow()
+    schema = dt.schema().to_arrow()
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "value"
     assert field.type == pa.int32()
     assert field.nullable is True
-    assert field.metadata is None
+    assert field.metadata == {}
 
 
+@pytest.mark.pyarrow
 def test_primitive_delta_types():
     valid_types = [
         "string",
@@ -87,8 +89,8 @@ def test_primitive_delta_types():
         assert data_type in str(delta_type)
         assert data_type in repr(delta_type)
 
-        pa_type = delta_type.to_pyarrow()
-        assert delta_type == PrimitiveType.from_pyarrow(pa_type)
+        pa_type = delta_type.to_arrow()
+        assert delta_type == PrimitiveType.from_arrow(pa_type)
 
         json_type = delta_type.to_json()
         assert delta_type == PrimitiveType.from_json(json_type)
@@ -98,6 +100,7 @@ def test_primitive_delta_types():
             PrimitiveType(data_type)
 
 
+@pytest.mark.pyarrow
 def test_array_delta_types():
     init_values = [
         (PrimitiveType("string"), False),
@@ -111,8 +114,8 @@ def test_array_delta_types():
         assert array_type.element_type == element_type
         assert array_type.contains_null == contains_null
 
-        pa_type = array_type.to_pyarrow()
-        assert array_type == ArrayType.from_pyarrow(pa_type)
+        pa_type = array_type.to_arrow()
+        assert array_type == ArrayType.from_arrow(pa_type)
 
         json_type = array_type.to_json()
         assert array_type == ArrayType.from_json(json_type)
@@ -138,13 +141,14 @@ def test_map_delta_types():
 
         # Map type is not yet supported in C Data Interface
         # https://github.com/apache/arrow-rs/issues/2037
-        # pa_type = map_type.to_pyarrow()
-        # assert map_type == PrimitiveType.from_pyarrow(pa_type)
+        # pa_type = map_type.to_arrow()
+        # assert map_type == PrimitiveType.from_arrow(pa_type)
 
         json_type = map_type.to_json()
         assert map_type == MapType.from_json(json_type)
 
 
+@pytest.mark.pyarrow
 def test_struct_delta_types():
     fields = [
         Field("x", "integer", nullable=True, metadata={"x": {"y": 3}}),
@@ -166,10 +170,11 @@ def test_struct_delta_types():
         Field("y", PrimitiveType("string"), nullable=False),
     ]
     struct_type = StructType(fields)
-    pa_type = struct_type.to_pyarrow()
-    assert struct_type == StructType.from_pyarrow(pa_type)
+    pa_type = struct_type.to_arrow()
+    assert struct_type == StructType.from_arrow(pa_type)
 
 
+@pytest.mark.pyarrow
 def test_delta_field():
     args = [
         ("x", PrimitiveType("string"), True, {}),
@@ -193,13 +198,14 @@ def test_delta_field():
         # Field metadata doesn't roundtrip currently
         # See: https://github.com/apache/arrow-rs/issues/478
         if len(field.metadata) == 0:
-            pa_field = field.to_pyarrow()
-            assert field == Field.from_pyarrow(pa_field)
+            pa_field = field.to_arrow()
+            assert field == Field.from_arrow(pa_field)
 
         json_field = field.to_json()
         assert field == Field.from_json(json_field)
 
 
+@pytest.mark.pyarrow
 def test_delta_schema():
     fields = [
         Field("x", "integer", nullable=True, metadata={"x": {"y": 3}}),
@@ -211,8 +217,8 @@ def test_delta_schema():
     assert schema.fields == fields
 
     empty_schema = Schema([])
-    pa_schema = empty_schema.to_pyarrow()
-    assert empty_schema == Schema.from_pyarrow(pa_schema)
+    pa_schema = empty_schema.to_arrow()
+    assert empty_schema == Schema.from_arrow(pa_schema)
 
     # Field metadata doesn't roundtrip currently
     # See: https://github.com/apache/arrow-rs/issues/478
@@ -221,11 +227,14 @@ def test_delta_schema():
         Field("y", ArrayType("string", contains_null=True), nullable=False),
     ]
     schema_without_metadata = schema = Schema(fields)
-    pa_schema = schema_without_metadata.to_pyarrow()
-    assert schema_without_metadata == Schema.from_pyarrow(pa_schema)
+    pa_schema = schema_without_metadata.to_arrow()
+    assert schema_without_metadata == Schema.from_arrow(pa_schema)
 
 
+@pytest.mark.pyarrow
 def _generate_test_type():
+    import pyarrow as pa
+
     class UuidType(pa.ExtensionType):
         def __init__(self):
             pa.ExtensionType.__init__(self, pa.binary(16), "my_package.uuid")
@@ -243,318 +252,6 @@ def _generate_test_type():
 
     pa.register_extension_type(UuidType())
     return UuidType()
-
-
-def _generate_test_tuples():
-    test_tuples = [
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_string", pa.string_view())]),
-            pa.schema([("some_int", pa.int32()), ("some_string", pa.string_view())]),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema(
-                [
-                    ("some_int", pa.uint32()),
-                    ("some_string", pa.list_view(pa.large_string())),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("some_int", pa.int32()),
-                    ("some_string", pa.list_view(pa.large_string())),
-                ]
-            ),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
-            pa.schema([("some_int", pa.int32()), ("some_string", pa.string())]),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
-            pa.schema([("some_int", pa.int32()), ("some_string", pa.string())]),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_string", pa.large_string())]),
-            pa.schema([("some_int", pa.int32()), ("some_string", pa.large_string())]),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_binary", pa.large_binary())]),
-            pa.schema([("some_int", pa.int32()), ("some_binary", pa.large_binary())]),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema(
-                [
-                    ("some_int", pa.uint32()),
-                    ("some_string", pa.large_list(pa.large_string())),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("some_int", pa.int32()),
-                    ("some_string", pa.large_list(pa.large_string())),
-                ]
-            ),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema(
-                [
-                    ("some_int", pa.uint32()),
-                    ("some_string", pa.list_(pa.large_string())),
-                ]
-            ),
-            pa.schema(
-                [("some_int", pa.int32()), ("some_string", pa.list_(pa.large_string()))]
-            ),
-            ArrowSchemaConversionMode.PASSTHROUGH,
-        ),
-        (
-            pa.schema(
-                [
-                    pa.field("some_int", pa.uint32(), nullable=True),
-                    pa.field("some_string", pa.string(), nullable=False),
-                    pa.field("some_fixed_binary", pa.binary(5), nullable=False),
-                    pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
-                ]
-            ),
-            pa.schema(
-                [
-                    pa.field("some_int", pa.int32(), nullable=True),
-                    pa.field("some_string", pa.string(), nullable=False),
-                    pa.field("some_fixed_binary", pa.binary(), nullable=False),
-                    pa.field("some_decimal", pa.decimal128(10, 2), nullable=False),
-                ]
-            ),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema(
-                [
-                    pa.field("some_int", pa.uint32(), nullable=True),
-                    pa.field("some_string", pa.string(), nullable=False),
-                ]
-            ),
-            pa.schema(
-                [
-                    pa.field("some_int", pa.int32(), nullable=True),
-                    pa.field("some_string", pa.large_string(), nullable=False),
-                ]
-            ),
-            ArrowSchemaConversionMode.LARGE,
-        ),
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_string", pa.string())]),
-            pa.schema([("some_int", pa.int32()), ("some_string", pa.large_string())]),
-            ArrowSchemaConversionMode.LARGE,
-        ),
-        (
-            pa.schema([("some_int", pa.uint32()), ("some_string", pa.large_string())]),
-            pa.schema([("some_int", pa.int32()), ("some_string", pa.string())]),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema(
-                [
-                    ("some_int", pa.uint8()),
-                    ("some_int1", pa.uint16()),
-                    ("some_int2", pa.uint32()),
-                    ("some_int3", pa.uint64()),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("some_int", pa.int8()),
-                    ("some_int1", pa.int16()),
-                    ("some_int2", pa.int32()),
-                    ("some_int3", pa.int64()),
-                ]
-            ),
-            ArrowSchemaConversionMode.LARGE,
-        ),
-        (
-            pa.schema(
-                [
-                    ("some_list", pa.list_(pa.string())),
-                    ("some_fixed_list_int", pa.list_(pa.uint32(), 5)),
-                    ("some_list_binary", pa.list_(pa.binary())),
-                    ("some_string", pa.large_string()),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("some_list", pa.large_list(pa.large_string())),
-                    ("some_fixed_list_int", pa.large_list(pa.int32())),
-                    ("some_list_binary", pa.large_list(pa.large_binary())),
-                    ("some_string", pa.large_string()),
-                ]
-            ),
-            ArrowSchemaConversionMode.LARGE,
-        ),
-        (
-            pa.schema(
-                [
-                    ("some_list", pa.large_list(pa.string())),
-                    ("some_string", pa.large_string()),
-                    ("some_binary", pa.large_binary()),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("some_list", pa.list_(pa.string())),
-                    ("some_string", pa.string()),
-                    ("some_binary", pa.binary()),
-                ]
-            ),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema(
-                [
-                    ("highly_nested_list", pa.list_(pa.list_(pa.list_(pa.string())))),
-                    (
-                        "highly_nested_list_binary",
-                        pa.list_(pa.list_(pa.list_(pa.binary()))),
-                    ),
-                    ("some_string", pa.large_string()),
-                    ("some_binary", pa.large_binary()),
-                ]
-            ),
-            pa.schema(
-                [
-                    (
-                        "highly_nested_list",
-                        pa.large_list(pa.large_list(pa.large_list(pa.large_string()))),
-                    ),
-                    (
-                        "highly_nested_list_binary",
-                        pa.large_list(pa.large_list(pa.large_list(pa.large_binary()))),
-                    ),
-                    ("some_string", pa.large_string()),
-                    ("some_binary", pa.large_binary()),
-                ]
-            ),
-            ArrowSchemaConversionMode.LARGE,
-        ),
-        (
-            pa.schema(
-                [
-                    (
-                        "highly_nested_list",
-                        pa.large_list(pa.list_(pa.large_list(pa.string()))),
-                    ),
-                    (
-                        "highly_nested_list_int",
-                        pa.large_list(pa.list_(pa.large_list(pa.uint64()))),
-                    ),
-                    ("some_string", pa.large_string()),
-                    ("some_binary", pa.large_binary()),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("highly_nested_list", pa.list_(pa.list_(pa.list_(pa.string())))),
-                    (
-                        "highly_nested_list_int",
-                        pa.list_(pa.list_(pa.list_(pa.int64()))),
-                    ),
-                    ("some_string", pa.string()),
-                    ("some_binary", pa.binary()),
-                ]
-            ),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema(
-                [
-                    ("timestamp", pa.timestamp("s")),
-                    ("timestamp1", pa.timestamp("ms")),
-                    ("timestamp2", pa.timestamp("us")),
-                    ("timestamp3", pa.timestamp("ns")),
-                    ("timestamp4", pa.timestamp("s", tz="UTC")),
-                    ("timestamp5", pa.timestamp("ms", tz="UTC")),
-                    ("timestamp6", pa.timestamp("ns", tz="UTC")),
-                    ("timestamp7", pa.timestamp("ns", tz="UTC")),
-                ]
-            ),
-            pa.schema(
-                [
-                    ("timestamp", pa.timestamp("us")),
-                    ("timestamp1", pa.timestamp("us")),
-                    ("timestamp2", pa.timestamp("us")),
-                    ("timestamp3", pa.timestamp("us")),
-                    ("timestamp4", pa.timestamp("us", tz="UTC")),
-                    ("timestamp5", pa.timestamp("us", tz="UTC")),
-                    ("timestamp6", pa.timestamp("us", tz="UTC")),
-                    ("timestamp7", pa.timestamp("us", tz="UTC")),
-                ]
-            ),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema(
-                [
-                    (
-                        "struct",
-                        pa.struct(
-                            {
-                                "highly_nested_list": pa.large_list(
-                                    pa.list_(pa.large_list(pa.string()))
-                                ),
-                                "highly_nested_list_int": pa.large_list(
-                                    pa.list_(pa.large_list(pa.uint64()))
-                                ),
-                                "some_string": pa.large_string(),
-                                "some_binary": pa.large_binary(),
-                            }
-                        ),
-                    )
-                ]
-            ),
-            pa.schema(
-                [
-                    (
-                        "struct",
-                        pa.struct(
-                            {
-                                "highly_nested_list": pa.list_(
-                                    pa.list_(pa.list_(pa.string()))
-                                ),
-                                "highly_nested_list_int": pa.list_(
-                                    pa.list_(pa.list_(pa.int64()))
-                                ),
-                                "some_string": pa.string(),
-                                "some_binary": pa.binary(),
-                            }
-                        ),
-                    )
-                ]
-            ),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-        (
-            pa.schema([("uuid", _generate_test_type())]),
-            pa.schema([("uuid", pa.binary(16))]),
-            ArrowSchemaConversionMode.NORMAL,
-        ),
-    ]
-
-    return test_tuples
-
-
-@pytest.mark.parametrize(
-    "schema,expected_schema,conversion_mode",
-    _generate_test_tuples(),
-)
-def test_schema_conversions(schema, expected_schema, conversion_mode):
-    result_schema = _convert_pa_schema_to_delta(schema, conversion_mode)
-
-    assert result_schema == expected_schema
 
 
 # <https://github.com/delta-io/delta-rs/issues/3174>

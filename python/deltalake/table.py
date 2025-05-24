@@ -15,15 +15,11 @@ from typing import (
     Union,
 )
 
-import pyarrow
-import pyarrow.dataset as ds
-import pyarrow.fs as pa_fs
-from pyarrow.dataset import (
-    Expression,
-    FileSystemDataset,
-    ParquetFileFormat,
-    ParquetFragmentScanOptions,
-    ParquetReadOptions,
+from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core.types import (
+    ArrowArrayExportable,
+    ArrowSchemaExportable,
+    ArrowStreamExportable,
 )
 
 from deltalake._internal import (
@@ -36,22 +32,20 @@ from deltalake._internal import (
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
-from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
-from deltalake.writer._conversion import (
-    ArrowSchemaConversionMode,
-    ArrowStreamExportable,
-    _convert_data_and_schema,
-)
-
-try:
-    from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
-except ImportError:
-    from pyarrow.parquet import _filters_to_expression as filters_to_expression
+from deltalake.writer._conversion import _convert_arro3_schema_to_delta
 
 if TYPE_CHECKING:
     import os
+
+    import pandas as pd
+    import pyarrow
+    import pyarrow.fs as pa_fs
+    from pyarrow.dataset import (
+        Expression,
+        ParquetReadOptions,
+    )
 
     from deltalake.transaction import (
         AddAction,
@@ -60,13 +54,6 @@ if TYPE_CHECKING:
     )
     from deltalake.writer.properties import WriterProperties
 
-
-try:
-    import pandas as pd
-except ModuleNotFoundError:
-    _has_pandas = False
-else:
-    _has_pandas = True
 
 MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
 NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
@@ -198,7 +185,7 @@ class DeltaTable:
     def create(
         cls,
         table_uri: str | Path,
-        schema: pyarrow.Schema | DeltaSchema,
+        schema: DeltaSchema | ArrowSchemaExportable,
         mode: Literal["error", "append", "overwrite", "ignore"] = "error",
         partition_by: list[str] | str | None = None,
         name: str | None = None,
@@ -246,13 +233,14 @@ class DeltaTable:
             )
             ```
         """
-        if isinstance(schema, DeltaSchema):
-            schema = schema.to_pyarrow()
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
         if isinstance(table_uri, Path):
             table_uri = str(table_uri)
+
+        if not isinstance(schema, DeltaSchema):
+            schema = DeltaSchema.from_arrow(schema)
 
         _create_deltalake(
             table_uri,
@@ -424,7 +412,7 @@ class DeltaTable:
         columns: list[str] | None = None,
         predicate: str | None = None,
         allow_out_of_range: bool = False,
-    ) -> pyarrow.RecordBatchReader:
+    ) -> RecordBatchReader:
         return self._table.load_cdf(
             columns=columns,
             predicate=predicate,
@@ -672,12 +660,7 @@ class DeltaTable:
 
     def merge(
         self,
-        source: pyarrow.Table
-        | pyarrow.RecordBatch
-        | pyarrow.RecordBatchReader
-        | ds.Dataset
-        | ArrowStreamExportable
-        | pd.DataFrame,
+        source: ArrowStreamExportable | ArrowArrayExportable,
         predicate: str,
         source_alias: str | None = None,
         target_alias: str | None = None,
@@ -708,15 +691,13 @@ class DeltaTable:
         Returns:
             TableMerger: TableMerger Object
         """
-        data, schema = _convert_data_and_schema(
-            data=source,
-            schema=None,
-            conversion_mode=ArrowSchemaConversionMode.PASSTHROUGH,
-        )
-        data = pyarrow.RecordBatchReader.from_batches(schema, (batch for batch in data))
+
+        source = RecordBatchReader.from_arrow(source)
+        compatible_delta_schema = _convert_arro3_schema_to_delta(source.schema)
 
         py_merge_builder = self._table.create_merge_builder(
             source=source,
+            batch_schema=compatible_delta_schema,
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
@@ -772,7 +753,7 @@ class DeltaTable:
         parquet_read_options: ParquetReadOptions | None = None,
         schema: pyarrow.Schema | None = None,
         as_large_types: bool = False,
-    ) -> pyarrow.dataset.Dataset:
+    ) -> "pyarrow.dataset.Dataset":
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
@@ -808,6 +789,16 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
+        try:
+            from pyarrow.dataset import (
+                FileSystemDataset,
+                ParquetFileFormat,
+                ParquetFragmentScanOptions,
+            )
+        except ImportError:
+            raise ImportError(
+                "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
+            )
         if not self._table.has_files():
             raise DeltaError("Table is instantiated without files.")
 
@@ -833,6 +824,12 @@ class DeltaTable:
                     f"The table has set these reader features: {missing_features} "
                     "but these are not yet supported by the deltalake reader."
                 )
+
+        import pyarrow
+        import pyarrow.fs as pa_fs
+
+        from deltalake.fs import DeltaStorageHandler
+
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler.from_table(
@@ -841,12 +838,16 @@ class DeltaTable:
                     self._table.get_add_file_sizes(),
                 )
             )
+
         format = ParquetFileFormat(
             read_options=parquet_read_options,
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
-        schema = schema or self.schema().to_pyarrow(as_large_types=as_large_types)
+        if schema is None:
+            schema = pyarrow.schema(
+                self.schema().to_arrow(as_large_types=as_large_types)
+            )
 
         fragments = [
             format.make_fragment(
@@ -876,7 +877,7 @@ class DeltaTable:
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
-    ) -> pyarrow.Table:
+    ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
 
@@ -886,6 +887,13 @@ class DeltaTable:
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
         """
+        try:
+            from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
+        except ImportError:
+            raise ImportError(
+                "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
+            )
+
         if filters is not None:
             filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
@@ -899,7 +907,7 @@ class DeltaTable:
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
-    ) -> pd.DataFrame:
+    ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
@@ -948,7 +956,7 @@ class DeltaTable:
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions(self, flatten: bool = False) -> pyarrow.RecordBatch:
+    def get_add_actions(self, flatten: bool = False) -> RecordBatch:
         """
         Return a dataframe with all current add actions.
 
@@ -1274,7 +1282,7 @@ class TableMerger:
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema
+            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
             if col.name not in except_columns
         }
 
@@ -1491,7 +1499,7 @@ class TableMerger:
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema
+            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
             if col.name not in except_columns
         }
 

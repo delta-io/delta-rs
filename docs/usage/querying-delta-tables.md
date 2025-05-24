@@ -18,7 +18,7 @@ To load into Pandas or a PyArrow table use the `DeltaTable.to_pandas` and `Delta
 ``` python
 >>> from deltalake import DeltaTable
 >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
->>> dt.schema().to_pyarrow()
+>>> dt.schema().to_arrow()
 value: string
 year: string
 month: string
@@ -117,7 +117,7 @@ Dask Name: read-parquet, 6 tasks
 1     7  2021    12  20
 ```
 
-When working with the Rust API, Apache Datafusion can be used to query data from a delta table. 
+When working with the Rust API, Apache Datafusion can be used to query data from a delta table.
 
 ```rust
 let table = deltalake::open_table("../rust/tests/data/delta-0.8.0-partitioned").await?;
