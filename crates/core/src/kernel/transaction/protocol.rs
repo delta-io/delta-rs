@@ -235,6 +235,8 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
 mod tests {
     use std::collections::HashMap;
 
+    use object_store::path::Path;
+
     use super::*;
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, Add, Metadata, PrimitiveType, Protocol, Remove};
@@ -307,7 +309,7 @@ mod tests {
         let checker = ProtocolChecker::new(HashSet::new(), WRITER_V2.clone());
 
         let actions = create_actions(1, "true", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager = snapshot.snapshot();
         assert!(checker
             .can_commit(eager, &append_actions, &append_op)
@@ -320,7 +322,7 @@ mod tests {
             .is_ok());
 
         let actions = create_actions(2, "true", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager = snapshot.snapshot();
         assert!(checker
             .can_commit(eager, &append_actions, &append_op)
@@ -333,7 +335,7 @@ mod tests {
             .is_ok());
 
         let actions = create_actions(2, "false", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager = snapshot.snapshot();
         assert!(checker
             .can_commit(eager, &append_actions, &append_op)
@@ -346,7 +348,7 @@ mod tests {
             .is_ok());
 
         let actions = create_actions(7, "true", vec![WriterFeature::AppendOnly]);
-        let snapshot = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager = snapshot.snapshot();
         assert!(checker
             .can_commit(eager, &append_actions, &append_op)
@@ -359,7 +361,7 @@ mod tests {
             .is_ok());
 
         let actions = create_actions(7, "false", vec![WriterFeature::AppendOnly]);
-        let snapshot = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager = snapshot.snapshot();
         assert!(checker
             .can_commit(eager, &append_actions, &append_op)
@@ -372,7 +374,7 @@ mod tests {
             .is_ok());
 
         let actions = create_actions(7, "true", vec![]);
-        let snapshot = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager = snapshot.snapshot();
         assert!(checker
             .can_commit(eager, &append_actions, &append_op)
@@ -396,7 +398,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_1 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_1 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_1 = snapshot_1.snapshot();
         assert!(checker_1.can_read_from(eager_1).is_ok());
         assert!(checker_1.can_write_to(eager_1).is_ok());
@@ -410,7 +412,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_2 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_2 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_2 = snapshot_2.snapshot();
         assert!(checker_1.can_read_from(eager_2).is_err());
         assert!(checker_1.can_write_to(eager_2).is_err());
@@ -427,7 +429,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_3 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_3 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_3 = snapshot_3.snapshot();
         assert!(checker_1.can_read_from(eager_3).is_err());
         assert!(checker_1.can_write_to(eager_3).is_err());
@@ -447,7 +449,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_4 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_4 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_4 = snapshot_4.snapshot();
         assert!(checker_1.can_read_from(eager_4).is_err());
         assert!(checker_1.can_write_to(eager_4).is_err());
@@ -470,7 +472,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_5 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_5 = snapshot_5.snapshot();
         assert!(checker_1.can_read_from(eager_5).is_err());
         assert!(checker_1.can_write_to(eager_5).is_err());
@@ -496,7 +498,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_6 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_6 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_6 = snapshot_6.snapshot();
         assert!(checker_1.can_read_from(eager_6).is_err());
         assert!(checker_1.can_write_to(eager_6).is_err());
@@ -525,7 +527,7 @@ mod tests {
             }),
             metadata_action(None).into(),
         ];
-        let snapshot_7 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_7 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_7 = snapshot_7.snapshot();
         assert!(checker_1.can_read_from(eager_7).is_err());
         assert!(checker_1.can_write_to(eager_7).is_err());
@@ -558,7 +560,7 @@ mod tests {
             ),
             metadata_action(None).into(),
         ];
-        let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_5 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_5 = snapshot_5.snapshot();
         assert!(checker_5.can_write_to(eager_5).is_ok());
     }
@@ -575,7 +577,7 @@ mod tests {
             ),
             metadata_action(None).into(),
         ];
-        let snapshot_5 = DeltaTableState::from_actions(actions).unwrap();
+        let snapshot_5 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let eager_5 = snapshot_5.snapshot();
         assert!(checker_5.can_write_to(eager_5).is_ok());
     }
