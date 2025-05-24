@@ -560,9 +560,10 @@ pub(super) mod tests {
     use tokio::task::JoinHandle;
 
     use crate::{
-        checkpoints::{create_checkpoint_for, create_checkpoint_from_table_uri_and_cleanup},
+        checkpoints::create_checkpoint_from_table_uri_and_cleanup,
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, Add, Format, Remove},
+        protocol::create_checkpoint_for,
         protocol::{DeltaOperation, SaveMode},
         test_utils::{TestResult, TestTables},
         DeltaTableBuilder,
@@ -822,7 +823,7 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        create_checkpoint_for(commit.version, &commit.snapshot, log_store.as_ref(), None)
+        create_checkpoint_for(commit.version as u64, log_store.as_ref(), None)
             .await
             .unwrap();
 
