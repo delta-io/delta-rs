@@ -1782,6 +1782,46 @@ class TableAlterer:
             commit_properties,
         )
 
+    def set_table_name(self, name: str) -> None:
+        """
+        Set the name of the table.
+
+        Args:
+            name: the name of the table
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_name("new_table_name")
+            ```
+        """
+        self.table._table.set_table_properties(
+            {"name": name},
+            False,
+            None,
+        )
+
+    def set_table_description(self, description: str) -> None:
+        """
+        Set the description of the table.
+
+        Args:
+            description: the description of the table
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_description("new_table_description")
+            ```
+        """
+        self.table._table.set_table_properties(
+            {"description": description},
+            False,
+            None,
+        )
+
     def set_column_metadata(
         self,
         column: str,
