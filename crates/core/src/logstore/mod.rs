@@ -61,6 +61,7 @@ use delta_kernel::engine::default::executor::tokio::{
 use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::{AsAny, Engine};
 use futures::{StreamExt, TryStreamExt};
+use object_store::ObjectStoreScheme;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
@@ -390,6 +391,31 @@ pub trait LogStore: Send + Sync + AsAny {
     }
 }
 
+/// Extension trait for LogStore to handle some internal invariants.
+pub(crate) trait LogStoreExt: LogStore {
+    /// The the fully qualified table URL
+    ///
+    /// The paths is guaranteed to end with a slash,
+    /// so that it can be used as a prefix for other paths.
+    fn table_root_url(&self) -> Url {
+        let mut base = self.config().location.clone();
+        if !base.path().ends_with("/") {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        base
+    }
+
+    /// The the fully qualified table log URL
+    ///
+    /// The paths is guaranteed to end with a slash,
+    /// so that it can be used as a prefix for other paths.
+    fn log_root_url(&self) -> Url {
+        self.table_root_url().join("_delta_log/").unwrap()
+    }
+}
+
+impl<T: LogStore + ?Sized> LogStoreExt for T {}
+
 #[async_trait::async_trait]
 impl<T: LogStore + ?Sized> LogStore for Arc<T> {
     fn name(&self) -> String {
@@ -497,6 +523,16 @@ fn object_store_url(location: &Url) -> ObjectStoreUrl {
         location.path().replace(DELIMITER, "-").replace(':', "-")
     ))
     .expect("Invalid object store url.")
+}
+
+/// Parse the path from a URL accounting for special case witjh S3
+// TODO: find out why this is necessary
+pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
+    Ok(match ObjectStoreScheme::parse(table_root) {
+        Ok((ObjectStoreScheme::AmazonS3, _)) => Path::parse(table_root.path())?,
+        Ok((_, path)) => path,
+        _ => Path::parse(table_root.path())?,
+    })
 }
 
 /// TODO
@@ -803,6 +839,16 @@ pub(crate) mod tests {
             StorageConfig::default().with_io_runtime(IORuntime::default()),
         );
         assert!(store.is_ok());
+    }
+
+    #[test]
+    fn test_logstore_ext() {
+        let location = Url::parse("memory:///table").unwrap();
+        let store = logstore_for(location, StorageConfig::default()).unwrap();
+        let table_url = store.table_root_url();
+        assert!(table_url.path().ends_with('/'));
+        let log_url = store.log_root_url();
+        assert!(log_url.path().ends_with("_delta_log/"));
     }
 
     #[tokio::test]
