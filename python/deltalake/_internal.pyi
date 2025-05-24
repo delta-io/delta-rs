@@ -404,13 +404,12 @@ class PrimitiveType:
 
     @staticmethod
     def from_arrow(type: ArrowSchemaExportable) -> PrimitiveType:
-        """Create a PrimitiveType from an object with an `__arrow_c_schema__`
-        datatype
+        """Create a PrimitiveType from an `ArrowSchemaExportable` datatype
 
         Will raise `TypeError` if the arrow type is not a primitive type.
 
         Args:
-            type: an object with an `__arrow_c_schema__
+            type: an object that is `ArrowSchemaExportable`
 
         Returns:
             a PrimitiveType
@@ -494,13 +493,12 @@ class ArrayType:
         """Get the equivalent arro3 type."""
     @staticmethod
     def from_arrow(type: ArrowSchemaExportable) -> ArrayType:
-        """Create an ArrayType from an object with an `__arrow_c_schema__`
-        datatype.
+        """Create an ArrayType from an `ArrowSchemaExportable` datatype.
 
         Will raise `TypeError` if a different arrow DataType is provided.
 
         Args:
-            type: an object with an `__arrow_c_schema__
+            type: an object that is `ArrowSchemaExportable`
 
         Returns:
             an ArrayType
@@ -602,13 +600,12 @@ class MapType:
 
     @staticmethod
     def from_arrow(type: ArrowSchemaExportable) -> MapType:
-        """Create a MapType from an object with an `__arrow_c_schema__`
-        datatype.
+        """Create a MapType from an `ArrowSchemaExportable` datatype
 
         Will raise `TypeError` if passed a different type.
 
         Args:
-            type: an object with an `__arrow_c_schema__
+            type: an object that is `ArrowSchemaExportable`
 
         Returns:
             a MapType
@@ -716,13 +713,12 @@ class Field:
         """
     @staticmethod
     def from_arrow(field: ArrowSchemaExportable) -> Field:
-        """Create a Field from an object with an `__arrow_c_schema__`
-        field
+        """Create a Field from an object with an `ArrowSchemaExportable` field
 
         Note: This currently doesn't preserve field metadata.
 
         Args:
-            field: a Field object with an `__arrow_c_schema__
+            field: a Field object that is `ArrowSchemaExportable`
 
         Returns:
             a Field
@@ -793,13 +789,12 @@ class StructType:
 
     @staticmethod
     def from_arrow(type: ArrowSchemaExportable) -> StructType:
-        """Create a new StructType from an object with an `__arrow_c_schema__`
-        datatype.
+        """Create a new StructType from an `ArrowSchemaExportable` datatype
 
         Will raise `TypeError` if a different data type is provided.
 
         Args:
-            type: a struct type object with an `__arrow_c_schema__
+            type: a struct type object that is `ArrowSchemaExportable`
 
         Returns:
             a StructType
@@ -872,7 +867,7 @@ class Schema:
         Will raise `TypeError` if one of the Arrow type is not a primitive type.
 
         Args:
-            type: an object with an `__arrow_c_schema__
+            type: an object that is `ArrowSchemaExportable`
 
         Returns:
             a Schema

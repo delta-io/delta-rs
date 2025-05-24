@@ -32,7 +32,7 @@ class BaseDeltaStorageHandler:
         table: RawDeltaTable,
         options: dict[str, str] | None = None,
         known_sizes: dict[str, int] | None = None,
-    ) -> "BaseDeltaStorageHandler":
+    ) -> BaseDeltaStorageHandler:
         self = cls.__new__(cls)
         self._handler = DeltaFileSystemHandler.from_table(table, options, known_sizes)
         return self
