@@ -722,6 +722,7 @@ mod tests {
 
     // The following sets of tests are related to #1386 and mergeSchema support
     // <https://github.com/delta-io/delta-rs/issues/1386>
+    #[cfg(feature = "datafusion")]
     mod schema_evolution {
         use itertools::Itertools;
 
@@ -1032,6 +1033,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_write_data_skipping_stats_columns() {
         let batch = get_record_batch(None, false);
@@ -1080,6 +1082,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_write_data_skipping_num_indexed_colsn() {
         let batch = get_record_batch(None, false);

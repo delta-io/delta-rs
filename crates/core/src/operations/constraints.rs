@@ -367,7 +367,7 @@ mod tests {
     async fn test_constraint_case_sensitive() -> DeltaResult<()> {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("Id", ArrowDataType::Utf8, true),
-            Field::new("vAlue", ArrowDataType::Int32, true),
+            Field::new("vAlue", ArrowDataType::Int32, true), // spellchecker:disable-line
             Field::new("mOdifieD", ArrowDataType::Utf8, true),
         ]));
 
@@ -389,12 +389,12 @@ mod tests {
 
         let mut table = DeltaOps(table)
             .add_constraint()
-            .with_constraint("valid_values", "vAlue < 1000")
+            .with_constraint("valid_values", "vAlue < 1000") // spellchecker:disable-line
             .await?;
         let version = table.version();
         assert_eq!(version, 1);
 
-        let expected_expr = "vAlue < 1000";
+        let expected_expr = "vAlue < 1000"; // spellchecker:disable-line
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
         assert_eq!(
             get_constraint(&table, "delta.constraints.valid_values"),

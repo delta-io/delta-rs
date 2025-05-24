@@ -210,15 +210,11 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(self.log_store.clone(), max_version).await,
+            Some(state) => state.update(&self.log_store, max_version).await,
             _ => {
-                let state = DeltaTableState::try_new(
-                    &Path::default(),
-                    self.log_store.object_store(None),
-                    self.config.clone(),
-                    max_version,
-                )
-                .await?;
+                let state =
+                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
+                        .await?;
                 self.state = Some(state);
                 Ok(())
             }
@@ -262,7 +258,7 @@ impl DeltaTable {
             .snapshot()?
             .snapshot
             .snapshot()
-            .commit_infos(self.object_store(), limit)
+            .commit_infos(&self.log_store(), limit)
             .await?
             .try_collect::<Vec<_>>()
             .await?;
@@ -392,7 +388,7 @@ impl DeltaTable {
             let part_count = location_path.prefix_match(prefix).unwrap().count();
             if part_count > 1 {
                 // Per the spec, ignore any files in subdirectories.
-                // Spark may create these as uncommited transactions which we don't want
+                // Spark may create these as uncommitted transactions which we don't want
                 //
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
                 // "Delta files are stored as JSON in a directory at the *root* of the table
