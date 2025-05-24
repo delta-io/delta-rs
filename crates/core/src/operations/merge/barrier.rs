@@ -661,8 +661,8 @@ mod tests {
             MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
 
         let survivors = merge.survivors();
-        let coalsece = CoalesceBatchesExec::new(Arc::new(merge), 100);
-        let mut stream = coalsece.execute(0, task_ctx).unwrap();
+        let coalescence = CoalesceBatchesExec::new(Arc::new(merge), 100);
+        let mut stream = coalescence.execute(0, task_ctx).unwrap();
         (vec![stream.next().await.unwrap().unwrap()], survivors)
     }
 

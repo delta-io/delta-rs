@@ -1,0 +1,10 @@
+[default.extend-words]
+# Intentional test data for case-sensitive column names
+vAlue = "vAlue"
+ValUe = "ValUe"
+Alue = "Alue"
+Ue = "Ue"
+
+[default.extend-ignore-identifiers]
+# File hash segments that contain "ba" - these are legitimate UUIDs in documentation
+ba = "ba" 

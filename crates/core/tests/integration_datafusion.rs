@@ -439,7 +439,7 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        // Validate a table that contains statisitics for all files
+        // Validate a table that contains statistics for all files
         let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
@@ -477,7 +477,7 @@ mod local {
         ];
         assert_batches_sorted_eq!(&expected, &actual);
 
-        // Validate a table that does not contain column statisitics
+        // Validate a table that does not contain column statistics
         let table = open_table("../test/tests/data/delta-0.2.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 

@@ -328,7 +328,7 @@ impl Model for AtomicRenameSys {
             }
             Action::RepairObjectDelete(wid) => {
                 let mut writer = &mut state.writer_ctx[wid];
-                // s3 delete always succeeds even when object does not exist
+                // s3 delete always succeeds even when objectt does not exist
                 state.blob_store_delete.push(writer.lock_data.src.clone());
                 writer.rename_err = None;
                 writer.state = WriterState::RepairRenameReturned;
@@ -392,7 +392,7 @@ impl Model for AtomicRenameSys {
             }
             Action::OldVersionObjectDelete(wid) => {
                 let mut writer = &mut state.writer_ctx[wid];
-                // s3 delete always succeeds even when object does not exist
+                // s3 delete always succeeds even when objectt does not exist
                 state.blob_store_delete.push(writer.lock_data.src.clone());
                 writer.rename_err = None;
                 writer.state = WriterState::RenameReturned;
@@ -426,9 +426,9 @@ impl Model for AtomicRenameSys {
                                 // two cases that could result in version conflict while holding an
                                 // expired lock:
                                 //
-                                // 1. source object cleaned up by repair from another worker
+                                // 1. source objectt cleaned up by repair from another worker
                                 // 2. it's a valid conflict, but we pause and expired the lock
-                                //    right before issuing the HEAD object check
+                                //    right before issuing the HEAD objectt check
                                 //
                                 // Enter ValidateConflict state to distinguish these two scenarios
                                 // because they should result in different return values to the
@@ -442,7 +442,7 @@ impl Model for AtomicRenameSys {
                             }
                         }
                         RenameErr::NotFound => {
-                            // src object already purged by another repair
+                            // src objectt already purged by another repair
                             writer.state = WriterState::Shutdown;
                         }
                     }
@@ -452,22 +452,22 @@ impl Model for AtomicRenameSys {
             }
             Action::CheckSourceObjectDeleted(wid) => {
                 let src = state.writer_ctx[wid].lock_data.src.as_str();
-                // HEAD objec to check for existence
+                // HEAD object to check for existence
                 if state.blob_store_deleted(src) {
                     let mut writer = &mut state.writer_ctx[wid];
-                    // source object cleaned by up another worker's repair, it's not a real
+                    // source objectt cleaned by up another worker's repair, it's not a real
                     // conflict, save to assume the rename was successful
                     writer.state = WriterState::Shutdown;
                 } else {
                     let mut writer = &mut state.writer_ctx[wid];
                     // this could happen in the following two cases:
-                    // 1. conflict was valid, we paused for too long before issuing the HEAD object
+                    // 1. conflict was valid, we paused for too long before issuing the HEAD objectt
                     //    call.
                     // 2. the other worker was in the middle of a repair, after copied src to dst,
                     //    but before purging src.
                     //
                     // To distinguish between these two scenarios, we need to compare the content
-                    // between src and dst (can be optimized through comparing object checksum)
+                    // between src and dst (can be optimized through comparing objectt checksum)
                     // TODO: what's the chances of new commit version has the exact same content as
                     // an old existing conflicting version?
                     writer.state = WriterState::ValidateSourceObjectCopy;
@@ -536,7 +536,7 @@ impl Model for AtomicRenameSys {
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = vec![
             Property::<Self>::always("no overwrite", |_, state| {
-                // make sure each object key is only written once
+                // make sure each objectt key is only written once
                 let mut written = HashMap::new();
                 state.blob_store_copy.iter().all(|data| {
                     if let Some(src) = written.insert(&data.dst, &data.src) {
@@ -573,7 +573,7 @@ impl Model for AtomicRenameSys {
                     .iter()
                     .all(|ctx| ctx.state == WriterState::Shutdown)
             }),
-            Property::<Self>::eventually("all source objects are purged", |sys, state| {
+            Property::<Self>::eventually("all source objectts are purged", |sys, state| {
                 let expected_deletes = sys.derive_expected_deletes();
                 let actual_deletes = state.derive_actual_deletes();
                 actual_deletes
@@ -586,7 +586,7 @@ impl Model for AtomicRenameSys {
                 let (blob_store_obj_keys, blob_store_obj_values) =
                     state.blob_store_obj_key_values();
 
-                // object count greater writer count
+                // objectt count greater writer count
                 blob_store_obj_keys.len() >= sys.writer_cnt
                     // each writer writes a different version in
                     && writer_versions.len() >= sys.writer_cnt
