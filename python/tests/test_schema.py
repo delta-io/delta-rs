@@ -231,29 +231,6 @@ def test_delta_schema():
     assert schema_without_metadata == Schema.from_arrow(pa_schema)
 
 
-@pytest.mark.pyarrow
-def _generate_test_type():
-    import pyarrow as pa
-
-    class UuidType(pa.ExtensionType):
-        def __init__(self):
-            pa.ExtensionType.__init__(self, pa.binary(16), "my_package.uuid")
-
-        def __arrow_ext_serialize__(self):
-            # since we don't have a parameterized type, we don't need extra
-            # metadata to be deserialized
-            return b""
-
-        @classmethod
-        def __arrow_ext_deserialize__(self, storage_type, serialized):
-            # return an instance of this subclass given the serialized
-            # metadata.
-            return UuidType()
-
-    pa.register_extension_type(UuidType())
-    return UuidType()
-
-
 # <https://github.com/delta-io/delta-rs/issues/3174>
 def test_field_serialization():
     from deltalake import Field
