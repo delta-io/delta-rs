@@ -41,7 +41,7 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
 
     let remove = table
         .snapshot()?
-        .all_tombstones(table.object_store().clone())
+        .all_tombstones(&table.log_store())
         .await?
         .collect::<HashSet<_>>();
     let remove = remove.get(file).unwrap();
@@ -88,7 +88,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
 
     let remove = table
         .snapshot()?
-        .all_tombstones(table.object_store().clone())
+        .all_tombstones(&table.log_store())
         .await?
         .collect::<HashSet<_>>();
     let remove = remove.get(file).unwrap();

@@ -178,7 +178,7 @@ pub async fn create_checkpoint_for(
 
     debug!("Writing parquet bytes to checkpoint buffer.");
     let tombstones = state
-        .unexpired_tombstones(log_store.object_store(None).clone())
+        .unexpired_tombstones(log_store)
         .await
         .map_err(|_| ProtocolError::Generic("filed to get tombstones".into()))?
         .collect::<Vec<_>>();
@@ -629,7 +629,8 @@ mod tests {
         // Look at the "files" and verify that the _last_checkpoint has the right version
         let path = Path::from("_delta_log/_last_checkpoint");
         let last_checkpoint = table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .get(&path)
             .await
             .expect("Failed to get the _last_checkpoint")
@@ -642,6 +643,7 @@ mod tests {
 
     /// This test validates that a checkpoint can be written and re-read with the minimum viable
     /// Metadata. There was a bug which didn't handle the optionality of createdTime.
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_checkpoint_with_metadata() {
         let table_schema = get_delta_schema();
@@ -715,7 +717,8 @@ mod tests {
         // Look at the "files" and verify that the _last_checkpoint has the right version
         let path = Path::from("_delta_log/_last_checkpoint");
         let last_checkpoint = table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .get(&path)
             .await
             .expect("Failed to get the _last_checkpoint")
@@ -897,6 +900,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     async fn setup_table() -> DeltaTable {
         use arrow_schema::{DataType, Field};
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
@@ -921,6 +925,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_cleanup_no_checkpoints() {
         // Test that metadata clean up does not corrupt the table when no checkpoints exist
@@ -950,6 +955,7 @@ mod tests {
         assert!(res.is_ok());
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_cleanup_with_checkpoints() {
         let table = setup_table().await;
@@ -1079,6 +1085,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_struct_with_single_list_field() {
         // you need another column otherwise the entire stats struct is empty
@@ -1165,6 +1172,7 @@ mod tests {
     });
 
     #[ignore = "This test is only useful if the batch size has been made small"]
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_checkpoint_large_table() -> DeltaResult<()> {
         use crate::writer::test_utils::get_arrow_schema;
