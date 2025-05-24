@@ -1,8 +1,7 @@
 import pathlib
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
+from arro3.core import Table
 
 from deltalake import (
     BloomFilterProperties,
@@ -89,9 +88,12 @@ def test_invalid_fpp_value():
         BloomFilterProperties(set_bloom_filter_enabled=True, fpp=1.1, ndv=30)
 
 
+@pytest.mark.pyarrow
 def test_write_with_writerproperties(
-    tmp_path: pathlib.Path, sample_table: pa.Table, writer_properties: WriterProperties
+    tmp_path: pathlib.Path, sample_table: Table, writer_properties: WriterProperties
 ):
+    import pyarrow.parquet as pq
+
     write_deltalake(tmp_path, sample_table, writer_properties=writer_properties)
 
     parquet_path = DeltaTable(tmp_path).file_uris()[0]

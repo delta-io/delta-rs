@@ -1,15 +1,18 @@
 import datetime
 import pathlib
 
-import pyarrow as pa
 import pytest
+from arro3.core import Table
 
 from deltalake import CommitProperties, DeltaTable, write_deltalake
 
 
 @pytest.mark.parametrize("use_relative", [True, False])
 def test_restore_with_version(
-    tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch, use_relative: bool
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    monkeypatch,
+    use_relative: bool,
 ):
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
@@ -18,9 +21,9 @@ def test_restore_with_version(
     else:
         table_path = str(tmp_path)
 
-    write_deltalake(table_path, sample_data, mode="append")
-    write_deltalake(table_path, sample_data, mode="append")
-    write_deltalake(table_path, sample_data, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
 
     dt = DeltaTable(table_path)
     old_version = dt.version()
@@ -34,7 +37,10 @@ def test_restore_with_version(
 
 @pytest.mark.parametrize("use_relative", [True, False])
 def test_restore_with_datetime_str(
-    tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch, use_relative: bool
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    monkeypatch,
+    use_relative: bool,
 ):
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
@@ -43,9 +49,9 @@ def test_restore_with_datetime_str(
     else:
         table_path = str(tmp_path)
 
-    write_deltalake(table_path, sample_data, mode="append")
-    write_deltalake(table_path, sample_data, mode="append")
-    write_deltalake(table_path, sample_data, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
 
     dt = DeltaTable(table_path)
     old_version = dt.version()
@@ -57,7 +63,10 @@ def test_restore_with_datetime_str(
 
 @pytest.mark.parametrize("use_relative", [True, False])
 def test_restore_with_datetime(
-    tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch, use_relative: bool
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    monkeypatch,
+    use_relative: bool,
 ):
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
@@ -66,9 +75,9 @@ def test_restore_with_datetime(
     else:
         table_path = str(tmp_path)
 
-    write_deltalake(table_path, sample_data, mode="append")
-    write_deltalake(table_path, sample_data, mode="append")
-    write_deltalake(table_path, sample_data, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
+    write_deltalake(table_path, sample_table, mode="append")
 
     dt = DeltaTable(table_path)
     old_version = dt.version()

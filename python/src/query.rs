@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use deltalake::{
-    arrow::pyarrow::ToPyArrow,
     datafusion::prelude::SessionContext,
-    delta_datafusion::{DeltaScanConfigBuilder, DeltaSessionConfig, DeltaTableProvider},
+    delta_datafusion::{
+        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionConfig, DeltaTableProvider,
+    },
 };
 use pyo3::prelude::*;
+use pyo3_arrow::PyRecordBatchReader;
 
-use crate::{error::PythonError, utils::rt, RawDeltaTable};
+use crate::{convert_stream_to_reader, error::PythonError, utils::rt, RawDeltaTable};
 
 /// PyQueryBuilder supports the _experimental_ `QueryBuilder` Python interface which allows users
 /// to take advantage of the [Apache DataFusion](https://datafusion.apache.org) engine already
@@ -32,13 +34,14 @@ impl PyQueryBuilder {
     /// Register the given [RawDeltaTable] into the [SessionContext] using the provided
     /// `table_name`
     ///
-    /// Once called, the provided `delta_table` will be referencable in SQL queries so long as
+    /// Once called, the provided `delta_table` will be referenceable in SQL queries so long as
     /// another table of the same name is not registered over it.
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
         let snapshot = delta_table.cloned_state()?;
         let log_store = delta_table.log_store()?;
 
         let scan_config = DeltaScanConfigBuilder::default()
+            .with_schema(snapshot.input_schema().map_err(PythonError::from)?)
             .build(&snapshot)
             .map_err(PythonError::from)?;
 
@@ -59,15 +62,16 @@ impl PyQueryBuilder {
     /// **NOTE:** Since this function returns a materialized Python list of `RecordBatch`
     /// instances, it may result unexpected memory consumption for queries which return large data
     /// sets.
-    pub fn execute(&self, py: Python, sql: &str) -> PyResult<PyObject> {
-        let batches = py.allow_threads(|| {
+    pub fn execute(&self, py: Python, sql: &str) -> PyResult<PyRecordBatchReader> {
+        let stream = py.allow_threads(|| {
             rt().block_on(async {
                 let df = self.ctx.sql(sql).await?;
-                df.collect().await
+                df.execute_stream().await
             })
             .map_err(PythonError::from)
         })?;
 
-        batches.to_pyarrow(py)
+        let stream = convert_stream_to_reader(stream);
+        Ok(PyRecordBatchReader::new(stream))
     }
 }

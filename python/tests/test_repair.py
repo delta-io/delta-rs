@@ -3,9 +3,9 @@ import os
 from deltalake import CommitProperties, DeltaTable, write_deltalake
 
 
-def test_repair_with_dry_run(tmp_path, sample_data):
-    write_deltalake(tmp_path, sample_data, mode="append")
-    write_deltalake(tmp_path, sample_data, mode="append")
+def test_repair_with_dry_run(tmp_path, sample_table):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    write_deltalake(tmp_path, sample_table, mode="append")
     dt = DeltaTable(tmp_path)
     os.remove(dt.file_uris()[0])
 
@@ -17,9 +17,9 @@ def test_repair_with_dry_run(tmp_path, sample_data):
     assert last_action["operation"] == "WRITE"
 
 
-def test_repair_wo_dry_run(tmp_path, sample_data):
-    write_deltalake(tmp_path, sample_data, mode="append")
-    write_deltalake(tmp_path, sample_data, mode="append")
+def test_repair_wo_dry_run(tmp_path, sample_table):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    write_deltalake(tmp_path, sample_table, mode="append")
     dt = DeltaTable(tmp_path)
     os.remove(dt.file_uris()[0])
 
