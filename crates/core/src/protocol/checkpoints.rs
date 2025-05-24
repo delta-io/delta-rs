@@ -8,6 +8,7 @@ use arrow_json::ReaderBuilder;
 use arrow_schema::ArrowError;
 
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::{Error, ObjectStore};
@@ -355,7 +356,7 @@ fn parquet_bytes_from_state(
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        (&schema).try_into()?,
+        (&schema).try_into_arrow()?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
         state.table_config().write_stats_as_json(),

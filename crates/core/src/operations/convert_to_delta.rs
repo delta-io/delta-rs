@@ -6,6 +6,8 @@ use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
 use arrow_schema::{ArrowError, Schema as ArrowSchema};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::schema::StructType;
 use futures::future::{self, BoxFuture};
 use futures::TryStreamExt;
 use indexmap::IndexMap;
@@ -21,7 +23,7 @@ use crate::kernel::transaction::CommitProperties;
 use crate::logstore::StorageConfig;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
-    kernel::{scalars::ScalarExt, Add, DataType, Schema, StructField},
+    kernel::{scalars::ScalarExt, Add, DataType, StructField},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
@@ -414,7 +416,7 @@ impl ConvertToDeltaBuilder {
 
         // Merge parquet file schemas
         // This step is needed because timestamp will not be preserved when copying files in S3. We can't use the schema of the latest parqeut file as Delta table's schema
-        let schema = Schema::try_from(&ArrowSchema::try_merge(arrow_schemas)?)?;
+        let schema: StructType = (&ArrowSchema::try_merge(arrow_schemas)?).try_into_kernel()?;
         let mut schema_fields = schema.fields().collect_vec();
         schema_fields.append(&mut partition_schema_fields.values().collect::<Vec<_>>());
 

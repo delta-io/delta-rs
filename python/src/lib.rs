@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
+use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use deltalake::arrow::compute::concat_batches;
@@ -297,7 +298,7 @@ impl RawDeltaTable {
     }
 
     pub fn check_can_write_timestamp_ntz(&self, schema: PyArrowType<ArrowSchema>) -> PyResult<()> {
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into_kernel().map_err(PythonError::from)?;
         // Need to unlock to access the shared reference to &DeltaTableState
         match self._table.lock() {
             Ok(table) => Ok(PROTOCOL
@@ -1216,7 +1217,7 @@ impl RawDeltaTable {
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
 
-            let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+            let schema: StructType = (&schema.0).try_into_kernel().map_err(PythonError::from)?;
 
             let existing_schema = self.with_table(|t| {
                 t.get_schema()
@@ -1925,6 +1926,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
+        Map(map) => {
+            let py_map = PyDict::new(py);
+            for (key, value) in map.pairs() {
+                py_map.set_item(scalar_to_py(key, py_date)?, scalar_to_py(value, py_date)?)?;
+            }
+            py_map.into_py_any(py)?
+        }
     };
 
     Ok(val.into_bound(py))
@@ -2303,7 +2311,7 @@ fn create_deltalake(
             .map_err(PythonError::from)?;
 
         let mode = mode.parse().map_err(PythonError::from)?;
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into_kernel().map_err(PythonError::from)?;
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
@@ -2366,7 +2374,7 @@ fn create_table_with_add_actions(
             .build()
             .map_err(PythonError::from)?;
 
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+        let schema: StructType = (&schema.0).try_into_kernel().map_err(PythonError::from)?;
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
@@ -2425,7 +2433,9 @@ fn convert_to_deltalake(
         let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
 
         if let Some(part_schema) = partition_schema {
-            let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
+            let schema: StructType = (&part_schema.0)
+                .try_into_kernel()
+                .map_err(PythonError::from)?;
             builder = builder.with_partition_schema(schema.fields().cloned());
         }
 

@@ -14,6 +14,7 @@ use arrow_array::{
 use arrow_cast::cast;
 use arrow_cast::parse::Parser;
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::table_features::{validate_schema_column_mapping, ColumnMappingMode};
 use itertools::Itertools;
 
@@ -155,7 +156,7 @@ impl DeltaTableState {
                             .ok_or(DeltaTableError::MetadataError(format!(
                                 "Invalid partition column {name}"
                             )))?;
-                    Ok(field.data_type().try_into()?)
+                    Ok(field.data_type().try_into_arrow()?)
                 },
             )
             .collect::<Result<_, DeltaTableError>>()?;
@@ -463,7 +464,7 @@ impl DeltaTableState {
                     Ok(Arc::new(arrow::array::Int64Array::from(values)))
                 })?);
 
-                let arrow_type: arrow::datatypes::DataType = datatype.try_into()?;
+                let arrow_type: arrow::datatypes::DataType = datatype.try_into_arrow()?;
 
                 // Min and max are collected for primitive values, not list or maps
                 let min_values = if matches!(datatype, DeltaDataType::Primitive(_)) {

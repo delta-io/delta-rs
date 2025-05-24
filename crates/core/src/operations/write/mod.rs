@@ -34,6 +34,7 @@ pub mod writer;
 use arrow_schema::Schema;
 pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
+use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
 use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
@@ -360,7 +361,7 @@ impl WriteBuilder {
             .input
             .clone()
             .ok_or::<DeltaTableError>(WriteError::MissingData.into())?;
-        let schema: StructType = input.schema().as_arrow().try_into()?;
+        let schema: StructType = input.schema().as_arrow().try_into_kernel()?;
 
         match &self.snapshot {
             Some(snapshot) => {
@@ -556,7 +557,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // Maybe create schema action
             if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
                 if let Some(snapshot) = &this.snapshot {
-                    let schema_struct: StructType = schema.clone().try_into()?;
+                    let schema_struct: StructType = schema.clone().try_into_kernel()?;
                     // Verify if delta schema changed
                     if &schema_struct != snapshot.schema() {
                         let current_protocol = snapshot.protocol();
@@ -621,7 +622,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
                 if matches!(this.mode, SaveMode::Overwrite) {
-                    let delta_schema: StructType = schema.as_ref().try_into()?;
+                    let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
                     // Update metadata with new schema if there is a change
                     if &delta_schema != snapshot.schema() {
                         let mut metadata = snapshot.metadata().clone();
@@ -773,6 +774,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use itertools::Itertools;
     use serde_json::{json, Value};
 
@@ -1615,7 +1617,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let schema = Arc::new(ArrowSchema::try_from(delta_schema)?);
+        let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1688,7 +1690,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let schema = Arc::new(ArrowSchema::try_from(delta_schema)?);
+        let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1762,7 +1764,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let schema = Arc::new(ArrowSchema::try_from(delta_schema)?);
+        let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),

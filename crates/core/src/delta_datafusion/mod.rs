@@ -80,6 +80,7 @@ use datafusion_physical_plan::{
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_sql::planner::ParserOptions;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -215,13 +216,13 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
     let fields = schema
         .fields()
         .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
-        .map(|f| f.try_into())
+        .map(|f| f.try_into_arrow())
         .chain(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
             meta.partition_columns.iter().map(|partition_col| {
                 let f = schema.field(partition_col).unwrap();
-                let field = Field::try_from(f)?;
+                let field: Field = f.try_into_arrow()?;
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
