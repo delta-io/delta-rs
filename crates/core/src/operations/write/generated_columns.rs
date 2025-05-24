@@ -2,6 +2,7 @@ use crate::table::state::DeltaTableState;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{col, when, Expr, ExprSchemable};
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
 
 use crate::{kernel::DataCheck, table::GeneratedColumn, DeltaResult};
@@ -75,10 +76,7 @@ pub fn add_generated_columns(
             generated_col.get_name(),
             when(col(col_name).is_null(), generation_expr)
                 .otherwise(col(col_name))?
-                .cast_to(
-                    &arrow_schema::DataType::try_from(&generated_col.data_type)?,
-                    df.schema(),
-                )?,
+                .cast_to(&((&generated_col.data_type).try_into_arrow()?), df.schema())?,
         )?
     }
     Ok(df)

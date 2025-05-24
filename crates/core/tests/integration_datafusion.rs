@@ -57,6 +57,7 @@ mod local {
         LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
     };
     use datafusion_physical_plan::displayable;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
@@ -124,7 +125,7 @@ mod local {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
-        let table_schema: StructType = batches[0].schema().try_into().unwrap();
+        let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
         let mut table = DeltaOps::try_from_uri(table_uri)
             .await
@@ -376,7 +377,7 @@ mod local {
             &ctx,
             &DeltaLogicalCodec {},
         )?);
-        let schema = StructType::try_from(source_scan.schema().as_arrow()).unwrap();
+        let schema: StructType = source_scan.schema().as_arrow().try_into_kernel().unwrap();
         let fields = schema.fields().cloned();
 
         dbg!(schema.fields().collect_vec().clone());
@@ -439,7 +440,7 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        // Validate a table that contains statisitics for all files
+        // Validate a table that contains statistics for all files
         let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
@@ -477,7 +478,7 @@ mod local {
         ];
         assert_batches_sorted_eq!(&expected, &actual);
 
-        // Validate a table that does not contain column statisitics
+        // Validate a table that does not contain column statistics
         let table = open_table("../test/tests/data/delta-0.2.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 

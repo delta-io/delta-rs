@@ -374,7 +374,10 @@ mod tests {
     use arrow::array::ArrayData;
     use arrow_array::{Array, BinaryArray, MapArray, RecordBatch, StringArray, StructArray};
     use arrow_buffer::{Buffer, ToByteSlice};
-    use delta_kernel::schema::{DataType, MapType, PrimitiveType, StructField, StructType};
+    use delta_kernel::{
+        engine::arrow_conversion::{TryIntoArrow, TryIntoKernel},
+        schema::{DataType, MapType, PrimitiveType, StructField, StructType},
+    };
 
     use super::*;
 
@@ -830,18 +833,16 @@ mod tests {
 
         let map_array = MapArray::from(map_data);
 
-        let schema =
-            <arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(&StructType::new(vec![
-                StructField::new(
-                    "example".to_string(),
-                    DataType::Map(Box::new(MapType::new(
-                        DataType::Primitive(PrimitiveType::String),
-                        DataType::Primitive(PrimitiveType::Binary),
-                        false,
-                    ))),
-                    false,
-                ),
-            ]))
+        let schema: arrow::datatypes::Schema = (&StructType::new(vec![StructField::new(
+            "example".to_string(),
+            DataType::Map(Box::new(MapType::new(
+                DataType::Primitive(PrimitiveType::String),
+                DataType::Primitive(PrimitiveType::Binary),
+                false,
+            ))),
+            false,
+        )]))
+            .try_into_arrow()
             .expect("Could not get schema");
 
         let record_batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_array)])
@@ -982,6 +983,6 @@ mod tests {
             ),
             true,
         ));
-        let _converted: StructField = field.as_ref().try_into().unwrap();
+        let _converted: StructField = field.as_ref().try_into_kernel().unwrap();
     }
 }
