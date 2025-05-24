@@ -254,7 +254,7 @@ Here’s the output of the command:
  'preserveInsertionOrder': True}
 ```
 
-The optimize operation has added 5 new files and marked 100 exisitng files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.
+The optimize operation has added 5 new files and marked 100 exiting files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.
 
 Let’s append some more data to the Delta table and see how we can selectively run optimize on the new data that’s added.
 
@@ -311,10 +311,10 @@ We can use `get_add_actions()` to introspect the table state. We can see that `2
     let ctx = SessionContext::new();
     ctx.register_batch("observations", batch.clone())?;
     let df = ctx.sql("
-    SELECT \"partition.date\", 
-            COUNT(*) 
-    FROM observations 
-    GROUP BY \"partition.date\" 
+    SELECT \"partition.date\",
+            COUNT(*)
+    FROM observations
+    GROUP BY \"partition.date\"
     ORDER BY \"partition.date\"").await?;
     df.show().await?;
 
@@ -416,7 +416,7 @@ This optimize operation tombstones 21 small data files and adds one file with al
 }
 ```
 
-The trasaction log indicates that many files have been tombstoned and one file is added, as expected.
+The transaction log indicates that many files have been tombstoned and one file is added, as expected.
 
 The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log.  The optimize command doesn’t physically delete the Parquet file from storage.  Optimize performs a “logical remove” not a “physical remove”.
 
@@ -493,7 +493,7 @@ Delta tables can accumulate small files for a variety of reasons:
 
 * User error: users can accidentally write files that are too small.  Users should sometimes repartition in memory before writing to disk to avoid appending files that are too small.
 * Frequent appends: systems that append more often tend to append more smaller files.  A pipeline that appends every minute will generally generate ten times as many small files compared to a system that appends every ten minutes.
-* Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.  
+* Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.
 
 ## Conclusion
 

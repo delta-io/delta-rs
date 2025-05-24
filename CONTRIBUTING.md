@@ -60,7 +60,7 @@ make build-docs
 
 *These are just some basic steps/components to get you started, there are many other very useful extensions for VSCode*
 
-- For a better Rust development experience, install [rust extention](https://marketplace.visualstudio.com/items?itemName=1YiB.rust-bundle)
+- For a better Rust development experience, install [rust extension](https://marketplace.visualstudio.com/items?itemName=1YiB.rust-bundle)
 - For debugging Rust code, install [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb). The extension should even create Debug launch configurations for the project if you allow it, an easy way to get started. Just set a breakpoint and run the relevant configuration.
 - For debugging from Python into Rust, follow this procedure:
 1. Add this to `.vscode/launch.json`
@@ -82,9 +82,7 @@ make build-docs
 2. Add a `breakpoint()` statement somewhere in your Python code (main function or at any point in Python code you know will be executed when you run it)
 3. Add a breakpoint in Rust code in VSCode editor where you want to drop into the debugger
 4. Run the relevant Python code function in your terminal, execution should drop into the Python debugger showing `PDB` prompt
-5. Run the following in that promt to get the Python process ID: `import os; os.getpid()`
+5. Run the following in that prompt to get the Python process ID: `import os; os.getpid()`
 6. Run the `LLDB Attach to Python` from the `Run and Debug` panel of VSCode. This will prompt you for a Process ID to attach to, enter the Python process ID obtained earlier (this will also be in the dropdown but that dropdown will have many process IDs)
 7. LLDB make take couple of seconds to attach to the process
-8. When the debugger is attached to the process (you will notice the debugger panels get filled with extra info), enter `c`+Enter in the `PDB` prompt in your terminal - the execution should continue until the breakpoint in Rust code is hit. From this point it's a standard debugging procecess.
-
-
+8. When the debugger is attached to the process (you will notice the debugger panels get filled with extra info), enter `c`+Enter in the `PDB` prompt in your terminal - the execution should continue until the breakpoint in Rust code is hit. From this point it's a standard debugging process.

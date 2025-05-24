@@ -476,7 +476,7 @@ def test_add_features_disallowed_protocol_increase(existing_sample_table: DeltaT
         )
 
 
-def test_add_feautres(existing_sample_table: DeltaTable):
+def test_add_features(existing_sample_table: DeltaTable):
     existing_sample_table.alter.add_feature(
         feature=features,
         allow_protocol_versions_increase=True,

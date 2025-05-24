@@ -4,17 +4,17 @@ The merge benchmarks are similar to the ones used by [Delta Spark](https://githu
 
 ## Dataset
 
-Databricks maintains a public S3 bucket of the TPC-DS dataset with various factor where requesters must pay to download this dataset. Below is an example of how to list the 1gb scale factor 
+Databricks maintains a public S3 bucket of the TPC-DS dataset with various factor where requesters must pay to download this dataset. Below is an example of how to list the 1gb scale factor
 
 ```
 aws s3api list-objects --bucket devrel-delta-datasets --request-payer requester --prefix tpcds-2.13/tpcds_sf1_parquet/web_returns/
 ```
 
-You can generate the TPC-DS dataset yourself by downloading and compiling [the generator](https://www.tpc.org/tpc_documents_current_versions/current_specifications5.asp) 
+You can generate the TPC-DS dataset yourself by downloading and compiling [the generator](https://www.tpc.org/tpc_documents_current_versions/current_specifications5.asp)
 You may need to update the CFLAGS to include `-fcommon` to compile on newer versions of GCC.
 
 ## Commands
-These commands can be executed from the root of the benchmark crate. Some commands depend on the existance of the TPC-DS Dataset existing.
+These commands can be executed from the root of the benchmark crate. Some commands depend on the existence of the TPC-DS Dataset existing.
 
 ### Convert
 Converts a TPC-DS web_returns csv into a Delta table
@@ -33,10 +33,10 @@ group_id: Used to group all tests that executed as a part of this call. Default 
 name: The benchmark name that was executed
 sample: The iteration number for a given benchmark name
 duration_ms: How long the benchmark took in ms
-data: Free field to pack any additonal data
+data: Free field to pack any additional data
 
 ```
- cargo run --release --bin merge -- standard data/web_returns 1 data/merge_results 
+ cargo run --release --bin merge -- standard data/web_returns 1 data/merge_results
 ```
 
 ### Compare

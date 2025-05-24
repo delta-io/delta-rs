@@ -296,7 +296,7 @@ def test_set_table_properties(
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_add_feautres(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
+def test_add_features(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
     write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
     dt.alter.add_feature(

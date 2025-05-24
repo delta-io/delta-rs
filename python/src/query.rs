@@ -32,7 +32,7 @@ impl PyQueryBuilder {
     /// Register the given [RawDeltaTable] into the [SessionContext] using the provided
     /// `table_name`
     ///
-    /// Once called, the provided `delta_table` will be referencable in SQL queries so long as
+    /// Once called, the provided `delta_table` will be referenceable in SQL queries so long as
     /// another table of the same name is not registered over it.
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
         let snapshot = delta_table.cloned_state()?;

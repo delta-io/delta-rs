@@ -1,6 +1,6 @@
 # Appending to and overwriting a Delta Lake table
 
-This section explains how to append to an exising Delta table and how to overwrite a Delta table.
+This section explains how to append to an existing Delta table and how to overwrite a Delta table.
 
 ## Delta Lake append transactions
 
@@ -61,7 +61,7 @@ Now let's see how to perform an overwrite transaction.
 
 ## Delta Lake overwrite transactions
 
-Now let's see how to overwrite the exisitng Delta table.
+Now let's see how to overwrite the exiting Delta table.
 === "Python"
     ```python
     df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
@@ -94,7 +94,7 @@ Here are the contents of the Delta table after the overwrite operation:
 +-------+----------+
 ```
 
-Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessable.
+Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessible.
 
 === "Python"
 
