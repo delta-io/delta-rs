@@ -4,6 +4,7 @@ use std::sync::{Arc, LazyLock};
 
 use arrow_array::RecordBatch;
 use chrono::Utc;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -200,7 +201,7 @@ impl LogSegment {
     ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
         let root_store = log_store.root_object_store(None);
 
-        let decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
+        let decoder = json::get_decoder(Arc::new(read_schema.try_into_arrow()?), config)?;
         let stream = futures::stream::iter(self.commit_files.iter())
             .map(move |meta| {
                 let root_store = root_store.clone();
@@ -330,7 +331,7 @@ impl LogSegment {
         config: &DeltaTableConfig,
     ) -> DeltaResult<impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_> {
         let log_path = table_root.child("_delta_log");
-        let mut decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
+        let mut decoder = json::get_decoder(Arc::new(read_schema.try_into_arrow()?), config)?;
 
         let mut commit_data = Vec::new();
         for commit in commits {

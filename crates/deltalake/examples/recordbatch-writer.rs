@@ -7,10 +7,11 @@
  *      <https://github.com/buoyant-data/demo-recordbatch-writer>
  */
 use chrono::prelude::*;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::{DataType, PrimitiveType, StructField, StructType};
+use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
@@ -161,10 +162,10 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
     let metadata = table
         .metadata()
         .expect("Failed to get metadata for the table");
-    let arrow_schema = <deltalake::arrow::datatypes::Schema as TryFrom<&StructType>>::try_from(
-        &metadata.schema().expect("failed to get schema"),
-    )
-    .expect("Failed to convert to arrow schema");
+    let arrow_schema: deltalake::arrow::datatypes::Schema =
+        (&(metadata.schema().expect("failed to get schema")))
+            .try_into_arrow()
+            .expect("Failed to convert to arrow schema");
     let arrow_schema_ref = Arc::new(arrow_schema);
 
     let mut ts = vec![];

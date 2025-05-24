@@ -475,6 +475,7 @@ pub(crate) mod tests {
     use chrono::NaiveDateTime;
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_batches_sorted_eq;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 
     use crate::test_utils::TestSchemas;
@@ -811,7 +812,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let schema = Arc::new(Schema::try_from(delta_schema)?);
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
