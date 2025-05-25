@@ -63,7 +63,7 @@ impl PartialOrd for ScalarHelper<'_> {
                 decimal1.bits().partial_cmp(&decimal2.bits())
             }
             // TODO should we make an assumption about the ordering of nulls?
-            // rigth now this is only used for internal purposes.
+            // right now this is only used for internal purposes.
             (Null(_), _) => Some(Ordering::Less),
             (_, Null(_)) => Some(Ordering::Greater),
             _ => None,
@@ -294,11 +294,11 @@ impl TryFrom<&str> for DeltaTablePartition {
     /// Try to create a DeltaTable partition from a HivePartition string.
     /// Returns a DeltaTableError if the string is not in the form of a HivePartition.
     fn try_from(partition: &str) -> Result<Self, DeltaTableError> {
-        let partition_splitted: Vec<&str> = partition.split('=').collect();
-        match partition_splitted {
-            partition_splitted if partition_splitted.len() == 2 => Ok(DeltaTablePartition {
-                key: partition_splitted[0].to_owned(),
-                value: Scalar::String(partition_splitted[1].to_owned()),
+        let partition_split: Vec<&str> = partition.split('=').collect();
+        match partition_split {
+            partition_split if partition_split.len() == 2 => Ok(DeltaTablePartition {
+                key: partition_split[0].to_owned(),
+                value: Scalar::String(partition_split[1].to_owned()),
             }),
             _ => Err(DeltaTableError::PartitionError {
                 partition: partition.to_string(),
