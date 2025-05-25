@@ -371,6 +371,18 @@ impl DeltaTable {
         self.update_incremental(None).await
     }
 
+    #[deprecated(
+        since = "0.22.4",
+        note = "peek_next_commit has moved to the logstore, use table.log_store().peek_next_commit() instead please :)"
+    )]
+    /// Get the list of actions for the next commit
+    pub async fn peek_next_commit(
+        &self,
+        current_version: i64,
+    ) -> Result<PeekCommit, DeltaTableError> {
+        self.log_store().peek_next_commit(current_version).await
+    }
+
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(
