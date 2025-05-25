@@ -530,3 +530,96 @@ def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
     with pytest.raises(DeltaError):
         # Can't set metadata for non existing column.
         dt.alter.set_column_metadata("non_existing_column", {"comment": "my comment"})
+
+
+def test_set_table_name(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    initial_metadata = dt.metadata()
+    assert initial_metadata.name is None
+
+    dt.alter.set_table_name("my_awesome_table")
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.name == "my_awesome_table"
+
+    assert dt.version() == 1
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_description(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    initial_metadata = dt.metadata()
+    assert initial_metadata.description is None
+
+    dt.alter.set_table_description("A wonderful sample table for testing")
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.description == "A wonderful sample table for testing"
+
+    assert dt.version() == 1
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_name_overwrite(tmp_path: pathlib.Path, sample_table: Table):
+    """Test overwriting an existing table name."""
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.set_table_name("initial_name")
+    dt.alter.set_table_name("new_name")
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.name == "new_name"
+
+
+def test_set_table_description_overwrite(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.set_table_description("initial description")
+    dt.alter.set_table_description("updated description")
+
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.description == "updated description"
+
+    assert dt.version() == 2
+
+
+def test_set_table_name_character_limit(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    name_255_chars = "x" * 255
+    dt.alter.set_table_name(name_255_chars)
+    assert dt.metadata().name == name_255_chars
+
+    name_256_chars = "y" * 256
+    with pytest.raises(DeltaError, match="Table name cannot exceed 255 characters"):
+        dt.alter.set_table_name(name_256_chars)
+
+
+def test_set_table_description_character_limit(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    desc_4000_chars = "x" * 4000
+    dt.alter.set_table_description(desc_4000_chars)
+    assert dt.metadata().description == desc_4000_chars
+
+    desc_4001_chars = "y" * 4001
+    with pytest.raises(
+        DeltaError, match="Table description cannot exceed 4,000 characters"
+    ):
+        dt.alter.set_table_description(desc_4001_chars)

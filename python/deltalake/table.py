@@ -1782,6 +1782,56 @@ class TableAlterer:
             commit_properties,
         )
 
+    def set_table_name(
+        self,
+        name: str,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
+    ) -> None:
+        """
+        Set the name of the table.
+
+        Args:
+            name: the name of the table
+            commit_properties: properties of the transaction commit. If None, default values are used.
+                              Note: This parameter is not yet implemented and will be ignored.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+                                       Note: This parameter is not yet implemented and will be ignored.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_name("new_table_name")
+            ```
+        """
+        self.table._table.set_table_name(name)
+
+    def set_table_description(
+        self,
+        description: str,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
+    ) -> None:
+        """
+        Set the description of the table.
+
+        Args:
+            description: the description of the table
+            commit_properties: properties of the transaction commit. If None, default values are used.
+                              Note: This parameter is not yet implemented and will be ignored.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+                                       Note: This parameter is not yet implemented and will be ignored.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_description("new_table_description")
+            ```
+        """
+        self.table._table.set_table_description(description)
+
     def set_column_metadata(
         self,
         column: str,
