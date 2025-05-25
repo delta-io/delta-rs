@@ -47,7 +47,7 @@
 //!
 //! ## Configuration
 //!
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
@@ -59,6 +59,7 @@ use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
 use delta_kernel::engine::default::DefaultEngine;
+use delta_kernel::log_segment::LogSegment;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::{AsAny, Engine};
 use futures::{StreamExt, TryStreamExt};
@@ -69,13 +70,13 @@ use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::RuntimeFlavor;
+use tokio::task::spawn_blocking;
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::Action;
-use crate::protocol::{get_last_checkpoint, ProtocolError};
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::config::StorageConfig;
@@ -342,6 +343,14 @@ pub trait LogStore: Send + Sync + AsAny {
     /// [Path] to Delta log
     fn log_path(&self) -> &Path {
         &DELTA_LOG_PATH
+    }
+
+    #[deprecated(
+        since = "0.1.0",
+        note = "DO NOT USE: Just a stop grap to support lakefs during kernel migration"
+    )]
+    fn transaction_url(&self, _operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
+        Ok(base.clone())
     }
 
     /// Check if the location is a delta table location
@@ -657,68 +666,31 @@ pub async fn get_latest_version(
     log_store: &dyn LogStore,
     current_version: i64,
 ) -> DeltaResult<i64> {
-    let version_start = match get_last_checkpoint(log_store).await {
-        Ok(last_check_point) => last_check_point.version,
-        Err(ProtocolError::CheckpointNotFound) => -1, // no checkpoint
-        Err(e) => return Err(DeltaTableError::from(e)),
+    let current_version = if current_version < 0 {
+        0
+    } else {
+        current_version
     };
 
-    debug!("latest checkpoint version: {version_start}");
+    let storage = log_store.engine(None).await.storage_handler();
+    let log_root = log_store.log_root_url();
 
-    let version_start = max(current_version, version_start);
-
-    // list files to find max version
-    let version = async {
-        let mut max_version: i64 = version_start;
-        let prefix = log_store.log_path();
-        let offset_path = commit_uri_from_version(max_version);
-        let object_store = log_store.object_store(None);
-        let mut files = object_store.list_with_offset(Some(prefix), &offset_path);
-        let mut empty_stream = true;
-
-        while let Some(obj_meta) = files.next().await {
-            let obj_meta = obj_meta?;
-            let location_path: &Path = &obj_meta.location;
-            let part_count = location_path.prefix_match(prefix).unwrap().count();
-            if part_count > 1 {
-                // Per the spec, ignore any files in subdirectories.
-                // Spark may create these as uncommitted transactions which we don't want
-                //
-                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
-                // "Delta files are stored as JSON in a directory at the *root* of the table
-                // named _delta_log, and ... make up the log of all changes that have occurred to a table."
-                continue;
-            }
-            if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
-                max_version = max(max_version, log_version);
-                // also cache timestamp for version, for faster time-travel
-                // TODO: temporarily disabled because `version_timestamp` is not available in the [`LogStore`]
-                // self.version_timestamp
-                //     .insert(log_version, obj_meta.last_modified.timestamp());
-            }
-            empty_stream = false;
+    let segment = spawn_blocking(move || {
+        LogSegment::for_table_changes(storage.as_ref(), log_root, current_version as u64, None)
+    })
+    .await
+    .map_err(|e| DeltaTableError::Generic(e.to_string()))?
+    .map_err(|e| {
+        if e.to_string()
+            .contains(&format!("to have version {}", current_version))
+        {
+            DeltaTableError::InvalidVersion(current_version)
+        } else {
+            DeltaTableError::Generic(e.to_string())
         }
+    })?;
 
-        if max_version < 0 {
-            return Err(DeltaTableError::not_a_table(log_store.root_uri()));
-        }
-
-        // This implies no files were fetched during list_offset so either the starting_version is the latest
-        // or starting_version is invalid, so we use current_version -1, and do one more try.
-        if empty_stream {
-            let obj_meta = object_store
-                .head(&commit_uri_from_version(max_version))
-                .await;
-            if obj_meta.is_err() {
-                return Box::pin(get_latest_version(log_store, -1)).await;
-            }
-        }
-
-        Ok::<i64, DeltaTableError>(max_version)
-    }
-    .await?;
-
-    Ok(version)
+    Ok(segment.end_version as i64)
 }
 
 /// Default implementation for retrieving the earliest version
@@ -726,22 +698,28 @@ pub async fn get_earliest_version(
     log_store: &dyn LogStore,
     current_version: i64,
 ) -> DeltaResult<i64> {
-    let version_start = match get_last_checkpoint(log_store).await {
-        Ok(last_check_point) => last_check_point.version,
-        Err(ProtocolError::CheckpointNotFound) => {
-            // no checkpoint so start from current_version
-            current_version
-        }
-        Err(e) => {
-            return Err(DeltaTableError::from(e));
-        }
+    let current_version = if current_version < 0 {
+        0
+    } else {
+        current_version
     };
+
+    let storage = log_store.engine(None).await.storage_handler();
+    let log_root = log_store.log_root_url();
+
+    let segment = spawn_blocking(move || {
+        LogSegment::for_table_changes(storage.as_ref(), log_root, current_version as u64, None)
+    })
+    .await
+    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+
+    let version_start = segment.checkpoint_version.unwrap_or(current_version as u64);
 
     // list files to find min version
     let version = async {
-        let mut min_version: i64 = version_start;
+        let mut min_version: i64 = version_start as i64;
         let prefix = Some(log_store.log_path());
-        let offset_path = commit_uri_from_version(version_start);
+        let offset_path = commit_uri_from_version(version_start as i64);
         let object_store = log_store.object_store(None);
 
         // Manually filter until we can provide direction in https://github.com/apache/arrow-rs/issues/6274
