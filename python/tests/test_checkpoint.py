@@ -15,7 +15,6 @@ from deltalake import (
     QueryBuilder,
     write_deltalake,
 )
-from deltalake.exceptions import DeltaError
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -36,44 +35,6 @@ def test_checkpoint(tmp_path: pathlib.Path, sample_table: Table):
 
     assert last_checkpoint_path.exists()
     assert checkpoint_path.exists()
-
-
-def test_checkpoint_without_files(tmp_path: pathlib.Path, sample_table: Table):
-    tmp_table_path = tmp_path / "path" / "to" / "table"
-    checkpoint_path = tmp_table_path / "_delta_log" / "_last_checkpoint"
-    last_checkpoint_path = (
-        tmp_table_path / "_delta_log" / "00000000000000000000.checkpoint.parquet"
-    )
-
-    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
-    write_deltalake(
-        str(tmp_table_path),
-        sample_table,
-        configuration={"delta.checkpointInterval": "2"},
-    )
-
-    assert not checkpoint_path.exists()
-
-    delta_table = DeltaTable(str(tmp_table_path), without_files=True)
-    with pytest.raises(
-        DeltaError,
-        match="Table has not yet been initialized with files, therefore creating a checkpoint is not possible.",
-    ):
-        delta_table.create_checkpoint()
-
-    for i in range(3):
-        write_deltalake(delta_table, sample_table, mode="append")
-
-    assert not checkpoint_path.exists()
-
-    delta_table = DeltaTable(str(tmp_table_path), without_files=False)
-    delta_table.create_checkpoint()
-
-    assert checkpoint_path.exists()
-    last_checkpoint_path = (
-        tmp_table_path / "_delta_log" / "00000000000000000003.checkpoint.parquet"
-    )
-    assert last_checkpoint_path.exists()
 
 
 def setup_cleanup_metadata(tmp_path: pathlib.Path, sample_table: Table):

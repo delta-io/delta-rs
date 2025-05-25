@@ -550,6 +550,7 @@ mod tests {
     use arrow_schema::DataType;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1100,7 +1101,7 @@ mod tests {
                 true,
             ),
         ]);
-        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+        let arrow_schema: ArrowSchema = (&schema).try_into_arrow().unwrap();
 
         // Create the first batch
         let arrow_field = Field::new("element", DataType::Int32, false);
@@ -1170,7 +1171,7 @@ mod tests {
                 true,
             ),
         ]);
-        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+        let arrow_schema: ArrowSchema = (&schema).try_into_arrow().unwrap();
 
         // Create the first batch
         let arrow_field = Field::new("element", DataType::Int64, true);

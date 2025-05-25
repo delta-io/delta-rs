@@ -27,6 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -804,8 +805,10 @@ pub fn create_merge_plan(
         target_size,
         predicate: serde_json::to_string(filters).ok(),
     };
-    let file_schema =
-        arrow_schema_without_partitions(&Arc::new(snapshot.schema().try_into()?), partitions_keys);
+    let file_schema = arrow_schema_without_partitions(
+        &Arc::new(snapshot.schema().try_into_arrow()?),
+        partitions_keys,
+    );
 
     Ok(MergePlan {
         operations,

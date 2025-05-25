@@ -71,7 +71,7 @@ def _recursively_read_simple_table(executor_class: type[Executor], depth):
     if depth == 0:
         return
     # We use concurrent.futures.Executors instead of `threading.Thread` or `multiprocessing.Process` to that errors
-    # are re-rasied in the parent process/thread when we call `future.result()`.
+    # are re-raised in the parent process/thread when we call `future.result()`.
     with executor_class(max_workers=1) as executor:
         future = executor.submit(
             _recursively_read_simple_table, executor_class, depth - 1

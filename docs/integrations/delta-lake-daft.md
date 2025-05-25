@@ -206,4 +206,4 @@ Take a look at the notebook in the [`delta-examples` Github repository](https://
 
 Excited about Daft and want to contribute? Join them on [Github](https://github.com/Eventual-Inc/Daft) 🚀
 
-Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: `DAFT_ANALYTICS_ENABLED=0`. Read more in the [Daft documentation](https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/).
+Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is strictly non-identifiable metadata. You can disable telemetry by setting the following environment variable: `DAFT_ANALYTICS_ENABLED=0`. Read more in the [Daft documentation](https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/).

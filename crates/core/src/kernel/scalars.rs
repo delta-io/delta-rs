@@ -5,6 +5,7 @@ use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
 use delta_kernel::{
+    engine::arrow_conversion::TryIntoKernel as _,
     expressions::{Scalar, StructData},
     schema::StructField,
 };
@@ -76,7 +77,7 @@ impl ScalarExt for Scalar {
             Self::Null(_) => "null".to_string(),
             Self::Struct(_) => self.to_string(),
             Self::Array(_) => self.to_string(),
-            _ => unimplemented!(),
+            Self::Map(_) => self.to_string(),
         }
     }
 
@@ -97,7 +98,7 @@ impl ScalarExt for Scalar {
             return None;
         }
         if arr.is_null(index) {
-            return Some(Self::Null(arr.data_type().try_into().ok()?));
+            return Some(Self::Null(arr.data_type().try_into_kernel().ok()?));
         }
 
         match arr.data_type() {
@@ -195,7 +196,7 @@ impl ScalarExt for Scalar {
             Struct(fields) => {
                 let struct_fields = fields
                     .iter()
-                    .flat_map(|f| TryFrom::try_from(f.as_ref()))
+                    .flat_map(|f| f.as_ref().try_into_kernel())
                     .collect::<Vec<_>>();
                 let values = arr
                     .as_any()
@@ -283,7 +284,7 @@ impl ScalarExt for Scalar {
             Self::Null(_) => Value::Null,
             Self::Struct(_) => unimplemented!(),
             Self::Array(_) => unimplemented!(),
-            _ => unimplemented!(),
+            Self::Map(_) => unimplemented!(),
         }
     }
 }

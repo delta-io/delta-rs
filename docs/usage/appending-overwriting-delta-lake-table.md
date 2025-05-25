@@ -1,6 +1,6 @@
 # Appending to and overwriting a Delta Lake table
 
-This section explains how to append to an exising Delta table and how to overwrite a Delta table.
+This section explains how to append to an existing Delta table and how to overwrite a Delta table.
 
 ## Delta Lake append transactions
 
@@ -28,7 +28,7 @@ Append two additional rows of data to the table:
     ```
 
 === "Rust"
-    ```rust
+`rust
     let table = open_table("tmp/some-table").await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -41,7 +41,7 @@ Append two additional rows of data to the table:
                 "dd", "ee"
             ])),
         ])).with_save_mode(SaveMode::Append).await?;
-    ```
+    `
 
 Here are the updated contents of the Delta table:
 
@@ -61,15 +61,15 @@ Now let's see how to perform an overwrite transaction.
 
 ## Delta Lake overwrite transactions
 
-Now let's see how to overwrite the exisitng Delta table.
+Now let's see how to overwrite the existing Delta table.
 === "Python"
-    ```python
+`python
     df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
     write_deltalake("tmp/some-table", df, mode="overwrite")
-    ```
+    `
 
 === "Rust"
-    ```rust
+`rust
     let table = open_table("tmp/some-table").await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -82,7 +82,7 @@ Now let's see how to overwrite the exisitng Delta table.
                 "a", "b", "c",
             ])),
         ])).with_save_mode(SaveMode::Overwrite).await?;
-    ```
+    `
 Here are the contents of the Delta table after the overwrite operation:
 
 ```
@@ -94,7 +94,7 @@ Here are the contents of the Delta table after the overwrite operation:
 +-------+----------+
 ```
 
-Overwriting just performs a logical delete.  It doesn't physically remove the previous data from storage.  Time travel back to the previous version to confirm that the old version of the table is still accessable.
+Overwriting just performs a logical delete. It doesn't physically remove the previous data from storage. Time travel back to the previous version to confirm that the old version of the table is still accessible.
 
 === "Python"
 
@@ -103,11 +103,10 @@ Overwriting just performs a logical delete.  It doesn't physically remove the pr
     ```
 
 === "Rust"
-    ```rust
+`rust
     let mut table = open_table("tmp/some-table").await?;
     table.load_version(1).await?;
-    ```
-
+    `
 
 ```
 +-------+----------+

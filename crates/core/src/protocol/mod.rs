@@ -7,24 +7,20 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
-use std::sync::LazyLock;
 
 use arrow_schema::ArrowError;
-use futures::StreamExt;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
-use regex::Regex;
+use object_store::Error as ObjectStoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
-use crate::logstore::LogStore;
-use crate::table::CheckPoint;
 
 pub mod checkpoints;
-mod parquet_read;
 mod time_utils;
+
+pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
@@ -244,22 +240,12 @@ impl Eq for Add {}
 impl Add {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        match self.get_stats_parsed() {
-            Ok(Some(stats)) => Ok(Some(stats)),
-            Ok(None) => self.get_json_stats(),
-            Err(e) => {
-                error!(
-                    "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
-                    self.stats_parsed
-                );
-                self.get_json_stats()
-            }
-        }
+        self.get_json_stats()
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
             .map(|stats| serde_json::from_str(stats).map(|mut ps: PartialStats| ps.as_stats()))
@@ -607,83 +593,6 @@ pub enum OutputMode {
     Complete,
     /// Only rows with updates will be written when new or changed data is available.
     Update,
-}
-
-pub(crate) async fn get_last_checkpoint(
-    log_store: &dyn LogStore,
-) -> Result<CheckPoint, ProtocolError> {
-    let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
-    debug!("loading checkpoint from {last_checkpoint_path}");
-    match log_store
-        .object_store(None)
-        .get(&last_checkpoint_path)
-        .await
-    {
-        Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
-        Err(ObjectStoreError::NotFound { .. }) => {
-            match find_latest_check_point_for_version(log_store, i64::MAX).await {
-                Ok(Some(cp)) => Ok(cp),
-                _ => Err(ProtocolError::CheckpointNotFound),
-            }
-        }
-        Err(err) => Err(ProtocolError::ObjectStore { source: err }),
-    }
-}
-
-pub(crate) async fn find_latest_check_point_for_version(
-    log_store: &dyn LogStore,
-    version: i64,
-) -> Result<Option<CheckPoint>, ProtocolError> {
-    static CHECKPOINT_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap());
-    static CHECKPOINT_PARTS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap()
-    });
-
-    let mut cp: Option<CheckPoint> = None;
-    let object_store = log_store.object_store(None);
-    let mut stream = object_store.list(Some(log_store.log_path()));
-
-    while let Some(obj_meta) = stream.next().await {
-        // Exit early if any objects can't be listed.
-        // We exclude the special case of a not found error on some of the list entities.
-        // This error mainly occurs for local stores when a temporary file has been deleted by
-        // concurrent writers or if the table is vacuumed by another client.
-        let obj_meta = match obj_meta {
-            Ok(meta) => Ok(meta),
-            Err(ObjectStoreError::NotFound { .. }) => continue,
-            Err(err) => Err(err),
-        }?;
-        if let Some(captures) = CHECKPOINT_REGEX.captures(obj_meta.location.as_ref()) {
-            let curr_ver_str = captures.get(1).unwrap().as_str();
-            let curr_ver: i64 = curr_ver_str.parse().unwrap();
-            if curr_ver > version {
-                // skip checkpoints newer than max version
-                continue;
-            }
-            if cp.is_none() || curr_ver > cp.unwrap().version {
-                cp = Some(CheckPoint::new(curr_ver, 0, None));
-            }
-            continue;
-        }
-
-        if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(obj_meta.location.as_ref()) {
-            let curr_ver_str = captures.get(1).unwrap().as_str();
-            let curr_ver: i64 = curr_ver_str.parse().unwrap();
-            if curr_ver > version {
-                // skip checkpoints newer than max version
-                continue;
-            }
-            if cp.is_none() || curr_ver > cp.unwrap().version {
-                let parts_str = captures.get(2).unwrap().as_str();
-                let parts = parts_str.parse().unwrap();
-                cp = Some(CheckPoint::new(curr_ver, 0, Some(parts)));
-            }
-            continue;
-        }
-    }
-
-    Ok(cp)
 }
 
 #[cfg(test)]

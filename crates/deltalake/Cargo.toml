@@ -33,6 +33,7 @@ deltalake-hdfs = { version = "0.10.0", path = "../hdfs", optional = true }
 deltalake-lakefs = { version = "0.9.0", path = "../lakefs", optional = true }
 deltalake-catalog-glue = { version = "0.10.0", path = "../catalog-glue", optional = true }
 deltalake-catalog-unity = { version = "0.10.0", path = "../catalog-unity", optional = true }
+delta_kernel = { workspace = true }
 
 
 [features]

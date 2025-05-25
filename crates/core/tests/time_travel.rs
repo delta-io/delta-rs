@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 #[tokio::test]
 async fn time_travel_by_ds() {
-    // test time travel on a table with an uncommited delta in a .tmp subfolder
+    // test time travel on a table with an uncommitted delta in a .tmp subfolder
 
     // git does not preserve mtime, so we need to manually set it in the test
     let log_dir = "../test/tests/data/simple_table/_delta_log";
@@ -86,7 +86,7 @@ async fn time_travel_by_ds() {
     .unwrap();
     assert_eq!(table.version(), 4);
 
-    // Final append in .tmp subdir is uncommited and should be ignored
+    // Final append in .tmp subdir is uncommitted and should be ignored
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
         "2020-05-25T22:47:31-07:00",

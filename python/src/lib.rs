@@ -8,43 +8,23 @@ mod schema;
 mod utils;
 mod writer;
 
-use std::cmp::min;
-use std::collections::{HashMap, HashSet};
-use std::ffi::CString;
-use std::future::IntoFuture;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use crate::error::{DeltaError, DeltaProtocolError, PythonError};
-use crate::features::TableFeatures;
-use crate::filesystem::FsConfig;
-use crate::merge::PyMergeBuilder;
-use crate::query::PyQueryBuilder;
-use crate::reader::convert_stream_to_reader;
-use crate::schema::{schema_to_pyobject, Field};
-use crate::utils::rt;
-use crate::writer::to_lazy_table;
 use arrow::pyarrow::PyArrowType;
+use arrow_schema::SchemaRef;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
-use deltalake::arrow::compute::concat_batches;
-use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
 use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
+use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
+    scalars::ScalarExt, Action, Add, LogicalFile, Remove, StructType, Transaction,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -56,10 +36,10 @@ use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionSt
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
+use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
-use deltalake::operations::table_changes::TableChangesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
@@ -76,9 +56,31 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
+use pyo3_arrow::export::Arro3RecordBatchReader;
+use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader, PySchema as PyArrowSchema};
+use schema::PySchema;
 use serde_json::{Map, Value};
+use std::cmp::min;
+use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
+use std::future::IntoFuture;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use std::time;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::log::*;
 use uuid::Uuid;
+use writer::maybe_lazy_cast_reader;
+
+use crate::error::{DeltaError, DeltaProtocolError, PythonError};
+use crate::features::TableFeatures;
+use crate::filesystem::FsConfig;
+use crate::merge::PyMergeBuilder;
+use crate::query::PyQueryBuilder;
+use crate::reader::convert_stream_to_reader;
+use crate::schema::{schema_to_pyobject, Field};
+use crate::utils::rt;
+use crate::writer::to_lazy_table;
 
 #[global_allocator]
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
@@ -1926,7 +1928,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
-        _ => unimplemented!(),
+        Map(map) => {
+            let py_map = PyDict::new(py);
+            for (key, value) in map.pairs() {
+                py_map.set_item(scalar_to_py(key, py_date)?, scalar_to_py(value, py_date)?)?;
+            }
+            py_map.into_py_any(py)?
+        }
     };
 
     Ok(val.into_bound(py))
@@ -1946,7 +1954,7 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
 /// they must be OR'd with is_null.
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
-    schema: &PyArrowType<ArrowSchema>,
+    schema: &SchemaRef,
     stats_columns: &[String],
     file_info: LogicalFile<'_>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -1975,7 +1983,7 @@ fn filestats_to_expression_next<'py>(
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
-                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, &schema.0)?;
+                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, &schema)?;
                 expressions.push(
                     py_field
                         .call1((&column,))?
@@ -2015,7 +2023,7 @@ fn filestats_to_expression_next<'py>(
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_minimum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema);
                         if let Ok(minimum) = maybe_minimum {
                             let field_expr = py_field.call1((field.name(),))?;
                             let expr = field_expr.call_method1("__ge__", (minimum,));
@@ -2044,7 +2052,7 @@ fn filestats_to_expression_next<'py>(
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_maximum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(maximum) = maybe_maximum {
                             let field_expr = py_field.call1((field.name(),))?;
                             let expr = field_expr.call_method1("__le__", (maximum,));
@@ -2077,21 +2085,6 @@ fn filestats_to_expression_next<'py>(
 #[pyfunction]
 fn rust_core_version() -> &'static str {
     deltalake::crate_version()
-}
-
-#[pyfunction]
-fn batch_distinct(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<RecordBatch>> {
-    let ctx = SessionContext::new();
-    let schema = batch.0.schema();
-    ctx.register_batch("batch", batch.0)
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let batches = rt()
-        .block_on(async { ctx.table("batch").await?.distinct()?.collect().await })
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-
-    Ok(PyArrowType(
-        concat_batches(&schema, &batches).map_err(PythonError::from)?,
-    ))
 }
 
 fn current_timestamp() -> i64 {
@@ -2227,11 +2220,12 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (table_uri, data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
-    data: PyArrowType<ArrowArrayStreamReader>,
+    data: PyRecordBatchReader,
+    batch_schema: PyArrowSchema,
     mode: String,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
