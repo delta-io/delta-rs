@@ -42,6 +42,9 @@ use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
+use deltalake::operations::update_table_metadata::{
+    TableMetadataUpdate, UpdateTableMetadataBuilder,
+};
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
@@ -56,7 +59,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
+use pyo3_arrow::export::Arro3RecordBatchReader;
 use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader, PySchema as PyArrowSchema};
 use schema::PySchema;
 use serde_json::{Map, Value};
@@ -1531,6 +1534,36 @@ impl RawDeltaTable {
         Ok(())
     }
 
+    pub fn set_table_name(&self, name: String) -> PyResult<()> {
+        let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
+            .with_update(TableMetadataUpdate::TableName(name));
+
+        if self.log_store()?.name() == "LakeFSLogStore" {
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
+    pub fn set_table_description(&self, description: String) -> PyResult<()> {
+        let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
+            .with_update(TableMetadataUpdate::TableDescription(description));
+
+        if self.log_store()?.name() == "LakeFSLogStore" {
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
     /// have been deleted or are malformed
     #[pyo3(signature = (dry_run = true, commit_properties = None, post_commithook_properties=None))]
@@ -1983,7 +2016,7 @@ fn filestats_to_expression_next<'py>(
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
-                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, &schema)?;
+                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, schema)?;
                 expressions.push(
                     py_field
                         .call1((&column,))?
@@ -2023,7 +2056,7 @@ fn filestats_to_expression_next<'py>(
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_minimum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema);
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(minimum) = maybe_minimum {
                             let field_expr = py_field.call1((field.name(),))?;
                             let expr = field_expr.call_method1("__ge__", (minimum,));
