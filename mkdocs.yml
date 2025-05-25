@@ -102,8 +102,6 @@ nav:
       - Architecture: how-delta-lake-works/architecture-of-delta-table.md
       - Transactions: how-delta-lake-works/delta-lake-acid-transactions.md
       - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
-  - Upgrade guides:
-      - Version 1.0.0: upgrade-guides/guide-1.0.0.md
 not_in_nav: |
   /_build/
 
