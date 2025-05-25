@@ -600,7 +600,7 @@ pub(super) mod tests {
             .table_builder()
             .build_storage()?;
         let root_store = log_store.root_object_store(None);
-        let log_url = log_store.table_root_url().join("_delta_log/")?;
+        let log_url = log_store.log_root_url();
         let log_path = Path::from_url_path(log_url.path())?;
         let mut store_url = log_url.clone();
         store_url.set_path("");

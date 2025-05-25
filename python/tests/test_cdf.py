@@ -726,10 +726,7 @@ def test_read_cdf_version_out_of_range():
     with pytest.raises(DeltaError) as e:
         dt.load_cdf(4).read_all()
 
-    assert (
-        "invalid version. start version 4 is greater than end version 3"
-        in str(e).lower()
-    )
+    assert "invalid table version: 4" in str(e).lower()
 
 
 def test_read_cdf_version_out_of_range_with_flag():
