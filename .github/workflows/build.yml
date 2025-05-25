@@ -18,9 +18,27 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
+  default_build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: '1.82'
+          override: true
+      - name: Format
+        run: cargo fmt -- --check
+      - name: Build
+        run: (cd crates/deltalake && cargo build)
+
   build:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         os:
           - ubuntu-latest
@@ -38,23 +56,37 @@ jobs:
           toolchain: '1.82'
           override: true
 
-      - name: Format
-        run: cargo fmt -- --check
-
-      - name: Default build
-        run: (cd crates/deltalake && cargo build)
-
       - name: build and lint with clippy
         run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
+      - name: Check docs
+        run: cargo doc --no-deps --features ${{ env.DEFAULT_FEATURES }}
+
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
 
-      - name: Check docs
-        run: cargo doc --no-deps --features ${{ env.DEFAULT_FEATURES }}
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          # The coverage action actually is running the Linux-based test.
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: '1.82'
+          override: true
 
       - name: Run tests
         run: |
