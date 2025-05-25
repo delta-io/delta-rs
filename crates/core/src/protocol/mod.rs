@@ -18,7 +18,6 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
 
 pub mod checkpoints;
-mod time_utils;
 
 pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 
