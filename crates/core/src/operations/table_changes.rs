@@ -1,45 +1,41 @@
+use crate::logstore::LogStore;
 use crate::{DeltaResult, DeltaTableError};
 use arrow_array::RecordBatch;
-use arrow_schema::Schema;
 use arrow_select::filter::filter_record_batch;
 use chrono::{DateTime, Utc};
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::prelude::SessionContext;
 use datafusion_physical_plan::ExecutionPlan;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine::default::executor::tokio::TokioBackgroundExecutor;
-use delta_kernel::engine::default::DefaultEngine;
-use delta_kernel::{Engine, Table};
+use delta_kernel::Table;
 use std::collections::HashMap;
-use std::fmt::Formatter;
-use std::str::FromStr;
 use std::sync::Arc;
-use url::Url;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct TableChangesBuilder {
     starting_version: Option<i64>,
     ending_version: Option<i64>,
     starting_timestamp: Option<DateTime<Utc>>,
     ending_timestamp: Option<DateTime<Utc>>,
-    engine: Option<Arc<dyn Engine>>,
+    log_store: Arc<dyn LogStore>,
     table_options: HashMap<String, String>,
     allow_out_of_range: bool,
     table_root: String,
     version_limit: Option<usize>,
 }
 
-impl std::fmt::Debug for TableChangesBuilder {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
-    }
-}
-
 impl TableChangesBuilder {
-    pub fn new(table_root: String) -> Self {
+    pub fn new(log_store: Arc<dyn LogStore>) -> Self {
         Self {
-            table_root,
-            ..Default::default()
+            starting_version: None,
+            ending_version: None,
+            starting_timestamp: None,
+            table_root: log_store.root_uri(),
+            log_store,
+            table_options: HashMap::new(),
+            ending_timestamp: None,
+            allow_out_of_range: false,
+            version_limit: None,
         }
     }
 
@@ -73,11 +69,6 @@ impl TableChangesBuilder {
         self
     }
 
-    pub fn with_engine(mut self, engine: Arc<dyn Engine>) -> Self {
-        self.engine = Some(engine);
-        self
-    }
-
     pub fn with_table_options(mut self, table_options: HashMap<String, String>) -> Self {
         self.table_options.extend(table_options.into_iter());
         self
@@ -87,39 +78,26 @@ impl TableChangesBuilder {
         self.version_limit = Some(limit);
         self
     }
-    pub fn build(self) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+    pub async fn build(self) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         if self.starting_version.is_none() && self.starting_timestamp.is_none() {
             return Err(DeltaTableError::NoStartingVersionOrTimestamp);
         }
-        let root_url = Url::from_str(&self.table_root)
-            .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
-
-        let engine = self.engine.unwrap_or(Arc::new(DefaultEngine::try_new(
-            &root_url,
-            self.table_options,
-            Arc::new(TokioBackgroundExecutor::new()),
-        )?));
-
+        let engine = self.log_store.engine(None).await;
         let table = Table::try_from_uri(&self.table_root)?;
-
-        let snapshot = Arc::new(table.snapshot(engine.as_ref(), None)?);
-        let history_manager =
-            table.history_manager_from_snapshot(engine.as_ref(), snapshot, self.version_limit)?;
-        let start_time = self.starting_timestamp.unwrap_or(DateTime::<Utc>::MIN_UTC);
-        let end_time = self.ending_timestamp.map(|ts| ts.timestamp());
-        let (start, end) = history_manager.timestamp_range_to_versions(
-            engine.as_ref(),
-            start_time.timestamp(),
-            end_time,
-        )?;
+        let (start, end) = if let Some(start) = self.starting_version {
+            (start as u64, self.ending_version.map(|et| et as u64))
+        } else {
+            let start_time = self.starting_timestamp.unwrap_or(DateTime::<Utc>::MIN_UTC);
+            let end_time = self.ending_timestamp.map(|ts| ts.timestamp());
+            table
+                .history_manager(engine.as_ref(), self.version_limit)?
+                .timestamp_range_to_versions(engine.as_ref(), start_time.timestamp(), end_time)?
+        };
 
         let table_changes = table
             .table_changes(engine.as_ref(), start, end)?
             .into_scan_builder()
             .build()?;
-
-        let schema_ref = table_changes.schema().clone();
-        let schema = Arc::new(Schema::try_from(schema_ref.as_ref())?);
         let changes = table_changes.execute(engine)?;
 
         let source = changes
@@ -143,7 +121,7 @@ impl TableChangesBuilder {
             })
             .collect::<DeltaResult<Vec<_>>>()?;
 
-        let memory_source = MemorySourceConfig::try_new_from_batches(schema, source)?;
+        let memory_source = MemorySourceConfig::try_new_from_batches(source[0].schema(), source)?;
         Ok(memory_source)
     }
 }

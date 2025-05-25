@@ -1318,6 +1318,7 @@ mod tests {
             .table_changes()
             .with_starting_version(0)
             .build()
+            .await
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
@@ -1407,6 +1408,7 @@ mod tests {
             .table_changes()
             .with_starting_version(0)
             .build()
+            .await
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
@@ -1417,21 +1419,19 @@ mod tests {
         .await
         .expect("Failed to collect batches");
 
-        let _ = arrow::util::pretty::print_batches(&batches);
-
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
-
+        let _ = arrow::util::pretty::print_batches(&batches);
         assert_batches_sorted_eq! {[
-        "+-------+------+------------------+-----------------+",
-        "| value | year | _change_type     | _commit_version |",
-        "+-------+------+------------------+-----------------+",
-        "| 1     | 2020 | insert           | 1               |",
-        "| 2     | 2020 | insert           | 1               |",
-        "| 2     | 2020 | update_preimage  | 2               |",
-        "| 2     | 2024 | update_postimage | 2               |",
-        "| 3     | 2024 | insert           | 1               |",
-        "+-------+------+------------------+-----------------+",
+        "+------+-------+------------------+-----------------+",
+        "| year | value | _change_type     | _commit_version |",
+        "+------+-------+------------------+-----------------+",
+        "| 2020 | 1     | insert           | 1               |",
+        "| 2020 | 2     | insert           | 1               |",
+        "| 2024 | 3     | insert           | 1               |",
+        "| 2020 | 2     | update_preimage  | 2               |",
+        "| 2024 | 2     | update_postimage | 2               |",
+        "+------+-------+------------------+-----------------+"
         ], &batches }
     }
 }

@@ -34,8 +34,8 @@ pub struct DeltaCdfTableProvider {
 
 impl DeltaCdfTableProvider {
     /// Build a DeltaCDFTableProvider
-    pub fn try_new(cdf_builder: TableChangesBuilder) -> DeltaResult<Self> {
-        let plan: Arc<dyn ExecutionPlan> = cdf_builder.build()?;
+    pub async fn try_new(cdf_builder: TableChangesBuilder) -> DeltaResult<Self> {
+        let plan: Arc<dyn ExecutionPlan> = cdf_builder.build().await?;
         let schema = plan.schema();
         Ok(DeltaCdfTableProvider { plan, schema })
     }
@@ -67,7 +67,6 @@ impl TableProvider for DeltaCdfTableProvider {
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
             let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
-
             Arc::new(FilterExec::try_new(physical_expr, self.plan.clone())?)
         } else {
             self.plan.clone()
