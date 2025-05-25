@@ -212,7 +212,10 @@ mod tests {
         let cols = schema.get_generated_columns().unwrap();
         assert_eq!(cols.len(), 1);
         assert_eq!(cols[0].data_type, DataType::INTEGER);
-        assert_eq!(cols[0].validation_expr, "gc <=> 5");
+        assert_eq!(
+            cols[0].validation_expr,
+            "gc = 5 OR (gc IS NULL AND 5 IS NULL)"
+        );
 
         let schema: StructType = serde_json::from_value(json!(
             {
