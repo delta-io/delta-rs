@@ -111,14 +111,14 @@ pub trait LogStoreFactory: Send + Sync {
     /// This method is responsible for creating a new instance of the [LogStore] implementation.
     ///
     /// ## Parameters
-    /// - `prefixed_store`: A reference to the object store.
+    /// - `store`: A reference to the object store.
     /// - `location`: A reference to the URL of the location.
     /// - `options`: A reference to the storage configuration options.
     ///
     /// It returns a [DeltaResult] containing an [Arc] to the newly created [LogStore] implementation.
     fn with_options(
         &self,
-        prefixed_store: ObjectStoreRef,
+        store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>>;
@@ -130,11 +130,11 @@ struct DefaultLogStoreFactory {}
 impl LogStoreFactory for DefaultLogStoreFactory {
     fn with_options(
         &self,
-        prefixed_store: ObjectStoreRef,
+        store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(prefixed_store, location, options))
+        Ok(default_logstore(store, location, options))
     }
 }
 

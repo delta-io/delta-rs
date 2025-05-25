@@ -90,11 +90,11 @@ impl ObjectStoreFactory for MountFactory {
 impl LogStoreFactory for MountFactory {
     fn with_options(
         &self,
-        prefixed_store: ObjectStoreRef,
+        store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(prefixed_store, location, options))
+        Ok(default_logstore(store, location, options))
     }
 }
 

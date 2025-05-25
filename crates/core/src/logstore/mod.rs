@@ -92,17 +92,9 @@ pub(crate) mod storage;
 
 /// Internal trait to handle object store configuration and initialization.
 trait LogStoreFactoryExt {
-    /// Create a new log store with the given options.
-    ///
-    /// ## Parameters
-    ///
-    /// - `root_store`: and instance of [`ObjectStoreRef`] with no prefix o.a. applied.
-    ///   I.e. pointing to the root of the onject store.
-    /// - `location`: The location of the the delta table (where the `_delta_log` directory is).
-    /// - `options`: The options for the log store.
     fn with_options_internal(
         &self,
-        root_store: ObjectStoreRef,
+        store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>>;
