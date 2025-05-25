@@ -56,9 +56,9 @@ pub fn lakefs_logstore(
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
 pub(crate) struct LakeFSLogStore {
-    pub(crate) prefixed_registry: DefaultObjectStoreRegistry,
+    pub(crate) storage: DefaultObjectStoreRegistry,
     root_registry: DefaultObjectStoreRegistry,
-    config: LogStoreConfig,
+    pub(crate) config: LogStoreConfig,
     pub(crate) client: LakeFSClient,
 }
 
@@ -67,23 +67,20 @@ impl LakeFSLogStore {
     ///
     /// # Arguments
     ///
-    /// * `prefixed_store` - A shared reference to an [`object_store::ObjectStore`]
-    ///   with "/" pointing at delta table root (i.e. where `_delta_log` is located).
-    /// * `root_store` - A shared reference to an [`object_store::ObjectStore`] with "/"
-    ///   pointing at root of the storage system.
+    /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(
-        prefixed_store: ObjectStoreRef,
+        storage: ObjectStoreRef,
         root_store: ObjectStoreRef,
         config: LogStoreConfig,
         client: LakeFSClient,
     ) -> Self {
-        let prefixed_registry = DefaultObjectStoreRegistry::new();
-        prefixed_registry.register_store(&config.location, prefixed_store);
+        let registry = DefaultObjectStoreRegistry::new();
+        registry.register_store(&config.location, storage);
         let root_registry = DefaultObjectStoreRegistry::new();
         root_registry.register_store(&config.location, root_store);
         Self {
-            prefixed_registry,
+            storage: registry,
             root_registry,
             config,
             client,
@@ -115,7 +112,7 @@ impl LakeFSLogStore {
     }
 
     fn register_object_store(&self, url: &Url, store: ObjectStoreRef) {
-        self.prefixed_registry.register_store(url, store);
+        self.storage.register_store(url, store);
     }
 
     fn register_root_object_store(&self, url: &Url, store: ObjectStoreRef) {
@@ -134,7 +131,7 @@ impl LakeFSLogStore {
         let transaction_url = Url::parse(&string_url).unwrap();
         Ok((
             string_url,
-            self.prefixed_registry.get_store(&transaction_url)?,
+            self.storage.get_store(&transaction_url)?,
             self.root_registry.get_store(&transaction_url)?,
         ))
     }
@@ -239,11 +236,7 @@ impl LogStore for LakeFSLogStore {
     }
 
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
-        read_commit_entry(
-            &self.prefixed_registry.get_store(&self.config.location)?,
-            version,
-        )
-        .await
+        read_commit_entry(&self.storage.get_store(&self.config.location)?, version).await
     }
 
     /// Tries to commit a prepared commit file. Returns [`TransactionError`]
@@ -362,10 +355,7 @@ impl LogStore for LakeFSLogStore {
                 let (_, store, _) = self.get_transaction_objectstore(id).unwrap_or_else(|_| panic!("The object_store registry inside LakeFSLogstore didn't have a store for operation_id {id} Something went wrong."));
                 store
             }
-            _ => self
-                .prefixed_registry
-                .get_store(&self.config.location)
-                .unwrap(),
+            _ => self.storage.get_store(&self.config.location).unwrap(),
         }
     }
 

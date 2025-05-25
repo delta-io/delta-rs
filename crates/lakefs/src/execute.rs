@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use deltalake_core::{
-    logstore::{LogStore as _, LogStoreRef},
-    operations::CustomExecuteHandler,
-    DeltaResult, DeltaTableError,
+    logstore::LogStoreRef, operations::CustomExecuteHandler, DeltaResult, DeltaTableError,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -30,7 +28,7 @@ impl CustomExecuteHandler for LakeFSCustomExecuteHandler {
         if let Some(lakefs_store) = log_store.clone().as_any().downcast_ref::<LakeFSLogStore>() {
             let (repo, _, _) = lakefs_store
                 .client
-                .decompose_url(lakefs_store.config().location.to_string());
+                .decompose_url(lakefs_store.config.location.to_string());
             let result = lakefs_store
                 .client
                 .delete_branch(repo, lakefs_store.client.get_transaction(operation_id)?)
@@ -146,7 +144,7 @@ mod tests {
             .downcast_ref::<LakeFSLogStore>()
         {
             assert!(lakefs_store
-                .prefixed_registry
+                .storage
                 .get_store(
                     &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
                         .unwrap()
@@ -187,7 +185,7 @@ mod tests {
             .downcast_ref::<LakeFSLogStore>()
         {
             assert!(lakefs_store
-                .prefixed_registry
+                .storage
                 .get_store(
                     &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
                         .unwrap()
