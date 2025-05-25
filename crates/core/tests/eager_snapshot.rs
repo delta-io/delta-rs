@@ -7,15 +7,20 @@ use deltalake_core::{
 };
 use deltalake_test::utils::*;
 use itertools::Itertools;
+use object_store::path::Path;
 
 #[tokio::test]
 async fn test_eager_snapshot_advance() -> TestResult {
     let context = IntegrationContext::new(Box::<LocalStorageIntegration>::default())?;
     context.load_table(TestTables::Simple).await?;
 
-    let log_store = context.table_builder(TestTables::Simple).build_storage()?;
+    let store = context
+        .table_builder(TestTables::Simple)
+        .build_storage()?
+        .object_store(None);
 
-    let mut snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+    let mut snapshot =
+        EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
 
     let version = snapshot.version();
 

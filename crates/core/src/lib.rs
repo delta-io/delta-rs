@@ -205,7 +205,7 @@ mod tests {
         let tombstones = table
             .snapshot()
             .unwrap()
-            .all_tombstones(&table.log_store())
+            .all_tombstones(table.object_store().clone())
             .await
             .unwrap()
             .collect_vec();
@@ -322,7 +322,7 @@ mod tests {
         let tombstones = table
             .snapshot()
             .unwrap()
-            .all_tombstones(&table.log_store())
+            .all_tombstones(table.object_store().clone())
             .await
             .unwrap()
             .collect_vec();

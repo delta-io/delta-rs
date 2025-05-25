@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
 
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
@@ -66,12 +67,13 @@ pub struct Snapshot {
 impl Snapshot {
     /// Create a new [`Snapshot`] instance
     pub async fn try_new(
-        log_store: &dyn LogStore,
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let log_segment = LogSegment::try_new(log_store, version).await?;
-        let (protocol, metadata) = log_segment.read_metadata(log_store, &config).await?;
+        let log_segment = LogSegment::try_new(table_root, version, store.as_ref()).await?;
+        let (protocol, metadata) = log_segment.read_metadata(store.clone(), &config).await?;
         if metadata.is_none() || protocol.is_none() {
             return Err(DeltaTableError::Generic(
                 "Cannot read metadata from log segment".into(),
@@ -88,7 +90,7 @@ impl Snapshot {
             protocol,
             metadata,
             schema,
-            table_url: "/".to_string(),
+            table_url: table_root.to_string(),
         })
     }
 
@@ -119,7 +121,7 @@ impl Snapshot {
     /// Update the snapshot to the given version
     pub async fn update(
         &mut self,
-        log_store: &dyn LogStore,
+        log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<()> {
         self.update_inner(log_store, target_version).await?;
@@ -128,7 +130,7 @@ impl Snapshot {
 
     async fn update_inner(
         &mut self,
-        log_store: &dyn LogStore,
+        log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<Option<LogSegment>> {
         if let Some(version) = target_version {
@@ -143,14 +145,16 @@ impl Snapshot {
             &Path::default(),
             self.version() + 1,
             target_version,
-            log_store,
+            log_store.as_ref(),
         )
         .await?;
         if log_segment.commit_files.is_empty() && log_segment.checkpoint_files.is_empty() {
             return Ok(None);
         }
 
-        let (protocol, metadata) = log_segment.read_metadata(log_store, &self.config).await?;
+        let (protocol, metadata) = log_segment
+            .read_metadata(log_store.object_store(None).clone(), &self.config)
+            .await?;
         if let Some(protocol) = protocol {
             self.protocol = protocol;
         }
@@ -211,7 +215,7 @@ impl Snapshot {
     /// Get the files in the snapshot
     pub fn files<'a>(
         &self,
-        log_store: &dyn LogStore,
+        store: Arc<dyn ObjectStore>,
         visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<ReplayStream<'a, BoxStream<'_, DeltaResult<RecordBatch>>>> {
         let mut schema_actions: HashSet<_> =
@@ -219,14 +223,14 @@ impl Snapshot {
 
         schema_actions.insert(ActionType::Add);
         let checkpoint_stream = self.log_segment.checkpoint_stream(
-            log_store,
+            store.clone(),
             &StructType::new(schema_actions.iter().map(|a| a.schema_field().clone())),
             &self.config,
         );
 
         schema_actions.insert(ActionType::Remove);
         let log_stream = self.log_segment.commit_stream(
-            log_store,
+            store.clone(),
             &StructType::new(schema_actions.iter().map(|a| a.schema_field().clone())),
             &self.config,
         )?;
@@ -237,11 +241,9 @@ impl Snapshot {
     /// Get the commit infos in the snapshot
     pub(crate) async fn commit_infos(
         &self,
-        log_store: &dyn LogStore,
+        store: Arc<dyn ObjectStore>,
         limit: Option<usize>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
-        let store = log_store.object_store(None);
-
         let log_root = self.table_root().child("_delta_log");
         let start_from = log_root.child(
             format!(
@@ -285,18 +287,16 @@ impl Snapshot {
 
     pub(crate) fn tombstones(
         &self,
-        log_store: &dyn LogStore,
+        store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Vec<Remove>>>> {
         let log_stream = self.log_segment.commit_stream(
-            log_store,
+            store.clone(),
             &log_segment::TOMBSTONE_SCHEMA,
             &self.config,
         )?;
-        let checkpoint_stream = self.log_segment.checkpoint_stream(
-            log_store,
-            &log_segment::TOMBSTONE_SCHEMA,
-            &self.config,
-        );
+        let checkpoint_stream =
+            self.log_segment
+                .checkpoint_stream(store, &log_segment::TOMBSTONE_SCHEMA, &self.config);
 
         Ok(log_stream
             .chain(checkpoint_stream)
@@ -343,16 +343,18 @@ pub struct EagerSnapshot {
 impl EagerSnapshot {
     /// Create a new [`EagerSnapshot`] instance
     pub async fn try_new(
-        log_store: &dyn LogStore,
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        Self::try_new_with_visitor(log_store, config, version, Default::default()).await
+        Self::try_new_with_visitor(table_root, store, config, version, Default::default()).await
     }
 
     /// Create a new [`EagerSnapshot`] instance
     pub async fn try_new_with_visitor(
-        log_store: &dyn LogStore,
+        table_root: &Path,
+        store: Arc<dyn ObjectStore>,
         config: DeltaTableConfig,
         version: Option<i64>,
         tracked_actions: HashSet<ActionType>,
@@ -361,15 +363,11 @@ impl EagerSnapshot {
             .iter()
             .flat_map(get_visitor)
             .collect::<Vec<_>>();
-        let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
+        let snapshot =
+            Snapshot::try_new(table_root, store.clone(), config.clone(), version).await?;
 
         let files = match config.require_files {
-            true => {
-                snapshot
-                    .files(log_store, &mut visitors)?
-                    .try_collect()
-                    .await?
-            }
+            true => snapshot.files(store, &mut visitors)?.try_collect().await?,
             false => vec![],
         };
 
@@ -424,7 +422,7 @@ impl EagerSnapshot {
     /// Update the snapshot to the given version
     pub async fn update(
         &mut self,
-        log_store: &dyn LogStore,
+        log_store: Arc<dyn LogStore>,
         target_version: Option<i64>,
     ) -> DeltaResult<()> {
         if Some(self.version()) == target_version {
@@ -433,7 +431,7 @@ impl EagerSnapshot {
 
         let new_slice = self
             .snapshot
-            .update_inner(log_store, target_version)
+            .update_inner(log_store.clone(), target_version)
             .await?;
 
         if new_slice.is_none() {
@@ -459,13 +457,21 @@ impl EagerSnapshot {
             let read_schema =
                 StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
             new_slice
-                .checkpoint_stream(log_store, &read_schema, &self.snapshot.config)
+                .checkpoint_stream(
+                    log_store.object_store(None),
+                    &read_schema,
+                    &self.snapshot.config,
+                )
                 .boxed()
         };
 
         schema_actions.insert(ActionType::Remove);
         let read_schema = StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
-        let log_stream = new_slice.commit_stream(log_store, &read_schema, &self.snapshot.config)?;
+        let log_stream = new_slice.commit_stream(
+            log_store.object_store(None).clone(),
+            &read_schema,
+            &self.snapshot.config,
+        )?;
 
         let mapper = LogMapper::try_new(&self.snapshot, None)?;
 
@@ -836,9 +842,13 @@ mod tests {
     }
 
     async fn test_snapshot() -> TestResult {
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
+        let store = TestTables::Simple
+            .table_builder()
+            .build_storage()?
+            .object_store(None);
 
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot =
+            Snapshot::try_new(&Path::default(), store.clone(), Default::default(), None).await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual: Snapshot = serde_json::from_slice(&bytes).unwrap();
@@ -849,7 +859,7 @@ mod tests {
         assert_eq!(snapshot.schema(), &expected);
 
         let infos = snapshot
-            .commit_infos(&log_store, None)
+            .commit_infos(store.clone(), None)
             .await?
             .try_collect::<Vec<_>>()
             .await?;
@@ -857,14 +867,14 @@ mod tests {
         assert_eq!(infos.len(), 5);
 
         let tombstones = snapshot
-            .tombstones(&log_store)?
+            .tombstones(store.clone())?
             .try_collect::<Vec<_>>()
             .await?;
         let tombstones = tombstones.into_iter().flatten().collect_vec();
         assert_eq!(tombstones.len(), 31);
 
         let batches = snapshot
-            .files(&log_store, &mut vec![])?
+            .files(store.clone(), &mut vec![])?
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
@@ -880,12 +890,21 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
-        let log_store = TestTables::Checkpoints.table_builder().build_storage()?;
+        let store = TestTables::Checkpoints
+            .table_builder()
+            .build_storage()?
+            .object_store(None);
 
         for version in 0..=12 {
-            let snapshot = Snapshot::try_new(&log_store, Default::default(), Some(version)).await?;
+            let snapshot = Snapshot::try_new(
+                &Path::default(),
+                store.clone(),
+                Default::default(),
+                Some(version),
+            )
+            .await?;
             let batches = snapshot
-                .files(&log_store, &mut vec![])?
+                .files(store.clone(), &mut vec![])?
                 .try_collect::<Vec<_>>()
                 .await?;
             let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
@@ -896,9 +915,14 @@ mod tests {
     }
 
     async fn test_eager_snapshot() -> TestResult {
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
+        let store = TestTables::Simple
+            .table_builder()
+            .build_storage()?
+            .object_store(None);
 
-        let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot =
+            EagerSnapshot::try_new(&Path::default(), store.clone(), Default::default(), None)
+                .await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual: EagerSnapshot = serde_json::from_slice(&bytes).unwrap();
@@ -908,11 +932,19 @@ mod tests {
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
-        let log_store = TestTables::Checkpoints.table_builder().build_storage()?;
+        let store = TestTables::Checkpoints
+            .table_builder()
+            .build_storage()?
+            .object_store(None);
 
         for version in 0..=12 {
-            let snapshot =
-                EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
+            let snapshot = EagerSnapshot::try_new(
+                &Path::default(),
+                store.clone(),
+                Default::default(),
+                Some(version),
+            )
+            .await?;
             let batches = snapshot.file_actions()?.collect::<Vec<_>>();
             assert_eq!(batches.len(), version as usize);
         }

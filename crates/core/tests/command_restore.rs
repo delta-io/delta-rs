@@ -179,7 +179,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
     for file in context
         .table
         .snapshot()?
-        .all_tombstones(&context.table.log_store())
+        .all_tombstones(context.table.object_store().clone())
         .await?
     {
         let p = tmp_dir.path().join(file.clone().path);
@@ -208,7 +208,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     for file in context
         .table
         .snapshot()?
-        .all_tombstones(&context.table.log_store())
+        .all_tombstones(context.table.object_store().clone())
         .await?
     {
         let p = tmp_dir.path().join(file.clone().path);

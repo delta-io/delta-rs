@@ -115,8 +115,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!("_delta_log/{:020}.json", 1)))
             .await
             .is_err(),
@@ -125,8 +124,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await
             .is_ok(),
@@ -135,8 +133,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!(
                 "_delta_log/{:020}.checkpoint.parquet",
                 2
@@ -161,8 +158,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await
             .is_ok(),
@@ -171,8 +167,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!(
                 "_delta_log/{:020}.checkpoint.parquet",
                 2

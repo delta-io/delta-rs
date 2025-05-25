@@ -36,7 +36,7 @@ use tracing::log::*;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::logstore::{LogStore, LogStoreRef};
+use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -242,7 +242,7 @@ impl VacuumBuilder {
             &self.snapshot,
             retention_period,
             now_millis,
-            &self.log_store,
+            self.log_store.object_store(None).clone(),
         )
         .await?;
         let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
@@ -452,7 +452,7 @@ async fn get_stale_files(
     snapshot: &DeltaTableState,
     retention_period: Duration,
     now_timestamp_millis: i64,
-    store: &dyn LogStore,
+    store: Arc<dyn ObjectStore>,
 ) -> DeltaResult<HashSet<String>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     Ok(snapshot

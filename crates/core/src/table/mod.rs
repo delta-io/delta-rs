@@ -210,11 +210,15 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(&self.log_store, max_version).await,
+            Some(state) => state.update(self.log_store.clone(), max_version).await,
             _ => {
-                let state =
-                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
-                        .await?;
+                let state = DeltaTableState::try_new(
+                    &Path::default(),
+                    self.log_store.object_store(None),
+                    self.config.clone(),
+                    max_version,
+                )
+                .await?;
                 self.state = Some(state);
                 Ok(())
             }
@@ -258,7 +262,7 @@ impl DeltaTable {
             .snapshot()?
             .snapshot
             .snapshot()
-            .commit_infos(&self.log_store(), limit)
+            .commit_infos(self.object_store(), limit)
             .await?
             .try_collect::<Vec<_>>()
             .await?;

@@ -686,7 +686,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     // Update snapshot to latest version after successful conflict check
                     read_snapshot
-                        .update(&this.log_store, Some(latest_version))
+                        .update(this.log_store.clone(), Some(latest_version))
                         .await?;
                 }
                 let version: i64 = latest_version + 1;
@@ -760,7 +760,7 @@ impl PostCommit {
                 // This may only occur during concurrent write actions. We need to update the state first to - 1
                 // then we can advance.
                 snapshot
-                    .update(&self.log_store, Some(self.version - 1))
+                    .update(self.log_store.clone(), Some(self.version - 1))
                     .await?;
                 snapshot.advance(vec![&self.data])?;
             } else {
@@ -811,7 +811,8 @@ impl PostCommit {
                 .await? as u64;
                 if num_log_files_cleaned_up > 0 {
                     state = DeltaTableState::try_new(
-                        &self.log_store,
+                        &state.snapshot().table_root(),
+                        self.log_store.object_store(None),
                         state.load_config().clone(),
                         Some(self.version),
                     )
@@ -837,9 +838,13 @@ impl PostCommit {
                 },
             ))
         } else {
-            let state =
-                DeltaTableState::try_new(&self.log_store, Default::default(), Some(self.version))
-                    .await?;
+            let state = DeltaTableState::try_new(
+                &Path::default(),
+                self.log_store.object_store(None),
+                Default::default(),
+                Some(self.version),
+            )
+            .await?;
             Ok((
                 state,
                 PostCommitMetrics {

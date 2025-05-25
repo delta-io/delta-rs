@@ -376,9 +376,6 @@ pub trait LogStore: Send + Sync + AsAny {
         Ok(false)
     }
 
-    /// Get configuration representing configured log store.
-    fn config(&self) -> &LogStoreConfig;
-
     #[cfg(feature = "datafusion")]
     /// Generate a unique enough url to identify the store in datafusion.
     /// The DF object store registry only cares about the scheme and the host of the url for
@@ -388,88 +385,9 @@ pub trait LogStore: Send + Sync + AsAny {
     fn object_store_url(&self) -> ObjectStoreUrl {
         crate::logstore::object_store_url(&self.config().location)
     }
-}
 
-#[async_trait::async_trait]
-impl<T: LogStore + ?Sized> LogStore for Arc<T> {
-    fn name(&self) -> String {
-        T::name(self)
-    }
-
-    async fn refresh(&self) -> DeltaResult<()> {
-        T::refresh(self).await
-    }
-
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
-        T::read_commit_entry(self, version).await
-    }
-
-    async fn write_commit_entry(
-        &self,
-        version: i64,
-        commit_or_bytes: CommitOrBytes,
-        operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        T::write_commit_entry(self, version, commit_or_bytes, operation_id).await
-    }
-
-    async fn abort_commit_entry(
-        &self,
-        version: i64,
-        commit_or_bytes: CommitOrBytes,
-        operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        T::abort_commit_entry(self, version, commit_or_bytes, operation_id).await
-    }
-
-    async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64> {
-        T::get_latest_version(self, start_version).await
-    }
-
-    async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64> {
-        T::get_earliest_version(self, start_version).await
-    }
-
-    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
-        T::peek_next_commit(self, current_version).await
-    }
-
-    fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
-        T::object_store(self, operation_id)
-    }
-
-    fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
-        T::root_object_store(self, operation_id)
-    }
-
-    async fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
-        T::engine(self, operation_id).await
-    }
-
-    fn to_uri(&self, location: &Path) -> String {
-        T::to_uri(self, location)
-    }
-
-    fn root_uri(&self) -> String {
-        T::root_uri(self)
-    }
-
-    fn log_path(&self) -> &Path {
-        T::log_path(self)
-    }
-
-    async fn is_delta_table_location(&self) -> DeltaResult<bool> {
-        T::is_delta_table_location(self).await
-    }
-
-    fn config(&self) -> &LogStoreConfig {
-        T::config(self)
-    }
-
-    #[cfg(feature = "datafusion")]
-    fn object_store_url(&self) -> ObjectStoreUrl {
-        T::object_store_url(self)
-    }
+    /// Get configuration representing configured log store.
+    fn config(&self) -> &LogStoreConfig;
 }
 
 async fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {

@@ -66,7 +66,7 @@ async fn test_action_reconciliation() {
         table
             .snapshot()
             .unwrap()
-            .all_tombstones(&table.log_store())
+            .all_tombstones(table.object_store().clone())
             .await
             .unwrap()
             .map(|r| r.path.clone())

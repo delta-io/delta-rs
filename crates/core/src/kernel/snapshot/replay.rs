@@ -604,6 +604,7 @@ pub(super) mod tests {
     use arrow_select::concat::concat_batches;
     use delta_kernel::schema::DataType;
     use futures::TryStreamExt;
+    use object_store::path::Path;
 
     use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
@@ -619,15 +620,16 @@ pub(super) mod tests {
             ActionType::Remove.schema_field().clone(),
         ]));
 
-        let log_store = TestTables::SimpleWithCheckpoint
+        let store = TestTables::SimpleWithCheckpoint
             .table_builder()
-            .build_storage()?;
+            .build_storage()?
+            .object_store(None);
 
-        let segment = LogSegment::try_new(&log_store, Some(9)).await?;
+        let segment = LogSegment::try_new(&Path::default(), Some(9), store.as_ref()).await?;
         let mut scanner = LogReplayScanner::new();
 
         let batches = segment
-            .commit_stream(&log_store, &log_schema, &Default::default())?
+            .commit_stream(store.clone(), &log_schema, &Default::default())?
             .try_collect::<Vec<_>>()
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -640,10 +642,13 @@ pub(super) mod tests {
         let filtered = scanner.process_files_batch(&batch, true)?;
         assert_eq!(filtered.schema().fields().len(), 1);
 
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
-        let segment = LogSegment::try_new(&log_store, None).await?;
+        let store = TestTables::Simple
+            .table_builder()
+            .build_storage()?
+            .object_store(None);
+        let segment = LogSegment::try_new(&Path::default(), None, store.as_ref()).await?;
         let batches = segment
-            .commit_stream(&log_store, &log_schema, &Default::default())?
+            .commit_stream(store.clone(), &log_schema, &Default::default())?
             .try_collect::<Vec<_>>()
             .await?;
 
