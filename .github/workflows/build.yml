@@ -63,7 +63,7 @@ jobs:
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
       - name: Check docs
-        run: cargo doc --no-deps --features ${{ env.DEFAULT_FEATURES }}
+        run: cargo doc --features ${{ env.DEFAULT_FEATURES }}
 
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
