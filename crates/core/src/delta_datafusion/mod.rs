@@ -27,9 +27,7 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow_array::types::UInt16Type;
-use arrow_array::{
-    Array, BooleanArray, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray,
-};
+use arrow_array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{
@@ -37,7 +35,6 @@ use arrow_schema::{
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use arrow_select::concat::concat_batches;
-use arrow_select::filter::filter_record_batch;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::catalog::memory::DataSourceExec;
@@ -62,11 +59,8 @@ use datafusion_common::{
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{
-    col, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
-    Volatility,
-};
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -92,9 +86,7 @@ use url::Url;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{
-    Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
-};
+use crate::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
@@ -549,16 +541,6 @@ impl<'a> DeltaScanBuilder<'a> {
             for idx in used_columns {
                 fields.push(logical_schema.field(*idx).to_owned());
             }
-            // partition filters with Exact pushdown were removed from projection by DF optimizer,
-            // we need to add them back for the predicate pruning to work
-            if let Some(expr) = &self.filter {
-                for c in expr.column_refs() {
-                    let idx = logical_schema.index_of(c.name.as_str())?;
-                    if !used_columns.contains(&idx) {
-                        fields.push(logical_schema.field(idx).to_owned());
-                    }
-                }
-            }
             Arc::new(ArrowSchema::new(fields))
         } else {
             logical_schema
@@ -567,48 +549,32 @@ impl<'a> DeltaScanBuilder<'a> {
         let context = SessionContext::new();
         let df_schema = logical_schema.clone().to_dfschema()?;
 
-        let logical_filter = self
-            .filter
-            .clone()
-            .map(|expr| simplify_expr(&context, &df_schema, expr));
-        // only inexact filters should be pushed down to the data source, doing otherwise
-        // will make stats inexact and disable datafusion optimizations like AggregateStatistics
-        let pushdown_filter = self
-            .filter
-            .and_then(|expr| {
-                let predicates = split_conjunction(&expr);
-                let pushdown_filters = get_pushdown_filters(
-                    &predicates,
-                    self.snapshot.metadata().partition_columns.as_slice(),
-                );
+        let logical_filter = self.filter.map(|expr| {
+            // Simplify the expression first
+            let props = ExecutionProps::new();
+            let simplify_context =
+                SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+            let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+            let simplified = simplifier.simplify(expr).unwrap();
 
-                let filtered_predicates = predicates
-                    .into_iter()
-                    .zip(pushdown_filters.into_iter())
-                    .filter_map(|(filter, pushdown)| {
-                        if pushdown == TableProviderFilterPushDown::Inexact {
-                            Some(filter.clone())
-                        } else {
-                            None
-                        }
-                    });
-                conjunction(filtered_predicates)
-            })
-            .map(|expr| simplify_expr(&context, &df_schema, expr));
+            context
+                .create_physical_expr(simplified, &df_schema)
+                .unwrap()
+        });
 
         // Perform Pruning of files to scan
-        let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
+        let (files, files_scanned, files_pruned) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
                 let files_scanned = files.len();
-                (files, files_scanned, 0, None)
+                (files, files_scanned, 0)
             }
             None => {
                 // early return in case we have no push down filters or limit
                 if logical_filter.is_none() && self.limit.is_none() {
                     let files = self.snapshot.file_actions()?;
                     let files_scanned = files.len();
-                    (files, files_scanned, 0, None)
+                    (files, files_scanned, 0)
                 } else {
                     let num_containers = self.snapshot.num_containers();
 
@@ -629,7 +595,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     for (action, keep) in self
                         .snapshot
                         .file_actions_iter()?
-                        .zip(files_to_prune.iter().cloned())
+                        .zip(files_to_prune.into_iter())
                     {
                         // prune file based on predicate pushdown
                         if keep {
@@ -661,7 +627,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     let files_scanned = files.len();
                     let files_pruned = num_containers - files_scanned;
-                    (files, files_scanned, files_pruned, Some(files_to_prune))
+                    (files, files_scanned, files_pruned)
                 }
             }
         };
@@ -718,18 +684,10 @@ impl<'a> DeltaScanBuilder<'a> {
             ));
         }
 
-        // FIXME - where is the correct place to marry file pruning with statistics pruning?
-        //  Temporarily re-generating the log handler, just so that we can compute the stats.
-        //  Should we update datafusion_table_statistics to optionally take the mask?
-        let stats = if let Some(mask) = pruning_mask {
-            let es = self.snapshot.snapshot();
-            let pruned_stats = prune_file_statistics(&es.files, mask);
-            LogDataHandler::new(&pruned_stats, es.metadata(), es.schema()).statistics()
-        } else {
-            self.snapshot.datafusion_table_statistics()
-        };
-
-        let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
+        let stats = self
+            .snapshot
+            .datafusion_table_statistics()
+            .unwrap_or(Statistics::new_unknown(&schema));
 
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
@@ -742,7 +700,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
         // filter
-        if let Some(predicate) = pushdown_filter {
+        if let Some(predicate) = logical_filter {
             if config.enable_parquet_pushdown {
                 file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
             }
@@ -786,43 +744,6 @@ impl<'a> DeltaScanBuilder<'a> {
             metrics,
         })
     }
-}
-
-fn simplify_expr(
-    context: &SessionContext,
-    df_schema: &DFSchema,
-    expr: Expr,
-) -> Arc<dyn PhysicalExpr> {
-    // Simplify the expression first
-    let props = ExecutionProps::new();
-    let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
-    let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
-    let simplified = simplifier.simplify(expr).unwrap();
-
-    context
-        .create_physical_expr(simplified, &df_schema)
-        .unwrap()
-}
-
-fn prune_file_statistics(
-    record_batches: &Vec<RecordBatch>,
-    pruning_mask: Vec<bool>,
-) -> Vec<RecordBatch> {
-    let mut filtered_batches = Vec::new();
-    let mut mask_offset = 0;
-
-    for batch in record_batches {
-        let num_rows = batch.num_rows();
-        let batch_mask = &pruning_mask[mask_offset..mask_offset + num_rows];
-        mask_offset += num_rows;
-
-        let boolean_mask = BooleanArray::from(batch_mask.to_vec());
-        let filtered_batch =
-            filter_record_batch(batch, &boolean_mask).expect("Failed to filter RecordBatch");
-        filtered_batches.push(filtered_batch);
-    }
-
-    filtered_batches
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable
@@ -872,79 +793,15 @@ impl TableProvider for DeltaTable {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot()?.metadata().partition_columns.as_slice();
-        Ok(get_pushdown_filters(filter, partition_cols))
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
         self.snapshot().ok()?.datafusion_table_statistics()
     }
-}
-
-fn get_pushdown_filters(
-    filter: &[&Expr],
-    partition_cols: &[String],
-) -> Vec<TableProviderFilterPushDown> {
-    filter
-        .iter()
-        .cloned()
-        .map(|expr| {
-            let applicable = expr_is_exact_predicate_for_cols(partition_cols, expr);
-            if !expr.column_refs().is_empty() && applicable {
-                TableProviderFilterPushDown::Exact
-            } else {
-                TableProviderFilterPushDown::Inexact
-            }
-        })
-        .collect()
-}
-
-// inspired from datafusion::listing::helpers, but adapted to only stats based pruning
-fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
-    let mut is_applicable = true;
-    expr.apply(|expr| match expr {
-        Expr::Column(Column { ref name, .. }) => {
-            is_applicable &= partition_cols.contains(&name);
-
-            // TODO: decide if we should constrain this to Utf8 columns (including views, dicts etc)
-
-            if is_applicable {
-                Ok(TreeNodeRecursion::Jump)
-            } else {
-                Ok(TreeNodeRecursion::Stop)
-            }
-        }
-        Expr::BinaryExpr(BinaryExpr { ref op, .. }) => {
-            is_applicable &= matches!(
-                op,
-                Operator::And
-                    | Operator::Or
-                    | Operator::NotEq
-                    | Operator::Eq
-                    | Operator::Gt
-                    | Operator::GtEq
-                    | Operator::Lt
-                    | Operator::LtEq
-            );
-            if is_applicable {
-                Ok(TreeNodeRecursion::Continue)
-            } else {
-                Ok(TreeNodeRecursion::Stop)
-            }
-        }
-        Expr::Literal(_)
-        | Expr::Not(_)
-        | Expr::IsNotNull(_)
-        | Expr::IsNull(_)
-        | Expr::Between(_)
-        | Expr::InList(_) => Ok(TreeNodeRecursion::Continue),
-        _ => {
-            is_applicable = false;
-            Ok(TreeNodeRecursion::Stop)
-        }
-    })
-    .unwrap();
-    is_applicable
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
@@ -1028,8 +885,10 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot.metadata().partition_columns.as_slice();
-        Ok(get_pushdown_filters(filter, partition_cols))
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Inexact)
+            .collect())
     }
 
     fn statistics(&self) -> Option<Statistics> {
