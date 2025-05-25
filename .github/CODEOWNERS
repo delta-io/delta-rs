@@ -1,14 +1,7 @@
-crates/core @roeap @rtyler @hntd187 @ion-elgreco
-crates/deltalake @roeap @rtyler @hntd187 @ion-elgreco
-crates/aws @rtyler
-crates/lakefs @ion-elgreco
-crates/catalog-unity @roeap @hntd187
-
-delta-inspect/ @rtyler
-
+crates/ @wjones127 @roeap @rtyler @hntd187 @ion-elgreco
+delta-inspect/ @wjones127 @rtyler
 proofs/ @houqp
-python/ @wjones127 @roeap @ion-elgreco
-
+python/ @wjones127 @fvaleye @roeap @ion-elgreco
 tlaplus/ @houqp
-
-.github/ @rtyler
+.github/ @wjones127 @rtyler
+docs/ @MrPowers
