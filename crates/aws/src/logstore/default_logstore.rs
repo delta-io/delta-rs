@@ -14,13 +14,11 @@ use uuid::Uuid;
 /// Return the [S3LogStore] implementation with the provided configuration options
 pub fn default_s3_logstore(
     store: ObjectStoreRef,
-    root_store: ObjectStoreRef,
     location: &Url,
     options: &StorageConfig,
 ) -> Arc<dyn LogStore> {
     Arc::new(S3LogStore::new(
         store,
-        root_store,
         LogStoreConfig {
             location: location.clone(),
             options: options.clone(),
@@ -31,8 +29,7 @@ pub fn default_s3_logstore(
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
 pub struct S3LogStore {
-    storage: ObjectStoreRef,
-    root_store: ObjectStoreRef,
+    pub(crate) storage: ObjectStoreRef,
     config: LogStoreConfig,
 }
 
@@ -43,16 +40,8 @@ impl S3LogStore {
     ///
     /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
-    pub fn new(
-        storage: ObjectStoreRef,
-        root_store: ObjectStoreRef,
-        config: LogStoreConfig,
-    ) -> Self {
-        Self {
-            storage,
-            root_store,
-            config,
-        }
+    pub fn new(storage: ObjectStoreRef, config: LogStoreConfig) -> Self {
+        Self { storage, config }
     }
 }
 
@@ -121,10 +110,6 @@ impl LogStore for S3LogStore {
 
     fn object_store(&self, _operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
         self.storage.clone()
-    }
-
-    fn root_object_store(&self, _operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
-        self.root_store.clone()
     }
 
     fn config(&self) -> &LogStoreConfig {

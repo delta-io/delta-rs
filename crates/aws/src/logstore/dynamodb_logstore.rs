@@ -23,8 +23,7 @@ const MAX_REPAIR_RETRIES: i64 = 3;
 
 /// [`LogStore`] implementation backed by DynamoDb
 pub struct S3DynamoDbLogStore {
-    prefixed_store: ObjectStoreRef,
-    root_store: ObjectStoreRef,
+    pub(crate) storage: ObjectStoreRef,
     lock_client: DynamoDbLockClient,
     config: LogStoreConfig,
     table_path: String,
@@ -42,8 +41,7 @@ impl S3DynamoDbLogStore {
         location: Url,
         options: &StorageConfig,
         s3_options: &S3StorageOptions,
-        prefixed_store: ObjectStoreRef,
-        root_store: ObjectStoreRef,
+        object_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
             &s3_options.sdk_config.clone().unwrap(),
@@ -73,8 +71,7 @@ impl S3DynamoDbLogStore {
         })?;
         let table_path = to_uri(&location, &Path::from(""));
         Ok(Self {
-            prefixed_store,
-            root_store,
+            storage: object_store,
             lock_client,
             config: LogStoreConfig {
                 location,
@@ -315,11 +312,7 @@ impl LogStore for S3DynamoDbLogStore {
     }
 
     fn object_store(&self, _operation_id: Option<Uuid>) -> ObjectStoreRef {
-        self.prefixed_store.clone()
-    }
-
-    fn root_object_store(&self, _operation_id: Option<Uuid>) -> ObjectStoreRef {
-        self.root_store.clone()
+        self.storage.clone()
     }
 
     fn config(&self) -> &LogStoreConfig {

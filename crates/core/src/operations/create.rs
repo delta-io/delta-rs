@@ -14,7 +14,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
@@ -229,8 +229,8 @@ impl CreateBuilder {
         self
     }
 
-    /// Provide a [`LogStore`] instance
-    pub fn with_log_store(mut self, log_store: LogStoreRef) -> Self {
+    /// Provide a [`LogStore`] instance, that points at table location
+    pub fn with_log_store(mut self, log_store: Arc<dyn LogStore>) -> Self {
         self.log_store = Some(log_store);
         self
     }

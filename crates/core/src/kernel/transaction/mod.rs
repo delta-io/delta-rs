@@ -947,7 +947,6 @@ mod tests {
         let url = Url::parse("mem://what/is/this").unwrap();
         let log_store = DefaultLogStore::new(
             store.clone(),
-            store.clone(),
             crate::logstore::LogStoreConfig {
                 location: url,
                 options: Default::default(),

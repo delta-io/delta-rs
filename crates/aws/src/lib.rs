@@ -55,7 +55,6 @@ impl LogStoreFactory for S3LogStoreFactory {
     fn with_options(
         &self,
         prefixed_store: ObjectStoreRef,
-        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
@@ -72,7 +71,6 @@ impl LogStoreFactory for S3LogStoreFactory {
             warn!("Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put.");
             return Ok(logstore::default_s3_logstore(
                 prefixed_store,
-                root_store,
                 location,
                 options,
             ));
@@ -86,15 +84,9 @@ impl LogStoreFactory for S3LogStoreFactory {
                 options,
                 &s3_options,
                 prefixed_store,
-                root_store,
             )?));
         }
-        Ok(default_logstore(
-            prefixed_store,
-            root_store,
-            location,
-            options,
-        ))
+        Ok(default_logstore(prefixed_store, location, options))
     }
 }
 
@@ -773,13 +765,13 @@ mod tests {
     #[serial]
     fn test_logstore_factory_default() {
         let factory = S3LogStoreFactory::default();
-        let store = Arc::new(InMemory::new());
+        let store = InMemory::new();
         let url = Url::parse("s3://test-bucket").unwrap();
         unsafe {
             std::env::remove_var(crate::constants::AWS_S3_LOCKING_PROVIDER);
         }
         let logstore = factory
-            .with_options(store.clone(), store, &url, &Default::default())
+            .with_options(Arc::new(store), &url, &Default::default())
             .unwrap();
         assert_eq!(logstore.name(), "DefaultLogStore");
     }
@@ -788,14 +780,14 @@ mod tests {
     #[serial]
     fn test_logstore_factory_with_locking_provider() {
         let factory = S3LogStoreFactory::default();
-        let store = Arc::new(InMemory::new());
+        let store = InMemory::new();
         let url = Url::parse("s3://test-bucket").unwrap();
         unsafe {
             std::env::set_var(crate::constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         }
 
         let logstore = factory
-            .with_options(store.clone(), store, &url, &Default::default())
+            .with_options(Arc::new(store), &url, &Default::default())
             .unwrap();
         assert_eq!(logstore.name(), "S3DynamoDbLogStore");
     }

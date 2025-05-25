@@ -3144,13 +3144,8 @@ mod tests {
 
         let (object_store, mut operations) =
             RecordingObjectStore::new(table.log_store().object_store(None));
-        // this uses an in memory store pointing at root...
-        let both_store = Arc::new(object_store);
-        let log_store = DefaultLogStore::new(
-            both_store.clone(),
-            both_store,
-            table.log_store().config().clone(),
-        );
+        let log_store =
+            DefaultLogStore::new(Arc::new(object_store), table.log_store().config().clone());
         let provider = DeltaTableProvider::try_new(
             table.snapshot().unwrap().clone(),
             Arc::new(log_store),
