@@ -36,10 +36,10 @@ use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionSt
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
-use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
+use deltalake::operations::table_changes::TableChangesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
@@ -297,8 +297,8 @@ impl RawDeltaTable {
         ))
     }
 
-    pub fn check_can_write_timestamp_ntz(&self, schema: PyArrowType<ArrowSchema>) -> PyResult<()> {
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
+    pub fn check_can_write_timestamp_ntz(&self, schema: PyRef<PySchema>) -> PyResult<()> {
+        let schema: StructType = schema.as_ref().inner_type.clone();
         // Need to unlock to access the shared reference to &DeltaTableState
         match self._table.lock() {
             Ok(table) => Ok(PROTOCOL
@@ -850,7 +850,7 @@ impl RawDeltaTable {
         columns: Option<Vec<String>>,
         predicate: Option<String>,
         allow_out_of_range: bool,
-    ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
+    ) -> PyResult<Arro3RecordBatchReader> {
         let ctx = SessionContext::new();
         let mut cdf_read = TableChangesBuilder::new(self.log_store()?);
 
@@ -903,15 +903,15 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
 
         py.allow_threads(|| {
-            let ffi_stream = FFI_ArrowArrayStream::new(convert_stream_to_reader(stream));
-            let reader = ArrowArrayStreamReader::try_new(ffi_stream).unwrap();
-            Ok(PyArrowType(reader))
+            let stream = convert_stream_to_reader(stream);
+            Ok(stream.into())
         })
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         source,
+        batch_schema,
         predicate,
         source_alias = None,
         target_alias = None,
@@ -925,7 +925,8 @@ impl RawDeltaTable {
     pub fn create_merge_builder(
         &self,
         py: Python,
-        source: PyArrowType<ArrowArrayStreamReader>,
+        source: PyRecordBatchReader,
+        batch_schema: PyArrowSchema,
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
@@ -947,7 +948,8 @@ impl RawDeltaTable {
             Ok(PyMergeBuilder::new(
                 self.log_store()?,
                 self.cloned_state()?,
-                source.0,
+                source,
+                batch_schema,
                 predicate,
                 source_alias,
                 target_alias,
@@ -1057,9 +1059,10 @@ impl RawDeltaTable {
     pub fn dataset_partitions<'py>(
         &self,
         py: Python<'py>,
-        schema: PyArrowType<ArrowSchema>,
+        schema: PyArrowSchema,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
+        let schema = schema.into_inner();
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
                 self.files(py, Some(filters))?.iter().cloned(),
@@ -1073,15 +1076,14 @@ impl RawDeltaTable {
             stats_cols
         } else if num_index_cols == -1 {
             schema
-                .0
                 .fields()
                 .iter()
                 .map(|v| v.name().clone())
                 .collect::<Vec<_>>()
         } else if num_index_cols >= 0 {
             let mut fields = vec![];
-            for idx in 0..(min(num_index_cols as usize, schema.0.fields.len())) {
-                fields.push(schema.0.field(idx).name().clone())
+            for idx in 0..(min(num_index_cols as usize, schema.fields.len())) {
+                fields.push(schema.field(idx).name().clone())
             }
             fields
         } else {
@@ -1211,16 +1213,14 @@ impl RawDeltaTable {
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
-        schema: PyArrowType<ArrowSchema>,
+        schema: PyRef<PySchema>,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
+        let schema = schema.as_ref().inner_type.clone();
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
-
-            let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
-
             let existing_schema = self.with_table(|t| {
                 t.get_schema()
                     .cloned()
@@ -1442,16 +1442,18 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyArrowType<RecordBatch>> {
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyRecordBatch> {
+        // replace with Arro3RecordBatch once new release is done for arro3.core
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
-        Ok(PyArrowType(self.with_table(|t| {
+        let batch = self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
                 .add_actions_table(flatten)
                 .map_err(PythonError::from)?)
-        })?))
+        })?;
+        Ok(batch.into())
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
@@ -1611,11 +1613,12 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
     fn write(
         &mut self,
         py: Python,
-        data: PyArrowType<ArrowArrayStreamReader>,
+        data: PyRecordBatchReader,
+        batch_schema: PyArrowSchema,
         mode: String,
         schema_mode: Option<String>,
         partition_by: Option<Vec<String>>,
@@ -1639,7 +1642,11 @@ impl RawDeltaTable {
             )
             .with_save_mode(save_mode);
 
-            let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+            let table_provider = to_lazy_table(maybe_lazy_cast_reader(
+                data.into_reader()?,
+                batch_schema.into_inner(),
+            ))
+            .map_err(PythonError::from)?;
 
             let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
                 .map_err(PythonError::from)?
@@ -2261,6 +2268,7 @@ fn write_to_deltalake(
     raw_table.map_err(PythonError::from)?.write(
         py,
         data,
+        batch_schema,
         mode,
         schema_mode,
         partition_by,
@@ -2281,7 +2289,7 @@ fn write_to_deltalake(
 fn create_deltalake(
     py: Python,
     table_uri: String,
-    schema: PyArrowType<ArrowSchema>,
+    schema: PyRef<PySchema>,
     partition_by: Vec<String>,
     mode: String,
     raise_if_key_not_exists: bool,
@@ -2292,6 +2300,7 @@ fn create_deltalake(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
+    let schema = schema.as_ref().inner_type.clone();
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
             .with_storage_options(storage_options.unwrap_or_default())
@@ -2299,7 +2308,6 @@ fn create_deltalake(
             .map_err(PythonError::from)?;
 
         let mode = mode.parse().map_err(PythonError::from)?;
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
@@ -2345,7 +2353,7 @@ fn create_deltalake(
 fn create_table_with_add_actions(
     py: Python,
     table_uri: String,
-    schema: PyArrowType<ArrowSchema>,
+    schema: PyRef<PySchema>,
     add_actions: Vec<PyAddAction>,
     mode: &str,
     partition_by: Vec<String>,
@@ -2356,13 +2364,12 @@ fn create_table_with_add_actions(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
+    let schema = schema.as_ref().inner_type.clone();
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;
-
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
@@ -2408,7 +2415,7 @@ fn create_table_with_add_actions(
 fn convert_to_deltalake(
     py: Python,
     uri: String,
-    partition_schema: Option<PyArrowType<ArrowSchema>>,
+    partition_schema: Option<PyRef<PySchema>>,
     partition_strategy: Option<String>,
     name: Option<String>,
     description: Option<String>,
@@ -2417,12 +2424,12 @@ fn convert_to_deltalake(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
+    let partition_schema = partition_schema.map(|s| s.as_ref().inner_type.clone());
     py.allow_threads(|| {
         let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
 
         if let Some(part_schema) = partition_schema {
-            let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
-            builder = builder.with_partition_schema(schema.fields().cloned());
+            builder = builder.with_partition_schema(part_schema.fields().cloned())
         }
 
         if let Some(partition_strategy) = &partition_strategy {
@@ -2481,38 +2488,6 @@ fn get_num_idx_cols_and_stats_columns(
     }
 }
 
-#[pyclass(name = "DeltaDataChecker", module = "deltalake._internal")]
-struct PyDeltaDataChecker {
-    inner: DeltaDataChecker,
-    rt: tokio::runtime::Runtime,
-}
-
-#[pymethods]
-impl PyDeltaDataChecker {
-    #[new]
-    #[pyo3(signature = (invariants))]
-    fn new(invariants: Vec<(String, String)>) -> Self {
-        let invariants: Vec<Invariant> = invariants
-            .into_iter()
-            .map(|(field_name, invariant_sql)| Invariant {
-                field_name,
-                invariant_sql,
-            })
-            .collect();
-        Self {
-            inner: DeltaDataChecker::new_with_invariants(invariants),
-            rt: tokio::runtime::Runtime::new().unwrap(),
-        }
-    }
-
-    fn check_batch(&self, batch: PyArrowType<RecordBatch>) -> PyResult<()> {
-        Ok(self
-            .rt
-            .block_on(async { self.inner.check_batch(&batch.0).await })
-            .map_err(PythonError::from)?)
-    }
-}
-
 #[pymodule]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2541,7 +2516,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(
         get_num_idx_cols_and_stats_columns,
         m
@@ -2550,7 +2524,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
-    m.add_class::<PyDeltaDataChecker>()?;
     m.add_class::<PyTransaction>()?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
