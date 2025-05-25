@@ -1,14 +1,14 @@
 # Delta Lake small file compaction with optimize
 
-This post shows you how to perform small file compaction with using the `optimize` method. This was added to the `DeltaTable` class in version 0.9.0. This command rearranges the small files into larger files which will reduce the number of files and speed up queries.
+This post shows you how to perform small file compaction with using the `optimize` method.  This was added to the `DeltaTable` class in version 0.9.0.  This command rearranges the small files into larger files which will reduce the number of files and speed up queries.
 
 This is very helpful for workloads that append frequently. For example, if you have a table that is appended to every 10 minutes, after a year you will have 52,560 files in the table. If the table is partitioned by another dimension, you will have 52,560 files per partition; with just 100 unique values that's millions of files. By running `optimize` periodically, you can reduce the number of files in the table to a more manageable number.
 
 Typically, you will run optimize less frequently than you append data. If possible, you might run optimize once you know you have finished writing to a particular partition. For example, on a table partitioned by date, you might append data every 10 minutes, but only run optimize once a day at the end of the day. This will ensure you don't need to compact the same data twice.
 
-This section will also teach you about how to use `vacuum` to physically remove files from storage that are no longer needed. You’ll often want vacuum after running optimize to remove the small files from storage once they’ve been compacted into larger files.
+This section will also teach you about how to use `vacuum` to physically remove files from storage that are no longer needed.  You’ll often want vacuum after running optimize to remove the small files from storage once they’ve been compacted into larger files.
 
-Let’s start with an example to explain these key concepts. All the code covered in this post is stored in [this notebook](https://github.com/delta-io/delta-examples/blob/master/notebooks/python-deltalake/deltalake_0_9_0.ipynb) in case you’d like to follow along.
+Let’s start with an example to explain these key concepts.  All the code covered in this post is stored in [this notebook](https://github.com/delta-io/delta-examples/blob/master/notebooks/python-deltalake/deltalake_0_9_0.ipynb) in case you’d like to follow along.
 
 ## Create a Delta table with small files
 
@@ -17,7 +17,7 @@ Let’s start by creating a Delta table with a lot of small files so we can demo
 Start by writing a function that generates on thousand rows of random data given a timestamp.
 
 === "Python"
-`python
+    ```python
     def record_observations(date: datetime) -> pa.Table:
         """Pulls data for a certain datetime"""
         nrows = 1000
@@ -28,21 +28,21 @@ Start by writing a function that generates on thousand rows of random data given
                 "value": pc.random(nrows),
             }
         )
-    `
+    ```
 
 === "Rust"
-```rust
-pub fn record*observations(timestamp: DateTime<Utc>) -> RecordBatch {
-let nrows = 1000;
-let date = timestamp.date_naive();
-let timestamp = timestamp;
-let value = (0..nrows)
-.map(|*| rand::random::<f64>())
-.collect::<Vec<f64>>();
-let date = (0..nrows).map(|_| date).collect::<Vec<NaiveDate>>();
-let timestamp = (0..nrows)
-.map(|_| timestamp.timestamp_micros())
-.collect::<Vec<i64>>();
+    ```rust
+    pub fn record_observations(timestamp: DateTime<Utc>) -> RecordBatch {
+        let nrows = 1000;
+        let date = timestamp.date_naive();
+        let timestamp = timestamp;
+        let value = (0..nrows)
+            .map(|_| rand::random::<f64>())
+            .collect::<Vec<f64>>();
+        let date = (0..nrows).map(|_| date).collect::<Vec<NaiveDate>>();
+        let timestamp = (0..nrows)
+            .map(|_| timestamp.timestamp_micros())
+            .collect::<Vec<i64>>();
 
         let schema = Schema::new(vec![
             Field::new("date", arrow::datatypes::DataType::Date32, false),
@@ -73,8 +73,8 @@ let timestamp = (0..nrows)
 Let’s run this function and observe the output:
 
 === "Python"
-```python
-record_observations(datetime(2021, 1, 1, 12)).to_pandas()
+    ```python
+    record_observations(datetime(2021, 1, 1, 12)).to_pandas()
 
       date				timestamp	value
     0	2021-01-01	2021-01-01 12:00:00	0.3186397383362023
@@ -85,22 +85,22 @@ record_observations(datetime(2021, 1, 1, 12)).to_pandas()
     ```
 
 === "Rust"
-```rust
-let batch = record_observations("2021-01-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap());
-println!("{}", pretty_format_batches(&vec![batch])?);
-// +------------+---------------------+------------------------+
-// | date | timestamp | value |
-// +------------+---------------------+------------------------+
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.4061923494886005 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.9987878410434536 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.5731950954440364 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.44535166836074713 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.7122994421129841 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.09947198303405769 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.02835490232344251 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.565059582551305 |
-// | 2021-01-01 | 2021-01-01T12:00:00 | 0.2149121627261419 |
-// ...
+    ```rust
+    let batch = record_observations("2021-01-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap());
+    println!("{}", pretty_format_batches(&vec![batch])?);
+    // +------------+---------------------+------------------------+
+    // | date       | timestamp           | value                  |
+    // +------------+---------------------+------------------------+
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.4061923494886005     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.9987878410434536     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.5731950954440364     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.44535166836074713    |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.7122994421129841     |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.09947198303405769    |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.02835490232344251    |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.565059582551305      |
+    // | 2021-01-01 | 2021-01-01T12:00:00 | 0.2149121627261419     |
+    // ...
 
     ```
 
@@ -123,13 +123,13 @@ Let’s write 100 hours worth of data to the Delta table.
     ```
 
 === "Rust"
-```rust
-let mut table = DeltaOps::try_from_uri("observation_data")
-.await?
-.create()
-.with_table_name("observations_data")
-.with_columns(
-StructType::new(vec![
+    ```rust
+    let mut table = DeltaOps::try_from_uri("observation_data")
+      .await?
+      .create()
+      .with_table_name("observations_data")
+      .with_columns(
+          StructType::new(vec![
               StructField::new(
                   "date".to_string(),
                   DataType::Primitive(PrimitiveType::Date),
@@ -146,12 +146,12 @@ StructType::new(vec![
                   false,
               ),
           ])
-.fields()
-.cloned(),
-)
-.with_partition_columns(vec!["date"])
-.with_save_mode(SaveMode::Append)
-.await?;
+          .fields()
+          .cloned(),
+      )
+      .with_partition_columns(vec!["date"])
+      .with_save_mode(SaveMode::Append)
+      .await?;
 
     let hours_iter = (0..).map(|i| {
         "2021-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::hours(i)
@@ -168,20 +168,20 @@ StructType::new(vec![
     }
     ```
 
-This data was appended to the Delta table in 100 separate transactions, so the table will contain 100 transaction log entries and 100 data files. You can see the number of files with the `files()` method.
+This data was appended to the Delta table in 100 separate transactions, so the table will contain 100 transaction log entries and 100 data files.  You can see the number of files with the `files()` method.
 
 === "Python"
-`python
+    ```python
     dt = DeltaTable("observation_data")
     len(dt.files()) # 100
-    `
+    ```
 
 === "Rust"
-`rust
+    ```rust
     let table = open_table("observation_data").await?;
     let files = table.get_files_iter()?;
     println!("len: {}", files.count()); // len: 100
-    `
+    ```
 Here’s how the files are persisted in storage.
 
 ```
@@ -212,25 +212,25 @@ observation_data
     └── 99-9650ed63-c195-433d-a86b-9469088c14ba-0.parquet
 ```
 
-Each of these Parquet files are tiny - they’re only 10 KB. Let’s see how to compact these tiny files into larger files, which is more efficient for data queries.
+Each of these Parquet files are tiny - they’re only 10 KB.  Let’s see how to compact these tiny files into larger files, which is more efficient for data queries.
 
 ## Compact small files in the Delta table with optimize
 
 Let’s run the optimize command to compact the existing small files into larger files:
 
 === "Python"
-```python
-dt = DeltaTable("observation_data")
+    ```python
+    dt = DeltaTable("observation_data")
 
     dt.optimize.compact()
     ```
 
 === "Rust"
-`rust
+    ```rust
     let table = open_table("observation_data").await?;
     let (table, metrics) = DeltaOps(table).optimize().with_type(OptimizeType::Compact).await?;
     println!("{:?}", metrics);
-    `
+    ```
 
 Here’s the output of the command:
 
@@ -254,7 +254,7 @@ Here’s the output of the command:
  'preserveInsertionOrder': True}
 ```
 
-The optimize operation has added 5 new files and marked 100 existing files for removal (this is also known as “tombstoning” files). It has compacted the 100 tiny files into 5 larger files.
+The optimize operation has added 5 new files and marked 100 exisitng files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.
 
 Let’s append some more data to the Delta table and see how we can selectively run optimize on the new data that’s added.
 
@@ -263,7 +263,7 @@ Let’s append some more data to the Delta table and see how we can selectively 
 Let’s append another 24 hours of data to the Delta table:
 
 === "Python"
-`python
+    ```python
     for timestamp in itertools.islice(hours_iter, 24):
         write_deltalake(
             dt,
@@ -271,9 +271,9 @@ Let’s append another 24 hours of data to the Delta table:
             partition_by=["date"],
             mode="append",
         )
-    `
+    ```
 === "Rust"
-`rust
+    ```rust
     let mut table = open_table("observation_data").await?;
     let hours_iter = (0..).map(|i| {
         "2021-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::hours(i)
@@ -286,15 +286,15 @@ Let’s append another 24 hours of data to the Delta table:
             .await?;
         writer.flush_and_commit(&mut table).await?;
     }
-    `
+    ```
 
 We can use `get_add_actions()` to introspect the table state. We can see that `2021-01-06` has only a few hours of data so far, so we don't want to optimize that yet. But `2021-01-05` has all 24 hours of data, so it's ready to be optimized.
 
 === "Python"
-```python
-dt.get_add_actions(flatten=True).to_pandas()[
-"partition.date"
-].value_counts().sort_index()
+    ```python
+    dt.get_add_actions(flatten=True).to_pandas()[
+        "partition.date"
+    ].value_counts().sort_index()
 
     2021-01-01     1
     2021-01-02     1
@@ -305,18 +305,19 @@ dt.get_add_actions(flatten=True).to_pandas()[
     ```
 
 === "Rust"
-```rust
-let table = open_table("observation_data").await?;
-let batch = table.snapshot()?.add_actions_table(true)?;
-let ctx = SessionContext::new();
-ctx.register_batch("observations", batch.clone())?;
-let df = ctx.sql("
-SELECT \"partition.date\",
-COUNT(\*)
-FROM observations
-GROUP BY \"partition.date\"
-ORDER BY \"partition.date\"").await?;
-df.show().await?;
+    ```rust
+    let table = open_table("observation_data").await?;
+    let batch = table.snapshot()?.add_actions_table(true)?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("observations", batch.clone())?;
+    let df = ctx.sql("
+    SELECT \"partition.date\", 
+            COUNT(*) 
+    FROM observations 
+    GROUP BY \"partition.date\" 
+    ORDER BY \"partition.date\"").await?;
+    df.show().await?;
+
 
     +----------------+----------+
     | partition.date | count(*) |
@@ -332,12 +333,12 @@ df.show().await?;
 
 To optimize a single partition, you can pass in a `partition_filters` argument specifying which partitions to optimize.
 === "Python"
-`python
+    ```python
     dt.optimize.compact(partition_filters=[("date", "=", "2021-01-05")])
-    `
+    ```
 
 === "Rust"
-`rust
+    ```rust
       let table = open_table("observation_data").await?;
       let (table, metrics) = DeltaOps(table)
           .optimize()
@@ -345,7 +346,7 @@ To optimize a single partition, you can pass in a `partition_filters` argument s
           .with_filters(&vec![("date", "=", "2021-01-05").try_into()?])
           .await?;
       println!("{:?}", metrics);
-    `
+    ```
 
 ```python
 {'numFilesAdded': 1,
@@ -367,7 +368,7 @@ To optimize a single partition, you can pass in a `partition_filters` argument s
  'preserveInsertionOrder': True}
 ```
 
-This optimize operation tombstones 21 small data files and adds one file with all the existing data properly condensed. Let’s take a look a portion of the `_delta_log/00000000000000000125.json` file, which is the transaction log entry that corresponds with this incremental optimize command.
+This optimize operation tombstones 21 small data files and adds one file with all the existing data properly condensed.  Let’s take a look a portion of the `_delta_log/00000000000000000125.json` file, which is the transaction log entry that corresponds with this incremental optimize command.
 
 ```python
 {
@@ -415,25 +416,25 @@ This optimize operation tombstones 21 small data files and adds one file with al
 }
 ```
 
-The transaction log indicates that many files have been tombstoned and one file is added, as expected.
+The trasaction log indicates that many files have been tombstoned and one file is added, as expected.
 
-The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log. The optimize command doesn’t physically delete the Parquet file from storage. Optimize performs a “logical remove” not a “physical remove”.
+The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log.  The optimize command doesn’t physically delete the Parquet file from storage.  Optimize performs a “logical remove” not a “physical remove”.
 
-Delta Lake uses logical operations so you can time travel back to earlier versions of your data. You can vacuum your Delta table to physically remove Parquet files from storage if you don’t need to time travel and don’t want to pay to store the tombstoned files.
+Delta Lake uses logical operations so you can time travel back to earlier versions of your data.  You can vacuum your Delta table to physically remove Parquet files from storage if you don’t need to time travel and don’t want to pay to store the tombstoned files.
 
 ## Vacuuming after optimizing
 
 The vacuum command deletes all files from storage that are marked for removal in the transaction log and older than the retention period which is 7 days by default.
 
-It’s normally a good idea to have a retention period of at least 7 days. For purposes of this example, we will set the retention period to zero, just so you can see how the files get removed from storage. Adjusting the retention period in this manner isn’t recommended for production use cases.
+It’s normally a good idea to have a retention period of at least 7 days.  For purposes of this example, we will set the retention period to zero, just so you can see how the files get removed from storage.  Adjusting the retention period in this manner isn’t recommended for production use cases.
 
 Let’s run the vacuum command:
 === "Python"
-`python
+      ```python
       dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
-      `
+      ```
 === "Rust"
-`rust
+    ```rust
     let table = open_table("observation_data").await?;
     let (table, metrics) = DeltaOps(table)
         .vacuum()
@@ -442,7 +443,8 @@ Let’s run the vacuum command:
         .with_dry_run(false)
         .await?;
     println!("{:?}", metrics);
-    `
+    ```
+
 
 The command returns a list of all the files that are removed from storage:
 
@@ -483,15 +485,15 @@ observation_data
 
 All the partitions only contain a single file now, except for the `date=2021-01-06` partition that has not been compacted yet.
 
-An entire partition won’t necessarily get compacted to a single data file when optimize is run. Each partition has data files that are condensed to the target file size.
+An entire partition won’t necessarily get compacted to a single data file when optimize is run.  Each partition has data files that are condensed to the target file size.
 
 ## What causes the small file problem?
 
 Delta tables can accumulate small files for a variety of reasons:
 
-- User error: users can accidentally write files that are too small. Users should sometimes repartition in memory before writing to disk to avoid appending files that are too small.
-- Frequent appends: systems that append more often tend to append more smaller files. A pipeline that appends every minute will generally generate ten times as many small files compared to a system that appends every ten minutes.
-- Appending to partitioned data lakes with high cardinality columns can also cause small files. If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files. Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.
+* User error: users can accidentally write files that are too small.  Users should sometimes repartition in memory before writing to disk to avoid appending files that are too small.
+* Frequent appends: systems that append more often tend to append more smaller files.  A pipeline that appends every minute will generally generate ten times as many small files compared to a system that appends every ten minutes.
+* Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.  
 
 ## Conclusion
 
@@ -499,4 +501,4 @@ This page showed you how to create a Delta table with many small files, compact 
 
 You also learned about how to incrementally optimize partitioned Delta tables, so you only compact newly added data.
 
-An excessive number of small files slows down Delta table queries, so periodic compaction is important. Make sure to properly maintain your Delta tables, so performance does not degrade over time.
+An excessive number of small files slows down Delta table queries, so periodic compaction is important.  Make sure to properly maintain your Delta tables, so performance does not degrade over time.
