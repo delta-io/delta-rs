@@ -13,7 +13,6 @@ use arrow_schema::{
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{common::collect, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
@@ -24,7 +23,7 @@ use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
-use deltalake_core::delta_datafusion::{DeltaScan, DeltaTableFactory};
+use deltalake_core::delta_datafusion::DeltaScan;
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
@@ -34,17 +33,10 @@ use deltalake_core::{
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
+use deltalake_test::datafusion::*;
 use deltalake_test::utils::*;
 use serial_test::serial;
 use url::Url;
-
-pub fn context_with_delta_table_factory() -> SessionContext {
-    let mut state = SessionStateBuilder::new().build();
-    state
-        .table_factories_mut()
-        .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
-    SessionContext::new_with_state(state)
-}
 
 mod local {
     use super::*;

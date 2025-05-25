@@ -17,6 +17,8 @@ use tempfile::TempDir;
 pub mod acceptance;
 pub mod clock;
 pub mod concurrent;
+#[cfg(feature = "datafusion")]
+pub mod datafusion;
 pub mod read;
 pub mod utils;
 

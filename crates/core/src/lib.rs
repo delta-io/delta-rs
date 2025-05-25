@@ -77,7 +77,7 @@ pub mod protocol;
 pub mod schema;
 pub mod table;
 
-#[cfg(any(test, feature = "integration_test"))]
+#[cfg(test)]
 pub mod test_utils;
 
 #[cfg(feature = "datafusion")]
