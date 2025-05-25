@@ -204,7 +204,7 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn table_changes(self) -> TableChangesBuilder {
-        TableChangesBuilder::new(self.0.table_uri())
+        TableChangesBuilder::new(self.0.log_store)
     }
 
     /// Write data to Delta table

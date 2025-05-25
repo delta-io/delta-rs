@@ -537,10 +537,10 @@ impl MergeOperation {
                     let r = TableReference::bare(alias.to_owned());
                     match column {
                         Column {
-                            relation: None,
+                            relation,
                             name,
                             spans,
-                        } => Column {
+                        } if relation.is_none() => Column {
                             relation: Some(r),
                             name,
                             spans,
@@ -1606,7 +1606,6 @@ mod tests {
     use itertools::Itertools;
     use regex::Regex;
     use serde_json::json;
-    use std::borrow::Cow;
     use std::ops::Neg;
     use std::sync::Arc;
 
@@ -4036,6 +4035,7 @@ mod tests {
             .table_changes()
             .with_starting_version(0)
             .build()
+            .await
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
@@ -4151,6 +4151,7 @@ mod tests {
             .table_changes()
             .with_starting_version(0)
             .build()
+            .await
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(
@@ -4238,6 +4239,7 @@ mod tests {
             .table_changes()
             .with_starting_version(0)
             .build()
+            .await
             .expect("Failed to load CDF");
 
         let mut batches = collect_batches(

@@ -850,7 +850,7 @@ impl RawDeltaTable {
         allow_out_of_range: bool,
     ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
         let ctx = SessionContext::new();
-        let mut cdf_read = TableChangesBuilder::new(self.log_store()?.root_uri());
+        let mut cdf_read = TableChangesBuilder::new(self.log_store()?);
 
         if let Some(sv) = starting_version {
             cdf_read = cdf_read.with_starting_version(sv);
@@ -875,8 +875,10 @@ impl RawDeltaTable {
             cdf_read = cdf_read.with_allow_out_of_range();
         }
 
-        let table_provider: Arc<dyn TableProvider> =
-            Arc::new(DeltaCdfTableProvider::try_new(cdf_read).map_err(PythonError::from)?);
+        let table_provider: Arc<dyn TableProvider> = Arc::new(
+            rt().block_on(DeltaCdfTableProvider::try_new(cdf_read))
+                .map_err(PythonError::from)?,
+        );
 
         let table_name: String = "source".to_string();
 
