@@ -7,6 +7,7 @@ use arrow_array::{BooleanArray, RecordBatch};
 use chrono::Utc;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
+use delta_kernel::snapshot::LastCheckpointHint;
 use delta_kernel::{FileMeta, Table};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -15,12 +16,11 @@ use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use tokio::task::spawn_blocking;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::ProtocolError;
-use crate::logstore::LogStore;
-use crate::table::CheckPoint;
+use crate::logstore::{LogStore, LogStoreExt};
 use crate::{open_table_with_version, DeltaTable};
 use crate::{DeltaResult, DeltaTableError};
 
@@ -37,9 +37,15 @@ pub(crate) async fn create_checkpoint_for(
     log_store: &dyn LogStore,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let table = Table::try_from_uri(log_store.table_root_url())?;
-
+    let table_root = if let Some(op_id) = operation_id {
+        #[allow(deprecated)]
+        log_store.transaction_url(op_id, &log_store.table_root_url())?
+    } else {
+        log_store.table_root_url()
+    };
     let engine = log_store.engine(operation_id).await;
+
+    let table = Table::try_from_uri(table_root)?;
 
     let task_engine = engine.clone();
     let cp_writer = spawn_blocking(move || table.checkpoint(task_engine.as_ref(), Some(version)))
@@ -119,7 +125,7 @@ pub async fn create_checkpoint(table: &DeltaTable, operation_id: Option<Uuid>) -
 pub async fn cleanup_metadata(
     table: &DeltaTable,
     operation_id: Option<Uuid>,
-) -> Result<usize, ProtocolError> {
+) -> DeltaResult<usize> {
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - table
             .snapshot()
@@ -149,7 +155,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
         .await
         .map_err(|err| ProtocolError::Generic(err.to_string()))?;
     let snapshot = table.snapshot().map_err(|_| ProtocolError::NoMetaData)?;
-    create_checkpoint_for(version as u64, table.log_store.as_ref(), None).await?;
+    create_checkpoint_for(version as u64, table.log_store.as_ref(), operation_id).await?;
 
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
@@ -169,23 +175,20 @@ pub async fn cleanup_expired_logs_for(
     log_store: &dyn LogStore,
     cutoff_timestamp: i64,
     operation_id: Option<Uuid>,
-) -> Result<usize, ProtocolError> {
+) -> DeltaResult<usize> {
     static DELTA_LOG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap()
     });
 
     let object_store = log_store.object_store(None);
-    let maybe_last_checkpoint = object_store
-        .get(&log_store.log_path().child("_last_checkpoint"))
-        .await;
+    let log_path = log_store.log_path();
+    let maybe_last_checkpoint = read_last_checkpoint(&object_store, &log_path).await?;
 
-    if let Err(Error::NotFound { path: _, source: _ }) = maybe_last_checkpoint {
+    let Some(last_checkpoint) = maybe_last_checkpoint else {
         return Ok(0);
-    }
+    };
 
-    let last_checkpoint = maybe_last_checkpoint?.bytes().await?;
-    let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint)?;
-    let until_version = i64::min(until_version, last_checkpoint.version);
+    let until_version = i64::min(until_version, last_checkpoint.version as i64);
 
     // Feed a stream of candidate deletion files directly into the delete_stream
     // function to try to improve the speed of cleanup and reduce the need for
@@ -228,6 +231,29 @@ pub async fn cleanup_expired_logs_for(
     Ok(deleted.len())
 }
 
+/// Try reading the `_last_checkpoint` file.
+///
+/// Note that we typically want to ignore a missing/invalid `_last_checkpoint` file without failing
+/// the read. Thus, the semantics of this function are to return `None` if the file is not found or
+/// is invalid JSON. Unexpected/unrecoverable errors are returned as `Err` case and are assumed to
+/// cause failure.
+async fn read_last_checkpoint(
+    storage: &dyn ObjectStore,
+    log_path: &Path,
+) -> DeltaResult<Option<LastCheckpointHint>> {
+    const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
+    let file_path = log_path.child(LAST_CHECKPOINT_FILE_NAME);
+    let maybe_data = storage.get(&file_path).await;
+    let data = match maybe_data {
+        Ok(data) => data.bytes().await?,
+        Err(Error::NotFound { .. }) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    Ok(serde_json::from_slice(&data)
+        .inspect_err(|e| warn!("invalid _last_checkpoint JSON: {e}"))
+        .ok())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -262,17 +288,12 @@ mod tests {
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
-        let path = Path::from("_delta_log/_last_checkpoint");
-        let last_checkpoint = table
-            .log_store()
-            .object_store(None)
-            .get(&path)
+        let log_path = Path::from("_delta_log");
+        let store = table.log_store().object_store(None);
+        let last_checkpoint = read_last_checkpoint(store.as_ref(), &log_path)
             .await
             .expect("Failed to get the _last_checkpoint")
-            .bytes()
-            .await
-            .expect("Failed to get bytes for _last_checkpoint");
-        let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
+            .expect("Expected checkpoint hint");
         assert_eq!(last_checkpoint.version, 0);
     }
 
@@ -347,17 +368,12 @@ mod tests {
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
-        let path = Path::from("_delta_log/_last_checkpoint");
-        let last_checkpoint = table
-            .log_store()
-            .object_store(None)
-            .get(&path)
+        let log_path = Path::from("_delta_log");
+        let store = table.log_store().object_store(None);
+        let last_checkpoint = read_last_checkpoint(store.as_ref(), &log_path)
             .await
             .expect("Failed to get the _last_checkpoint")
-            .bytes()
-            .await
-            .expect("Failed to get bytes for _last_checkpoint");
-        let last_checkpoint: CheckPoint = serde_json::from_slice(&last_checkpoint).expect("Fail");
+            .expect("Expected checkpoint hint");
         assert_eq!(last_checkpoint.version, 1);
 
         // If the regression exists, this will fail
