@@ -189,34 +189,6 @@ mod local {
     }
 
     #[tokio::test]
-    async fn test_files_scanned_pushdown_limit() -> Result<()> {
-        use datafusion::prelude::*;
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let table = open_table("../test/tests/data/delta-0.8.0")
-            .await?;
-
-        // Simple Equality test, we only exercise the limit in this test
-        let e = col("value").eq(lit(2));
-        let metrics = get_scan_metrics(&table, &state, &[e.clone()]).await?;
-        assert_eq!(metrics.num_scanned_files(), 2);
-        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
-        assert_eq!(metrics.skip_count, 0);
-
-        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(1)).await?;
-        assert_eq!(metrics.num_scanned_files(), 1);
-        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
-        assert_eq!(metrics.skip_count, 1);
-
-        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(3)).await?;
-        assert_eq!(metrics.num_scanned_files(), 2);
-        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
-        assert_eq!(metrics.skip_count, 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_datafusion_write_from_serialized_delta_scan() -> Result<()> {
         // Build an execution plan for scanning a DeltaTable and serialize it to bytes.
         // We want to emulate that this occurs on another node, so that all we have access to is the
@@ -444,14 +416,13 @@ mod local {
         Ok(())
     }
 
-    async fn get_scan_metrics_with_limit(
+    async fn get_scan_metrics(
         table: &DeltaTable,
         state: &SessionState,
         e: &[Expr],
-        limit: Option<usize>,
     ) -> Result<ExecutionMetricsCollector> {
         let mut metrics = ExecutionMetricsCollector::default();
-        let scan = table.scan(state, None, e, limit).await?;
+        let scan = table.scan(state, None, e, None).await?;
         if scan.properties().output_partitioning().partition_count() > 0 {
             let plan = CoalescePartitionsExec::new(scan);
             let task_ctx = Arc::new(TaskContext::from(state));
@@ -464,14 +435,6 @@ mod local {
         }
 
         Ok(metrics)
-    }
-
-    async fn get_scan_metrics(
-        table: &DeltaTable,
-        state: &SessionState,
-        e: &[Expr],
-    ) -> Result<ExecutionMetricsCollector> {
-        get_scan_metrics_with_limit(table, state, e, None).await
     }
 
     fn create_all_types_batch(

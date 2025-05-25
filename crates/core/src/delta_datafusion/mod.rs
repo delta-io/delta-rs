@@ -49,7 +49,7 @@ use datafusion::execution::context::{SessionConfig, SessionContext, SessionState
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
@@ -570,64 +570,31 @@ impl<'a> DeltaScanBuilder<'a> {
                 (files, files_scanned, 0)
             }
             None => {
-                // early return in case we have no push down filters or limit
-                if logical_filter.is_none() && self.limit.is_none() {
-                    let files = self.snapshot.file_actions()?;
-                    let files_scanned = files.len();
-                    (files, files_scanned, 0)
-                } else {
-                    let num_containers = self.snapshot.num_containers();
-
-                    let files_to_prune = if let Some(predicate) = &logical_filter {
-                        let pruning_predicate =
-                            PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
-                        pruning_predicate.prune(self.snapshot)?
-                    } else {
-                        vec![true; num_containers]
-                    };
-
-                    // needed to enforce limit and deal with missing statistics
-                    // rust port of https://github.com/delta-io/delta/pull/1495
-                    let mut pruned_without_stats = vec![];
-                    let mut rows_collected = 0;
-                    let mut files = vec![];
-
-                    for (action, keep) in self
+                if let Some(predicate) = &logical_filter {
+                    let pruning_predicate =
+                        PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
+                    let files_to_prune = pruning_predicate.prune(self.snapshot)?;
+                    let mut files_pruned = 0usize;
+                    let files = self
                         .snapshot
                         .file_actions_iter()?
                         .zip(files_to_prune.into_iter())
-                    {
-                        // prune file based on predicate pushdown
-                        if keep {
-                            // prune file based on limit pushdown
-                            if let Some(limit) = self.limit {
-                                if let Some(stats) = action.get_stats()? {
-                                    if rows_collected <= limit as i64 {
-                                        rows_collected += stats.num_records;
-                                        files.push(action.to_owned());
-                                    } else {
-                                        break;
-                                    }
-                                } else {
-                                    // some files are missing stats; skipping but storing them
-                                    // in a list in case we can't reach the target limit
-                                    pruned_without_stats.push(action.to_owned());
-                                }
+                        .filter_map(|(action, keep)| {
+                            if keep {
+                                Some(action.to_owned())
                             } else {
-                                files.push(action.to_owned());
+                                files_pruned += 1;
+                                None
                             }
-                        }
-                    }
-
-                    if let Some(limit) = self.limit {
-                        if rows_collected < limit as i64 {
-                            files.extend(pruned_without_stats);
-                        }
-                    }
+                        })
+                        .collect::<Vec<_>>();
 
                     let files_scanned = files.len();
-                    let files_pruned = num_containers - files_scanned;
                     (files, files_scanned, files_pruned)
+                } else {
+                    let files = self.snapshot.file_actions()?;
+                    let files_scanned = files.len();
+                    (files, files_scanned, 0)
                 }
             }
         };
