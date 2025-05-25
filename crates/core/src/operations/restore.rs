@@ -375,7 +375,6 @@ mod tests {
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>
     #[tokio::test]
-    #[cfg(feature = "datafusion")]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let table = DeltaOps(create_bare_table())
