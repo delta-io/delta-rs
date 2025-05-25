@@ -1,5 +1,6 @@
 extern crate pyo3;
 
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, FieldRef as ArrowFieldRef,
     Schema as ArrowSchema,
@@ -146,7 +147,7 @@ impl PrimitiveType {
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
         let inner_type = DataType::Primitive(self.inner_type.clone());
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         Ok(arrow_type.into())
@@ -156,7 +157,7 @@ impl PrimitiveType {
     #[staticmethod]
     fn from_arrow(data_type: PyDataType) -> PyResult<Self> {
         let inner_type: DataType = (&data_type.into_inner())
-            .try_into()
+            .try_into_kernel()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         inner_type.try_into()
@@ -165,7 +166,7 @@ impl PrimitiveType {
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let inner_type = DataType::Primitive(self.inner_type.clone());
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         to_schema_pycapsule(py, arrow_type)
@@ -272,7 +273,7 @@ impl ArrayType {
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
         let inner_type = DataType::Array(Box::new(self.inner_type.clone()));
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         Ok(arrow_type.into())
@@ -282,7 +283,7 @@ impl ArrayType {
     #[staticmethod]
     fn from_arrow(data_type: PyDataType) -> PyResult<Self> {
         let inner_type: DataType = (&data_type.into_inner())
-            .try_into()
+            .try_into_kernel()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         inner_type.try_into()
@@ -291,7 +292,7 @@ impl ArrayType {
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let inner_type = DataType::Array(Box::new(self.inner_type.clone()));
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         to_schema_pycapsule(py, arrow_type)
@@ -414,7 +415,7 @@ impl MapType {
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
         let inner_type = DataType::Map(Box::new(self.inner_type.clone()));
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         Ok(arrow_type.into())
@@ -424,7 +425,7 @@ impl MapType {
     #[pyo3(text_signature = "(data_type)")]
     fn from_arrow(data_type: PyDataType) -> PyResult<Self> {
         let inner_type: DataType = (&data_type.into_inner())
-            .try_into()
+            .try_into_kernel()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         inner_type.try_into()
@@ -433,7 +434,7 @@ impl MapType {
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let inner_type = DataType::Map(Box::new(self.inner_type.clone()));
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         to_schema_pycapsule(py, arrow_type)
@@ -568,7 +569,7 @@ impl Field {
     fn to_arrow(&self) -> PyResult<Arro3Field> {
         let inner_type = self.inner.clone();
         let field: ArrowField = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         Ok(Arc::new(field).into())
@@ -580,7 +581,8 @@ impl Field {
         let field = field.into_inner().as_ref().clone();
 
         Ok(Self {
-            inner: StructField::try_from(&field)
+            inner: (&field)
+                .try_into_kernel()
                 .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
         })
     }
@@ -588,7 +590,7 @@ impl Field {
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let inner_type = self.inner.clone();
         let field: ArrowField = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
         to_schema_pycapsule(py, field)
     }
@@ -693,7 +695,7 @@ impl StructType {
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
         let inner_type = DataType::Struct(Box::new(self.inner_type.clone()));
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         Ok(arrow_type.into())
@@ -703,7 +705,7 @@ impl StructType {
     #[pyo3(text_signature = "(data_type)")]
     fn from_arrow(data_type: PyDataType) -> PyResult<Self> {
         let inner_type: DataType = (&data_type.into_inner())
-            .try_into()
+            .try_into_kernel()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         inner_type.try_into()
@@ -712,7 +714,7 @@ impl StructType {
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let inner_type = DataType::Struct(Box::new(self.inner_type.clone()));
         let arrow_type: ArrowDataType = (&inner_type)
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
         to_schema_pycapsule(py, arrow_type)
     }
@@ -789,7 +791,7 @@ impl PySchema {
     fn to_arrow(self_: PyRef<'_, Self>, as_large_types: bool) -> PyResult<Arro3Schema> {
         let super_ = self_.as_ref();
         let res: ArrowSchema = (&super_.inner_type.clone())
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         fn convert_to_large_type(field: ArrowFieldRef, dt: ArrowDataType) -> ArrowFieldRef {
@@ -862,7 +864,7 @@ impl PySchema {
         let super_ = self_.as_ref();
 
         let res: ArrowSchema = (&super_.inner_type.clone())
-            .try_into()
+            .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
         to_schema_pycapsule(py, res)
     }
@@ -872,7 +874,7 @@ impl PySchema {
     fn from_arrow(data_type: PyArrow3Schema, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         let schema = data_type.into_inner().as_ref().clone();
         let inner_type: DeltaStructType = (&schema)
-            .try_into()
+            .try_into_kernel()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         schema_to_pyobject(inner_type, py)

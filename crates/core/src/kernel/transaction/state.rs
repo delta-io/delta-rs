@@ -254,6 +254,7 @@ mod tests {
 
     use datafusion::prelude::SessionContext;
     use datafusion_expr::{col, lit};
+    use object_store::path::Path;
 
     use super::*;
     use crate::delta_datafusion::{files_matching_predicate, DataFusionMixins};
@@ -269,7 +270,8 @@ mod tests {
 
     #[test]
     fn test_parse_predicate_expression() {
-        let snapshot = DeltaTableState::from_actions(init_table_actions()).unwrap();
+        let snapshot =
+            DeltaTableState::from_actions(init_table_actions(), &Path::default()).unwrap();
         let session = SessionContext::new();
         let state = session.state();
 
@@ -317,7 +319,7 @@ mod tests {
             true,
         )));
 
-        let state = DeltaTableState::from_actions(actions).unwrap();
+        let state = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
         let files = files_matching_predicate(&state.snapshot, &[])
             .unwrap()
             .collect::<Vec<_>>();

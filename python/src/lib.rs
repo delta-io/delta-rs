@@ -1968,6 +1968,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
+        Map(map) => {
+            let py_map = PyDict::new(py);
+            for (key, value) in map.pairs() {
+                py_map.set_item(scalar_to_py(key, py_date)?, scalar_to_py(value, py_date)?)?;
+            }
+            py_map.into_py_any(py)?
+        }
     };
 
     Ok(val.into_bound(py))

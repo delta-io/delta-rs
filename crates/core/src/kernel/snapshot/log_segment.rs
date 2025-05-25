@@ -4,6 +4,8 @@ use std::sync::{Arc, LazyLock};
 
 use arrow_array::RecordBatch;
 use chrono::Utc;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::path::Path;
@@ -11,92 +13,19 @@ use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::ProjectionMask;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+use url::Url;
 
 use super::parse;
 use crate::kernel::transaction::CommitData;
 use crate::kernel::{arrow::json, ActionType, Metadata, Protocol, Schema, StructType};
-use crate::logstore::LogStore;
+use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
-
-static CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\d+\.checkpoint(\.\d+\.\d+)?\.parquet").unwrap());
-static DELTA_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.json$").unwrap());
-static CRC_FILE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\.\d+(\.crc|\.json)|\d+)\.crc$").unwrap());
-static LAST_CHECKPOINT_FILE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^_last_checkpoint$").unwrap());
-static LAST_VACUUM_INFO_FILE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^_last_vacuum_info$").unwrap());
-static DELETION_VECTOR_FILE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r".*\.bin$").unwrap());
 pub(super) static TOMBSTONE_SCHEMA: LazyLock<StructType> =
     LazyLock::new(|| StructType::new(vec![ActionType::Remove.schema_field().clone()]));
-
-/// Trait to extend a file path representation with delta specific functionality
-///
-/// specifically, this trait adds the ability to recognize valid log files and
-/// parse the version number from a log file path
-// TODO handle compaction files
-pub(crate) trait PathExt {
-    /// Returns the last path segment if not terminated with a "/"
-    fn filename(&self) -> Option<&str>;
-
-    /// Parse the version number assuming a commit json or checkpoint parquet file
-    fn commit_version(&self) -> Option<i64> {
-        self.filename()
-            .and_then(|f| f.split_once('.'))
-            .and_then(|(name, _)| name.parse().ok())
-    }
-
-    /// Returns true if the file is a checkpoint parquet file
-    fn is_checkpoint_file(&self) -> bool {
-        self.filename()
-            .map(|name| CHECKPOINT_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
-    }
-
-    /// Returns true if the file is a commit json file
-    fn is_commit_file(&self) -> bool {
-        self.filename()
-            .map(|name| DELTA_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
-    }
-
-    fn is_crc_file(&self) -> bool {
-        self.filename()
-            .map(|name| CRC_FILE_PATTERN.captures(name).is_some())
-            .unwrap()
-    }
-
-    fn is_last_checkpoint_file(&self) -> bool {
-        self.filename()
-            .map(|name| LAST_CHECKPOINT_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
-    }
-
-    fn is_last_vacuum_info_file(&self) -> bool {
-        self.filename()
-            .map(|name| LAST_VACUUM_INFO_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
-    }
-
-    fn is_deletion_vector_file(&self) -> bool {
-        self.filename()
-            .map(|name| DELETION_VECTOR_FILE_PATTERN.captures(name).is_some())
-            .unwrap_or(false)
-    }
-}
-
-impl PathExt for Path {
-    fn filename(&self) -> Option<&str> {
-        self.filename()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct LogSegment {
@@ -110,29 +39,39 @@ impl LogSegment {
     ///
     /// This will list the entire log directory and find all relevant files for the given table version.
     pub async fn try_new(log_store: &dyn LogStore, version: Option<i64>) -> DeltaResult<Self> {
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
 
-        let log_url = Path::from("_delta_log");
-        let maybe_cp = read_last_checkpoint(&store, &log_url).await?;
+        let root_url = log_store.table_root_url();
+        let mut store_root = root_url.clone();
+        store_root.set_path("");
+
+        let log_url = log_store.log_root_url();
+        let log_path = crate::logstore::object_store_path(&log_url)?;
+
+        let maybe_cp = read_last_checkpoint(&root_store, &log_path).await?;
 
         // List relevant files from log
         let (mut commit_files, checkpoint_files) = match (maybe_cp, version) {
-            (Some(cp), None) => list_log_files_with_checkpoint(&cp, &store, &log_url).await?,
-            (Some(cp), Some(v)) if cp.version <= v => {
-                list_log_files_with_checkpoint(&cp, &store, &log_url).await?
+            (Some(cp), None) => {
+                list_log_files_with_checkpoint(&cp, &root_store, &log_path, &store_root).await?
             }
-            _ => list_log_files(&store, &log_url, version, None).await?,
+            (Some(cp), Some(v)) if cp.version <= v => {
+                list_log_files_with_checkpoint(&cp, &root_store, &log_path, &store_root).await?
+            }
+            _ => list_log_files(&root_store, &log_path, version, None, &store_root).await?,
         };
 
         // remove all files above requested version
         if let Some(version) = version {
-            commit_files.retain(|meta| meta.location.commit_version() <= Some(version));
+            commit_files.retain(|meta| meta.1.version <= version as u64);
         }
+
+        validate(&commit_files, &checkpoint_files)?;
 
         let mut segment = Self {
             version: 0,
-            commit_files: commit_files.into(),
-            checkpoint_files,
+            commit_files: commit_files.into_iter().map(|(meta, _)| meta).collect(),
+            checkpoint_files: checkpoint_files.into_iter().map(|(meta, _)| meta).collect(),
         };
         if segment.commit_files.is_empty() && segment.checkpoint_files.is_empty() {
             return Err(DeltaTableError::NotATable("no log files".into()));
@@ -140,13 +79,11 @@ impl LogSegment {
         // get the effective version from chosen files
         let version_eff = segment.file_version().ok_or(DeltaTableError::Generic(
             "failed to get effective version".into(),
-        ))?; // TODO: A more descriptive error
+        ))?;
         segment.version = version_eff;
-        segment.validate()?;
 
         if let Some(v) = version {
             if version_eff != v {
-                // TODO more descriptive error
                 return Err(DeltaTableError::Generic("missing version".into()));
             }
         }
@@ -159,87 +96,66 @@ impl LogSegment {
     /// This will create a new [`LogSegment`] from the log with all relevant log files
     /// starting at `start_version` and ending at `end_version`.
     pub async fn try_new_slice(
-        table_root: &Path,
         start_version: i64,
         end_version: Option<i64>,
         log_store: &dyn LogStore,
     ) -> DeltaResult<Self> {
         debug!("try_new_slice: start_version: {start_version}, end_version: {end_version:?}",);
         log_store.refresh().await?;
-        let log_url = table_root.child("_delta_log");
+        let log_url = log_store.log_root_url();
+        let mut store_root = log_url.clone();
+        store_root.set_path("");
+        let log_path = crate::logstore::object_store_path(&log_url)?;
+
         let (mut commit_files, checkpoint_files) = list_log_files(
-            log_store.object_store(None).as_ref(),
-            &log_url,
+            &log_store.root_object_store(None),
+            &log_path,
             end_version,
             Some(start_version),
+            &store_root,
         )
         .await?;
+
         // remove all files above requested version
         if let Some(version) = end_version {
-            commit_files.retain(|meta| meta.location.commit_version() <= Some(version));
+            commit_files.retain(|meta| meta.1.version <= version as u64);
         }
+
+        validate(&commit_files, &checkpoint_files)?;
+
         let mut segment = Self {
             version: start_version,
-            commit_files: commit_files.into(),
-            checkpoint_files,
+            commit_files: commit_files.into_iter().map(|(meta, _)| meta).collect(),
+            checkpoint_files: checkpoint_files.into_iter().map(|(meta, _)| meta).collect(),
         };
         segment.version = segment
             .file_version()
             .unwrap_or(end_version.unwrap_or(start_version));
 
-        segment.validate()?;
-
         Ok(segment)
-    }
-
-    pub fn validate(&self) -> DeltaResult<()> {
-        let is_contiguous = self
-            .commit_files
-            .iter()
-            .collect_vec()
-            .windows(2)
-            .all(|cfs| {
-                cfs[0].location.commit_version().unwrap() - 1
-                    == cfs[1].location.commit_version().unwrap()
-            });
-        if !is_contiguous {
-            return Err(DeltaTableError::Generic(
-                "non-contiguous log segment".into(),
-            ));
-        }
-
-        let checkpoint_version = self
-            .checkpoint_files
-            .iter()
-            .filter_map(|f| f.location.commit_version())
-            .max();
-        if let Some(v) = checkpoint_version {
-            if !self
-                .commit_files
-                .iter()
-                .all(|f| f.location.commit_version() > Some(v))
-            {
-                return Err(DeltaTableError::Generic("inconsistent log segment".into()));
-            }
-        }
-        Ok(())
     }
 
     /// Returns the highest commit version number in the log segment
     pub fn file_version(&self) -> Option<i64> {
+        let dummy_url = Url::parse("dummy:///").unwrap();
         self.commit_files
-            .iter()
-            .filter_map(|f| f.location.commit_version())
-            .max()
-            .or(self
-                .checkpoint_files
-                .first()
-                .and_then(|f| f.location.commit_version()))
+            .front()
+            .and_then(|f| {
+                let file_url = dummy_url.join(f.location.as_ref()).ok()?;
+                let parsed = ParsedLogPath::try_from(file_url).ok()?;
+                parsed.map(|p| p.version as i64)
+            })
+            .or(self.checkpoint_files.first().and_then(|f| {
+                let file_url = dummy_url.join(f.location.as_ref()).ok()?;
+                let parsed = ParsedLogPath::try_from(file_url).ok()?;
+                parsed.map(|p| p.version as i64)
+            }))
     }
 
     #[cfg(test)]
     pub(super) fn new_test<'a>(
         commits: impl IntoIterator<Item = &'a CommitData>,
+        table_root: &Path,
     ) -> DeltaResult<(Self, Vec<Result<RecordBatch, DeltaTableError>>)> {
         let mut log = Self {
             version: -1,
@@ -249,7 +165,7 @@ impl LogSegment {
         let iter = log
             .advance(
                 commits,
-                &Path::default(),
+                table_root,
                 crate::kernel::models::fields::log_schema(),
                 &Default::default(),
             )?
@@ -263,9 +179,17 @@ impl LogSegment {
 
     /// Returns the last modified timestamp for a commit file with the given version
     pub fn version_timestamp(&self, version: i64) -> Option<chrono::DateTime<Utc>> {
+        let dummy_url = Url::parse("dummy:///").unwrap();
         self.commit_files
             .iter()
-            .find(|f| f.location.commit_version() == Some(version))
+            .find(|f| {
+                let parsed = dummy_url
+                    .join(f.location.as_ref())
+                    .ok()
+                    .and_then(|p| ParsedLogPath::try_from(p).ok())
+                    .flatten();
+                parsed.map(|p| p.version == version as u64).unwrap_or(false)
+            })
             .map(|f| f.last_modified)
     }
 
@@ -275,13 +199,13 @@ impl LogSegment {
         read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<RecordBatch>>> {
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
 
-        let decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
+        let decoder = json::get_decoder(Arc::new(read_schema.try_into_arrow()?), config)?;
         let stream = futures::stream::iter(self.commit_files.iter())
             .map(move |meta| {
-                let store = store.clone();
-                async move { store.get(&meta.location).await?.bytes().await }
+                let root_store = root_store.clone();
+                async move { root_store.get(&meta.location).await?.bytes().await }
             })
             .buffered(config.log_buffer_size);
         Ok(json::decode_stream(decoder, stream).boxed())
@@ -293,17 +217,17 @@ impl LogSegment {
         read_schema: &Schema,
         config: &DeltaTableConfig,
     ) -> BoxStream<'_, DeltaResult<RecordBatch>> {
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
 
         let batch_size = config.log_batch_size;
         let read_schema = Arc::new(read_schema.clone());
         futures::stream::iter(self.checkpoint_files.clone())
             .map(move |meta| {
-                let store = store.clone();
+                let root_store = root_store.clone();
                 let read_schema = read_schema.clone();
                 async move {
-                    let mut reader =
-                        ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
+                    let mut reader = ParquetObjectReader::new(root_store, meta.location)
+                        .with_file_size(meta.size);
                     let options = ArrowReaderOptions::new();
                     let reader_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
 
@@ -407,7 +331,7 @@ impl LogSegment {
         config: &DeltaTableConfig,
     ) -> DeltaResult<impl Iterator<Item = Result<RecordBatch, DeltaTableError>> + '_> {
         let log_path = table_root.child("_delta_log");
-        let mut decoder = json::get_decoder(Arc::new(read_schema.try_into()?), config)?;
+        let mut decoder = json::get_decoder(Arc::new(read_schema.try_into_arrow()?), config)?;
 
         let mut commit_data = Vec::new();
         for commit in commits {
@@ -433,6 +357,30 @@ impl LogSegment {
         commit_data.reverse();
         Ok(commit_data.into_iter().flatten().map(Ok))
     }
+}
+
+fn validate(
+    commit_files: &[(ObjectMeta, ParsedLogPath<Url>)],
+    checkpoint_files: &[(ObjectMeta, ParsedLogPath<Url>)],
+) -> DeltaResult<()> {
+    let is_contiguous = commit_files
+        .iter()
+        .collect_vec()
+        .windows(2)
+        .all(|cfs| cfs[0].1.version - 1 == cfs[1].1.version);
+    if !is_contiguous {
+        return Err(DeltaTableError::Generic(
+            "non-contiguous log segment".into(),
+        ));
+    }
+
+    let checkpoint_version = checkpoint_files.iter().map(|f| f.1.version).max();
+    if let Some(v) = checkpoint_version {
+        if !commit_files.iter().all(|f| f.1.version > v) {
+            return Err(DeltaTableError::Generic("inconsistent log segment".into()));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -476,25 +424,32 @@ async fn read_last_checkpoint(
 /// List all log files after a given checkpoint.
 async fn list_log_files_with_checkpoint(
     cp: &CheckpointMetadata,
-    fs_client: &dyn ObjectStore,
+    root_store: &dyn ObjectStore,
     log_root: &Path,
-) -> DeltaResult<(Vec<ObjectMeta>, Vec<ObjectMeta>)> {
+    store_root: &Url,
+) -> DeltaResult<(
+    Vec<(ObjectMeta, ParsedLogPath<Url>)>,
+    Vec<(ObjectMeta, ParsedLogPath<Url>)>,
+)> {
     let version_prefix = format!("{:020}", cp.version);
     let start_from = log_root.child(version_prefix.as_str());
 
-    let files = fs_client
+    let files = root_store
         .list_with_offset(Some(log_root), &start_from)
         .try_collect::<Vec<_>>()
         .await?
         .into_iter()
-        // TODO this filters out .crc files etc which start with "." - how do we want to use these kind of files?
-        .filter(|f| f.location.commit_version().is_some())
+        .filter_map(|f| {
+            let file_url = store_root.join(f.location.as_ref()).ok()?;
+            let path = ParsedLogPath::try_from(file_url).ok()??;
+            Some((f, path))
+        })
         .collect::<Vec<_>>();
 
     let mut commit_files = files
         .iter()
         .filter_map(|f| {
-            if f.location.is_commit_file() && f.location.commit_version() > Some(cp.version) {
+            if matches!(f.1.file_type, LogPathFileType::Commit) && f.1.version > cp.version as u64 {
                 Some(f.clone())
             } else {
                 None
@@ -503,12 +458,19 @@ async fn list_log_files_with_checkpoint(
         .collect_vec();
 
     // NOTE: this will sort in reverse order
-    commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
+    commit_files.sort_unstable_by(|a, b| b.0.location.cmp(&a.0.location));
 
     let checkpoint_files = files
         .iter()
         .filter_map(|f| {
-            if f.location.is_checkpoint_file() && f.location.commit_version() == Some(cp.version) {
+            if matches!(
+                f.1.file_type,
+                // UUID named checkpoints are part of the v2 spec and can currently not be parsed.
+                // This will be supported once we do kernel log replay.
+                // | LogPathFileType::UuidCheckpoint(_)
+                LogPathFileType::SinglePartCheckpoint | LogPathFileType::MultiPartCheckpoint { .. }
+            ) && f.1.version == cp.version as u64
+            {
                 Some(f.clone())
             } else {
                 None
@@ -532,11 +494,15 @@ async fn list_log_files_with_checkpoint(
 ///
 /// Relevant files are the max checkpoint found and all subsequent commits.
 pub(super) async fn list_log_files(
-    fs_client: &dyn ObjectStore,
+    root_store: &dyn ObjectStore,
     log_root: &Path,
     max_version: Option<i64>,
     start_version: Option<i64>,
-) -> DeltaResult<(Vec<ObjectMeta>, Vec<ObjectMeta>)> {
+    store_root: &Url,
+) -> DeltaResult<(
+    Vec<(ObjectMeta, ParsedLogPath<Url>)>,
+    Vec<(ObjectMeta, ParsedLogPath<Url>)>,
+)> {
     let max_version = max_version.unwrap_or(i64::MAX - 1);
     let start_from = log_root.child(format!("{:020}", start_version.unwrap_or(0)).as_str());
 
@@ -544,19 +510,28 @@ pub(super) async fn list_log_files(
     let mut commit_files = Vec::with_capacity(25);
     let mut checkpoint_files = Vec::with_capacity(10);
 
-    for meta in fs_client
+    for meta in root_store
         .list_with_offset(Some(log_root), &start_from)
         .try_collect::<Vec<_>>()
         .await?
+        .into_iter()
+        .filter_map(|f| {
+            let file_url = store_root.join(f.location.as_ref()).ok()?;
+            let path = ParsedLogPath::try_from(file_url).ok()??;
+            Some((f, path))
+        })
     {
-        if meta.location.commit_version().unwrap_or(i64::MAX) <= max_version
-            && meta.location.commit_version() >= start_version
-        {
-            if meta.location.is_checkpoint_file() {
-                let version = meta.location.commit_version().unwrap_or(0);
-                match version.cmp(&max_checkpoint_version) {
+        if meta.1.version <= max_version as u64 && Some(meta.1.version as i64) >= start_version {
+            if matches!(
+                meta.1.file_type,
+                // UUID named checkpoints are part of the v2 spec and can currently not be parsed.
+                // This will be supported once we do kernel log replay.
+                // | LogPathFileType::UuidCheckpoint(_)
+                LogPathFileType::SinglePartCheckpoint | LogPathFileType::MultiPartCheckpoint { .. }
+            ) {
+                match (meta.1.version as i64).cmp(&max_checkpoint_version) {
                     Ordering::Greater => {
-                        max_checkpoint_version = version;
+                        max_checkpoint_version = meta.1.version as i64;
                         checkpoint_files.clear();
                         checkpoint_files.push(meta);
                     }
@@ -565,15 +540,15 @@ pub(super) async fn list_log_files(
                     }
                     _ => {}
                 }
-            } else if meta.location.is_commit_file() {
+            } else if matches!(meta.1.file_type, LogPathFileType::Commit) {
                 commit_files.push(meta);
             }
         }
     }
 
-    commit_files.retain(|f| f.location.commit_version().unwrap_or(0) > max_checkpoint_version);
+    commit_files.retain(|f| f.1.version as i64 > max_checkpoint_version);
     // NOTE this will sort in reverse order
-    commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
+    commit_files.sort_unstable_by(|a, b| b.0.location.cmp(&a.0.location));
 
     Ok((commit_files, checkpoint_files))
 }
@@ -623,21 +598,26 @@ pub(super) mod tests {
         let log_store = TestTables::SimpleWithCheckpoint
             .table_builder()
             .build_storage()?;
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
+        let log_url = log_store.table_root_url().join("_delta_log/")?;
+        let log_path = Path::from_url_path(log_url.path())?;
+        let mut store_url = log_url.clone();
+        store_url.set_path("");
 
-        let log_path = Path::from("_delta_log");
-        let cp = read_last_checkpoint(&store, &log_path).await?.unwrap();
+        let cp = read_last_checkpoint(&root_store, &log_path).await?.unwrap();
         assert_eq!(cp.version, 10);
 
-        let (log, check) = list_log_files_with_checkpoint(&cp, &store, &log_path).await?;
+        let (log, check) =
+            list_log_files_with_checkpoint(&cp, &root_store, &log_path, &store_url).await?;
         assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(&store, &log_path, None, None).await?;
+        let (log, check) = list_log_files(&root_store, &log_path, None, None, &store_url).await?;
         assert_eq!(log.len(), 0);
         assert_eq!(check.len(), 1);
 
-        let (log, check) = list_log_files(&store, &log_path, Some(8), None).await?;
+        let (log, check) =
+            list_log_files(&root_store, &log_path, Some(8), None, &store_url).await?;
         assert_eq!(log.len(), 9);
         assert_eq!(check.len(), 0);
 
@@ -652,13 +632,18 @@ pub(super) mod tests {
         assert_eq!(segment.checkpoint_files.len(), 0);
 
         let log_store = TestTables::Simple.table_builder().build_storage()?;
-        let store = log_store.object_store(None);
+        let root_store = log_store.root_object_store(None);
+        let log_url = log_store.log_root_url();
+        let mut store_url = log_url.clone();
+        store_url.set_path("");
+        let log_path = Path::from_url_path(log_url.path())?;
 
-        let (log, check) = list_log_files(&store, &log_path, None, None).await?;
+        let (log, check) = list_log_files(&root_store, &log_path, None, None, &store_url).await?;
         assert_eq!(log.len(), 5);
         assert_eq!(check.len(), 0);
 
-        let (log, check) = list_log_files(&store, &log_path, Some(2), None).await?;
+        let (log, check) =
+            list_log_files(&root_store, &log_path, Some(2), None, &store_url).await?;
         assert_eq!(log.len(), 3);
         assert_eq!(check.len(), 0);
 
@@ -783,23 +768,6 @@ pub(super) mod tests {
             async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
                 self.store.copy_if_not_exists(from, to).await
             }
-        }
-    }
-
-    #[test]
-    pub fn is_commit_file_only_matches_commits() {
-        for path in [0, 1, 5, 10, 100, i64::MAX]
-            .into_iter()
-            .map(crate::logstore::commit_uri_from_version)
-        {
-            assert!(path.is_commit_file());
-        }
-
-        let not_commits = ["_delta_log/_commit_2132c4fe-4077-476c-b8f5-e77fea04f170.json.tmp"];
-
-        for not_commit in not_commits {
-            let path = Path::from(not_commit);
-            assert!(!path.is_commit_file());
         }
     }
 
