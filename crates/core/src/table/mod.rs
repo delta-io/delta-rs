@@ -18,8 +18,8 @@ use crate::kernel::{
     CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
 };
 use crate::logstore::{
-    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreRef,
-    ObjectStoreRef,
+    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
+    LogStoreRef, ObjectStoreRef,
 };
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
@@ -32,11 +32,8 @@ pub mod config;
 pub mod state;
 pub mod state_arrow;
 
-mod checkpoint;
 mod columns;
 
-// Re-exposing for backwards compatibility
-pub use checkpoint::*;
 // Re-exposing for backwards compatibility
 pub use columns::*;
 
@@ -406,7 +403,15 @@ impl DeltaTable {
                 break;
             }
         }
-        let mut max_version = self.get_latest_version().await?;
+        let mut max_version = match self.get_latest_version().await {
+            Ok(version) => version,
+            Err(DeltaTableError::InvalidVersion(_)) => {
+                return Err(DeltaTableError::NotATable(
+                    log_store.table_root_url().to_string(),
+                ))
+            }
+            Err(e) => return Err(e),
+        };
         let mut version = min_version;
         let lowest_table_version = min_version;
         let target_ts = datetime.timestamp_millis();
