@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use validator::Validate;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
@@ -13,40 +14,33 @@ use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum TableMetadataUpdate {
-    /// Update the table name
-    TableName(String),
-    /// Update the table description
-    TableDescription(String),
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Validate)]
+#[validate(schema(
+    function = "validate_at_least_one_field",
+    message = "No metadata update specified"
+))]
+pub struct TableMetadataUpdate {
+    #[validate(length(
+        min = 1,
+        max = 255,
+        message = "Table name cannot be empty and cannot exceed 255 characters"
+    ))]
+    pub name: Option<String>,
+
+    #[validate(length(
+        max = 4000,
+        message = "Table description cannot exceed 4000 characters"
+    ))]
+    pub description: Option<String>,
 }
 
-impl TableMetadataUpdate {
-    /// Create a validated table name update
-    pub fn table_name(name: impl Into<String>) -> DeltaResult<Self> {
-        let name = name.into();
-        if name.len() > 255 {
-            return Err(DeltaTableError::MetadataError(format!(
-                "Table name cannot exceed 255 characters. Provided name has {} characters.",
-                name.len()
-            )));
-        }
-        Ok(TableMetadataUpdate::TableName(name))
+fn validate_at_least_one_field(
+    update: &TableMetadataUpdate,
+) -> Result<(), validator::ValidationError> {
+    if update.name.is_none() && update.description.is_none() {
+        return Err(validator::ValidationError::new("no_fields_specified"));
     }
-
-    /// Create a validated table description update
-    pub fn table_description(description: impl Into<String>) -> DeltaResult<Self> {
-        let description = description.into();
-        let max_description_length = 4000;
-        if description.len() > max_description_length {
-            return Err(DeltaTableError::MetadataError(format!(
-                "Table description cannot exceed {} characters. Provided description has {} characters.",
-                max_description_length,
-                description.len()
-            )));
-        }
-        Ok(TableMetadataUpdate::TableDescription(description))
-    }
+    Ok(())
 }
 
 /// Update table metadata operation
@@ -83,16 +77,19 @@ impl UpdateTableMetadataBuilder {
         }
     }
 
+    /// Specify the complete metadata update
     pub fn with_update(mut self, update: TableMetadataUpdate) -> Self {
         self.update = Some(update);
         self
     }
 
+    /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self
     }
 
+    /// Set a custom execute handler, for pre and post execution
     pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
         self
@@ -114,28 +111,17 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
             let update = this.update.ok_or_else(|| {
                 DeltaTableError::MetadataError("No metadata update specified".to_string())
             })?;
+            update
+                .validate()
+                .map_err(|e| DeltaTableError::MetadataError(format!("{}", e)))?;
 
             let mut metadata = this.snapshot.metadata().clone();
 
-            match update.clone() {
-                TableMetadataUpdate::TableName(name) => {
-                    if name.len() > 255 {
-                        return Err(DeltaTableError::MetadataError(format!(
-                            "Table name cannot exceed 255 characters. Provided name has {} characters.",
-                            name.len()
-                        )));
-                    }
-                    metadata.name = Some(name.clone());
-                }
-                TableMetadataUpdate::TableDescription(description) => {
-                    if description.len() > 4000 {
-                        return Err(DeltaTableError::MetadataError(format!(
-                            "Table description cannot exceed 4,000 characters. Provided description has {} characters.",
-                            description.len()
-                        )));
-                    }
-                    metadata.description = Some(description.clone());
-                }
+            if let Some(name) = &update.name {
+                metadata.name = Some(name.clone());
+            }
+            if let Some(description) = &update.description {
+                metadata.description = Some(description.clone());
             }
 
             let operation = DeltaOperation::UpdateTableMetadata {
