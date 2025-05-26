@@ -1534,12 +1534,25 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn set_table_name(&self, name: String) -> PyResult<()> {
+    #[pyo3(signature = (name, commit_properties=None))]
+    pub fn set_table_name(
+        &self,
+        name: String,
+        commit_properties: Option<PyCommitProperties>,
+    ) -> PyResult<()> {
+        let update = TableMetadataUpdate {
+            name: Some(name),
+            description: None,
+        };
         let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_update(TableMetadataUpdate::TableName(name));
+            .with_update(update);
+
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
 
         if self.log_store()?.name() == "LakeFSLogStore" {
-            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}));
         }
 
         let table = rt()
@@ -1549,12 +1562,25 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn set_table_description(&self, description: String) -> PyResult<()> {
+    #[pyo3(signature = (description, commit_properties=None))]
+    pub fn set_table_description(
+        &self,
+        description: String,
+        commit_properties: Option<PyCommitProperties>,
+    ) -> PyResult<()> {
+        let update = TableMetadataUpdate {
+            name: None,
+            description: Some(description),
+        };
         let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_update(TableMetadataUpdate::TableDescription(description));
+            .with_update(update);
+
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
 
         if self.log_store()?.name() == "LakeFSLogStore" {
-            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}));
         }
 
         let table = rt()
