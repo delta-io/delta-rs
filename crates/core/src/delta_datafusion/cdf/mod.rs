@@ -103,11 +103,9 @@ impl FileAction for Remove {
         } else {
             match self.partition_values {
                 Some(ref part_map) => Ok(part_map),
-                _ => Err(crate::DeltaTableError::Protocol {
-                    source: crate::protocol::ProtocolError::InvalidField(
-                        "partition_values".to_string(),
-                    ),
-                }),
+                _ => Err(crate::DeltaTableError::MetadataError(
+                    "Remove action is missing required field: 'partition_values'".to_string(),
+                )),
             }
         }
     }
@@ -123,9 +121,9 @@ impl FileAction for Remove {
         } else {
             match self.size {
                 Some(size) => Ok(size as usize),
-                _ => Err(crate::DeltaTableError::Protocol {
-                    source: crate::protocol::ProtocolError::InvalidField("size".to_string()),
-                }),
+                _ => Err(crate::DeltaTableError::MetadataError(
+                    "Remove action is missing required field: 'size'".to_string(),
+                )),
             }
         }
     }

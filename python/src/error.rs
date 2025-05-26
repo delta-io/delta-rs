@@ -1,6 +1,5 @@
 use arrow_schema::ArrowError;
 use deltalake::datafusion::error::DataFusionError;
-use deltalake::protocol::ProtocolError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::{
@@ -123,24 +122,6 @@ fn arrow_to_py(err: ArrowError) -> PyErr {
     }
 }
 
-fn checkpoint_to_py(err: ProtocolError) -> PyErr {
-    match err {
-        ProtocolError::Arrow { source } => arrow_to_py(source),
-        ProtocolError::ObjectStore { source } => object_store_to_py(source),
-        ProtocolError::EndOfLog => DeltaProtocolError::new_err("End of log"),
-        ProtocolError::NoMetaData => DeltaProtocolError::new_err("Table metadata missing"),
-        ProtocolError::CheckpointNotFound => DeltaProtocolError::new_err(err.to_string()),
-        ProtocolError::InvalidField(err) => PyValueError::new_err(err),
-        ProtocolError::InvalidRow(err) => PyValueError::new_err(err),
-        ProtocolError::InvalidDeletionVectorStorageType(err) => PyValueError::new_err(err),
-        ProtocolError::SerializeOperation { source } => PyValueError::new_err(source.to_string()),
-        ProtocolError::ParquetParseError { source } => PyIOError::new_err(source.to_string()),
-        ProtocolError::IO { source } => PyIOError::new_err(source.to_string()),
-        ProtocolError::Generic(msg) => DeltaError::new_err(msg),
-        ProtocolError::Kernel { source } => DeltaError::new_err(source.to_string()),
-    }
-}
-
 fn datafusion_to_py(err: DataFusionError) -> PyErr {
     DeltaError::new_err(err.to_string())
 }
@@ -153,8 +134,6 @@ pub enum PythonError {
     ObjectStore(#[from] ObjectStoreError),
     #[error("Error in arrow")]
     Arrow(#[from] ArrowError),
-    #[error("Error in checkpoint")]
-    Protocol(#[from] ProtocolError),
     #[error("Error in data fusion")]
     DataFusion(#[from] DataFusionError),
     #[error("Lock acquisition error")]
@@ -173,7 +152,6 @@ impl From<PythonError> for pyo3::PyErr {
             PythonError::DeltaTable(err) => inner_to_py_err(err),
             PythonError::ObjectStore(err) => object_store_to_py(err),
             PythonError::Arrow(err) => arrow_to_py(err),
-            PythonError::Protocol(err) => checkpoint_to_py(err),
             PythonError::DataFusion(err) => datafusion_to_py(err),
             PythonError::ThreadingError(err) => PyRuntimeError::new_err(err),
         }

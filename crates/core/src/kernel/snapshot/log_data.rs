@@ -180,12 +180,12 @@ impl LogicalFile<'_> {
 
     /// Datetime of the last modification time of the file.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        DateTime::from_timestamp_millis(self.modification_time()).ok_or(DeltaTableError::from(
-            crate::protocol::ProtocolError::InvalidField(format!(
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or(
+            DeltaTableError::MetadataError(format!(
                 "invalid modification_time: {:?}",
                 self.modification_time()
             )),
-        ))
+        )
     }
 
     /// The partition values for this logical file.
