@@ -97,6 +97,10 @@ impl DeltaTableState {
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
+    #[deprecated(
+        since = "0.27.0",
+        note = "Tombstones are no longer exposed via public APIs. If you require access to tombstones, please file an issue."
+    )]
     pub async fn all_tombstones(
         &self,
         log_store: &dyn LogStore,
@@ -113,6 +117,10 @@ impl DeltaTableState {
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
+    #[deprecated(
+        since = "0.27.0",
+        note = "Tombstones are no longer exposed via public APIs. If you require access to tombstones, please file an issue."
+    )]
     pub async fn unexpired_tombstones(
         &self,
         log_store: &dyn LogStore,
@@ -122,6 +130,7 @@ impl DeltaTableState {
                 .table_config()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
+        #[allow(deprecated)]
         let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
         Ok(tombstones
             .into_iter()

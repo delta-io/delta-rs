@@ -264,7 +264,7 @@ impl DeltaTable {
             .await?
             .try_collect::<Vec<_>>()
             .await?;
-        Ok(infos.into_iter().flatten().collect())
+        Ok(infos.into_iter().flat_map(|v| v.map(|vv| vv.1)).collect())
     }
 
     /// Obtain Add actions for files that match the filter
