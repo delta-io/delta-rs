@@ -19,17 +19,9 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use super::ProtocolError;
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{open_table_with_version, DeltaTable};
 use crate::{DeltaResult, DeltaTableError};
-
-use core::str::Utf8Error;
-impl From<Utf8Error> for ProtocolError {
-    fn from(value: Utf8Error) -> Self {
-        Self::Generic(value.to_string())
-    }
-}
 
 /// Creates checkpoint for a given table version, table state and object store
 pub(crate) async fn create_checkpoint_for(
@@ -128,8 +120,7 @@ pub async fn cleanup_metadata(
 ) -> DeltaResult<usize> {
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - table
-            .snapshot()
-            .map_err(|_| ProtocolError::NoMetaData)?
+            .snapshot()?
             .table_config()
             .log_retention_duration()
             .as_millis() as i64;
@@ -151,10 +142,8 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     cleanup: Option<bool>,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let table = open_table_with_version(table_uri, version)
-        .await
-        .map_err(|err| ProtocolError::Generic(err.to_string()))?;
-    let snapshot = table.snapshot().map_err(|_| ProtocolError::NoMetaData)?;
+    let table = open_table_with_version(table_uri, version).await?;
+    let snapshot = table.snapshot()?;
     create_checkpoint_for(version as u64, table.log_store.as_ref(), operation_id).await?;
 
     let enable_expired_log_cleanup =
