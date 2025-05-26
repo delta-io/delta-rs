@@ -8,11 +8,8 @@ use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
 
-use arrow_schema::ArrowError;
-use object_store::Error as ObjectStoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::error;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
@@ -20,80 +17,6 @@ use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, Ta
 pub mod checkpoints;
 
 pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
-
-/// Error returned when an invalid Delta log action is encountered.
-#[allow(missing_docs)]
-#[derive(thiserror::Error, Debug)]
-pub enum ProtocolError {
-    #[error("Table state does not contain metadata")]
-    NoMetaData,
-
-    #[error("Checkpoint file not found")]
-    CheckpointNotFound,
-
-    #[error("End of transaction log")]
-    EndOfLog,
-
-    /// The action contains an invalid field.
-    #[error("Invalid action field: {0}")]
-    InvalidField(String),
-
-    /// A parquet log checkpoint file contains an invalid action.
-    #[error("Invalid action in parquet row: {0}")]
-    InvalidRow(String),
-
-    /// A transaction log contains invalid deletion vector storage type
-    #[error("Invalid deletion vector storage type: {0}")]
-    InvalidDeletionVectorStorageType(String),
-
-    /// A generic action error. The wrapped error string describes the details.
-    #[error("Generic action error: {0}")]
-    Generic(String),
-
-    /// Error returned when parsing checkpoint parquet using the parquet crate.
-    #[error("Failed to parse parquet checkpoint: {source}")]
-    ParquetParseError {
-        /// Parquet error details returned when parsing the checkpoint parquet
-        #[from]
-        source: parquet::errors::ParquetError,
-    },
-
-    /// Failed to serialize operation
-    #[error("Failed to serialize operation: {source}")]
-    SerializeOperation {
-        #[from]
-        /// The source error
-        source: serde_json::Error,
-    },
-
-    /// Error returned when converting the schema to Arrow format failed.
-    #[error("Failed to convert into Arrow schema: {}", .source)]
-    Arrow {
-        /// Arrow error details returned when converting the schema in Arrow format failed
-        #[from]
-        source: ArrowError,
-    },
-
-    /// Passthrough error returned when calling ObjectStore.
-    #[error("ObjectStoreError: {source}")]
-    ObjectStore {
-        /// The source ObjectStoreError.
-        #[from]
-        source: ObjectStoreError,
-    },
-
-    #[error("Io: {source}")]
-    IO {
-        #[from]
-        source: std::io::Error,
-    },
-
-    #[error("Kernel: {source}")]
-    Kernel {
-        #[from]
-        source: crate::kernel::Error,
-    },
-}
 
 /// Struct used to represent minValues and maxValues in add action statistics.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -474,8 +397,7 @@ impl DeltaOperation {
 
     /// Parameters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
-        if let Some(Some(Some(map))) = serde_json::to_value(self)
-            .map_err(|err| ProtocolError::SerializeOperation { source: err })?
+        if let Some(Some(Some(map))) = serde_json::to_value(self)?
             .as_object()
             .map(|p| p.values().next().map(|q| q.as_object()))
         {
@@ -494,10 +416,9 @@ impl DeltaOperation {
                 })
                 .collect())
         } else {
-            Err(ProtocolError::Generic(
+            Err(DeltaTableError::Generic(
                 "Operation parameters serialized into unexpected shape".into(),
-            )
-            .into())
+            ))
         }
     }
 
