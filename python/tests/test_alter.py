@@ -604,7 +604,10 @@ def test_set_table_name_character_limit(tmp_path: pathlib.Path, sample_table: Ta
     assert dt.metadata().name == name_255_chars
 
     name_256_chars = "y" * 256
-    with pytest.raises(DeltaError, match="Table name cannot exceed 255 characters"):
+    with pytest.raises(
+        DeltaError,
+        match="Table metadata is invalid: name: Table name cannot be empty and cannot exceed 255 characters",
+    ):
         dt.alter.set_table_name(name_256_chars)
 
 
@@ -620,6 +623,20 @@ def test_set_table_description_character_limit(
 
     desc_4001_chars = "y" * 4001
     with pytest.raises(
-        DeltaError, match="Table description cannot exceed 4,000 characters"
+        DeltaError,
+        match="Table metadata is invalid: description: Table description cannot exceed 4000 characters",
     ):
         dt.alter.set_table_description(desc_4001_chars)
+
+
+def test_set_table_metadata_name_none_should_raise_error(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(
+        DeltaError,
+        match="Table metadata is invalid: name: Table name cannot be empty and cannot exceed 255 characters",
+    ):
+        dt.alter.set_table_name("")

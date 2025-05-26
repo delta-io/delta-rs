@@ -1,5 +1,6 @@
 use deltalake_core::kernel::transaction::CommitProperties;
 use deltalake_core::kernel::StructType;
+
 use deltalake_core::operations::update_table_metadata::TableMetadataUpdate;
 use deltalake_core::operations::DeltaOps;
 use serde_json::json;
@@ -25,9 +26,13 @@ async fn test_update_table_name_valid() {
         .unwrap();
 
     let name = "test_table_name";
+    let update = TableMetadataUpdate {
+        name: Some(name.to_string()),
+        description: None,
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(name.to_string()))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -45,11 +50,13 @@ async fn test_update_table_description_valid() {
         .unwrap();
 
     let description = "This is a test table description";
+    let update = TableMetadataUpdate {
+        name: None,
+        description: Some(description.to_string()),
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableDescription(
-            description.to_string(),
-        ))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -67,9 +74,13 @@ async fn test_update_table_name_character_limit_valid() {
         .unwrap();
 
     let name_255_chars = "x".repeat(255);
+    let update = TableMetadataUpdate {
+        name: Some(name_255_chars.clone()),
+        description: None,
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(name_255_chars.clone()))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -87,15 +98,18 @@ async fn test_update_table_name_character_limit_exceeded() {
         .unwrap();
 
     let name_256_chars = "x".repeat(256);
+    let update = TableMetadataUpdate {
+        name: Some(name_256_chars),
+        description: None,
+    };
     let result = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(name_256_chars))
+        .with_update(update)
         .await;
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
-    assert!(error_message.contains("Table name cannot exceed 255 characters"));
-    assert!(error_message.contains("256 characters"));
+    assert!(error_message.contains("Table name cannot be empty and cannot exceed 255 characters"));
 }
 
 #[tokio::test]
@@ -107,11 +121,13 @@ async fn test_update_table_description_character_limit_valid() {
         .unwrap();
 
     let description_4000_chars = "y".repeat(4000);
+    let update = TableMetadataUpdate {
+        name: None,
+        description: Some(description_4000_chars.clone()),
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableDescription(
-            description_4000_chars.clone(),
-        ))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -132,17 +148,18 @@ async fn test_update_table_description_character_limit_exceeded() {
         .unwrap();
 
     let description_4001_chars = "y".repeat(4001);
+    let update = TableMetadataUpdate {
+        name: None,
+        description: Some(description_4001_chars),
+    };
     let result = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableDescription(
-            description_4001_chars,
-        ))
+        .with_update(update)
         .await;
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
-    assert!(error_message.contains("Table description cannot exceed 4,000 characters"));
-    assert!(error_message.contains("4001 characters"));
+    assert!(error_message.contains("Table description cannot exceed 4000 characters"));
 }
 
 #[tokio::test]
@@ -154,9 +171,13 @@ async fn test_update_existing_table_name() {
         .unwrap();
 
     let initial_name = "initial_table_name";
+    let update = TableMetadataUpdate {
+        name: Some(initial_name.to_string()),
+        description: None,
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(initial_name.to_string()))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -167,9 +188,13 @@ async fn test_update_existing_table_name() {
     );
 
     let new_name = "updated_table_name";
+    let update = TableMetadataUpdate {
+        name: Some(new_name.to_string()),
+        description: None,
+    };
     let final_table = DeltaOps(updated_table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(new_name.to_string()))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -189,11 +214,13 @@ async fn test_update_existing_table_description() {
         .unwrap();
 
     let initial_description = "Initial table description";
+    let update = TableMetadataUpdate {
+        name: None,
+        description: Some(initial_description.to_string()),
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableDescription(
-            initial_description.to_string(),
-        ))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -209,11 +236,13 @@ async fn test_update_existing_table_description() {
     );
 
     let new_description = "Updated table description with more details";
+    let update = TableMetadataUpdate {
+        name: None,
+        description: Some(new_description.to_string()),
+    };
     let final_table = DeltaOps(updated_table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableDescription(
-            new_description.to_string(),
-        ))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -237,15 +266,18 @@ async fn test_empty_table_name() {
         .await
         .unwrap();
 
-    let updated_table = DeltaOps(table)
+    let update = TableMetadataUpdate {
+        name: Some("".to_string()),
+        description: None,
+    };
+    let result = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName("".to_string()))
-        .await
-        .unwrap();
+        .with_update(update)
+        .await;
 
-    let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.name.as_ref().unwrap(), "");
-    assert_eq!(updated_table.version(), 1);
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(error_message.contains("Table name cannot be empty"));
 }
 
 #[tokio::test]
@@ -256,9 +288,13 @@ async fn test_empty_table_description() {
         .await
         .unwrap();
 
+    let update = TableMetadataUpdate {
+        name: None,
+        description: Some("".to_string()),
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableDescription("".to_string()))
+        .with_update(update)
         .await
         .unwrap();
 
@@ -283,24 +319,6 @@ async fn test_no_update_specified() {
 }
 
 #[tokio::test]
-async fn test_helper_methods() {
-    let name_update = TableMetadataUpdate::table_name("test_table").unwrap();
-    assert!(matches!(name_update, TableMetadataUpdate::TableName(_)));
-
-    let desc_update = TableMetadataUpdate::table_description("test description").unwrap();
-    assert!(matches!(
-        desc_update,
-        TableMetadataUpdate::TableDescription(_)
-    ));
-
-    let invalid_name = TableMetadataUpdate::table_name("x".repeat(256));
-    assert!(invalid_name.is_err());
-
-    let invalid_desc = TableMetadataUpdate::table_description("y".repeat(4001));
-    assert!(invalid_desc.is_err());
-}
-
-#[tokio::test]
 async fn test_with_commit_properties() {
     let table = DeltaOps::new_in_memory()
         .create()
@@ -314,9 +332,13 @@ async fn test_with_commit_properties() {
     ]);
 
     let name = "test_table_with_commit_props";
+    let update = TableMetadataUpdate {
+        name: Some(name.to_string()),
+        description: None,
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(name.to_string()))
+        .with_update(update)
         .with_commit_properties(commit_properties)
         .await
         .unwrap();
@@ -393,9 +415,13 @@ async fn test_with_custom_execute_handler() {
     });
 
     let name = "test_table_with_handler";
+    let update = TableMetadataUpdate {
+        name: Some(name.to_string()),
+        description: None,
+    };
     let updated_table = DeltaOps(table)
         .update_table_metadata()
-        .with_update(TableMetadataUpdate::TableName(name.to_string()))
+        .with_update(update)
         .with_custom_execute_handler(handler.clone())
         .await
         .unwrap();
@@ -404,7 +430,6 @@ async fn test_with_custom_execute_handler() {
     assert_eq!(metadata.name.as_ref().unwrap(), name);
     assert_eq!(updated_table.version(), 1);
 
-    // Verify the handler methods were called
     assert!(handler
         .pre_execute_called
         .load(std::sync::atomic::Ordering::SeqCst));

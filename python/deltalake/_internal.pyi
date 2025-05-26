@@ -168,13 +168,11 @@ class RawDeltaTable:
         self,
         name: str,
         commit_properties: CommitProperties | None = None,
-        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None: ...
     def set_table_description(
         self,
         description: str,
         commit_properties: CommitProperties | None = None,
-        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None: ...
     def restore(
         self,
