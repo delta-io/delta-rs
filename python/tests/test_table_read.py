@@ -1021,3 +1021,28 @@ def test_read_query_builder_show_output(capsys, caplog):
     qb.execute(query).show()
     assert "query contains no records" in caplog.text
     assert capsys.readouterr().out.strip() == ""
+
+
+def test_read_added_column():
+    table_path = tempfile.gettempdir() + "/single_col_evolution"
+
+    write_deltalake(table_path, pa.table({"a": [1, 2, 3]}), mode="overwrite", schema_mode="overwrite")
+    write_deltalake(table_path, pa.table({"a": [4, 5, 6], "b": [7, 8, 9]}), mode="append", schema_mode="merge")
+    dt = DeltaTable(table_path)
+    # specifically selecting b to ensure schema mapper can map empty record batch
+    batches = QueryBuilder().register("tbl", dt).sql("select b from tbl order by b").fetchall()
+
+    actual = []
+    for batch in batches:
+        actual.extend(batch.to_pylist())
+
+    expected = [
+        {"b": None},
+        {"b": None},
+        {"b": None},
+        {"b": 7},
+        {"b": 8},
+        {"b": 9},
+    ]
+
+    assert actual == expected
