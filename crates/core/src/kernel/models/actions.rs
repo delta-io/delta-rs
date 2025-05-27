@@ -725,14 +725,6 @@ pub struct Add {
 
     /// The name of the clustering implementation
     pub clustering_provider: Option<String>,
-
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    /// raw parquet format. This field needs to be written when statistics are available and the
-    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<parquet::record::Row>,
 }
 
 /// Represents a tombstone (deleted file) in the Delta log.

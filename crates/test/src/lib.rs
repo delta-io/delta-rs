@@ -129,7 +129,6 @@ pub async fn add_file(
             partition_values: part_values,
             data_change: true,
             stats: None,
-            stats_parsed: None,
             tags: None,
             default_row_commit_version: None,
             base_row_id: None,
