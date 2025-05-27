@@ -328,7 +328,6 @@ impl LogicalFile<'_> {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
-            stats_parsed: None,
         }
     }
 

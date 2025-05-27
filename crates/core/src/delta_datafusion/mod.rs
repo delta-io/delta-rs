@@ -2269,7 +2269,6 @@ mod tests {
             data_change: true,
             stats: None,
             deletion_vector: None,
-            stats_parsed: None,
             tags: None,
             base_row_id: None,
             default_row_commit_version: None,

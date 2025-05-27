@@ -167,7 +167,6 @@ pub(super) fn read_adds(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Add
                     base_row_id: None,
                     default_row_commit_version: None,
                     clustering_provider: None,
-                    stats_parsed: None,
                 });
             }
         }
