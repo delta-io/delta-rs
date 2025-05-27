@@ -435,7 +435,6 @@ fn add_action(name: &str) -> Action {
         modification_time: ts as i64,
         data_change: true,
         stats: None,
-        stats_parsed: None,
         tags: None,
         deletion_vector: None,
         base_row_id: None,

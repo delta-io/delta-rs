@@ -34,7 +34,6 @@ impl ActionFactory {
             deletion_vector: None,
             base_row_id: None,
             clustering_provider: None,
-            stats_parsed: None,
         }
     }
 

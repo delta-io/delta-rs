@@ -130,7 +130,6 @@ impl Worker {
             modification_time: 1564524294000,
             data_change: true,
             stats: None,
-            stats_parsed: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,

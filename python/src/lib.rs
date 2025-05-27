@@ -2180,7 +2180,6 @@ impl From<&PyAddAction> for Add {
             modification_time: action.modification_time,
             data_change: action.data_change,
             stats: action.stats.clone(),
-            stats_parsed: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
