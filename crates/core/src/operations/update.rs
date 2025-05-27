@@ -550,6 +550,7 @@ mod tests {
     use arrow_schema::DataType;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::*;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -863,7 +864,7 @@ mod tests {
                 true,
             ),
             StructField::new(
-                "ValUe".to_string(),
+                "ValUe".to_string(), // spellchecker:disable-line
                 DeltaDataType::Primitive(PrimitiveType::Integer),
                 true,
             ),
@@ -876,7 +877,7 @@ mod tests {
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("Id", DataType::Utf8, true),
-            Field::new("ValUe", DataType::Int32, true),
+            Field::new("ValUe", DataType::Int32, true), // spellchecker:disable-line
             Field::new("mOdified", DataType::Utf8, true),
         ]));
 
@@ -912,7 +913,7 @@ mod tests {
 
         let expected = vec![
             "+----+-------+------------+",
-            "| Id | ValUe | mOdified   |",
+            "| Id | ValUe | mOdified   |", // spellchecker:disable-line
             "+----+-------+------------+",
             "| A  | 1     | 2021-02-02 |",
             "| B  | 10    | 2021-02-02 |",
@@ -1100,7 +1101,7 @@ mod tests {
                 true,
             ),
         ]);
-        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+        let arrow_schema: ArrowSchema = (&schema).try_into_arrow().unwrap();
 
         // Create the first batch
         let arrow_field = Field::new("element", DataType::Int32, false);
@@ -1170,7 +1171,7 @@ mod tests {
                 true,
             ),
         ]);
-        let arrow_schema: ArrowSchema = (&schema).try_into().unwrap();
+        let arrow_schema: ArrowSchema = (&schema).try_into_arrow().unwrap();
 
         // Create the first batch
         let arrow_field = Field::new("element", DataType::Int64, true);

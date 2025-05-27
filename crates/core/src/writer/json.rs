@@ -1,11 +1,11 @@
 //! Main writer API to write json messages to delta table
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
@@ -24,7 +24,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt, StructType};
+use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::writer::utils::ShareableBuffer;
@@ -258,9 +258,11 @@ impl JsonWriter {
             .table
             .schema()
             .expect("Failed to unwrap schema for table");
-        <ArrowSchema as TryFrom<&StructType>>::try_from(schema)
-            .expect("Failed to coerce delta schema to arrow")
-            .into()
+        Arc::new(
+            schema
+                .try_into_arrow()
+                .expect("Failed to coerce delta schema to arrow"),
+        )
     }
 
     fn divide_by_partition_values(
@@ -487,7 +489,7 @@ mod tests {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
         let schema = table.schema().unwrap();
-        let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(schema).unwrap();
+        let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
             table.table_uri(),
             Arc::new(arrow_schema),
@@ -563,8 +565,7 @@ mod tests {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
 
-        let arrow_schema =
-            <ArrowSchema as TryFrom<&StructType>>::try_from(table.schema().unwrap()).unwrap();
+        let arrow_schema: ArrowSchema = table.schema().unwrap().try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
             table.table_uri(),
             Arc::new(arrow_schema),
@@ -601,8 +602,7 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let table = get_test_table(&table_dir).await;
 
-            let arrow_schema =
-                <ArrowSchema as TryFrom<&StructType>>::try_from(table.schema().unwrap()).unwrap();
+            let arrow_schema: ArrowSchema = table.schema().unwrap().try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 table.table_uri(),
                 Arc::new(arrow_schema),
@@ -636,13 +636,14 @@ mod tests {
             }
         }
 
+        #[cfg(feature = "datafusion")]
         #[tokio::test]
         async fn test_json_write_mismatched_schema() {
             let table_dir = tempfile::tempdir().unwrap();
             let mut table = get_test_table(&table_dir).await;
 
             let schema = table.schema().unwrap();
-            let arrow_schema = <ArrowSchema as TryFrom<&StructType>>::try_from(schema).unwrap();
+            let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 table.table_uri(),
                 Arc::new(arrow_schema),
@@ -678,6 +679,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_json_write_checkpoint() {
         use std::fs;
@@ -726,6 +728,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_json_write_data_skipping_stats_columns() {
         let table_dir = tempfile::tempdir().unwrap();
@@ -774,6 +777,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_json_write_data_skipping_num_indexed_cols() {
         let table_dir = tempfile::tempdir().unwrap();

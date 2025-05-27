@@ -13,6 +13,7 @@ use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow_select::take::take;
 use bytes::Bytes;
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
@@ -28,7 +29,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
-use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, StructType};
+use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::operations::cast::merge_schema::merge_arrow_schema;
 use crate::table::builder::DeltaTableBuilder;
@@ -102,8 +103,7 @@ impl RecordBatchWriter {
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.metadata()?;
-        let arrow_schema =
-            <ArrowSchema as TryFrom<&StructType>>::try_from(&metadata.schema()?.clone())?;
+        let arrow_schema: ArrowSchema = (&metadata.schema()?).try_into_arrow()?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -275,7 +275,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         let mut adds: Vec<Action> = self.flush().await?.drain(..).map(Action::Add).collect();
 
         if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
-            let schema: StructType = self.arrow_schema_ref.clone().try_into()?;
+            let schema: StructType = self.arrow_schema_ref.clone().try_into_kernel()?;
             if !self.partition_columns.is_empty() {
                 return Err(DeltaTableError::Generic(
                     "Merging Schemas with partition columns present is currently unsupported"
@@ -499,6 +499,7 @@ mod tests {
     use arrow::json::ReaderBuilder;
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use delta_kernel::schema::StructType;
     use std::path::Path;
 
     #[tokio::test]
@@ -592,7 +593,7 @@ mod tests {
                 "metadata" : {"some-key" : "some-value"}}"#
             .as_bytes();
 
-        let schema: ArrowSchema = (&delta_schema).try_into().unwrap();
+        let schema: ArrowSchema = (&delta_schema).try_into_arrow().unwrap();
 
         // Using a batch size of two since the buf above only has two records
         let mut decoder = ReaderBuilder::new(Arc::new(schema))
@@ -722,6 +723,7 @@ mod tests {
 
     // The following sets of tests are related to #1386 and mergeSchema support
     // <https://github.com/delta-io/delta-rs/issues/1386>
+    #[cfg(feature = "datafusion")]
     mod schema_evolution {
         use itertools::Itertools;
 
@@ -1032,6 +1034,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_write_data_skipping_stats_columns() {
         let batch = get_record_batch(None, false);
@@ -1080,6 +1083,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_write_data_skipping_num_indexed_colsn() {
         let batch = get_record_batch(None, false);

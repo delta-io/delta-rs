@@ -57,7 +57,7 @@ chrono = { workspace = true, default-features = false, features = ["clock"] }
 regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
-url = { workspace = true }
+url = { workspace = true, features = ["serde"] }
 urlencoding = { workspace = true }
 
 # runtime
@@ -89,25 +89,23 @@ num-bigint = "0.4"
 num-traits = "0.2.15"
 parking_lot = "0.12"
 percent-encoding = "2"
-roaring = "0.10.1"
 tracing = { workspace = true }
 rand = "0.8"
-z85 = "3.0.5"
 maplit = "1"
 sqlparser = { version = "0.56.0" }
 humantime = { version = "2.1.0" }
+validator = { version = "0.19", features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.5"
 ctor = "0"
 datatest-stable = "0.2"
-deltalake-test = { path = "../test", features = ["datafusion"] }
+deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
 maplit = "1"
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
-rand = "0.8"
 rstest = { version = "0.25.0" }
 serial_test = "3"
 tempfile = "3"
@@ -136,6 +134,52 @@ cloud = ["object_store/cloud"]
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
 
+integration_test = []
+
 [[test]]
 name = "dat"
 harness = false
+
+[[test]]
+name = "command_optimize"
+required-features = ["datafusion"]
+
+[[test]]
+name = "command_merge"
+required-features = ["datafusion"]
+
+[[test]]
+name = "command_restore"
+required-features = ["datafusion"]
+
+[[test]]
+name = "checkpoint_writer"
+required-features = ["datafusion"]
+
+[[test]]
+name = "command_filesystem_check"
+required-features = ["datafusion"]
+
+[[test]]
+name = "command_vacuum"
+required-features = ["datafusion"]
+
+[[test]]
+name = "commit_info_format"
+required-features = ["datafusion"]
+
+[[test]]
+name = "integration"
+required-features = ["datafusion"]
+
+[[test]]
+name = "integration_checkpoint"
+required-features = ["datafusion"]
+
+[[test]]
+name = "read_delta_log_test"
+required-features = ["datafusion"]
+
+[[test]]
+name = "read_delta_partitions_test"
+required-features = ["datafusion"]

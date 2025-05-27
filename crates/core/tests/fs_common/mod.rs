@@ -89,7 +89,6 @@ pub fn add(offset_millis: i64) -> Add {
         modification_time: Utc::now().timestamp_millis() - offset_millis,
         data_change: true,
         stats: None,
-        stats_parsed: None,
         tags: None,
         deletion_vector: None,
         base_row_id: None,

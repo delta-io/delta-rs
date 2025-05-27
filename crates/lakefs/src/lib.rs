@@ -27,13 +27,14 @@ impl S3StorageOptionsConversion for LakeFSLogStoreFactory {}
 impl LogStoreFactory for LakeFSLogStoreFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         config: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let options = StorageConfig::parse_options(self.with_env_s3(&config.raw.clone()))?;
         debug!("LakeFSLogStoreFactory has been asked to create a LogStore");
-        lakefs_logstore(store, location, &options)
+        lakefs_logstore(prefixed_store, root_store, location, &options)
     }
 }
 

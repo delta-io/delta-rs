@@ -180,12 +180,12 @@ impl LogicalFile<'_> {
 
     /// Datetime of the last modification time of the file.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        DateTime::from_timestamp_millis(self.modification_time()).ok_or(DeltaTableError::from(
-            crate::protocol::ProtocolError::InvalidField(format!(
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or(
+            DeltaTableError::MetadataError(format!(
                 "invalid modification_time: {:?}",
                 self.modification_time()
             )),
-        ))
+        )
     }
 
     /// The partition values for this logical file.
@@ -328,7 +328,6 @@ impl LogicalFile<'_> {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
-            stats_parsed: None,
         }
     }
 
@@ -891,14 +890,53 @@ mod datafusion {
             arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
         }
 
-        // This function is required since DataFusion 35.0, but is implemented as a no-op
-        // https://github.com/apache/arrow-datafusion/blob/ec6abece2dcfa68007b87c69eefa6b0d7333f628/datafusion/core/src/datasource/physical_plan/parquet/page_filter.rs#L550
-        fn contained(
-            &self,
-            _column: &Column,
-            _value: &HashSet<ScalarValue>,
-        ) -> Option<BooleanArray> {
-            None
+        // This function is optional but will optimize partition column pruning
+        fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+            if value.is_empty() || !self.metadata.partition_columns.contains(&column.name) {
+                return None;
+            }
+
+            // Retrieve the partition values for the column
+            let partition_values = self.pick_stats(column, "__dummy__")?;
+
+            let partition_values = partition_values
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or(DeltaTableError::generic(
+                    "failed to downcast string result to StringArray.",
+                ))
+                .ok()?;
+
+            let mut contains = Vec::with_capacity(partition_values.len());
+
+            // TODO: this was inspired by parquet's BloomFilter pruning, decide if we should
+            //  just convert to Vec<String> for a subset of column types and use .contains
+            fn check_scalar(pv: &str, value: &ScalarValue) -> bool {
+                match value {
+                    ScalarValue::Utf8(Some(v))
+                    | ScalarValue::Utf8View(Some(v))
+                    | ScalarValue::LargeUtf8(Some(v)) => pv == v,
+
+                    ScalarValue::Dictionary(_, inner) => check_scalar(pv, inner),
+                    // FIXME: is this a good enough default or should we sync this with
+                    //  expr_applicable_for_cols and bail out with None
+                    _ => value.to_string() == pv,
+                }
+            }
+
+            for i in 0..partition_values.len() {
+                if partition_values.is_null(i) {
+                    contains.push(false);
+                } else {
+                    contains.push(
+                        value
+                            .iter()
+                            .any(|scalar| check_scalar(partition_values.value(i), scalar)),
+                    );
+                }
+            }
+
+            Some(BooleanArray::from(contains))
         }
     }
 }

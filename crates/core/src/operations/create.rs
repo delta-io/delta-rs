@@ -14,7 +14,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
-use crate::logstore::{LogStore, LogStoreRef};
+use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
@@ -229,8 +229,8 @@ impl CreateBuilder {
         self
     }
 
-    /// Provide a [`LogStore`] instance, that points at table location
-    pub fn with_log_store(mut self, log_store: Arc<dyn LogStore>) -> Self {
+    /// Provide a [`LogStore`] instance
+    pub fn with_log_store(mut self, log_store: LogStoreRef) -> Self {
         self.log_store = Some(log_store);
         self
     }
@@ -509,6 +509,7 @@ mod tests {
         assert_eq!(String::from("true"), append)
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_table_save_mode() {
         let tmp_dir = tempfile::tempdir().unwrap();
@@ -551,6 +552,7 @@ mod tests {
         assert_ne!(table.metadata().unwrap().id, first_id)
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_or_replace_existing_table() {
         let batch = get_record_batch(None, false);
@@ -576,6 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "datafusion")]
     async fn test_create_or_replace_existing_table_partitioned() {
         let batch = get_record_batch(None, false);
         let schema = get_delta_schema();

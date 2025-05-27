@@ -165,7 +165,8 @@ async fn test_repair_commit_entry() -> TestResult<()> {
         ensure_table_uri(table.table_uri())?,
         &options,
         &S3_OPTIONS,
-        std::sync::Arc::new(table.object_store()),
+        table.log_store().object_store(None),
+        table.log_store().root_object_store(None),
     )?;
 
     // create an incomplete log entry, commit file not yet moved from its temporary location
@@ -240,7 +241,8 @@ async fn test_abort_commit_entry() -> TestResult<()> {
         ensure_table_uri(table.table_uri())?,
         &options,
         &S3_OPTIONS,
-        std::sync::Arc::new(table.object_store()),
+        table.log_store().object_store(None),
+        table.log_store().root_object_store(None),
     )?;
 
     let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
@@ -287,7 +289,8 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
         ensure_table_uri(table.table_uri())?,
         &options,
         &S3_OPTIONS,
-        std::sync::Arc::new(table.object_store()),
+        table.log_store().object_store(None),
+        table.log_store().root_object_store(None),
     )?;
 
     let entry = create_incomplete_commit_entry(&table, 1, "finished_commit").await?;
@@ -432,7 +435,6 @@ fn add_action(name: &str) -> Action {
         modification_time: ts as i64,
         data_change: true,
         stats: None,
-        stats_parsed: None,
         tags: None,
         deletion_vector: None,
         base_row_id: None,

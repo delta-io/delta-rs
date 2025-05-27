@@ -1,8 +1,8 @@
 import os
 import pathlib
 
-import pyarrow as pa
 import pytest
+from arro3.core import Table
 
 from deltalake import CommitProperties, DeltaTable, write_deltalake
 
@@ -37,7 +37,10 @@ def test_vacuum_dry_run_simple_table():
 
 @pytest.mark.parametrize("use_relative", [True, False])
 def test_vacuum_zero_duration(
-    tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch, use_relative: bool
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    monkeypatch,
+    use_relative: bool,
 ):
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
@@ -46,10 +49,10 @@ def test_vacuum_zero_duration(
     else:
         table_path = str(tmp_path)
 
-    write_deltalake(table_path, sample_data, mode="overwrite")
+    write_deltalake(table_path, sample_table, mode="overwrite")
     dt = DeltaTable(table_path)
     original_files = set(dt.files())
-    write_deltalake(table_path, sample_data, mode="overwrite")
+    write_deltalake(table_path, sample_table, mode="overwrite")
     dt.update_incremental()
     new_files = set(dt.files())
     assert new_files.isdisjoint(original_files)
@@ -66,9 +69,9 @@ def test_vacuum_zero_duration(
     assert parquet_files == new_files
 
 
-def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
+def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
     for i in range(5):
-        write_deltalake(tmp_path, sample_data, mode="overwrite")
+        write_deltalake(tmp_path, sample_table, mode="overwrite")
 
     dt = DeltaTable(tmp_path)
 

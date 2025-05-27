@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+from abc import abstractmethod
 from collections.abc import Mapping
-from typing import Any
-
-import pyarrow as pa
-from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
+from typing import TYPE_CHECKING, Any
 
 from deltalake._internal import DeltaFileSystemHandler, RawDeltaTable
 
+if TYPE_CHECKING:
+    import pyarrow as pa
+    from pyarrow.fs import FileInfo, FileSelector
 
-# NOTE  we need to inherit form FileSystemHandler to pass pyarrow's internal type checks.
-class DeltaStorageHandler(FileSystemHandler):
+
+class BaseDeltaStorageHandler:
     """
-    DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.
+    BaseDeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.
     """
 
     def __init__(
@@ -31,7 +32,7 @@ class DeltaStorageHandler(FileSystemHandler):
         table: RawDeltaTable,
         options: dict[str, str] | None = None,
         known_sizes: dict[str, int] | None = None,
-    ) -> DeltaStorageHandler:
+    ) -> BaseDeltaStorageHandler:
         self = cls.__new__(cls)
         self._handler = DeltaFileSystemHandler.from_table(table, options, known_sizes)
         return self
@@ -65,21 +66,27 @@ class DeltaStorageHandler(FileSystemHandler):
         return self._handler.equals(other)
 
     def delete_dir_contents(
-        self, path: str, *, accept_root_dir: bool = False, missing_dir_ok: bool = False
+        self,
+        path: str,
+        *,
+        accept_root_dir: bool = False,
+        missing_dir_ok: bool = False,
     ) -> None:
         """Delete a directory's contents, recursively.
 
         Like delete_dir, but doesn't delete the directory itself.
         """
         return self._handler.delete_dir_contents(
-            path=path, accept_root_dir=accept_root_dir, missing_dir_ok=missing_dir_ok
+            path=path,
+            accept_root_dir=accept_root_dir,
+            missing_dir_ok=missing_dir_ok,
         )
 
     def delete_root_dir_contents(self) -> None:
         """Delete the root directory contents, recursively."""
         return self._handler.delete_root_dir_contents()
 
-    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
+    def get_file_info(self, paths: list[str]) -> list["FileInfo"]:
         """Get info for the given files.
 
         A non-existing or unreachable file returns a FileStat object and has a FileType of value NotFound.
@@ -100,7 +107,8 @@ class DeltaStorageHandler(FileSystemHandler):
         """Normalize filesystem path."""
         return self._handler.normalize_path(path)
 
-    def open_input_file(self, path: str) -> pa.PythonFile:
+    @abstractmethod
+    def open_input_file(self, path: str) -> "pa.PythonFile":
         """
         Open an input file for random access reading.
 
@@ -110,9 +118,9 @@ class DeltaStorageHandler(FileSystemHandler):
         Returns:
             NativeFile
         """
-        return pa.PythonFile(self._handler.open_input_file(path))
 
-    def open_input_stream(self, path: str) -> pa.PythonFile:
+    @abstractmethod
+    def open_input_stream(self, path: str) -> "pa.PythonFile":
         """
         Open an input stream for sequential reading.
 
@@ -122,11 +130,11 @@ class DeltaStorageHandler(FileSystemHandler):
         Returns:
             NativeFile
         """
-        return pa.PythonFile(self._handler.open_input_file(path))
 
+    @abstractmethod
     def open_output_stream(
         self, path: str, metadata: dict[str, str] | None = None
-    ) -> pa.PythonFile:
+    ) -> "pa.PythonFile":
         """
         Open an output stream for sequential writing.
 
@@ -139,9 +147,8 @@ class DeltaStorageHandler(FileSystemHandler):
         Returns:
             NativeFile
         """
-        return pa.PythonFile(self._handler.open_output_stream(path, metadata))
 
-    def get_file_info_selector(self, selector: FileSelector) -> list[FileInfo]:
+    def get_file_info_selector(self, selector: "FileSelector") -> list["FileInfo"]:
         """
         Get info for the files defined by FileSelector.
 

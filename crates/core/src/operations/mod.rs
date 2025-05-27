@@ -25,6 +25,7 @@ use self::filesystem_check::FileSystemCheckBuilder;
 use self::optimize::OptimizeBuilder;
 use self::restore::RestoreBuilder;
 use self::set_tbl_properties::SetTablePropertiesBuilder;
+use self::update_table_metadata::UpdateTableMetadataBuilder;
 use self::vacuum::VacuumBuilder;
 #[cfg(feature = "datafusion")]
 use self::{
@@ -46,6 +47,7 @@ pub mod drop_constraints;
 pub mod filesystem_check;
 pub mod restore;
 pub mod update_field_metadata;
+pub mod update_table_metadata;
 pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
@@ -302,6 +304,11 @@ impl DeltaOps {
     /// Update field metadata
     pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
         UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
+    }
+
+    /// Update table metadata
+    pub fn update_table_metadata(self) -> UpdateTableMetadataBuilder {
+        UpdateTableMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 }
 

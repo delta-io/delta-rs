@@ -138,13 +138,21 @@ impl CdfLoadBuilder {
         } else {
             self.calculate_earliest_version().await?
         };
-        let latest_version = self.log_store.get_latest_version(start).await?; // Start from 0 since if start > latest commit, the returned commit is not a valid commit
-
-        let mut end = self.ending_version.unwrap_or(latest_version);
 
         let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
         let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
         let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
+
+        // Start from 0 since if start > latest commit, the returned commit is not a valid commit
+        let latest_version = match self.log_store.get_latest_version(start).await {
+            Ok(latest_version) => latest_version,
+            Err(DeltaTableError::InvalidVersion(_)) if self.allow_out_of_range => {
+                return Ok((change_files, add_files, remove_files));
+            }
+            Err(e) => return Err(e),
+        };
+
+        let mut end = self.ending_version.unwrap_or(latest_version);
 
         if end > latest_version {
             end = latest_version;
@@ -175,10 +183,10 @@ impl CdfLoadBuilder {
             .log_store
             .read_commit_entry(latest_version)
             .await?
-            .ok_or(DeltaTableError::InvalidVersion(latest_version));
+            .ok_or(DeltaTableError::InvalidVersion(latest_version))?;
 
         let latest_version_actions: Vec<Action> =
-            get_actions(latest_version, latest_snapshot_bytes?).await?;
+            get_actions(latest_version, latest_snapshot_bytes).await?;
         let latest_version_commit = latest_version_actions
             .iter()
             .find(|a| matches!(a, Action::CommitInfo(_)));
@@ -475,6 +483,7 @@ pub(crate) mod tests {
     use chrono::NaiveDateTime;
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_batches_sorted_eq;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 
     use crate::test_utils::TestSchemas;
@@ -661,10 +670,10 @@ pub(crate) mod tests {
             .await;
 
         assert!(table.is_err());
-        assert!(table
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid version. Start version 5 is greater than end version 4"));
+        assert!(matches!(
+            table.unwrap_err(),
+            DeltaTableError::InvalidVersion(5)
+        ));
 
         Ok(())
     }
@@ -811,7 +820,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
 
-        let schema = Arc::new(Schema::try_from(delta_schema)?);
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),

@@ -3,9 +3,10 @@ use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::{DeltaResult, DeltaTableBuilder};
 use fs_extra::dir::{copy, CopyOptions};
 use std::collections::HashMap;
-use std::env;
 use std::process::ExitStatus;
 use tempfile::{tempdir, TempDir};
+
+pub use deltalake_core::test_utils::TestTables;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
@@ -128,7 +129,7 @@ impl IntegrationContext {
         name: impl AsRef<str>,
     ) -> TestResult {
         self.integration
-            .copy_directory(&table.as_path(), name.as_ref())?;
+            .copy_directory(&table.as_path().to_str().unwrap(), name.as_ref())?;
         Ok(())
     }
 
@@ -141,82 +142,6 @@ impl IntegrationContext {
         }
         for (key, value) in self.env_vars.iter() {
             std::env::set_var(key, value);
-        }
-    }
-}
-
-/// Reference tables from the test data folder
-pub enum TestTables {
-    Simple,
-    SimpleWithCheckpoint,
-    SimpleCommit,
-    Golden,
-    Delta0_8_0Partitioned,
-    Delta0_8_0SpecialPartitioned,
-    Checkpoints,
-    LatestNotCheckpointed,
-    WithDvSmall,
-    Custom(String),
-}
-
-impl TestTables {
-    fn as_path(&self) -> String {
-        // env "CARGO_MANIFEST_DIR" is "the directory containing the manifest of your package",
-        // set by `cargo run` or `cargo test`, see:
-        // https://doc.rust-lang.org/cargo/reference/environment-variables.html
-        let dir = env!("CARGO_MANIFEST_DIR");
-        let data_path = std::path::Path::new(dir).join("tests/data");
-        match self {
-            Self::Simple => data_path.join("simple_table").to_str().unwrap().to_owned(),
-            Self::SimpleWithCheckpoint => data_path
-                .join("simple_table_with_checkpoint")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            Self::SimpleCommit => data_path.join("simple_commit").to_str().unwrap().to_owned(),
-            Self::Golden => data_path
-                .join("golden/data-reader-array-primitives")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            Self::Delta0_8_0Partitioned => data_path
-                .join("delta-0.8.0-partitioned")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            Self::Delta0_8_0SpecialPartitioned => data_path
-                .join("delta-0.8.0-special-partition")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            Self::Checkpoints => data_path.join("checkpoints").to_str().unwrap().to_owned(),
-            Self::LatestNotCheckpointed => data_path
-                .join("latest_not_checkpointed")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            Self::WithDvSmall => data_path
-                .join("table-with-dv-small")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            // the data path for upload does not apply to custom tables.
-            Self::Custom(_) => todo!(),
-        }
-    }
-
-    pub fn as_name(&self) -> String {
-        match self {
-            Self::Simple => "simple".into(),
-            Self::SimpleWithCheckpoint => "simple_table_with_checkpoint".into(),
-            Self::SimpleCommit => "simple_commit".into(),
-            Self::Golden => "golden".into(),
-            Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
-            Self::Delta0_8_0SpecialPartitioned => "delta-0.8.0-special-partition".into(),
-            Self::Checkpoints => "checkpoints".into(),
-            Self::LatestNotCheckpointed => "latest_not_checkpointed".into(),
-            Self::WithDvSmall => "table-with-dv-small".into(),
-            Self::Custom(name) => name.to_owned(),
         }
     }
 }

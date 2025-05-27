@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.0.0-rc0"
+version = "1.0.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>", "Will Jones <willjones127@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -16,6 +16,8 @@ doc = false
 
 [dependencies]
 delta_kernel.workspace = true
+
+pyo3-arrow = { version = "0.9.0", default-features = false}
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }

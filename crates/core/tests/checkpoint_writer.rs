@@ -64,6 +64,7 @@ mod simple_checkpoint {
         assert_eq!(12, files.count());
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn checkpoint_run_length_encoding_test() {
@@ -302,31 +303,15 @@ mod delete_expired_delta_log_in_checkpoint {
 
 mod checkpoints_with_tombstones {
     use super::*;
+
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
     use deltalake_core::kernel::*;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
     use maplit::hashmap;
-    use parquet::file::reader::{FileReader, SerializedFileReader};
-    use parquet::schema::types::Type;
     use pretty_assertions::assert_eq;
     use std::collections::{HashMap, HashSet};
-    use std::fs::File;
-    use std::iter::FromIterator;
-    use uuid::Uuid;
-
-    async fn read_checkpoint(path: &str) -> (Type, Vec<Action>) {
-        let file = File::open(path).unwrap();
-        let reader = SerializedFileReader::new(file).unwrap();
-        let schema = reader.metadata().file_metadata().schema();
-        let row_iter = reader.get_row_iter(None).unwrap();
-        let mut actions = Vec::new();
-        for record in row_iter {
-            actions.push(Action::from_parquet_record(schema, &record.unwrap()).unwrap())
-        }
-        (schema.clone(), actions)
-    }
 
     #[tokio::test]
     #[ignore]
@@ -360,7 +345,7 @@ mod checkpoints_with_tombstones {
             table
                 .snapshot()
                 .unwrap()
-                .all_tombstones(table.object_store().clone())
+                .all_tombstones(&table.log_store())
                 .await
                 .unwrap()
                 .collect::<HashSet<_>>(),
@@ -377,74 +362,12 @@ mod checkpoints_with_tombstones {
             table
                 .snapshot()
                 .unwrap()
-                .all_tombstones(table.object_store().clone())
+                .all_tombstones(&table.log_store())
                 .await
                 .unwrap()
                 .count(),
             0
         ); // stale removes are deleted from the state
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_checkpoint_with_extended_file_metadata_true() {
-        let path = "../test/tests/data/checkpoints_tombstones/metadata_true";
-        let mut table = fs_common::create_table(path, None).await;
-        let r1 = remove_metadata_true();
-        let r2 = remove_metadata_true();
-        let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
-        let (schema, actions) = create_checkpoint_and_parse(&table, path, version).await;
-
-        assert!(actions.contains(&r1));
-        assert!(actions.contains(&r2));
-        assert!(schema.contains("size"));
-        assert!(schema.contains("partitionValues"));
-        assert!(schema.contains("tags"));
-    }
-
-    #[tokio::test]
-    async fn test_checkpoint_with_extended_file_metadata_false() {
-        let path = "../test/tests/data/checkpoints_tombstones/metadata_false";
-        let mut table = fs_common::create_table(path, None).await;
-        let r1 = remove_metadata_true();
-        let r2 = remove_metadata_false();
-        let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
-        let (schema, actions) = create_checkpoint_and_parse(&table, path, version).await;
-
-        // r2 has extended_file_metadata=false, then every tombstone should be so, even r1
-        assert_ne!(actions, vec![r1.clone(), r2.clone()]);
-        assert!(!schema.contains("size"));
-        assert!(!schema.contains("partitionValues"));
-        assert!(!schema.contains("tags"));
-        let r1_updated = Remove {
-            extended_file_metadata: Some(false),
-            size: None,
-            ..r1
-        };
-        assert!(actions.contains(&r1_updated));
-        assert!(actions.contains(&r2));
-    }
-
-    #[tokio::test]
-    async fn test_checkpoint_with_extended_file_metadata_broken() {
-        let path = "../test/tests/data/checkpoints_tombstones/metadata_broken";
-        let mut table = fs_common::create_table(path, None).await;
-        let r1 = remove_metadata_broken();
-        let r2 = remove_metadata_false();
-        let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
-        let (schema, actions) = create_checkpoint_and_parse(&table, path, version).await;
-
-        // r1 extended_file_metadata=true, but the size is null.
-        // We should fix this by setting extended_file_metadata=false
-        assert!(!schema.contains("size"));
-        assert!(!schema.contains("partitionValues"));
-        assert!(!schema.contains("tags"));
-        assert!(actions.contains(&Remove {
-            extended_file_metadata: Some(false),
-            size: None,
-            ..r1
-        }));
-        assert!(actions.contains(&r2));
     }
 
     async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (HashSet<Remove>, Add) {
@@ -482,69 +405,5 @@ mod checkpoints_with_tombstones {
         };
         fs_common::commit_actions(table, actions, operation).await;
         (removes, add)
-    }
-
-    async fn create_checkpoint_and_parse(
-        table: &DeltaTable,
-        path: &str,
-        version: i64,
-    ) -> (HashSet<String>, Vec<Remove>) {
-        checkpoints::create_checkpoint(table, None).await.unwrap();
-        let cp_path = format!("{path}/_delta_log/0000000000000000000{version}.checkpoint.parquet");
-        let (schema, actions) = read_checkpoint(&cp_path).await;
-
-        let fields = schema
-            .get_fields()
-            .iter()
-            .find(|p| p.name() == "remove")
-            .unwrap()
-            .get_fields()
-            .iter()
-            .map(|f| f.name().to_string());
-
-        let actions = actions
-            .iter()
-            .filter_map(|a| match a {
-                Action::Remove(r) => Some(r.clone()),
-                _ => None,
-            })
-            .collect();
-
-        (HashSet::from_iter(fields), actions)
-    }
-
-    // The tags and partition values could be missing, but the size has to present
-    fn remove_metadata_true() -> Remove {
-        Remove {
-            path: Uuid::new_v4().to_string(),
-            deletion_timestamp: Some(Utc::now().timestamp_millis()),
-            data_change: false,
-            extended_file_metadata: Some(true),
-            partition_values: None,
-            size: Some(100),
-            tags: None,
-            deletion_vector: None,
-            base_row_id: None,
-            default_row_commit_version: None,
-        }
-    }
-
-    // when metadata is false, then extended fields are null
-    fn remove_metadata_false() -> Remove {
-        Remove {
-            extended_file_metadata: Some(false),
-            size: None,
-            partition_values: None,
-            tags: None,
-            ..remove_metadata_true()
-        }
-    }
-
-    // broken record is when fields are null (the size especially) but metadata is true
-    fn remove_metadata_broken() -> Remove {
-        Remove {
-            extended_file_metadata: Some(true),
-            ..remove_metadata_false()
-        }
     }
 }

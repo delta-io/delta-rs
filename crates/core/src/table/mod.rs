@@ -1,6 +1,5 @@
 //! Delta Table read and write implementation
 
-use std::any::Any;
 use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
@@ -19,8 +18,8 @@ use crate::kernel::{
     CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
 };
 use crate::logstore::{
-    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreRef,
-    ObjectStoreRef,
+    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
+    LogStoreRef, ObjectStoreRef,
 };
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
@@ -33,180 +32,10 @@ pub mod config;
 pub mod state;
 pub mod state_arrow;
 
-/// Metadata for a checkpoint file
-#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
-#[serde(rename_all = "camelCase")]
-pub struct CheckPoint {
-    /// Delta table version
-    pub(crate) version: i64, // 20 digits decimals
-    /// The number of actions that are stored in the checkpoint.
-    pub(crate) size: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// The number of fragments if the last checkpoint was written in multiple parts. This field is optional.
-    pub(crate) parts: Option<u32>, // 10 digits decimals
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// The number of bytes of the checkpoint. This field is optional.
-    pub(crate) size_in_bytes: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// The number of AddFile actions in the checkpoint. This field is optional.
-    pub(crate) num_of_add_files: Option<i64>,
-}
+mod columns;
 
-#[derive(Default)]
-/// Builder for CheckPoint
-pub struct CheckPointBuilder {
-    /// Delta table version
-    pub(crate) version: i64, // 20 digits decimals
-    /// The number of actions that are stored in the checkpoint.
-    pub(crate) size: i64,
-    /// The number of fragments if the last checkpoint was written in multiple parts. This field is optional.
-    pub(crate) parts: Option<u32>, // 10 digits decimals
-    /// The number of bytes of the checkpoint. This field is optional.
-    pub(crate) size_in_bytes: Option<i64>,
-    /// The number of AddFile actions in the checkpoint. This field is optional.
-    pub(crate) num_of_add_files: Option<i64>,
-}
-
-impl CheckPointBuilder {
-    /// Creates a new [`CheckPointBuilder`] instance with the provided `version` and `size`.
-    /// Size is the total number of actions in the checkpoint. See size_in_bytes for total size in bytes.
-    pub fn new(version: i64, size: i64) -> Self {
-        CheckPointBuilder {
-            version,
-            size,
-            parts: None,
-            size_in_bytes: None,
-            num_of_add_files: None,
-        }
-    }
-
-    /// The number of fragments if the last checkpoint was written in multiple parts. This field is optional.
-    pub fn with_parts(mut self, parts: u32) -> Self {
-        self.parts = Some(parts);
-        self
-    }
-
-    /// The number of bytes of the checkpoint. This field is optional.
-    pub fn with_size_in_bytes(mut self, size_in_bytes: i64) -> Self {
-        self.size_in_bytes = Some(size_in_bytes);
-        self
-    }
-
-    /// The number of AddFile actions in the checkpoint. This field is optional.
-    pub fn with_num_of_add_files(mut self, num_of_add_files: i64) -> Self {
-        self.num_of_add_files = Some(num_of_add_files);
-        self
-    }
-
-    /// Build the final [`CheckPoint`] struct.
-    pub fn build(self) -> CheckPoint {
-        CheckPoint {
-            version: self.version,
-            size: self.size,
-            parts: self.parts,
-            size_in_bytes: self.size_in_bytes,
-            num_of_add_files: self.num_of_add_files,
-        }
-    }
-}
-
-impl CheckPoint {
-    /// Creates a new checkpoint from the given parameters.
-    pub fn new(version: i64, size: i64, parts: Option<u32>) -> Self {
-        Self {
-            version,
-            size,
-            parts: parts.or(None),
-            size_in_bytes: None,
-            num_of_add_files: None,
-        }
-    }
-}
-
-impl PartialEq for CheckPoint {
-    fn eq(&self, other: &Self) -> bool {
-        self.version == other.version
-    }
-}
-
-impl Eq for CheckPoint {}
-
-/// A constraint in a check constraint
-#[derive(Eq, PartialEq, Debug, Default, Clone)]
-pub struct Constraint {
-    /// The full path to the field.
-    pub name: String,
-    /// The SQL string that must always evaluate to true.
-    pub expr: String,
-}
-
-impl Constraint {
-    /// Create a new invariant
-    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
-        Self {
-            name: field_name.to_string(),
-            expr: invariant_sql.to_string(),
-        }
-    }
-}
-
-impl DataCheck for Constraint {
-    fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_expression(&self) -> &str {
-        &self.expr
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// A generated column
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct GeneratedColumn {
-    /// The full path to the field.
-    pub name: String,
-    /// The SQL string that generate the column value.
-    pub generation_expr: String,
-    /// The SQL string that must always evaluate to true.
-    pub validation_expr: String,
-    /// Data Type
-    pub data_type: DataType,
-}
-
-impl GeneratedColumn {
-    /// Create a new invariant
-    pub fn new(field_name: &str, sql_generation: &str, data_type: &DataType) -> Self {
-        Self {
-            name: field_name.to_string(),
-            generation_expr: sql_generation.to_string(),
-            validation_expr: format!("{field_name} = {sql_generation} OR ({field_name} IS NULL AND {sql_generation} IS NULL)"),
-            // validation_expr: format!("{field_name} <=> {sql_generation}"), // update to
-            data_type: data_type.clone()
-        }
-    }
-
-    pub fn get_generation_expression(&self) -> &str {
-        &self.generation_expr
-    }
-}
-
-impl DataCheck for GeneratedColumn {
-    fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_expression(&self) -> &str {
-        &self.validation_expr
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+// Re-exposing for backwards compatibility
+pub use columns::*;
 
 /// Return partition fields along with their data type from the current schema.
 pub(crate) fn get_partition_col_data_types<'a>(
@@ -371,18 +200,6 @@ impl DeltaTable {
         self.update_incremental(None).await
     }
 
-    #[deprecated(
-        since = "0.22.4",
-        note = "peek_next_commit has moved to the logstore, use table.log_store().peek_next_commit() instead please :)"
-    )]
-    /// Get the list of actions for the next commit
-    pub async fn peek_next_commit(
-        &self,
-        current_version: i64,
-    ) -> Result<PeekCommit, DeltaTableError> {
-        self.log_store().peek_next_commit(current_version).await
-    }
-
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(
@@ -390,15 +207,11 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(self.log_store.clone(), max_version).await,
+            Some(state) => state.update(&self.log_store, max_version).await,
             _ => {
-                let state = DeltaTableState::try_new(
-                    &Path::default(),
-                    self.log_store.object_store(None),
-                    self.config.clone(),
-                    max_version,
-                )
-                .await?;
+                let state =
+                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
+                        .await?;
                 self.state = Some(state);
                 Ok(())
             }
@@ -442,7 +255,7 @@ impl DeltaTable {
             .snapshot()?
             .snapshot
             .snapshot()
-            .commit_infos(self.object_store(), limit)
+            .commit_infos(&self.log_store(), limit)
             .await?
             .try_collect::<Vec<_>>()
             .await?;
@@ -561,13 +374,24 @@ impl DeltaTable {
     ) -> Result<(), DeltaTableError> {
         let mut min_version: i64 = -1;
         let log_store = self.log_store();
-        let prefix = Some(log_store.log_path());
+        let prefix = log_store.log_path();
         let offset_path = commit_uri_from_version(min_version);
         let object_store = log_store.object_store(None);
-        let mut files = object_store.list_with_offset(prefix, &offset_path);
+        let mut files = object_store.list_with_offset(Some(prefix), &offset_path);
 
         while let Some(obj_meta) = files.next().await {
             let obj_meta = obj_meta?;
+            let location_path: Path = obj_meta.location.clone();
+            let part_count = location_path.prefix_match(prefix).unwrap().count();
+            if part_count > 1 {
+                // Per the spec, ignore any files in subdirectories.
+                // Spark may create these as uncommitted transactions which we don't want
+                //
+                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#delta-log-entries
+                // "Delta files are stored as JSON in a directory at the *root* of the table
+                // named _delta_log, and ... make up the log of all changes that have occurred to a table."
+                continue;
+            }
             if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
                 if min_version == -1 {
                     min_version = log_version
@@ -579,7 +403,15 @@ impl DeltaTable {
                 break;
             }
         }
-        let mut max_version = self.get_latest_version().await?;
+        let mut max_version = match self.get_latest_version().await {
+            Ok(version) => version,
+            Err(DeltaTableError::InvalidVersion(_)) => {
+                return Err(DeltaTableError::NotATable(
+                    log_store.table_root_url().to_string(),
+                ))
+            }
+            Err(e) => return Err(e),
+        };
         let mut version = min_version;
         let lowest_table_version = min_version;
         let target_ts = datetime.timestamp_millis();
@@ -666,22 +498,5 @@ mod tests {
             .await
             .unwrap();
         (dt, tmp_dir)
-    }
-
-    #[test]
-    fn checkpoint_should_serialize_in_camel_case() {
-        let checkpoint = CheckPoint {
-            version: 1,
-            size: 1,
-            parts: None,
-            size_in_bytes: Some(1),
-            num_of_add_files: Some(1),
-        };
-
-        let checkpoint_json_serialized =
-            serde_json::to_string(&checkpoint).expect("could not serialize to json");
-
-        assert!(checkpoint_json_serialized.contains("sizeInBytes"));
-        assert!(checkpoint_json_serialized.contains("numOfAddFiles"));
     }
 }

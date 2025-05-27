@@ -90,13 +90,13 @@ use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::errors::DeltaTableError;
 use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
+use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
@@ -686,7 +686,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     // Update snapshot to latest version after successful conflict check
                     read_snapshot
-                        .update(this.log_store.clone(), Some(latest_version))
+                        .update(&this.log_store, Some(latest_version))
                         .await?;
                 }
                 let version: i64 = latest_version + 1;
@@ -760,7 +760,7 @@ impl PostCommit {
                 // This may only occur during concurrent write actions. We need to update the state first to - 1
                 // then we can advance.
                 snapshot
-                    .update(self.log_store.clone(), Some(self.version - 1))
+                    .update(&self.log_store, Some(self.version - 1))
                     .await?;
                 snapshot.advance(vec![&self.data])?;
             } else {
@@ -811,8 +811,7 @@ impl PostCommit {
                 .await? as u64;
                 if num_log_files_cleaned_up > 0 {
                     state = DeltaTableState::try_new(
-                        &state.snapshot().table_root(),
-                        self.log_store.object_store(None),
+                        &self.log_store,
                         state.load_config().clone(),
                         Some(self.version),
                     )
@@ -838,13 +837,9 @@ impl PostCommit {
                 },
             ))
         } else {
-            let state = DeltaTableState::try_new(
-                &Path::default(),
-                self.log_store.object_store(None),
-                Default::default(),
-                Some(self.version),
-            )
-            .await?;
+            let state =
+                DeltaTableState::try_new(&self.log_store, Default::default(), Some(self.version))
+                    .await?;
             Ok((
                 state,
                 PostCommitMetrics {
@@ -868,8 +863,7 @@ impl PostCommit {
 
         let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
-            create_checkpoint_for(version, table_state, log_store.as_ref(), Some(operation_id))
-                .await?;
+            create_checkpoint_for(version as u64, log_store.as_ref(), Some(operation_id)).await?;
             Ok(true)
         } else {
             Ok(false)
@@ -946,6 +940,7 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let url = Url::parse("mem://what/is/this").unwrap();
         let log_store = DefaultLogStore::new(
+            store.clone(),
             store.clone(),
             crate::logstore::LogStoreConfig {
                 location: url,

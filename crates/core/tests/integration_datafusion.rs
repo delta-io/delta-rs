@@ -13,6 +13,7 @@ use arrow_schema::{
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{common::collect, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
@@ -23,7 +24,7 @@ use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
-use deltalake_core::delta_datafusion::DeltaScan;
+use deltalake_core::delta_datafusion::{DeltaScan, DeltaTableFactory};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
@@ -33,22 +34,36 @@ use deltalake_core::{
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
-use deltalake_test::datafusion::*;
 use deltalake_test::utils::*;
 use serial_test::serial;
 use url::Url;
 
+pub fn context_with_delta_table_factory() -> SessionContext {
+    let mut state = SessionStateBuilder::new().build();
+    state
+        .table_factories_mut()
+        .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    SessionContext::new_with_state(state)
+}
+
 mod local {
+    use super::*;
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion::prelude::SessionConfig;
     use datafusion::{common::stats::Precision, datasource::provider_as_source};
-    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_common::assert_contains;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::{
+        LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
+    };
+    use datafusion_physical_plan::displayable;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
     use itertools::Itertools;
     use object_store::local::LocalFileSystem;
-
-    use super::*;
+    use TableProviderFilterPushDown::{Exact, Inexact};
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
@@ -110,7 +125,7 @@ mod local {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
-        let table_schema: StructType = batches[0].schema().try_into().unwrap();
+        let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
         let mut table = DeltaOps::try_from_uri(table_uri)
             .await
@@ -188,6 +203,157 @@ mod local {
         Ok(())
     }
 
+    struct PruningTestCase {
+        sql: String,
+        push_down: Vec<TableProviderFilterPushDown>,
+    }
+
+    impl PruningTestCase {
+        fn new(sql: &str) -> Self {
+            Self {
+                sql: sql.to_string(),
+                push_down: vec![Exact],
+            }
+        }
+
+        fn with_push_down(sql: &str, push_down: Vec<TableProviderFilterPushDown>) -> Self {
+            Self {
+                sql: sql.to_string(),
+                push_down,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_optimize_stats_partitioned_pushdown() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(2);
+        let ctx = SessionContext::new_with_config(config);
+        let table = open_table("../test/tests/data/http_requests").await?;
+        ctx.register_table("http_requests", Arc::new(table.clone()))?;
+
+        let sql = "SELECT COUNT(*) as num_events FROM http_requests WHERE date > '2023-04-13'";
+        let df = ctx.sql(sql).await?;
+        let plan = df.clone().create_physical_plan().await?;
+
+        // convert to explain plan form
+        let display = displayable(plan.as_ref()).indent(true).to_string();
+
+        assert_contains!(
+            &display,
+            "ProjectionExec: expr=[1437 as num_events]\n  PlaceholderRowExec"
+        );
+
+        let batches = df.collect().await?;
+        let batch = &batches[0];
+
+        assert_eq!(
+            batch.column(0).as_ref(),
+            Arc::new(Int64Array::from(vec![1437])).as_ref(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_query_partitioned_pushdown() -> Result<()> {
+        let ctx = SessionContext::new();
+        let table = open_table("../test/tests/data/delta-0.8.0-partitioned").await?;
+        ctx.register_table("demo", Arc::new(table.clone()))?;
+
+        let pruning_predicates = [
+            PruningTestCase::new("year > '2020'"),
+            PruningTestCase::new("year != '2020'"),
+            PruningTestCase::new("year = '2021'"),
+            PruningTestCase::with_push_down(
+                "year = '2021' AND day IS NOT NULL",
+                vec![Exact, Exact],
+            ),
+            PruningTestCase::new("year IN ('2021', '2022')"),
+            // NOT IN (a, b) is rewritten as (col != a AND col != b)
+            PruningTestCase::with_push_down("year NOT IN ('2020', '2022')", vec![Exact, Exact]),
+            // BETWEEN a AND b is rewritten as (col >= a AND col < b)
+            PruningTestCase::with_push_down("year BETWEEN '2021' AND '2022'", vec![Exact, Exact]),
+            PruningTestCase::new("year NOT BETWEEN '2019' AND '2020'"),
+            PruningTestCase::with_push_down(
+                "year = '2021' AND day IN ('4', '5', '20')",
+                vec![Exact, Exact],
+            ),
+            PruningTestCase::with_push_down(
+                "year = '2021' AND cast(day as int) <= 20",
+                vec![Exact, Inexact],
+            ),
+        ];
+
+        fn find_scan_filters(plan: &LogicalPlan) -> Vec<&Expr> {
+            let mut result = vec![];
+
+            plan.apply(|node| {
+                if let LogicalPlan::TableScan(TableScan { ref filters, .. }) = node {
+                    result = filters.iter().collect();
+                    Ok(TreeNodeRecursion::Stop) // Stop traversal once found
+                } else {
+                    Ok(TreeNodeRecursion::Continue) // Continue traversal
+                }
+            })
+            .expect("Traversal should not fail");
+
+            result
+        }
+
+        for pp in pruning_predicates {
+            let pred = pp.sql;
+            let sql = format!("SELECT CAST( day as int ) as my_day FROM demo WHERE {pred} ORDER BY CAST( day as int ) ASC");
+            println!("\nExecuting query: {}", sql);
+
+            let df = ctx.sql(sql.as_str()).await?;
+
+            // validate that we are correctly qualifying filters as Exact or Inexact
+            let plan = df.clone().into_optimized_plan()?;
+            let filters = find_scan_filters(&plan);
+            let push_down = table.supports_filters_pushdown(&filters)?;
+
+            assert_eq!(push_down, pp.push_down);
+
+            let batches = df.collect().await?;
+
+            let batch = &batches[0];
+
+            assert_eq!(
+                batch.column(0).as_ref(),
+                Arc::new(Int32Array::from(vec![4, 5, 20, 20])).as_ref(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_files_scanned_pushdown_limit() -> Result<()> {
+        use datafusion::prelude::*;
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let table = open_table("../test/tests/data/delta-0.8.0").await?;
+
+        // Simple Equality test, we only exercise the limit in this test
+        let e = col("value").eq(lit(2));
+        let metrics = get_scan_metrics(&table, &state, &[e.clone()]).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 0);
+
+        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(1)).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 1);
+
+        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(3)).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        assert_eq!(metrics.skip_count, 0);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_datafusion_write_from_serialized_delta_scan() -> Result<()> {
         // Build an execution plan for scanning a DeltaTable and serialize it to bytes.
@@ -211,7 +377,7 @@ mod local {
             &ctx,
             &DeltaLogicalCodec {},
         )?);
-        let schema = StructType::try_from(source_scan.schema().as_arrow()).unwrap();
+        let schema: StructType = source_scan.schema().as_arrow().try_into_kernel().unwrap();
         let fields = schema.fields().cloned();
 
         dbg!(schema.fields().collect_vec().clone());
@@ -274,7 +440,7 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        // Validate a table that contains statisitics for all files
+        // Validate a table that contains statistics for all files
         let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
@@ -312,7 +478,7 @@ mod local {
         ];
         assert_batches_sorted_eq!(&expected, &actual);
 
-        // Validate a table that does not contain column statisitics
+        // Validate a table that does not contain column statistics
         let table = open_table("../test/tests/data/delta-0.2.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
@@ -416,13 +582,14 @@ mod local {
         Ok(())
     }
 
-    async fn get_scan_metrics(
+    async fn get_scan_metrics_with_limit(
         table: &DeltaTable,
         state: &SessionState,
         e: &[Expr],
+        limit: Option<usize>,
     ) -> Result<ExecutionMetricsCollector> {
         let mut metrics = ExecutionMetricsCollector::default();
-        let scan = table.scan(state, None, e, None).await?;
+        let scan = table.scan(state, None, e, limit).await?;
         if scan.properties().output_partitioning().partition_count() > 0 {
             let plan = CoalescePartitionsExec::new(scan);
             let task_ctx = Arc::new(TaskContext::from(state));
@@ -435,6 +602,14 @@ mod local {
         }
 
         Ok(metrics)
+    }
+
+    async fn get_scan_metrics(
+        table: &DeltaTable,
+        state: &SessionState,
+        e: &[Expr],
+    ) -> Result<ExecutionMetricsCollector> {
+        get_scan_metrics_with_limit(table, state, e, None).await
     }
 
     fn create_all_types_batch(
@@ -1084,13 +1259,14 @@ mod local {
     #[tokio::test]
     async fn test_issue_2105() -> Result<()> {
         use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-        let path = tempfile::tempdir().unwrap();
-        let path = path.into_path();
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path();
 
-        let file_store = LocalFileSystem::new_with_prefix(path.clone()).unwrap();
+        let file_store = LocalFileSystem::new_with_prefix(path).unwrap();
         let log_store = default_logstore(
             Arc::new(file_store),
-            &Url::from_file_path(path.clone()).unwrap(),
+            Arc::new(LocalFileSystem::new()),
+            &Url::from_file_path(path).unwrap(),
             &Default::default(),
         );
 

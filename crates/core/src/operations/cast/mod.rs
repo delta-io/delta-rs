@@ -212,6 +212,7 @@ mod tests {
     };
     use arrow::buffer::{Buffer, NullBuffer};
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use delta_kernel::schema::MetadataValue;
     use itertools::Itertools;
 
@@ -236,7 +237,7 @@ mod tests {
 
         let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
         assert_eq!(result.fields().len(), 1);
-        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into_kernel().unwrap();
         assert_eq!(delta_type, DeltaDataType::STRING);
         assert!(result.fields()[0].is_nullable());
     }
@@ -286,7 +287,7 @@ mod tests {
 
         let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
         assert_eq!(result.fields().len(), 1);
-        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into_kernel().unwrap();
         assert_eq!(
             delta_type,
             DeltaDataType::Array(Box::new(DeltaArrayType::new(DeltaDataType::STRING, false)))

@@ -17,8 +17,6 @@ use tempfile::TempDir;
 pub mod acceptance;
 pub mod clock;
 pub mod concurrent;
-#[cfg(feature = "datafusion")]
-pub mod datafusion;
 pub mod read;
 pub mod utils;
 
@@ -115,7 +113,7 @@ pub async fn add_file(
     create_time: i64,
     commit_to_log: bool,
 ) {
-    let backend = table.object_store();
+    let backend = table.log_store().object_store(None);
     backend.put(path, data.clone().into()).await.unwrap();
 
     if commit_to_log {
@@ -131,7 +129,6 @@ pub async fn add_file(
             partition_values: part_values,
             data_change: true,
             stats: None,
-            stats_parsed: None,
             tags: None,
             default_row_commit_version: None,
             base_row_id: None,

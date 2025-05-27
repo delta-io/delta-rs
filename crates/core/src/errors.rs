@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use object_store::Error as ObjectStoreError;
 
 use crate::kernel::transaction::{CommitBuilderError, TransactionError};
-use crate::protocol::ProtocolError;
 
 /// A result returned by delta-rs
 pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
@@ -14,9 +13,6 @@ pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
 pub enum DeltaTableError {
     #[error("Kernel error: {0}")]
     KernelError(#[from] delta_kernel::error::Error),
-
-    #[error("Delta protocol violation: {source}")]
-    Protocol { source: ProtocolError },
 
     /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]
@@ -245,18 +241,6 @@ impl From<object_store::path::Error> for DeltaTableError {
     fn from(err: object_store::path::Error) -> Self {
         Self::GenericError {
             source: Box::new(err),
-        }
-    }
-}
-
-impl From<ProtocolError> for DeltaTableError {
-    fn from(value: ProtocolError) -> Self {
-        match value {
-            ProtocolError::Arrow { source } => DeltaTableError::Arrow { source },
-            ProtocolError::IO { source } => DeltaTableError::Io { source },
-            ProtocolError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
-            ProtocolError::ParquetParseError { source } => DeltaTableError::Parquet { source },
-            _ => DeltaTableError::Protocol { source: value },
         }
     }
 }

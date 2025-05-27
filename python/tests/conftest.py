@@ -5,12 +5,16 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from time import sleep
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
 import pytest
+from arro3.core import Array, DataType, Field, Schema, Table
 from azure.storage import blob
 
 from deltalake import DeltaTable, WriterProperties, write_deltalake
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
 def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
@@ -180,8 +184,10 @@ def azurite_sas_creds(azurite_creds):
 
 
 @pytest.fixture()
-def sample_data():
+def sample_data_pyarrow() -> "pa.Table":
     nrows = 5
+    import pyarrow as pa
+
     return pa.table(
         {
             "utf8": pa.array([str(x) for x in range(nrows)]),
@@ -201,7 +207,10 @@ def sample_data():
                 [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
             ),
             "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
-            "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
+            "list": pa.array(
+                [list(range(x + 1)) for x in range(nrows)],
+                type=pa.list_(pa.field("inner", pa.int64(), nullable=False)),
+            ),
             # NOTE: https://github.com/apache/arrow-rs/issues/477
             #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
         }
@@ -209,42 +218,62 @@ def sample_data():
 
 
 @pytest.fixture()
-def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
+def existing_table(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
     path = str(tmp_path)
-    write_deltalake(path, sample_data)
+    write_deltalake(path, sample_data_pyarrow)
     return DeltaTable(path)
 
 
 @pytest.fixture()
-def sample_table():
+def sample_table() -> Table:
     nrows = 5
-    return pa.table(
+    return Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                Field("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)), Field("price", type=DataType.int64(), nullable=True)
+            ),
+            "sold": Array(
+                list(range(nrows)), Field("sold", type=DataType.int32(), nullable=True)
+            ),
+            "deleted": Array(
+                [False] * nrows, Field("deleted", type=DataType.bool(), nullable=True)
+            ),
+        },
     )
 
 
 @pytest.fixture()
-def existing_sample_table(tmp_path: pathlib.Path, sample_table: pa.Table):
+def existing_sample_table(tmp_path: pathlib.Path, sample_table: Table):
     path = str(tmp_path)
     write_deltalake(path, sample_table)
     return DeltaTable(path)
 
 
 @pytest.fixture()
-def sample_table_with_spaces_numbers():
+def sample_table_with_spaces_numbers() -> Table:
     nrows = 5
-    return pa.table(
+    return Table.from_pydict(
         {
-            "1id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold items": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
+            "1id": Array(["1", "2", "3", "4", "5"], DataType.string()),
+            "price": Array(list(range(nrows)), DataType.int64()),
+            "sold items": Array(list(range(nrows)), DataType.int32()),
+            "deleted": Array(
+                [False] * nrows,
+                DataType.bool(),
+            ),
+        },
+        schema=Schema(
+            fields=[
+                Field("1id", type=DataType.string(), nullable=True),
+                Field("price", type=DataType.int64(), nullable=True),
+                Field("sold items", type=DataType.int32(), nullable=True),
+                Field("deleted", type=DataType.bool(), nullable=True),
+            ]
+        ),
     )
 
 

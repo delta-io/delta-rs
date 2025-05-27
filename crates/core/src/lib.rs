@@ -49,9 +49,10 @@
 //! Querying from local filesystem:
 //! ```
 //! use std::sync::Arc;
-//! use datafusion::prelude::SessionContext;
 //!
+//! # #[cfg(feature="datafusion")]
 //! async {
+//!   use datafusion::prelude::SessionContext;
 //!   let mut ctx = SessionContext::new();
 //!   let table = deltalake_core::open_table("../test/tests/data/simple_table")
 //!       .await
@@ -77,7 +78,7 @@ pub mod protocol;
 pub mod schema;
 pub mod table;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
 
 #[cfg(feature = "datafusion")]
@@ -205,7 +206,7 @@ mod tests {
         let tombstones = table
             .snapshot()
             .unwrap()
-            .all_tombstones(table.object_store().clone())
+            .all_tombstones(&table.log_store())
             .await
             .unwrap()
             .collect_vec();
@@ -322,7 +323,7 @@ mod tests {
         let tombstones = table
             .snapshot()
             .unwrap()
-            .all_tombstones(table.object_store().clone())
+            .all_tombstones(&table.log_store())
             .await
             .unwrap()
             .collect_vec();
