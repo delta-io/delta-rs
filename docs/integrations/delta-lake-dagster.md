@@ -5,6 +5,7 @@ Delta Lake is a great storage format for Dagster workflows. This page will expla
 You will learn how to use the Delta Lake I/O Manager to read and write your Dagster Software-Defined Assets (SDAs). You will also learn about the unique advantages Delta Lake offers the Dagster community.
 
 Here are some of the benefits that Delta Lake provides Dagster users:
+
 - native PyArrow integration for lazy computation of large datasets,
 - more efficient querying with file skipping via Z Ordering and liquid clustering
 - built-in vacuuming to remove unnecessary files and versions
