@@ -10,8 +10,14 @@ use crate::table::state::DeltaTableState;
 
 static READER_V2: LazyLock<HashSet<ReaderFeature>> =
     LazyLock::new(|| HashSet::from_iter([ReaderFeature::ColumnMapping]));
+#[cfg(feature = "datafusion")]
 static WRITER_V2: LazyLock<HashSet<WriterFeature>> =
     LazyLock::new(|| HashSet::from_iter([WriterFeature::AppendOnly, WriterFeature::Invariants]));
+// Invariants cannot work in the default builds where datafusion is not present currently, this
+// feature configuration ensures that the writer doesn't pretend otherwise
+#[cfg(not(feature = "datafusion"))]
+static WRITER_V2: LazyLock<HashSet<WriterFeature>> =
+    LazyLock::new(|| HashSet::from_iter([WriterFeature::AppendOnly]));
 static WRITER_V3: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
         WriterFeature::AppendOnly,
