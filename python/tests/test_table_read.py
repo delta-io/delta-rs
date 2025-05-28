@@ -1080,3 +1080,44 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         .read_all()
     )
     assert expected == actual
+
+
+def test_read_query_builder_show_output(capsys, caplog):
+    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    logging.getLogger("deltalake").setLevel(logging.INFO)
+
+    qb = QueryBuilder().register("tbl", dt)
+    query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
+    qb.execute(query).show()
+    assert capsys.readouterr().out.strip() != ""
+
+    query = "SELECT * FROM tbl WHERE year >= 9999"
+    qb.execute(query).show()
+    assert "query contains no records" in caplog.text
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_read_added_column():
+    table_path = tempfile.gettempdir() + "/single_col_evolution"
+
+    write_deltalake(table_path, pa.table({"a": [1, 2, 3]}), mode="overwrite", schema_mode="overwrite")
+    write_deltalake(table_path, pa.table({"a": [4, 5, 6], "b": [7, 8, 9]}), mode="append", schema_mode="merge")
+    dt = DeltaTable(table_path)
+    # specifically selecting b to ensure schema mapper can map empty record batch
+    batches = QueryBuilder().register("tbl", dt).sql("select b from tbl order by b").fetchall()
+
+    actual = []
+    for batch in batches:
+        actual.extend(batch.to_pylist())
+
+    expected = [
+        {"b": None},
+        {"b": None},
+        {"b": None},
+        {"b": 7},
+        {"b": 8},
+        {"b": 9},
+    ]
+
+    assert actual == expected
