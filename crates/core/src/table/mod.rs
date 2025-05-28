@@ -343,12 +343,15 @@ impl DeltaTable {
         Ok(self.snapshot()?.metadata())
     }
 
+    #[deprecated(
+        since = "0.27.0",
+        note = "Use `snapshot()?.transaction_version(app_id)` instead."
+    )]
     /// Returns the current version of the DeltaTable based on the loaded metadata.
     pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
         self.state
             .as_ref()
-            .and_then(|s| s.app_transaction_version().ok())
-            .map(|it| it.map(|t| (t.app_id.clone(), t)).collect())
+            .and_then(|s| s.snapshot.transactions.clone())
             .unwrap_or_default()
     }
 

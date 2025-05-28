@@ -27,7 +27,6 @@ from deltalake._internal import (
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
-    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -413,6 +412,24 @@ class DeltaTable:
         predicate: str | None = None,
         allow_out_of_range: bool = False,
     ) -> RecordBatchReader:
+        """
+        Load the Change Data Feed (CDF) from the Delta table as a stream of record batches.
+
+        Parameters:
+            starting_version (int): The version of the Delta table to start reading CDF from.
+            ending_version (int | None): The version to stop reading CDF at. If None, reads up to the latest version.
+            starting_timestamp (str | None): An ISO 8601 timestamp to start reading CDF from. Ignored if starting_version is provided.
+            ending_timestamp (str | None): An ISO 8601 timestamp to stop reading CDF at. Ignored if ending_version is provided.
+            columns (list[str] | None): A list of column names to include in the output. If None, all columns are included.
+            predicate (str | None): An optional SQL predicate to filter the output rows.
+            allow_out_of_range (bool): If True, does not raise an error when specified versions or timestamps are outside the table's history.
+
+        Returns:
+            RecordBatchReader: An Arrow RecordBatchReader that streams the resulting change data.
+
+        Raises:
+            ValueError: If input parameters are invalid or if the specified range is not found (unless allow_out_of_range is True).
+        """
         return self._table.load_cdf(
             columns=columns,
             predicate=predicate,
@@ -1071,14 +1088,23 @@ class DeltaTable:
         )
         return deserialized_metrics
 
-    def transaction_versions(self) -> dict[str, Transaction]:
-        return self._table.transaction_versions()
+    def transaction_version(self, app_id: str) -> int | None:
+        """
+        Retrieve the latest transaction versions for the given application ID.
+
+        Args:
+            app_id (str): The application ID for which to retrieve the latest transaction version.
+
+        Returns:
+            int | None: The latest transaction version for the given application ID if it exists, otherwise None.
+        """
+        return self._table.transaction_version(app_id)
 
     def create_write_transaction(
         self,
         actions: list[AddAction],
         mode: str,
-        schema: pyarrow.Schema,
+        schema: DeltaSchema | ArrowSchemaExportable,
         partition_by: list[str] | str | None = None,
         partition_filters: FilterType | None = None,
         commit_properties: CommitProperties | None = None,
@@ -1086,6 +1112,9 @@ class DeltaTable:
     ) -> None:
         if isinstance(partition_by, str):
             partition_by = [partition_by]
+
+        if not isinstance(schema, DeltaSchema):
+            schema = DeltaSchema.from_arrow(schema)
 
         self._table.create_write_transaction(
             actions,

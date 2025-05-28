@@ -59,8 +59,8 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::export::Arro3RecordBatchReader;
-use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader, PySchema as PyArrowSchema};
+use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
+use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
 use schema::PySchema;
 use serde_json::{Map, Value};
 use std::cmp::min;
@@ -71,7 +71,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::log::*;
 use uuid::Uuid;
 use writer::maybe_lazy_cast_reader;
 
@@ -1445,7 +1444,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyRecordBatch> {
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
         // replace with Arro3RecordBatch once new release is done for arro3.core
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
@@ -1619,19 +1618,16 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
-        let version = self.with_table(|t| Ok(t.get_app_transaction_version()));
-
-        match version {
-            Ok(version) => version
-                .into_iter()
-                .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
-                .collect(),
-            Err(e) => {
-                warn!("Cannot fetch transaction version due to {e:?}");
-                HashMap::default()
-            }
-        }
+    /// Get the latest transaction version for the given application ID.
+    ///
+    /// Returns `None` if the application ID is not found.
+    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
+        // NOTE: this will simplify once we have moved logstore onto state.
+        let log_store = self.log_store()?;
+        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+        Ok(rt()
+            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+            .map_err(PythonError::from)?)
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
