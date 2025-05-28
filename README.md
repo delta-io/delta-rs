@@ -190,7 +190,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Version 2      | Column Mapping                      |            |
 | Version 3      | Table Features (requires reader V7) |  ![done]   |
 
-[datafusion]: https://github.com/apache/arrow-datafusion
+[datafusion]: https://github.com/apache/datafusion
 [ballista]: https://github.com/apache/arrow-ballista
 [polars]: https://github.com/pola-rs/polars
 [open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueNeutral.svg
