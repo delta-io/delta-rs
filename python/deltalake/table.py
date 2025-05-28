@@ -21,6 +21,7 @@ from arro3.core.types import (
     ArrowSchemaExportable,
     ArrowStreamExportable,
 )
+from deprecated import deprecated
 
 from deltalake._internal import (
     DeltaError,
@@ -284,6 +285,10 @@ class DeltaTable:
             partitions.append({k: v for (k, v) in partition})
         return partitions
 
+    @deprecated(
+        version="1.0.0",
+        reason="Not compatible with modern delta features (e.g. shallow clones). Use `file_uris` instead.",
+    )
     def files(
         self, partition_filters: list[tuple[str, str, Any]] | None = None
     ) -> list[str]:
