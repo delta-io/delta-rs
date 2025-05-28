@@ -52,7 +52,7 @@ impl From<RetryError> for std::io::Error {
             (_, Some(StatusCode::BAD_REQUEST)) => Self::new(ErrorKind::InvalidInput, err),
             (Some(source), None) if source.is_timeout() => Self::new(ErrorKind::TimedOut, err),
             (Some(source), None) if source.is_connect() => Self::new(ErrorKind::NotConnected, err),
-            _ => Self::new(ErrorKind::Other, err),
+            _ => Self::other(err),
         }
     }
 }

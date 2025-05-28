@@ -129,7 +129,7 @@ impl IntegrationContext {
         name: impl AsRef<str>,
     ) -> TestResult {
         self.integration
-            .copy_directory(&table.as_path().to_str().unwrap(), name.as_ref())?;
+            .copy_directory(table.as_path().to_str().unwrap(), name.as_ref())?;
         Ok(())
     }
 

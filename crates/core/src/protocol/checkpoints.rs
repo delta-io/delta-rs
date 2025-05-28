@@ -171,7 +171,7 @@ pub async fn cleanup_expired_logs_for(
 
     let object_store = log_store.object_store(None);
     let log_path = log_store.log_path();
-    let maybe_last_checkpoint = read_last_checkpoint(&object_store, &log_path).await?;
+    let maybe_last_checkpoint = read_last_checkpoint(&object_store, log_path).await?;
 
     let Some(last_checkpoint) = maybe_last_checkpoint else {
         return Ok(0);
