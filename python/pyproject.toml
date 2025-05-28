@@ -18,7 +18,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    "arro3-core>=0.4.6",
+    "arro3-core>=0.5.0",
 ]
 
 [project.optional-dependencies]
