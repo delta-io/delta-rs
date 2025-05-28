@@ -71,7 +71,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::log::*;
 use uuid::Uuid;
 use writer::maybe_lazy_cast_reader;
 
@@ -1619,19 +1618,16 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
-        let version = self.with_table(|t| Ok(t.get_app_transaction_version()));
-
-        match version {
-            Ok(version) => version
-                .into_iter()
-                .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
-                .collect(),
-            Err(e) => {
-                warn!("Cannot fetch transaction version due to {e:?}");
-                HashMap::default()
-            }
-        }
+    /// Get the latest transaction version for the given application ID.
+    ///
+    /// Returns `None` if the application ID is not found.
+    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
+        // NOTE: this will simplify once we have moved logstore onto state.
+        let log_store = self.log_store()?;
+        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+        Ok(rt()
+            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+            .map_err(PythonError::from)?)
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]

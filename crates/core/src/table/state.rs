@@ -12,7 +12,7 @@ use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig}
 use crate::kernel::Action;
 use crate::kernel::{
     ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
-    Protocol, Remove, StructType, Transaction,
+    Protocol, Remove, StructType,
 };
 use crate::logstore::LogStore;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
@@ -158,9 +158,15 @@ impl DeltaTableState {
             .map(|add| add.object_store_path())
     }
 
-    /// HashMap containing the last transaction stored for every application.
-    pub fn app_transaction_version(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
-        self.snapshot.transactions()
+    /// Get the transaction version for the given application ID.
+    ///
+    /// Returns `None` if the application ID is not found.
+    pub async fn transaction_version(
+        &self,
+        _log_store: &dyn LogStore,
+        app_id: impl AsRef<str>,
+    ) -> DeltaResult<Option<i64>> {
+        self.snapshot.transaction_version(app_id).await
     }
 
     /// The most recent protocol of the table.

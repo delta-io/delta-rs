@@ -161,6 +161,14 @@ convert_to_deltalake(
 
 This method was previously unimplemented and has now been fully removed from the DeltaTable class.
 
+### `transaction_versions` changed to `transaction_version`
+
+`transaction_versions` has been renamed to `transaction_version` and now returns a single version
+number for a specific application instead of a dictionary for all applications. This allows
+for internal optimisations and aligns more with the use case for idempotent writes.
+
+To store more complex state as part of the delta log, use `domainMetadata`.
+
 ### Internal changes
 
 #### `WriterProperties`, `ColumnProperties` and `BloomFilterProperties` moved to `deltalake.writer.properties`

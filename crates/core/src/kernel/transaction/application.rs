@@ -37,6 +37,15 @@ mod tests {
         assert_eq!(app_txns.len(), 1);
         assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(1));
 
+        let log_store = table.log_store();
+        let txn_version = table
+            .snapshot()
+            .unwrap()
+            .transaction_version(log_store.as_ref(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(txn_version, Some(1));
+
         // Test Txn Id can be read from existing table
 
         let mut table2 = DeltaTableBuilder::from_uri(tmp_path.to_str().unwrap())
@@ -47,6 +56,13 @@ mod tests {
 
         assert_eq!(app_txns2.len(), 1);
         assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(1));
+        let txn_version = table2
+            .snapshot()
+            .unwrap()
+            .transaction_version(log_store.as_ref(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(txn_version, Some(1));
 
         // Write new data to the table and check that `update` functions work
 
@@ -63,12 +79,26 @@ mod tests {
         let app_txns = table.get_app_transaction_version();
         assert_eq!(app_txns.len(), 1);
         assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(3));
+        let txn_version = table
+            .snapshot()
+            .unwrap()
+            .transaction_version(log_store.as_ref(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(txn_version, Some(3));
 
         table2.update_incremental(None).await.unwrap();
         assert_eq!(table2.version(), 1);
         let app_txns2 = table2.get_app_transaction_version();
         assert_eq!(app_txns2.len(), 1);
         assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(3));
+        let txn_version = table2
+            .snapshot()
+            .unwrap()
+            .transaction_version(log_store.as_ref(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(txn_version, Some(3));
 
         // Create a checkpoint and then load
         checkpoints::create_checkpoint(&table, None).await.unwrap();
@@ -76,9 +106,16 @@ mod tests {
             .load()
             .await
             .unwrap();
-        let app_txns3 = table2.get_app_transaction_version();
+        let app_txns3 = table3.get_app_transaction_version();
         assert_eq!(app_txns3.len(), 1);
         assert_eq!(app_txns3.get("my-app").map(|t| t.version), Some(3));
         assert_eq!(table3.version(), 1);
+        let txn_version = table3
+            .snapshot()
+            .unwrap()
+            .transaction_version(log_store.as_ref(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(txn_version, Some(3));
     }
 }

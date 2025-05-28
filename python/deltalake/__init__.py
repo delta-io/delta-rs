@@ -1,7 +1,12 @@
-from deltalake._internal import TableFeatures, __version__, rust_core_version
+from deltalake._internal import (
+    TableFeatures,
+    Transaction,
+    __version__,
+    rust_core_version,
+)
 from deltalake.query import QueryBuilder
 from deltalake.schema import DataType, Field, Schema
-from deltalake.table import DeltaTable, Metadata, Transaction
+from deltalake.table import DeltaTable, Metadata
 from deltalake.transaction import CommitProperties, PostCommitHookProperties
 from deltalake.writer import (
     BloomFilterProperties,
