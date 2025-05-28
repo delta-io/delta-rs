@@ -59,8 +59,8 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::export::Arro3RecordBatchReader;
-use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader, PySchema as PyArrowSchema};
+use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
+use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
 use schema::PySchema;
 use serde_json::{Map, Value};
 use std::cmp::min;
@@ -1445,7 +1445,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyRecordBatch> {
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
         // replace with Arro3RecordBatch once new release is done for arro3.core
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
