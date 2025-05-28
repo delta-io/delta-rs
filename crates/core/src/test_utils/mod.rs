@@ -1,10 +1,10 @@
 mod factories;
 
-use std::{path::PathBuf, process::Command};
+use std::{collections::HashMap, path::PathBuf, process::Command};
 
-pub use factories::*;
 use url::Url;
 
+pub use self::factories::*;
 use crate::DeltaTableBuilder;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
@@ -80,6 +80,38 @@ fn find_git_root() -> PathBuf {
     PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
 }
 
+/// Test fixture that allows setting environment variables for the duration of a test.
+///
+/// Existing environment variables that are overwritten will be restored when the fixture is dropped.
+pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
+    // Store the original values before modifying
+    let original_values: HashMap<String, Option<String>> = vars
+        .iter()
+        .map(|(key, _)| (key.to_string(), std::env::var(key).ok()))
+        .collect();
+
+    // Set all the new environment variables
+    for (key, value) in vars {
+        std::env::set_var(key, value);
+    }
+
+    // Create a cleanup struct that will restore original values when dropped
+    struct EnvCleanup(HashMap<String, Option<String>>);
+
+    impl Drop for EnvCleanup {
+        fn drop(&mut self) {
+            for (key, maybe_value) in self.0.iter() {
+                match maybe_value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    EnvCleanup(original_values)
+}
+
 #[macro_export]
 macro_rules! assert_batches_sorted_eq {
     ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
@@ -112,3 +144,27 @@ macro_rules! assert_batches_sorted_eq {
 }
 
 pub use assert_batches_sorted_eq;
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+
+    use super::*;
+
+    #[test]
+    fn test_api_with_env() {
+        let _env = with_env(vec![
+            ("API_KEY", "test_key"),
+            ("API_URL", "http://test.example.com"),
+        ]);
+
+        // Test code using these environment variables
+        assert_eq!(env::var("API_KEY").unwrap(), "test_key");
+        assert_eq!(env::var("API_URL").unwrap(), "http://test.example.com");
+
+        drop(_env);
+
+        assert!(env::var("API_KEY").is_err());
+        assert!(env::var("API_URL").is_err());
+    }
+}
