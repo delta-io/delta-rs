@@ -15,21 +15,60 @@ jobs:
       CARGO_INCREMENTAL: 0
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: deltalake
+      AWS_SECRET_ACCESS_KEY: weloverust
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ALLOW_HTTP: "1"
+      AZURE_USE_EMULATOR: "1"
+      AZURE_STORAGE_ALLOW_HTTP: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Install rust
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.82'
+          toolchain: "1.82"
           override: true
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
+
+      # Install Java and Hadoop for HDFS integration tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Download Hadoop
+        run: |
+          wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
+          tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
+
+      - name: Start emulated services
+        run: docker compose up -d
+
       - name: Generate code coverage
-        run: gmake coverage
+        run: |
+          gmake setup-dat
+          cargo llvm-cov \
+            --features azure,datafusion,s3,gcs,glue,integration_test
+            --workspace \
+            --codecov \
+            --output-path codecov.json \
+            -- --skip test_read_tables_lakefs
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
