@@ -157,17 +157,34 @@ convert_to_deltalake(
 )
 ```
 
-### `from_data_catalog` removed on `DeltaTable`
+### DeltaTable
+
+#### removed `from_data_catalog`
 
 This method was previously unimplemented and has now been fully removed from the DeltaTable class.
 
-### `transaction_versions` changed to `transaction_version`
+#### removed `get_earliest_version`
+
+This method is potentially very expensive while we could not find a clear use case for it.
+If you have a specific use case, please open an issue on GitHub.
+
+#### `transaction_versions` changed to `transaction_version`
 
 `transaction_versions` has been renamed to `transaction_version` and now returns a single version
 number for a specific application instead of a dictionary for all applications. This allows
 for internal optimisations and aligns more with the use case for idempotent writes.
 
 To store more complex state as part of the delta log, use `domainMetadata`.
+
+#### removed `get_num_index_cols`, `get_stats_columns` and `check_can_write_timestamp_ntz`.
+
+These methods were rxposed for use by the `pyarrow` engine, which no longer exists.
+
+#### deprecated `files`
+
+The `files` method has been deprecated and will be removed in a future release. Use `file_uris` instead.
+The relative paths reported by `files` cannot properly be interpreted when using features like shallow clones.
+`file_uris` reposrts absolute paths that can handle a more dynamic path resolution.
 
 ### Internal changes
 
