@@ -102,7 +102,7 @@ impl Iterator for LazyCastReader {
     fn next(&mut self) -> Option<Self::Item> {
         match self.input.next() {
             Some(Ok(batch)) => Some(
-                cast_record_batch(&batch, self.target_schema.clone(), true, false)
+                cast_record_batch(&batch, self.target_schema.clone(), false, false)
                     .map_err(|e| ArrowError::CastError(e.to_string())),
             ),
             Some(Err(e)) => Some(Err(e)),
