@@ -27,7 +27,6 @@ from deltalake._internal import (
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
-    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -1089,15 +1088,17 @@ class DeltaTable:
         )
         return deserialized_metrics
 
-    def transaction_versions(self) -> dict[str, Transaction]:
+    def transaction_version(self, app_id: str) -> int | None:
         """
-        Retrieve the latest transaction versions for each application ID.
+        Retrieve the latest transaction versions for the given application ID.
+
+        Args:
+            app_id (str): The application ID for which to retrieve the latest transaction version.
 
         Returns:
-            dict[str, Transaction]: A mapping from application ID (str) to the corresponding Transaction object,
-            representing the most recent transaction for each app.
+            int | None: The latest transaction version for the given application ID if it exists, otherwise None.
         """
-        return self._table.transaction_versions()
+        return self._table.transaction_version(app_id)
 
     def create_write_transaction(
         self,
