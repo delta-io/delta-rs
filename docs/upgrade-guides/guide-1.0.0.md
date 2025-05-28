@@ -10,7 +10,7 @@ For users who still require PyArrow-based read functionality, it remains availab
 
 ### `arro3` adoption
 
-DeltaLake 1.0.0 introduces support for `arro3`. As a result, the `write_deltalake` and `DeltaTable.merge` functions now only accept inputs that implement one of the following interfaces:
+DeltaLake 1.0.0 introduces support for Arrow PyCapsule protocol using a lightweight arrow implementation with `arro3`. As a result, the `write_deltalake` and `DeltaTable.merge` functions now only accept inputs that implement one of the following interfaces:
 
 - `ArrowStreamExportable`
 - `ArrowArrayExportable`
