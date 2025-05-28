@@ -330,6 +330,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1106,6 +1126,8 @@
       
         
       
+        
+      
     
     
     
@@ -1357,11 +1379,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../api/catalog/" class="md-nav__link">
+      <a href="../../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1922,6 +1964,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2252,7 +2366,8 @@
 </span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a> <span class="s1">&#39;totalFilesSkipped&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
 </span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a> <span class="s1">&#39;preserveInsertionOrder&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
 </span></code></pre></div>
-<p>The optimize operation has added 5 new files and marked 100 exisitng files for removal (this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.</p>
+<p>The optimize operation has added 5 new files and marked 100 existing files for removal
+(this is also known as “tombstoning” files).  It has compacted the 100 tiny files into 5 larger files.</p>
 <p>Let’s append some more data to the Delta table and see how we can selectively run optimize on the new data that’s added.</p>
 <h2 id="handling-incremental-updates-with-optimize">Handling incremental updates with optimize</h2>
 <p>Let’s append another 24 hours of data to the Delta table:</p>
@@ -2285,7 +2400,9 @@
 </div>
 </div>
 </div>
-<p>We can use <code>get_add_actions()</code> to introspect the table state. We can see that <code>2021-01-06</code> has only a few hours of data so far, so we don't want to optimize that yet. But <code>2021-01-05</code> has all 24 hours of data, so it's ready to be optimized.</p>
+<p>We can use <code>get_add_actions()</code> to introspect the table state. We can see that <code>2021-01-06</code>
+has only a few hours of data so far, so we don't want to optimize that yet. But <code>2021-01-05</code>
+has all 24 hours of data, so it's ready to be optimized.</p>
 <div class="tabbed-set tabbed-alternate" data-tabs="7:2"><input checked="checked" id="__tabbed_7_1" name="__tabbed_7" type="radio" /><input id="__tabbed_7_2" name="__tabbed_7" type="radio" /><div class="tabbed-labels"><label for="__tabbed_7_1">Python</label><label for="__tabbed_7_2">Rust</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
@@ -2307,10 +2424,10 @@
 </span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
 </span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">ctx</span><span class="p">.</span><span class="n">register_batch</span><span class="p">(</span><span class="s">&quot;observations&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">batch</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
 </span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="s">SELECT </span><span class="se">\&quot;</span><span class="s">partition.date</span><span class="se">\&quot;</span><span class="s">, </span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="s">        COUNT(*) </span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="s">FROM observations </span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="s">GROUP BY </span><span class="se">\&quot;</span><span class="s">partition.date</span><span class="se">\&quot;</span><span class="s"> </span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="s">SELECT </span><span class="se">\&quot;</span><span class="s">partition.date</span><span class="se">\&quot;</span><span class="s">,</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="s">        COUNT(*)</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="s">FROM observations</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="s">GROUP BY </span><span class="se">\&quot;</span><span class="s">partition.date</span><span class="se">\&quot;</span>
 </span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="s">ORDER BY </span><span class="se">\&quot;</span><span class="s">partition.date</span><span class="se">\&quot;</span><span class="s">&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="n">df</span><span class="p">.</span><span class="n">show</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>
@@ -2329,11 +2446,11 @@
 </div>
 </div>
 </div>
-<p>To optimize a single partition, you can pass in a <code>partition_filters</code> argument speficying which partitions to optimize.</p>
+<p>To optimize a single partition, you can pass in a <code>partition_filters</code> argument specifying which partitions to optimize.</p>
 <div class="tabbed-set tabbed-alternate" data-tabs="8:2"><input checked="checked" id="__tabbed_8_1" name="__tabbed_8" type="radio" /><input id="__tabbed_8_2" name="__tabbed_8" type="radio" /><div class="tabbed-labels"><label for="__tabbed_8_1">Python</label><label for="__tabbed_8_2">Rust</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
-<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span><span class="n">partition_filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021-01-05&quot;</span><span class="p">)])</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">compact</span><span class="p">(</span><span class="n">partition_filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021-01-05&quot;</span><span class="p">)])</span>
 </span></code></pre></div>
 </div>
 <div class="tabbed-block">
@@ -2366,7 +2483,9 @@
 </span><span id="__span-18-16"><a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a> <span class="s1">&#39;totalFilesSkipped&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
 </span><span id="__span-18-17"><a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a> <span class="s1">&#39;preserveInsertionOrder&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
 </span></code></pre></div>
-<p>This optimize operation tombstones 21 small data files and adds one file with all the existing data properly condensed.  Let’s take a look a portion of the <code>_delta_log/00000000000000000125.json</code> file, which is the transaction log entry that corresponds with this incremental optimize command.</p>
+<p>This optimize operation tombstones 21 small data files and adds one file with all the existing
+data properly condensed.  Let’s take a look a portion of the <code>_delta_log/00000000000000000125.json</code>
+file, which is the transaction log entry that corresponds with this incremental optimize command.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="p">{</span>
 </span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>  <span class="s2">&quot;remove&quot;</span><span class="p">:</span> <span class="p">{</span>
 </span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="s2">&quot;date=2021-01-05/part-00000-41178aab-2491-488f-943d-8f03867295ee-c000.snappy.parquet&quot;</span><span class="p">,</span>
@@ -2411,8 +2530,10 @@
 </span><span id="__span-19-42"><a id="__codelineno-19-42" name="__codelineno-19-42" href="#__codelineno-19-42"></a>  <span class="p">}</span>
 </span><span id="__span-19-43"><a id="__codelineno-19-43" name="__codelineno-19-43" href="#__codelineno-19-43"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>The trasaction log indicates that many files have been tombstoned and one file is added, as expected.</p>
-<p>The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log.  The optimize command doesn’t physically delete the Parquet file from storage.  Optimize performs a “logical remove” not a “physical remove”.</p>
+<p>The transaction log indicates that many files have been tombstoned and one file is added, as expected.</p>
+<p>The Delta Lake optimize command “removes” data by marking the data files as removed in the transaction log.
+The optimize command doesn’t physically delete the Parquet file from storage.
+Optimize performs a “logical remove” not a “physical remove”.</p>
 <p>Delta Lake uses logical operations so you can time travel back to earlier versions of your data.  You can vacuum your Delta table to physically remove Parquet files from storage if you don’t need to time travel and don’t want to pay to store the tombstoned files.</p>
 <h2 id="vacuuming-after-optimizing">Vacuuming after optimizing</h2>
 <p>The vacuum command deletes all files from storage that are marked for removal in the transaction log and older than the retention period which is 7 days by default.</p>
@@ -2475,7 +2596,7 @@
 <ul>
 <li>User error: users can accidentally write files that are too small.  Users should sometimes repartition in memory before writing to disk to avoid appending files that are too small.</li>
 <li>Frequent appends: systems that append more often tend to append more smaller files.  A pipeline that appends every minute will generally generate ten times as many small files compared to a system that appends every ten minutes.</li>
-<li>Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.  </li>
+<li>Appending to partitioned data lakes with high cardinality columns can also cause small files.  If you append every hour to a table that’s partitioned on a column with 1,000 distinct values, then every append could create 1,000 new files.  Partitioning by date avoids this problem because the data isn’t split up across partitions in this manner.</li>
 </ul>
 <h2 id="conclusion">Conclusion</h2>
 <p>This page showed you how to create a Delta table with many small files, compact the small files into larger files with optimize, and remove the tombstoned files from storage with vacuum.</p>

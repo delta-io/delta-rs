@@ -330,6 +330,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1024,6 +1044,8 @@
       
         
       
+        
+      
     
     
     
@@ -1275,11 +1297,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1894,6 +1936,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2115,7 +2229,7 @@
 </span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41" href="#__codelineno-8-41"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>This transaction adds a data file and marks the two exising data files for removal. Marking a file for removal in the transaction log is known as "tombstoning the file" or a "logical delete". This is different from a "physical delete" which actually removes the data file from storage.</p>
+<p>This transaction adds a data file and marks the two existing data files for removal. Marking a file for removal in the transaction log is known as "tombstoning the file" or a "logical delete". This is different from a "physical delete" which actually removes the data file from storage.</p>
 <h2 id="how-delta-table-operations-differ-from-data-lakes">How Delta table operations differ from data lakes</h2>
 <p>Data lakes consist of data files persisted in storage. They don't have a transaction log that retain metadata about the transactions.</p>
 <p>Data lakes perform transactions differently than Delta tables.</p>

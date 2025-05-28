@@ -332,6 +332,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1026,6 +1046,8 @@
       
         
       
+        
+      
     
     
     
@@ -1277,11 +1299,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1986,6 +2028,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2137,28 +2251,34 @@
 <h1 id="using-delta-lake-with-dagster">Using Delta Lake with Dagster¶</h1>
 <p>Delta Lake is a great storage format for Dagster workflows. This page will explain why and how to use Delta Lake with Dagster.</p>
 <p>You will learn how to use the Delta Lake I/O Manager to read and write your Dagster Software-Defined Assets (SDAs). You will also learn about the unique advantages Delta Lake offers the Dagster community.</p>
-<p>Here are some of the benefits that Delta Lake provides Dagster users:
-- native PyArrow integration for lazy computation of large datasets,
-- more efficient querying with file skipping via Z Ordering and liquid clustering
-- built-in vacuuming to remove unnecessary files and versions
-- ACID transactions for reliable writes
-- smooth versioning integration so that versions can be use to trigger downstream updates.
-- surfacing table stats based on the file statistics </p>
+<p>Here are some of the benefits that Delta Lake provides Dagster users:</p>
+<ul>
+<li>native PyArrow integration for lazy computation of large datasets,</li>
+<li>more efficient querying with file skipping via Z Ordering and liquid clustering</li>
+<li>built-in vacuuming to remove unnecessary files and versions</li>
+<li>ACID transactions for reliable writes</li>
+<li>smooth versioning integration so that versions can be use to trigger downstream updates.</li>
+<li>surfacing table stats based on the file statistics</li>
+</ul>
 <h2 id="dagster-io-managers">Dagster I/O Managers</h2>
 <p>Dagster uses <a href="https://docs.dagster.io/concepts/io-management/io-managers#overview">I/O Managers</a> to simplify data reads and writes. I/O Managers help you reduce boilerplate code by storing Dagster Asset and Op outputs and loading them as inputs to downstream objects. They make it easy to change where and how your data is stored.</p>
 <p>You only need to define your I/O Manager and its settings (such as storage location and schema) once and the I/O Manager will take care of correctly reading and writing all your Dagster Assets automatically.</p>
 <p>If you need lower-level access than the Dagster I/O Managers provide, take a look at the Delta Table Resource.</p>
 <h2 id="the-delta-lake-io-manager">The Delta Lake I/O Manager</h2>
-<p>You can easily read and write Delta Lake Tables from Dagster by using the <code>DeltaLakeIOManager()</code>. </p>
+<p>You can easily read and write Delta Lake Tables from Dagster by using the <code>DeltaLakeIOManager()</code>.</p>
 <p>Install the DeltaLakeIOManager:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip install dagster-deltalake
 </span></code></pre></div>
-<p>Next, configure the following settings in your project’s <code>__init__.py</code> file:
-- <code>io_manager</code>: set this to <code>DeltaLakeIOManager()</code>, this sets the default I/O Manager for all your Assets</p>
-<p>Within the DeltaLakeIOManager, define:
-- <code>root_uri</code>: the root path where your Delta Tables will be created
-- <code>storage_options</code>: configuration for accessing storage location
-- <code>schema</code>: name of schema to use (optional, defaults to public)</p>
+<p>Next, configure the following settings in your project’s <code>__init__.py</code> file:</p>
+<ul>
+<li><code>io_manager</code>: set this to <code>DeltaLakeIOManager()</code>, this sets the default I/O Manager for all your Assets</li>
+</ul>
+<p>Within the DeltaLakeIOManager, define:</p>
+<ul>
+<li><code>root_uri</code>: the root path where your Delta Tables will be created</li>
+<li><code>storage_options</code>: configuration for accessing storage location</li>
+<li><code>schema</code>: name of schema to use (optional, defaults to public)</li>
+</ul>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>defs = Definitions(
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>   assets=all_assets,
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>   resources={
@@ -2171,7 +2291,7 @@
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>)
 </span></code></pre></div>
 <p>Now, when you materialize an Asset, it will be saved as a Delta Lake in a folder <code>dagster_deltalake/asset_name</code> under the root directory <code>path/to/deltalake</code>.</p>
-<p>The default Delta Lake I/O Manager supports Arrow reads and writes. You can also use the Delta Lake I/O Manager with <a href="#using-delta-lake-and-dagster-with-pandas">pandas</a> or <a href="#using-delta-lake-and-dagster-with-polars">polars</a>. </p>
+<p>The default Delta Lake I/O Manager supports Arrow reads and writes. You can also use the Delta Lake I/O Manager with <a href="#using-delta-lake-and-dagster-with-pandas">pandas</a> or <a href="#using-delta-lake-and-dagster-with-polars">polars</a>.</p>
 <h2 id="creating-delta-lake-tables-with-dagster">Creating Delta Lake Tables with Dagster</h2>
 <p>You don’t need to do anything else to store your Dagster Assets as Delta Lake tables. The I/O Manager will handle storing and loading your Assets as Delta Lake tables from now on.</p>
 <p>You can proceed to write Dagster code as you normally would. For example, you can create an Asset that reads in some toy data about animals and writes it out to an Arrow Table:</p>
@@ -2205,14 +2325,14 @@
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>   return raw_dataset.drop_null()
 </span></code></pre></div>
 <h2 id="reading-existing-delta-lake-tables-into-dagster">Reading Existing Delta Lake Tables into Dagster</h2>
-<p>You can make existing Delta Lake tables (that were not created in Dagster) available to your Dagster assets. Use the <code>SourceAsset</code> object and pass the table name as the key argument: </p>
+<p>You can make existing Delta Lake tables (that were not created in Dagster) available to your Dagster assets. Use the <code>SourceAsset</code> object and pass the table name as the key argument:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>from dagster import SourceAsset
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>iris_harvest_data = SourceAsset(key=&quot;more_animal_data&quot;)
 </span></code></pre></div>
 <p>This will load a table <code>more_animal_data</code> located at <code>&lt;root_uri&gt;/&lt;schema&gt;</code> as configured in the Definitions object above (see <a href="#the-delta-lake-io-manager">Delta Lake I/O Manager</a> section).</p>
 <h2 id="column-pruning">Column Pruning</h2>
-<p>You can often improve the efficiency of your computations by only loading specific columns of your Delta table. This is called column pruning. </p>
+<p>You can often improve the efficiency of your computations by only loading specific columns of your Delta table. This is called column pruning.</p>
 <p>With the Delta Lake I/O manager, you can select specific columns to load defining the <code>columns</code> in the <code>metadata</code> parameter of the <code>AssetIn</code> that loads the upstream Asset:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>import pyarrow as pa
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>from dagster import AssetIn, asset
@@ -2258,7 +2378,7 @@
 </span></code></pre></div>
 <p>To partition your data, make sure to include the relevant <code>partitions_def</code> and <code>metadata</code> arguments to the <code>@asset</code> decorator. Refer to the Dagster documentation on <a href="https://docs.dagster.io/concepts/partitions-schedules-sensors/partitioning-assets">partitioning assets</a> for more information.</p>
 <h2 id="using-delta-lake-and-dagster-with-pandas">Using Delta Lake and Dagster with Pandas</h2>
-<p>To read and write data to Delta Lake using pandas, use the <code>DeltaLakePandasIOManager()</code>. </p>
+<p>To read and write data to Delta Lake using pandas, use the <code>DeltaLakePandasIOManager()</code>.</p>
 <p>You will need to install it using:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>pip install dagster-deltalake-pandas
 </span></code></pre></div>
@@ -2295,7 +2415,7 @@
 </span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>   )
 </span></code></pre></div>
 <h2 id="using-delta-lake-and-dagster-with-polars">Using Delta Lake and Dagster with Polars</h2>
-<p>To read and write data to Delta Lake using polars, use the <code>DeltaLakePolarsIOManager()</code>. </p>
+<p>To read and write data to Delta Lake using polars, use the <code>DeltaLakePolarsIOManager()</code>.</p>
 <p>You will need to install it using:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pip install dagster-deltalake-polars
 </span></code></pre></div>
@@ -2336,7 +2456,7 @@
 <p>I/O managers are a helpful tool in many common usage situations. But when you need lower-level access, the I/O Manager might not be the right tool to use. In these cases you may want to use the Delta Lake Table Resource.</p>
 <p>The Delta Lake Table Resource is a low-level access method to the table object. It gives you more fine-grained control and allows for modeling of more complex data. You can also use the Table Resource to run optimization and vacuuming jobs.</p>
 <h2 id="schema-and-constraint-enforcement">Schema and Constraint Enforcement</h2>
-<p>Delta Lake provides built-in checks to ensure schema consistency when appending data to a table, as well as the ability to evolve the schema. This is a great feature for the Dagster community as it prevents bad data from being appended to tables, ensuring data consistency and accuracy. </p>
+<p>Delta Lake provides built-in checks to ensure schema consistency when appending data to a table, as well as the ability to evolve the schema. This is a great feature for the Dagster community as it prevents bad data from being appended to tables, ensuring data consistency and accuracy.</p>
 <p>Read more about how to add constraints to a table in <a href="https://delta-io.github.io/delta-rs/usage/constraints/">the Delta Lake documentation</a>.</p>
 <h2 id="z-ordering">Z-Ordering</h2>
 <p>Delta Lake offers Z-ordering functionality to colocate similar data in the same files. This can make your Delta Table queries much more efficient via file skipping. Dagster users can now benefit from this great feature through the Delta Lake I/O Manager.</p>

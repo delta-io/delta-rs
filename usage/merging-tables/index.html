@@ -330,6 +330,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -875,6 +895,47 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#optimizing-merge-performance" class="md-nav__link">
+    Optimizing Merge Performance
+  </a>
+  
+    <nav class="md-nav" aria-label="Optimizing Merge Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-add-partition-columns-to-predicates" class="md-nav__link">
+    1. Add Partition Columns to Predicates
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-add-additional-filter-columns-to-predicates" class="md-nav__link">
+    2. Add Additional Filter Columns to Predicates
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-impact" class="md-nav__link">
+    Performance Impact
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    Best Practices
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1114,6 +1175,8 @@
   
     
     
+      
+        
       
         
       
@@ -1378,11 +1441,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1943,6 +2026,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2029,6 +2184,47 @@
   <a href="#notes" class="md-nav__link">
     Notes
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optimizing-merge-performance" class="md-nav__link">
+    Optimizing Merge Performance
+  </a>
+  
+    <nav class="md-nav" aria-label="Optimizing Merge Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-add-partition-columns-to-predicates" class="md-nav__link">
+    1. Add Partition Columns to Predicates
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-add-additional-filter-columns-to-predicates" class="md-nav__link">
+    2. Add Additional Filter Columns to Predicates
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-impact" class="md-nav__link">
+    Performance Impact
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    Best Practices
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2541,6 +2737,103 @@
 <ul>
 <li>Column names with special characters, such as numbers or spaces should be encapsulated in backticks: "target.<code>123column</code>" or "target.<code>my column</code>"</li>
 </ul>
+<h2 id="optimizing-merge-performance">Optimizing Merge Performance</h2>
+<p>Delta Lake merge operations can be resource intensive when working with large tables. Processing time and compute resources can be significantly reduced by using
+efficient predicates which are specific to the data being merged.</p>
+<p>The following strategies explain how to optimize merge operations for better performance.</p>
+<h4 id="1-add-partition-columns-to-predicates">1. Add Partition Columns to Predicates</h4>
+<p>When your table is partitioned, including partition columns in your merge predicate can improve performance by enabling file pruning:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Good - uses partition column and value</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="p">(</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>    <span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>        <span class="n">source</span><span class="o">=</span><span class="n">source_data</span><span class="p">,</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>        <span class="n">predicate</span><span class="o">=</span><span class="s2">&quot;s.id = t.id AND s.month_id = t.month_id AND t.month_id = 202501&quot;</span><span class="p">,</span>  <span class="c1"># month_id is a partition column</span>
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>        <span class="n">source_alias</span><span class="o">=</span><span class="s2">&quot;s&quot;</span><span class="p">,</span>
+</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>        <span class="n">target_alias</span><span class="o">=</span><span class="s2">&quot;t&quot;</span><span class="p">)</span>
+</span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>    <span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a><span class="p">)</span>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a>
+</span><span id="__span-28-12"><a id="__codelineno-28-12" name="__codelineno-28-12" href="#__codelineno-28-12"></a><span class="c1"># Less optimal - no partition column usage</span>
+</span><span id="__span-28-13"><a id="__codelineno-28-13" name="__codelineno-28-13" href="#__codelineno-28-13"></a><span class="p">(</span>
+</span><span id="__span-28-14"><a id="__codelineno-28-14" name="__codelineno-28-14" href="#__codelineno-28-14"></a>    <span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+</span><span id="__span-28-15"><a id="__codelineno-28-15" name="__codelineno-28-15" href="#__codelineno-28-15"></a>        <span class="n">source</span><span class="o">=</span><span class="n">source_data</span><span class="p">,</span>
+</span><span id="__span-28-16"><a id="__codelineno-28-16" name="__codelineno-28-16" href="#__codelineno-28-16"></a>        <span class="n">predicate</span><span class="o">=</span><span class="s2">&quot;s.id = t.id&quot;</span><span class="p">,</span>  <span class="c1"># No partition column specified</span>
+</span><span id="__span-28-17"><a id="__codelineno-28-17" name="__codelineno-28-17" href="#__codelineno-28-17"></a>        <span class="n">source_alias</span><span class="o">=</span><span class="s2">&quot;s&quot;</span><span class="p">,</span>
+</span><span id="__span-28-18"><a id="__codelineno-28-18" name="__codelineno-28-18" href="#__codelineno-28-18"></a>        <span class="n">target_alias</span><span class="o">=</span><span class="s2">&quot;t&quot;</span><span class="p">)</span>
+</span><span id="__span-28-19"><a id="__codelineno-28-19" name="__codelineno-28-19" href="#__codelineno-28-19"></a>    <span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</span><span id="__span-28-20"><a id="__codelineno-28-20" name="__codelineno-28-20" href="#__codelineno-28-20"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>As you can see, your filter should specify the partition column(s) and the value(s) you want to target during the merge operation.
+This is especially important when using the default argument <code>streamed_exec=True</code> in the <code>merge</code> method which disables the use of source table statistics to derive an early pruning predicate.
+Without these statistics, explicit predicates in your merge condition are required for file pruning.</p>
+<h4 id="2-add-additional-filter-columns-to-predicates">2. Add Additional Filter Columns to Predicates</h4>
+<p>Partitioning data on certain columns may be inefficient when it creates an excessive number of files or results in files that are too small.</p>
+<p>For example, you might have a source which is updated daily with the previous date's data. If the size of the data is too small to justify daily
+partitioning, you can use the following predicate to prune the monthly partition and only join the previous day's data:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># The predicate below prunes the monthly partition and only joins the previous day&#39;s data</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="c1"># Note: the table is only partitioned by the `month_id` column. The `date_id` value is computed from the source data.</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="p">(</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>    <span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>        <span class="n">source</span><span class="o">=</span><span class="n">source_data</span><span class="p">,</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>        <span class="n">predicate</span><span class="o">=</span><span class="s2">&quot;s.id = t.id AND s.month_id = t.month_id AND t.month_id = 202501 AND s.date_id = t.date_id AND t.date_id = 20250120&quot;</span><span class="p">,</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>        <span class="n">source_alias</span><span class="o">=</span><span class="s2">&quot;s&quot;</span><span class="p">,</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>        <span class="n">target_alias</span><span class="o">=</span><span class="s2">&quot;t&quot;</span><span class="p">)</span>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a>    <span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="performance-impact">Performance Impact</h3>
+<p>The effectiveness of these optimizations can be monitored using the operation metrics:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="n">metrics</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="o">...</span><span class="p">)</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Files scanned: </span><span class="si">{</span><span class="n">metrics</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;num_target_files_scanned&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Files skipped: </span><span class="si">{</span><span class="n">metrics</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;num_target_files_skipped_during_scan&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Execution time: </span><span class="si">{</span><span class="n">metrics</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;execution_time_ms&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<p>An efficient merge operation should show:</p>
+<ul>
+<li>A high ratio of skipped files to scanned files</li>
+<li>Lower execution time compared to less specific predicates</li>
+</ul>
+<p>Here is an example of logs from a merge operation with a partitioned table without adding the partition columns to the predicates:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>Merging table with predicates: {
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>    &#39;merge&#39;: &#39;s.unique_constraint_hash = t.unique_constraint_hash&#39;,
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>    &#39;when_matched_update_all&#39;: &#39;s.post_transform_row_hash != t.post_transform_row_hash&#39;
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a>}
+</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>Files Scanned: 24
+</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a>Files Skipped: 0
+</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a>Files Added: 1
+</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a>Execution Time: 23774ms
+</span></code></pre></div>
+<p>The table is partitioned by the <code>month_id</code> column and all files are scanned which is not efficient. If we add the partition columns to the predicates,
+the merge operation will only scan the relevant files which is faster and more efficient:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>Merging table with predicates: {
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>    &#39;merge&#39;: &#39;s.unique_constraint_hash = t.unique_constraint_hash AND s.month_id = t.month_id AND t.month_id = 202503&#39;,
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>    &#39;when_matched_update_all&#39;: &#39;s.post_transform_row_hash != t.post_transform_row_hash AND s.month_id = t.month_id AND t.month_id = 202503&#39;
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a>}
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a>Files Scanned: 1
+</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a>Files Skipped: 10
+</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a>Files Added: 1
+</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a>Execution Time: 2964ms
+</span></code></pre></div>
+<p>For this specific source, it is known that each data update only includes a few recent days. This means that we can further optimize the merge operation
+by making the predicate even more specific by adding the unique <code>date_id</code> column values to the predicates.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a> Merging table with predicates: {
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>    &#39;merge&#39;: &#39;s.unique_constraint_hash = t.unique_constraint_hash AND s.month_id = t.month_id AND t.month_id = 202503 AND s.date_id = t.date_id AND t.date_id IN (20250314, 20250315, 20250316)&#39;,
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>    &#39;when_matched_update_all&#39;: &#39;s.post_transform_row_hash != t.post_transform_row_hash AND s.month_id = t.month_id AND t.month_id = 202503 AND s.date_id = t.date_id AND t.date_id IN (20250314, 20250315, 20250316)&#39;
+</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a>}
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a>Files Scanned: 0
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6" href="#__codelineno-33-6"></a>Files Skipped: 18
+</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7" href="#__codelineno-33-7"></a>Files Added: 1
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8" href="#__codelineno-33-8"></a>Execution Time: 416ms
+</span></code></pre></div>
+<p>The final result skips all files that are not relevant to the merge operation and is significantly faster (98%) than the original operation.</p>
+<h3 id="best-practices">Best Practices</h3>
+<ol>
+<li><strong>Always Include Partition Columns</strong>: If your table is partitioned, include partition columns in your merge predicates</li>
+<li><strong>Keep Statistics Updated</strong>: Regular table optimization helps Delta Lake make better decisions about file pruning</li>
+<li><strong>Monitor Metrics</strong>: Use the operation metrics to verify the effectiveness of your predicates</li>
+</ol>
 
 
 

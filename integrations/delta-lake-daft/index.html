@@ -332,6 +332,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1026,6 +1046,8 @@
       
         
       
+        
+      
     
     
     
@@ -1277,11 +1299,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1951,6 +1993,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2125,7 +2239,7 @@
 <p>You can use <code>write_deltalake</code> to write a Daft DataFrame to a Delta table:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>df.write_deltalake(&quot;tmp/daft-table&quot;, mode=&quot;overwrite&quot;)
 </span></code></pre></div>
-<p>Daft supports multiple write modes. See the <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/doc_gen/dataframe_methods/daft.DataFrame.write_deltalake.html#daft.DataFrame.write_deltalake">Daft documentation</a> for more information.</p>
+<p>Daft supports multiple write modes. See the <a href="https://www.getdaft.io/projects/docs/en/stable/api/dataframe/?h=write+delta#daft.DataFrame.write_deltalake">Daft documentation</a> for more information.</p>
 <h2 id="what-can-i-do-with-a-daft-dataframe">What can I do with a Daft DataFrame?</h2>
 <p>Daft gives you full-featured DataFrame functionality, similar to what you might be used to from pandas, Dask or PySpark.</p>
 <p>On top of this, Daft also gives you:</p>
@@ -2210,11 +2324,11 @@
 <p>Read <a href="https://delta.io/blog/daft-delta-lake-integration/">High-Performance Querying on Massive Delta Lake Tables with Daft</a> for an in-depth benchmarking of query optimization with Delta Lake and Daft using partitioning and Z-ordering.</p>
 <h2 id="daft-gives-you-multimodal-data-type-support">Daft gives you Multimodal Data Type Support</h2>
 <p>Daft has a rich multimodal type-system with support for Python objects, Images, URLs, Tensors and more.</p>
-<p>The <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/expressions.html">Expressions API</a> provides useful tools to work with these data types. By combining multimodal data support with the <a href="https://www.getdaft.io/projects/docs/en/latest/api_docs/udf.html">User-Defined Functions API</a> you can run ML workloads right within your DataFrame.</p>
+<p>The <a href="https://www.getdaft.io/projects/docs/en/stable/api/expressions">Expressions API</a> provides useful tools to work with these data types. By combining multimodal data support with the <a href="https://www.getdaft.io/projects/docs/en/stable/api/udf">User-Defined Functions API</a> you can run ML workloads right within your DataFrame.</p>
 <p>Take a look at the notebook in the <a href="https://github.com/delta-io/delta-examples"><code>delta-examples</code> Github repository</a> for a closer look at how Daft handles URLs, images and ML applications.</p>
 <h2 id="contribute-to-daft">Contribute to <code>daft</code></h2>
 <p>Excited about Daft and want to contribute? Join them on <a href="https://github.com/Eventual-Inc/Daft">Github</a> 🚀</p>
-<p>Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is stricly non-identifiable metadata. You can disable telemetry by setting the following environment variable: <code>DAFT_ANALYTICS_ENABLED=0</code>. Read more in the <a href="https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/">Daft documentation</a>.</p>
+<p>Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is strictly non-identifiable metadata. You can disable telemetry by setting the following environment variable: <code>DAFT_ANALYTICS_ENABLED=0</code>. Read more in the <a href="https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/">Daft documentation</a>.</p>
 
 
 

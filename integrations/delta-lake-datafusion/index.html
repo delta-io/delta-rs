@@ -332,6 +332,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1026,6 +1046,8 @@
       
         
       
+        
+      
     
     
     
@@ -1277,11 +1299,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/catalog/" class="md-nav__link">
+      <a href="../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1718,6 +1760,13 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dataframe-syntax" class="md-nav__link">
+    Dataframe syntax
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#delta-lake-features-for-datafusion-users" class="md-nav__link">
     Delta Lake features for DataFusion users
   </a>
@@ -1910,6 +1959,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1939,6 +2060,13 @@
         <li class="md-nav__item">
   <a href="#delta-lake-performance-benefits-for-datafusion-users" class="md-nav__link">
     Delta Lake performance benefits for DataFusion users
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dataframe-syntax" class="md-nav__link">
+    Dataframe syntax
   </a>
   
 </li>
@@ -1998,16 +2126,16 @@
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>| id047 | id098 | id0000307804 |    85 |    23 | 187639 |    3 |    5 | 47.5773 |
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>+-------+-------+--------------+-------+-------+--------+------+------+---------+
 </span></code></pre></div>
-<p>Here's how to register a Delta Lake table as a PyArrow dataset:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datafusion</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionContext</span>
+<p>Here's how to register a Delta Lake table with DataFusion:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datafusion</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionContext</span><span class="p">,</span> <span class="n">col</span><span class="p">,</span> <span class="n">functions</span> <span class="k">as</span> <span class="n">f</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeltaTable</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">ctx</span> <span class="o">=</span> <span class="n">SessionContext</span><span class="p">()</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">table</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;G1_1e9_1e2_0_0&quot;</span><span class="p">)</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_dataset</span><span class="p">(</span><span class="s2">&quot;my_delta_table&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">())</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_table_provider</span><span class="p">(</span><span class="s2">&quot;my_delta_table&quot;</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Now query the table:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select id1, sum(v1) as v1 from my_delta_table where id1=&#39;id096&#39; group by id1&quot;</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select id1, sum(v1) as v1 from my_delta_table where id1=&#39;id096&#39; group by id1&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </span></code></pre></div>
 <p>That query takes 2.8 seconds to execute.</p>
 <p>Let's register the same dataset as a Parquet table, run the same query, and compare the runtime difference.</p>
@@ -2019,6 +2147,12 @@
 <p>This query takes 5.3 seconds to run.</p>
 <p>Parquet stores data in row groups and DataFusion can intelligently skip row groups that don't contain relevant data, so the query is faster than a file format like CSV which doesn't support row group skipping.</p>
 <p>Delta Lake stores file-level metadata information in the transaction log, so it can skip entire files when queries are executed.  Delta Lake can skip entire files and then skip row groups within the individual files.  This makes Delta Lake even faster than Parquet files, especially for larger datasets spread across many files.</p>
+<h2 id="dataframe-syntax">Dataframe syntax</h2>
+<p>You can also use DataFusion's dataframe syntax to run the query above. Please note: unlike Polars or Pandas, all dataframes in DataFusion are lazy.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">ctx</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;my_delta_table&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;id1&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;id096&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">aggregate</span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">col</span><span class="p">(</span><span class="s2">&quot;id1&quot;</span><span class="p">),</span> <span class="n">f</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;v1&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;v1&quot;</span><span class="p">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</span></code></pre></div>
 <h2 id="delta-lake-features-for-datafusion-users">Delta Lake features for DataFusion users</h2>
 <p>Delta Lake also provides other features that are useful for DataFusion users like ACID transactions, concurrency protection, time travel, versioned data, and more.</p>
 <h2 id="why-delta-lake-depends-on-datafusion">Why Delta Lake depends on DataFusion</h2>

@@ -8,10 +8,10 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/catalog/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/transaction/">
       
       
-        <link rel="prev" href="../storage/">
+        <link rel="prev" href="../query/">
       
       
         <link rel="next" href="../exceptions/">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Catalog - Delta Lake Documentation</title>
+        <title>Transaction - Delta Lake Documentation</title>
       
     
     
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deltalake.data_catalog.DataCatalog" class="md-skip">
+        <a href="#transaction" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Catalog
+              Transaction
             
           </span>
         </div>
@@ -323,6 +323,26 @@
     
   
   How Delta Lake works
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
 
         </a>
       </li>
@@ -1026,6 +1046,8 @@
       
         
       
+        
+      
     
     
     
@@ -1273,6 +1295,26 @@
                 
   
   
+  
+    <li class="md-nav__item">
+      <a href="../query/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1281,12 +1323,14 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
+        
+      
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
           
   
   <span class="md-ellipsis">
-    Catalog
+    Transaction
   </span>
   
 
@@ -1297,7 +1341,7 @@
         
   
   <span class="md-ellipsis">
-    Catalog
+    Transaction
   </span>
   
 
@@ -1309,6 +1353,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1317,23 +1363,57 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog" class="md-nav__link">
-    DataCatalog
+  <a href="#commitproperties-and-postcommithookproperties" class="md-nav__link">
+    CommitProperties and PostCommitHookProperties
   </a>
   
-    <nav class="md-nav" aria-label="DataCatalog">
+    <nav class="md-nav" aria-label="CommitProperties and PostCommitHookProperties">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.AWS" class="md-nav__link">
-    AWS
+  <a href="#deltalake.CommitProperties" class="md-nav__link">
+    CommitProperties
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.UNITY" class="md-nav__link">
-    UNITY
+  <a href="#deltalake.PostCommitHookProperties" class="md-nav__link">
+    PostCommitHookProperties
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#create-write-transactions" class="md-nav__link">
+    Create write transactions
+  </a>
+  
+    <nav class="md-nav" aria-label="Create write transactions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.transaction.AddAction" class="md-nav__link">
+    AddAction
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.transaction.create_table_with_add_actions" class="md-nav__link">
+    create_table_with_add_actions
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.create_write_transaction" class="md-nav__link">
+    create_write_transaction
   </a>
   
 </li>
@@ -1903,6 +1983,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1920,6 +2072,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1928,23 +2082,57 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog" class="md-nav__link">
-    DataCatalog
+  <a href="#commitproperties-and-postcommithookproperties" class="md-nav__link">
+    CommitProperties and PostCommitHookProperties
   </a>
   
-    <nav class="md-nav" aria-label="DataCatalog">
+    <nav class="md-nav" aria-label="CommitProperties and PostCommitHookProperties">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.AWS" class="md-nav__link">
-    AWS
+  <a href="#deltalake.CommitProperties" class="md-nav__link">
+    CommitProperties
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.data_catalog.DataCatalog.UNITY" class="md-nav__link">
-    UNITY
+  <a href="#deltalake.PostCommitHookProperties" class="md-nav__link">
+    PostCommitHookProperties
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#create-write-transactions" class="md-nav__link">
+    Create write transactions
+  </a>
+  
+    <nav class="md-nav" aria-label="Create write transactions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.transaction.AddAction" class="md-nav__link">
+    AddAction
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.transaction.create_table_with_add_actions" class="md-nav__link">
+    create_table_with_add_actions
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.create_write_transaction" class="md-nav__link">
+    create_write_transaction
   </a>
   
 </li>
@@ -1972,25 +2160,76 @@
   
 
 
-  <h1>Catalog</h1>
+<h1 id="transaction">Transaction</h1>
+<h2 id="commitproperties-and-postcommithookproperties">CommitProperties and PostCommitHookProperties</h2>
+
 
 <div class="doc doc-object doc-class">
 
 
 
-<h3 id="deltalake.data_catalog.DataCatalog" class="doc doc-heading">
-          <span class="doc doc-object-name doc-class-name">deltalake.data_catalog.DataCatalog</span>
-
-
-</h3>
-
-
-  <div class="doc doc-contents first">
-          <p class="doc doc-class-bases">
-            Bases: <code><span title="enum.Enum">Enum</span></code></p>
+<h3 id="deltalake.CommitProperties" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.CommitProperties</span>
 
   
-      <p>List of the Data Catalogs</p>
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">CommitProperties</span><span class="p">(</span><span class="n">custom_metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_commit_retries</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">app_transactions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Transaction</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents first">
+
+  
+      <p>The commit properties. Controls the behaviour of the commit.</p>
+  
+      <p>Custom metadata to be stored in the commit. Controls the number of retries for the commit.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>custom_metadata</code></td>
+          <td>
+                <code>dict[str, str] | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>custom metadata that will be added to the transaction commit.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>max_commit_retries</code></td>
+          <td>
+                <code>int | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>maximum number of times to retry the transaction commit.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
 
   
@@ -2003,64 +2242,186 @@
 
 
 
-<div class="doc doc-object doc-attribute">
 
 
 
-<h4 id="deltalake.data_catalog.DataCatalog.AWS" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">AWS</span>
+
+  </div>
+
+  </div>
+
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="deltalake.PostCommitHookProperties" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.PostCommitHookProperties</span>
 
   
   <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
-      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
   </span>
 
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">AWS</span> <span class="o">=</span> <span class="s1">&#39;glue&#39;</span>
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">PostCommitHookProperties</span><span class="p">(</span><span class="n">create_checkpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">cleanup_expired_logs</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
-  <div class="doc doc-contents ">
+  <div class="doc doc-contents first">
+
   
-      <p>Refers to the
-<code>AWS Glue Data Catalog &lt;https://docs.aws.amazon.com/glue/latest/dg/catalog-and-crawler.html&gt;</code>_</p>
+      <p>The post commit hook properties, only required for advanced usecases where you need to control this.</p>
+  
+      <p>Checkpoints are by default created based on the delta.checkpointInterval config setting.
+cleanup_expired_logs can be set to override the delta.enableExpiredLogCleanup, otherwise the
+config setting will be used to decide whether to clean up logs automatically by taking also
+the delta.logRetentionDuration into account.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>create_checkpoint</code></td>
+          <td>
+                <code>bool</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>to create checkpoints based on checkpoint interval. Defaults to True.</p>
+            </div>
+          </td>
+          <td>
+                <code>True</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>cleanup_expired_logs</code></td>
+          <td>
+                <code>Optional[bool]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>to clean up logs based on interval. Defaults to None.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+  </div>
+
+
+</div><h2 id="create-write-transactions">Create write transactions</h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="deltalake.transaction.AddAction" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.transaction.AddAction</span>
+
+  
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">AddAction</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">partition_values</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">],</span> <span class="n">modification_time</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">data_change</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">stats</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents first">
+
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+  </div>
+
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h3 id="deltalake.transaction.create_table_with_add_actions" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">deltalake.transaction.create_table_with_add_actions</span>
+
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create_table_with_add_actions</span><span class="p">(</span><span class="n">table_uri</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">Schema</span><span class="p">,</span> <span class="n">add_actions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">AddAction</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;append&#39;</span><span class="p">,</span> <span class="s1">&#39;overwrite&#39;</span><span class="p">,</span> <span class="s1">&#39;ignore&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">configuration</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">storage_options</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">CommitProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">PostCommitHookProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents first">
+
   </div>
 
 </div>
 
-<div class="doc doc-object doc-attribute">
+
+<div class="doc doc-object doc-function">
 
 
 
-<h4 id="deltalake.data_catalog.DataCatalog.UNITY" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">UNITY</span>
+<h3 id="deltalake.DeltaTable.create_write_transaction" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">deltalake.DeltaTable.create_write_transaction</span>
 
-  
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
-      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
-  </span>
 
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">UNITY</span> <span class="o">=</span> <span class="s1">&#39;unity&#39;</span>
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create_write_transaction</span><span class="p">(</span><span class="n">actions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">AddAction</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">DeltaSchema</span> <span class="o">|</span> <span class="n">ArrowSchemaExportable</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">CommitProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">PostCommitHookProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
-  <div class="doc doc-contents ">
-  
-      <p>Refers to the
-<code>Databricks Unity Catalog &lt;https://docs.databricks.com/data-governance/unity-catalog/index.html&gt;</code>_</p>
-  </div>
-
-</div>
-
-
-
-
+  <div class="doc doc-contents first">
 
   </div>
-
-  </div>
-
 
 </div>
 
@@ -2086,7 +2447,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../storage/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Storage">
+          <a href="../query/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Query">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -2096,7 +2457,7 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Storage
+                Query
               </div>
             </div>
           </a>

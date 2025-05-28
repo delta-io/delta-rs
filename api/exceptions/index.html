@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://github.com/delta-io/delta-rs/api/exceptions/">
       
       
-        <link rel="prev" href="../catalog/">
+        <link rel="prev" href="../transaction/">
       
       
         <link rel="next" href="../../integrations/object-storage/adls/">
@@ -323,6 +323,26 @@
     
   
   How Delta Lake works
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+          
+  
+    
+  
+  Upgrade guides
 
         </a>
       </li>
@@ -1026,6 +1046,8 @@
       
         
       
+        
+      
     
     
     
@@ -1275,11 +1297,31 @@
   
   
     <li class="md-nav__item">
-      <a href="../catalog/" class="md-nav__link">
+      <a href="../query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Catalog
+    Query
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../transaction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Transaction
   </span>
   
 
@@ -1364,6 +1406,13 @@
         <li class="md-nav__item">
   <a href="#deltalake.exceptions.CommitFailedError" class="md-nav__link">
     CommitFailedError
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deltalake.exceptions.SchemaMismatchError" class="md-nav__link">
+    SchemaMismatchError
   </a>
   
 </li>
@@ -1908,6 +1957,78 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Upgrade guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Upgrade guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Version 1.0.0
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1962,6 +2083,13 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#deltalake.exceptions.SchemaMismatchError" class="md-nav__link">
+    SchemaMismatchError
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1996,27 +2124,11 @@
 
   <div class="doc doc-contents first">
           <p class="doc doc-class-bases">
-            Bases: <code>builtins.Exception</code></p>
+            Bases: <code>Exception</code></p>
 
   
       <p>The base class for Delta-specific errors.</p>
 
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-
-  </div>
 
   </div>
 
@@ -2036,27 +2148,11 @@
 
   <div class="doc doc-contents first">
           <p class="doc doc-class-bases">
-            Bases: <code>_internal.DeltaError</code></p>
+            Bases: <code><a class="autorefs autorefs-internal" title="deltalake._internal.DeltaError" href="#deltalake.exceptions.DeltaError">DeltaError</a></code></p>
 
   
-      <p>Raised when a violation with the Delta protocol specs ocurred.</p>
+      <p>Raised when a violation with the Delta protocol specs occurred.</p>
 
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-
-  </div>
 
   </div>
 
@@ -2076,27 +2172,11 @@
 
   <div class="doc doc-contents first">
           <p class="doc doc-class-bases">
-            Bases: <code>_internal.DeltaError</code></p>
+            Bases: <code><a class="autorefs autorefs-internal" title="deltalake._internal.DeltaError" href="#deltalake.exceptions.DeltaError">DeltaError</a></code></p>
 
   
       <p>Raised when a Delta table cannot be loaded from a location.</p>
 
-
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-
-  </div>
 
   </div>
 
@@ -2116,27 +2196,35 @@
 
   <div class="doc doc-contents first">
           <p class="doc doc-class-bases">
-            Bases: <code>_internal.DeltaError</code></p>
+            Bases: <code><a class="autorefs autorefs-internal" title="deltalake._internal.DeltaError" href="#deltalake.exceptions.DeltaError">DeltaError</a></code></p>
 
   
       <p>Raised when a commit to a Delta table fails.</p>
 
 
-  
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-
   </div>
+
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="deltalake.exceptions.SchemaMismatchError" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.exceptions.SchemaMismatchError</span>
+
+
+</h3>
+
+
+  <div class="doc doc-contents first">
+          <p class="doc doc-class-bases">
+            Bases: <code><a class="autorefs autorefs-internal" title="deltalake._internal.DeltaError" href="#deltalake.exceptions.DeltaError">DeltaError</a></code></p>
+
+  
+      <p>Raised when a schema mismatch is detected.</p>
+
 
   </div>
 
@@ -2165,7 +2253,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../catalog/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Catalog">
+          <a href="../transaction/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Transaction">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -2175,7 +2263,7 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Catalog
+                Transaction
               </div>
             </div>
           </a>
