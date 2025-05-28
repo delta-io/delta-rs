@@ -241,7 +241,7 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.version()))
     }
 
-    pub fn has_files(&self) -> PyResult<bool> {
+    pub(crate) fn has_files(&self) -> PyResult<bool> {
         self.with_table(|t| Ok(t.config.require_files))
     }
 
@@ -299,21 +299,6 @@ impl RawDeltaTable {
         ))
     }
 
-    pub fn check_can_write_timestamp_ntz(&self, schema: PyRef<PySchema>) -> PyResult<()> {
-        let schema: StructType = schema.as_ref().inner_type.clone();
-        // Need to unlock to access the shared reference to &DeltaTableState
-        match self._table.lock() {
-            Ok(table) => Ok(PROTOCOL
-                .check_can_write_timestamp_ntz(
-                    table.snapshot().map_err(PythonError::from)?,
-                    &schema,
-                )
-                .map_err(|e| DeltaTableError::Generic(e.to_string()))
-                .map_err(PythonError::from)?),
-            Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-        }
-    }
-
     /// Load the internal [RawDeltaTable] with the table state from the specified `version`
     ///
     /// This will acquire the internal lock since it is a mutating operation!
@@ -351,7 +336,7 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
+    fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
         py.allow_threads(|| {
             #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
@@ -367,7 +352,7 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn get_num_index_cols(&self) -> PyResult<i32> {
+    fn get_num_index_cols(&self) -> PyResult<i32> {
         self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
@@ -376,7 +361,7 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
+    fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
         self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
