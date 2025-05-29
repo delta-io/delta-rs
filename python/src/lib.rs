@@ -22,7 +22,7 @@ use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, LogicalFile, Remove, StructType, Transaction,
 };
@@ -327,22 +327,6 @@ impl RawDeltaTable {
                 match self._table.lock() {
                     Ok(table) => table
                         .get_latest_version()
-                        .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from),
-                    Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-                }
-            })
-        })
-    }
-
-    fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
-        py.allow_threads(|| {
-            #[allow(clippy::await_holding_lock)]
-            rt().block_on(async {
-                match self._table.lock() {
-                    Ok(table) => table
-                        .get_earliest_version()
                         .await
                         .map_err(PythonError::from)
                         .map_err(PyErr::from),
