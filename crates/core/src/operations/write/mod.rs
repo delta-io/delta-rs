@@ -760,7 +760,7 @@ impl std::future::IntoFuture for WriteBuilder {
 mod tests {
     use super::*;
     use crate::logstore::get_actions;
-    use crate::operations::load_cdf::collect_batches;
+    use crate::operations::table_changes::collect_batches;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
     use crate::test_utils::{TestResult, TestSchemas};
@@ -1806,9 +1806,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let cdf_scan = DeltaOps(table.clone())
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
+            .build()
             .await
             .expect("Failed to load CDF");
 
@@ -1827,15 +1827,15 @@ mod tests {
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
 
         assert_batches_sorted_eq! {[
-            "+-------+----------+----+--------------+-----------------+",
-            "| value | modified | id | _change_type | _commit_version |",
-            "+-------+----------+----+--------------+-----------------+",
-            "| 1     | yes      | 1  | insert       | 1               |",
-            "| 2     | yes      | 2  | insert       | 1               |",
-            "| 3     | no       | 3  | delete       | 2               |",
-            "| 3     | no       | 3  | insert       | 1               |",
-            "| 3     | yes      | 3  | insert       | 2               |",
-            "+-------+----------+----+--------------+-----------------+",
+            "+----+-------+----------+--------------+-----------------+",
+            "| id | value | modified | _change_type | _commit_version |",
+            "+----+-------+----------+--------------+-----------------+",
+            "| 1  | 1     | yes      | insert       | 1               |",
+            "| 2  | 2     | yes      | insert       | 1               |",
+            "| 3  | 3     | no       | delete       | 2               |",
+            "| 3  | 3     | no       | insert       | 1               |",
+            "| 3  | 3     | yes      | insert       | 2               |",
+            "+----+-------+----------+--------------+-----------------+",
         ], &batches }
 
         let snapshot_bytes = table

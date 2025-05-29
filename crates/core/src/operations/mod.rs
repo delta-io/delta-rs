@@ -30,11 +30,12 @@ use self::vacuum::VacuumBuilder;
 #[cfg(feature = "datafusion")]
 use self::{
     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
-    merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
+    drop_constraints::DropConstraintBuilder, load::LoadBuilder, merge::MergeBuilder,
+    update::UpdateBuilder, write::WriteBuilder,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
+use crate::operations::table_changes::TableChangesBuilder;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
@@ -59,12 +60,12 @@ pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
-pub mod load_cdf;
-#[cfg(feature = "datafusion")]
 pub mod merge;
 #[cfg(feature = "datafusion")]
 pub mod optimize;
 pub mod set_tbl_properties;
+#[cfg(feature = "datafusion")]
+pub mod table_changes;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
@@ -202,11 +203,10 @@ impl DeltaOps {
         LoadBuilder::new(self.0.log_store, self.0.state.unwrap())
     }
 
-    /// Load a table with CDF Enabled
     #[cfg(feature = "datafusion")]
     #[must_use]
-    pub fn load_cdf(self) -> CdfLoadBuilder {
-        CdfLoadBuilder::new(self.0.log_store, self.0.state.unwrap())
+    pub fn table_changes(self) -> TableChangesBuilder {
+        TableChangesBuilder::new(self.0.log_store)
     }
 
     /// Write data to Delta table

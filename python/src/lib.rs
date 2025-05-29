@@ -36,10 +36,10 @@ use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionSt
 use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
-use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
+use deltalake::operations::table_changes::TableChangesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
 use deltalake::operations::update_table_metadata::{
@@ -823,7 +823,7 @@ impl RawDeltaTable {
         allow_out_of_range: bool,
     ) -> PyResult<Arro3RecordBatchReader> {
         let ctx = SessionContext::new();
-        let mut cdf_read = CdfLoadBuilder::new(self.log_store()?, self.cloned_state()?);
+        let mut cdf_read = TableChangesBuilder::new(self.log_store()?);
 
         if let Some(sv) = starting_version {
             cdf_read = cdf_read.with_starting_version(sv);
@@ -848,8 +848,10 @@ impl RawDeltaTable {
             cdf_read = cdf_read.with_allow_out_of_range();
         }
 
-        let table_provider: Arc<dyn TableProvider> =
-            Arc::new(DeltaCdfTableProvider::try_new(cdf_read).map_err(PythonError::from)?);
+        let table_provider: Arc<dyn TableProvider> = Arc::new(
+            rt().block_on(DeltaCdfTableProvider::try_new(cdf_read))
+                .map_err(PythonError::from)?,
+        );
 
         let table_name: String = "source".to_string();
 
@@ -1031,6 +1033,7 @@ impl RawDeltaTable {
         schema: PyArrowSchema,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
+        let schema = schema.into_inner();
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
                 self.files(py, Some(filters))?.iter().cloned(),
@@ -1039,8 +1042,6 @@ impl RawDeltaTable {
         };
         let stats_cols = self.get_stats_columns()?;
         let num_index_cols = self.get_num_index_cols()?;
-
-        let schema = schema.into_inner();
 
         let inclusion_stats_cols = if let Some(stats_cols) = stats_cols {
             stats_cols
@@ -1191,7 +1192,6 @@ impl RawDeltaTable {
         let schema = schema.as_ref().inner_type.clone();
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
-
             let existing_schema = self.with_table(|t| {
                 t.get_schema()
                     .cloned()
@@ -2388,7 +2388,6 @@ fn create_table_with_add_actions(
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     let schema = schema.as_ref().inner_type.clone();
-
     py.allow_threads(|| {
         let table = DeltaTableBuilder::from_uri(table_uri.clone())
             .with_storage_options(storage_options.unwrap_or_default())
@@ -2453,7 +2452,7 @@ fn convert_to_deltalake(
         let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
 
         if let Some(part_schema) = partition_schema {
-            builder = builder.with_partition_schema(part_schema.fields().cloned());
+            builder = builder.with_partition_schema(part_schema.fields().cloned())
         }
 
         if let Some(partition_strategy) = &partition_strategy {

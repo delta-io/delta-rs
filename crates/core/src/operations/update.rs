@@ -531,17 +531,17 @@ impl std::future::IntoFuture for UpdateBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
-    use crate::operations::load_cdf::*;
+    use crate::operations::table_changes::collect_batches;
+    use crate::operations::update::ScalarValue;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
+    use crate::DeltaResult;
     use crate::{DeltaTable, TableProperty};
     use arrow::array::{Int32Array, ListArray, StringArray};
     use arrow::datatypes::Schema as ArrowSchema;
@@ -1316,9 +1316,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
+            .build()
             .await
             .expect("Failed to load CDF");
 
@@ -1406,9 +1406,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
+            .build()
             .await
             .expect("Failed to load CDF");
 
@@ -1420,21 +1420,19 @@ mod tests {
         .await
         .expect("Failed to collect batches");
 
-        let _ = arrow::util::pretty::print_batches(&batches);
-
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
-
+        let _ = arrow::util::pretty::print_batches(&batches);
         assert_batches_sorted_eq! {[
-        "+-------+------+------------------+-----------------+",
-        "| value | year | _change_type     | _commit_version |",
-        "+-------+------+------------------+-----------------+",
-        "| 1     | 2020 | insert           | 1               |",
-        "| 2     | 2020 | insert           | 1               |",
-        "| 2     | 2020 | update_preimage  | 2               |",
-        "| 2     | 2024 | update_postimage | 2               |",
-        "| 3     | 2024 | insert           | 1               |",
-        "+-------+------+------------------+-----------------+",
+        "+------+-------+------------------+-----------------+",
+        "| year | value | _change_type     | _commit_version |",
+        "+------+-------+------------------+-----------------+",
+        "| 2020 | 1     | insert           | 1               |",
+        "| 2020 | 2     | insert           | 1               |",
+        "| 2024 | 3     | insert           | 1               |",
+        "| 2020 | 2     | update_preimage  | 2               |",
+        "| 2024 | 2     | update_postimage | 2               |",
+        "+------+-------+------------------+-----------------+"
         ], &batches }
     }
 }

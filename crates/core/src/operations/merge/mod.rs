@@ -505,7 +505,7 @@ enum OperationType {
     Copy,
 }
 
-//Encapsute the User's Merge configuration for later processing
+//Encapsulate the User's Merge configuration for later processing
 struct MergeOperationConfig {
     /// Which records to update
     predicate: Option<Expression>,
@@ -538,10 +538,10 @@ impl MergeOperation {
                     let r = TableReference::bare(alias.to_owned());
                     match column {
                         Column {
-                            relation: None,
+                            relation,
                             name,
                             spans,
-                        } => Column {
+                        } if relation.is_none() => Column {
                             relation: Some(r),
                             name,
                             spans,
@@ -1580,8 +1580,9 @@ mod tests {
     use crate::kernel::DataType;
     use crate::kernel::PrimitiveType;
     use crate::kernel::StructField;
-    use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
+    use crate::operations::merge::MergeMetrics;
+    use crate::operations::table_changes::collect_batches;
     use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -1609,8 +1610,6 @@ mod tests {
     use serde_json::json;
     use std::ops::Neg;
     use std::sync::Arc;
-
-    use super::MergeMetrics;
 
     pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
@@ -2614,7 +2613,7 @@ mod tests {
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
         let predicate = parameters["predicate"].as_str().unwrap();
-        let re = Regex::new(r"^id = '(C|X|B)' OR id = '(C|X|B)' OR id = '(C|X|B)'$").unwrap();
+        let re = Regex::new(r"^id = '([CXB])' OR id = '([CXB])' OR id = '([CXB])'$").unwrap();
         assert!(re.is_match(predicate));
 
         let expected = vec![
@@ -4035,9 +4034,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
+            .build()
             .await
             .expect("Failed to load CDF");
 
@@ -4047,8 +4046,7 @@ mod tests {
             ctx,
         )
         .await
-        .expect("Failed to collect batches");
-
+        .unwrap();
         let _ = arrow::util::pretty::print_batches(&batches);
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
@@ -4152,9 +4150,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
+            .build()
             .await
             .expect("Failed to load CDF");
 
@@ -4240,9 +4238,9 @@ mod tests {
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
-            .load_cdf()
+            .table_changes()
             .with_starting_version(0)
-            .build(&ctx.state(), None)
+            .build()
             .await
             .expect("Failed to load CDF");
 
