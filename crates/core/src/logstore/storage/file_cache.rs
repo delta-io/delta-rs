@@ -93,43 +93,45 @@ pub fn decorate_store(
         ))
     })?;
 
+    let file_cache = LocalFileSystem::new_with_prefix(path)?;
+
     let last_checkpoint_valid_duration = config
         .last_checkpoint_valid_duration
         .unwrap_or(Duration::ZERO);
 
     Ok(Box::new(FileCacheStorageBackend::try_new(
         store,
-        path,
+        file_cache,
         Arc::new(DeltaFileCachePolicy::new(last_checkpoint_valid_duration)),
     )?))
 }
 
 #[derive(Debug)]
-pub struct FileCacheStorageBackend {
+pub struct FileCacheStorageBackend<T: ObjectStore> {
     inner: ObjectStoreRef,
-    file_cache: Arc<LocalFileSystem>,
+    file_cache: T,
     cache_policy: Arc<dyn FileCachePolicy>,
     // Threads must hold the lock to download the file to cache to prevent
     // multiple threads from downloading the same file at the same time.
     in_progress_files: Arc<DashMap<Path, Arc<Mutex<()>>>>,
 }
 
-impl FileCacheStorageBackend {
+impl<T: ObjectStore> FileCacheStorageBackend<T> {
     pub fn try_new(
         inner: ObjectStoreRef,
-        path: impl AsRef<std::path::Path>,
+        file_cache: T,
         cache_policy: Arc<dyn FileCachePolicy>,
     ) -> ObjectStoreResult<Self> {
         Ok(Self {
             inner,
-            file_cache: Arc::new(LocalFileSystem::new_with_prefix(path)?),
+            file_cache,
             cache_policy,
             in_progress_files: Arc::new(DashMap::new()),
         })
     }
 }
 
-impl std::fmt::Display for FileCacheStorageBackend {
+impl<T: ObjectStore> std::fmt::Display for FileCacheStorageBackend<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -139,7 +141,7 @@ impl std::fmt::Display for FileCacheStorageBackend {
     }
 }
 
-impl FileCacheStorageBackend {
+impl<T: ObjectStore> FileCacheStorageBackend<T> {
     async fn ensure_cache_populated(
         &self,
         location: &Path,
@@ -199,7 +201,7 @@ impl FileCacheStorageBackend {
 }
 
 #[async_trait::async_trait]
-impl ObjectStore for FileCacheStorageBackend {
+impl<T: ObjectStore> ObjectStore for FileCacheStorageBackend<T> {
     async fn put_opts(
         &self,
         location: &Path,
@@ -273,7 +275,6 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::{path::Path, ObjectMeta, ObjectStore};
     use std::sync::Arc;
-    use tempfile::tempdir;
 
     // Helper struct to count the number of times get is called for each file
     #[derive(Debug)]
@@ -305,7 +306,6 @@ mod tests {
         ) -> ObjectStoreResult<GetResult> {
             let mut entry = self.get_counts.entry(location.to_owned()).or_insert(0);
             *entry += 1;
-
             self.inner.get_opts(location, options).await
         }
 
@@ -353,11 +353,12 @@ mod tests {
     #[tokio::test]
     async fn test_file_cached_on_get() {
         let inner_store = Arc::new(InMemory::new());
-        let cache_dir = tempdir().unwrap();
+        let cache_store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
         let file_cache_store = Arc::new(
             FileCacheStorageBackend::try_new(
                 inner_store.clone(),
-                cache_dir.path(),
+                cache_store.clone(),
                 Arc::new(DefaultFileCachePolicy {}),
             )
             .unwrap(),
@@ -378,11 +379,17 @@ mod tests {
         assert_eq!(data, file_content.to_vec());
 
         // Check if file is in cache, and content is correct
-        let cache_file_path = cache_dir.path().join(file_path.as_ref());
-        assert!(cache_file_path.exists());
+        let cache_file_path = cache_store.head(&file_path).await;
+        assert!(cache_file_path.is_ok());
 
-        let cached_data = tokio::fs::read(&cache_file_path).await.unwrap();
-        assert_eq!(cached_data, file_content);
+        let cached_data = cache_store
+            .get(&file_path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(cached_data, file_content.to_vec());
     }
 
     #[tokio::test]
@@ -391,7 +398,7 @@ mod tests {
             inner: Arc::new(InMemory::new()),
             get_counts: Arc::new(DashMap::new()),
         });
-        let cache_dir = tempdir().unwrap();
+        let cache_store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         #[derive(Debug)]
         struct CacheSpecificFilePolicy {}
@@ -399,18 +406,10 @@ mod tests {
         #[async_trait::async_trait]
         impl FileCachePolicy for CacheSpecificFilePolicy {
             fn should_use_cache(&self, location: &Path) -> bool {
+                println!("location: {:?}", location);
                 location.to_string() == "test_file_cache.txt"
             }
         }
-
-        let file_cache_store = Arc::new(
-            FileCacheStorageBackend::try_new(
-                inner_store.clone(),
-                cache_dir.path(),
-                Arc::new(CacheSpecificFilePolicy {}),
-            )
-            .unwrap(),
-        );
 
         let file_path = Path::from("test_file_no_cache.txt");
         let file_path_cached = Path::from("test_file_cache.txt");
@@ -427,6 +426,15 @@ mod tests {
             .await
             .unwrap();
 
+        let file_cache_store = Arc::new(
+            FileCacheStorageBackend::try_new(
+                inner_store.clone(),
+                cache_store.clone(),
+                Arc::new(CacheSpecificFilePolicy {}),
+            )
+            .unwrap(),
+        );
+
         // Check file that should not be cached
         let data = file_cache_store
             .get(&file_path)
@@ -441,8 +449,11 @@ mod tests {
         assert_eq!(*inner_store.get_counts.get(&file_path).unwrap().value(), 1);
 
         // Check no file has been saved to cache
-        let cache_file_path = cache_dir.path().join(file_path.as_ref());
-        assert!(!cache_file_path.exists());
+        let cache_file_meta = cache_store.head(&file_path).await;
+        assert!(matches!(
+            cache_file_meta.unwrap_err(),
+            ObjectStoreError::NotFound { .. }
+        ));
 
         // Try accessing it again.
         let data = file_cache_store
@@ -477,8 +488,8 @@ mod tests {
             1
         );
 
-        let cache_file_path = cache_dir.path().join(file_path_cached.as_ref());
-        assert!(cache_file_path.exists());
+        let cache_file_meta = cache_store.head(&file_path_cached).await;
+        assert!(cache_file_meta.is_ok());
 
         // Try accessing it again.
         let data = file_cache_store
