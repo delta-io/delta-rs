@@ -800,9 +800,7 @@ fn simplify_expr(
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr).unwrap();
 
-    context
-        .create_physical_expr(simplified, &df_schema)
-        .unwrap()
+    context.create_physical_expr(simplified, df_schema).unwrap()
 }
 
 fn prune_file_statistics(
@@ -905,7 +903,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
     let mut is_applicable = true;
     expr.apply(|expr| match expr {
         Expr::Column(Column { ref name, .. }) => {
-            is_applicable &= partition_cols.contains(&name);
+            is_applicable &= partition_cols.contains(name);
 
             // TODO: decide if we should constrain this to Utf8 columns (including views, dicts etc)
 
@@ -2269,7 +2267,6 @@ mod tests {
             data_change: true,
             stats: None,
             deletion_vector: None,
-            stats_parsed: None,
             tags: None,
             base_row_id: None,
             default_row_commit_version: None,

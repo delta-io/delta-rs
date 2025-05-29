@@ -50,25 +50,28 @@ def _convert_arro3_schema_to_delta(
         dtype: DataType,
     ) -> DataType:
         nested_dtype = dtype.value_type
+        inner_field = dtype.value_field
+
         assert nested_dtype is not None
-        nested_dtype_cast = dtype_to_delta_dtype(nested_dtype)
+        assert inner_field is not None
+
+        inner_field_casted = inner_field.with_type(dtype_to_delta_dtype(nested_dtype))
 
         if DataType.is_large_list(dtype):
-            return DataType.large_list(nested_dtype_cast)
+            return DataType.large_list(inner_field_casted)
         elif DataType.is_fixed_size_list(dtype):
-            return DataType.list(nested_dtype_cast, dtype.list_size)
+            return DataType.list(inner_field_casted, dtype.list_size)
         elif DataType.is_large_list_view(dtype):
-            return DataType.large_list_view(nested_dtype_cast)
+            return DataType.large_list_view(inner_field_casted)
         elif DataType.is_list_view(dtype):
-            return DataType.list_view(nested_dtype_cast)
+            return DataType.list_view(inner_field_casted)
         elif DataType.is_list(dtype):
-            return DataType.list(nested_dtype_cast)
+            return DataType.list(inner_field_casted)
         else:
             raise NotImplementedError
 
     def struct_to_delta_dtype(dtype: DataType) -> DataType:
-        schema = Arro3Schema.from_arrow(dtype)
-        fields_cast = [f.with_type(dtype_to_delta_dtype(f.type)) for f in schema]  # type: ignore[attr-defined]
+        fields_cast = [f.with_type(dtype_to_delta_dtype(f.type)) for f in dtype.fields]
         return DataType.struct(fields_cast)
 
     return Arro3Schema([f.with_type(dtype_to_delta_dtype(f.type)) for f in schema])  # type: ignore[attr-defined]

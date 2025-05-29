@@ -179,11 +179,6 @@ impl DeltaTable {
         self.log_store.get_latest_version(self.version()).await
     }
 
-    /// returns the earliest available version of the table
-    pub async fn get_earliest_version(&self) -> Result<i64, DeltaTableError> {
-        self.log_store.get_earliest_version(self.version()).await
-    }
-
     /// Currently loaded version of the table
     pub fn version(&self) -> i64 {
         self.state.as_ref().map(|s| s.version()).unwrap_or(-1)
@@ -343,12 +338,15 @@ impl DeltaTable {
         Ok(self.snapshot()?.metadata())
     }
 
+    #[deprecated(
+        since = "0.27.0",
+        note = "Use `snapshot()?.transaction_version(app_id)` instead."
+    )]
     /// Returns the current version of the DeltaTable based on the loaded metadata.
     pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
         self.state
             .as_ref()
-            .and_then(|s| s.app_transaction_version().ok())
-            .map(|it| it.map(|t| (t.app_id.clone(), t)).collect())
+            .and_then(|s| s.snapshot.transactions.clone())
             .unwrap_or_default()
     }
 

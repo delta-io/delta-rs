@@ -47,7 +47,6 @@
 //!
 //! ## Configuration
 //!
-use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
@@ -62,7 +61,7 @@ use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::log_segment::LogSegment;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::{AsAny, Engine};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use object_store::ObjectStoreScheme;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
@@ -303,9 +302,6 @@ pub trait LogStore: Send + Sync + AsAny {
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64>;
 
-    /// Find earliest version currently stored in the delta log.
-    async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64>;
-
     /// Get the list of actions for the next commit
     async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
         let next_version = current_version + 1;
@@ -459,10 +455,6 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64> {
         T::get_latest_version(self, start_version).await
-    }
-
-    async fn get_earliest_version(&self, start_version: i64) -> DeltaResult<i64> {
-        T::get_earliest_version(self, start_version).await
     }
 
     async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
@@ -693,58 +685,6 @@ pub async fn get_latest_version(
     Ok(segment.end_version as i64)
 }
 
-/// Default implementation for retrieving the earliest version
-pub async fn get_earliest_version(
-    log_store: &dyn LogStore,
-    current_version: i64,
-) -> DeltaResult<i64> {
-    let current_version = if current_version < 0 {
-        0
-    } else {
-        current_version
-    };
-
-    let storage = log_store.engine(None).await.storage_handler();
-    let log_root = log_store.log_root_url();
-
-    let segment = spawn_blocking(move || {
-        LogSegment::for_table_changes(storage.as_ref(), log_root, current_version as u64, None)
-    })
-    .await
-    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-    let version_start = segment.checkpoint_version.unwrap_or(current_version as u64);
-
-    // list files to find min version
-    let version = async {
-        let mut min_version: i64 = version_start as i64;
-        let prefix = Some(log_store.log_path());
-        let offset_path = commit_uri_from_version(version_start as i64);
-        let object_store = log_store.object_store(None);
-
-        // Manually filter until we can provide direction in https://github.com/apache/arrow-rs/issues/6274
-        let mut files = object_store
-            .list(prefix)
-            .try_filter(move |f| futures::future::ready(f.location < offset_path))
-            .boxed();
-
-        while let Some(obj_meta) = files.next().await {
-            let obj_meta = obj_meta?;
-            if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
-                min_version = min(min_version, log_version);
-            }
-        }
-
-        if min_version < 0 {
-            return Err(DeltaTableError::not_a_table(log_store.root_uri()));
-        }
-
-        Ok::<i64, DeltaTableError>(min_version)
-    }
-    .await?;
-    Ok(version)
-}
-
 /// Read delta log for a specific version
 pub async fn read_commit_entry(
     storage: &dyn ObjectStore,
@@ -792,6 +732,8 @@ pub async fn abort_commit_entry(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use futures::TryStreamExt;
+
     use super::*;
 
     #[test]

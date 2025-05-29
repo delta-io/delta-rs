@@ -364,6 +364,12 @@ pub enum DeltaOperation {
         /// Fields added to existing schema
         fields: Vec<StructField>,
     },
+    /// Update table metadata operations
+    #[serde(rename_all = "camelCase")]
+    UpdateTableMetadata {
+        /// The metadata update to apply
+        metadata_update: crate::operations::update_table_metadata::TableMetadataUpdate,
+    },
 }
 
 impl DeltaOperation {
@@ -392,6 +398,7 @@ impl DeltaOperation {
             DeltaOperation::DropConstraint { .. } => "DROP CONSTRAINT",
             DeltaOperation::AddFeature { .. } => "ADD FEATURE",
             DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
+            DeltaOperation::UpdateTableMetadata { .. } => "UPDATE TABLE METADATA",
         }
     }
 
@@ -427,6 +434,7 @@ impl DeltaOperation {
         match self {
             Self::Optimize { .. }
             | Self::UpdateFieldMetadata { .. }
+            | Self::UpdateTableMetadata { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
             | Self::AddFeature { .. }
@@ -536,7 +544,6 @@ mod tests {
             data_change: true,
             deletion_vector: None,
             partition_values: Default::default(),
-            stats_parsed: None,
             tags: None,
             size: 0,
             modification_time: 0,
@@ -611,7 +618,6 @@ mod tests {
             data_change: true,
             deletion_vector: None,
             partition_values: Default::default(),
-            stats_parsed: None,
             tags: None,
             size: 0,
             modification_time: 0,

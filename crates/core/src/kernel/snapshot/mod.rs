@@ -340,7 +340,7 @@ pub struct EagerSnapshot {
     // additional actions that should be tracked during log replay.
     tracked_actions: HashSet<ActionType>,
 
-    transactions: Option<HashMap<String, Transaction>>,
+    pub(crate) transactions: Option<HashMap<String, Transaction>>,
 
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
@@ -565,14 +565,16 @@ impl EagerSnapshot {
     }
 
     /// Iterate over all latest app transactions
-    pub fn transactions(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
-        self.transactions
+    pub async fn transaction_version(&self, app_id: impl AsRef<str>) -> DeltaResult<Option<i64>> {
+        Ok(self
+            .transactions
             .as_ref()
-            .map(|t| t.values().cloned())
             .ok_or(DeltaTableError::Generic(
                 "Transactions are not available. Please enable tracking of transactions."
                     .to_string(),
-            ))
+            ))?
+            .get(app_id.as_ref())
+            .map(|txn| txn.version))
     }
 
     /// Advance the snapshot based on the given commit actions

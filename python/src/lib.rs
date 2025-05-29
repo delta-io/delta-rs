@@ -22,7 +22,7 @@ use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, LogicalFile, Remove, StructType, Transaction,
 };
@@ -42,6 +42,9 @@ use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
 use deltalake::operations::table_changes::TableChangesBuilder;
 use deltalake::operations::update::UpdateBuilder;
 use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
+use deltalake::operations::update_table_metadata::{
+    TableMetadataUpdate, UpdateTableMetadataBuilder,
+};
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
@@ -56,8 +59,8 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
 use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::export::Arro3RecordBatchReader;
-use pyo3_arrow::{PyRecordBatch, PyRecordBatchReader, PySchema as PyArrowSchema};
+use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
+use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
 use schema::PySchema;
 use serde_json::{Map, Value};
 use std::cmp::min;
@@ -68,7 +71,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::log::*;
 use uuid::Uuid;
 use writer::maybe_lazy_cast_reader;
 
@@ -239,7 +241,7 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.version()))
     }
 
-    pub fn has_files(&self) -> PyResult<bool> {
+    pub(crate) fn has_files(&self) -> PyResult<bool> {
         self.with_table(|t| Ok(t.config.require_files))
     }
 
@@ -297,21 +299,6 @@ impl RawDeltaTable {
         ))
     }
 
-    pub fn check_can_write_timestamp_ntz(&self, schema: PyRef<PySchema>) -> PyResult<()> {
-        let schema: StructType = schema.as_ref().inner_type.clone();
-        // Need to unlock to access the shared reference to &DeltaTableState
-        match self._table.lock() {
-            Ok(table) => Ok(PROTOCOL
-                .check_can_write_timestamp_ntz(
-                    table.snapshot().map_err(PythonError::from)?,
-                    &schema,
-                )
-                .map_err(|e| DeltaTableError::Generic(e.to_string()))
-                .map_err(PythonError::from)?),
-            Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-        }
-    }
-
     /// Load the internal [RawDeltaTable] with the table state from the specified `version`
     ///
     /// This will acquire the internal lock since it is a mutating operation!
@@ -349,23 +336,7 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
-        py.allow_threads(|| {
-            #[allow(clippy::await_holding_lock)]
-            rt().block_on(async {
-                match self._table.lock() {
-                    Ok(table) => table
-                        .get_earliest_version()
-                        .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from),
-                    Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-                }
-            })
-        })
-    }
-
-    pub fn get_num_index_cols(&self) -> PyResult<i32> {
+    fn get_num_index_cols(&self) -> PyResult<i32> {
         self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
@@ -374,7 +345,7 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
+    fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
         self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
@@ -1442,7 +1413,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyRecordBatch> {
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
         // replace with Arro3RecordBatch once new release is done for arro3.core
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
@@ -1531,6 +1502,62 @@ impl RawDeltaTable {
         Ok(())
     }
 
+    #[pyo3(signature = (name, commit_properties=None))]
+    pub fn set_table_name(
+        &self,
+        name: String,
+        commit_properties: Option<PyCommitProperties>,
+    ) -> PyResult<()> {
+        let update = TableMetadataUpdate {
+            name: Some(name),
+            description: None,
+        };
+        let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
+            .with_update(update);
+
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        if self.log_store()?.name() == "LakeFSLogStore" {
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}));
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (description, commit_properties=None))]
+    pub fn set_table_description(
+        &self,
+        description: String,
+        commit_properties: Option<PyCommitProperties>,
+    ) -> PyResult<()> {
+        let update = TableMetadataUpdate {
+            name: None,
+            description: Some(description),
+        };
+        let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
+            .with_update(update);
+
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        if self.log_store()?.name() == "LakeFSLogStore" {
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}));
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
     /// have been deleted or are malformed
     #[pyo3(signature = (dry_run = true, commit_properties = None, post_commithook_properties=None))]
@@ -1560,19 +1587,16 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
-        let version = self.with_table(|t| Ok(t.get_app_transaction_version()));
-
-        match version {
-            Ok(version) => version
-                .into_iter()
-                .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
-                .collect(),
-            Err(e) => {
-                warn!("Cannot fetch transaction version due to {e:?}");
-                HashMap::default()
-            }
-        }
+    /// Get the latest transaction version for the given application ID.
+    ///
+    /// Returns `None` if the application ID is not found.
+    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
+        // NOTE: this will simplify once we have moved logstore onto state.
+        let log_store = self.log_store()?;
+        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+        Ok(rt()
+            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+            .map_err(PythonError::from)?)
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
@@ -1990,7 +2014,7 @@ fn filestats_to_expression_next<'py>(
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
-                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, &schema)?;
+                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, schema)?;
                 expressions.push(
                     py_field
                         .call1((&column,))?
@@ -2030,7 +2054,7 @@ fn filestats_to_expression_next<'py>(
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_minimum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema);
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(minimum) = maybe_minimum {
                             let field_expr = py_field.call1((field.name(),))?;
                             let expr = field_expr.call_method1("__ge__", (minimum,));
@@ -2121,7 +2145,6 @@ impl From<&PyAddAction> for Add {
             modification_time: action.modification_time,
             data_change: action.data_change,
             stats: action.stats.clone(),
-            stats_parsed: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,

@@ -1,11 +1,8 @@
 name: python_benchmark
 
-
 # This is separate from the python_build so that it doesn't need to run on the merge group
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 defaults:
@@ -21,7 +18,7 @@ jobs:
       CARGO_INCREMENTAL: 0
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env

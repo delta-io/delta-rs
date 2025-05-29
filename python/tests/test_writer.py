@@ -2193,19 +2193,11 @@ def test_write_transactions(tmp_path: pathlib.Path, sample_table: Table):
     )
 
     delta_table = DeltaTable(tmp_path)
-    transactions = delta_table.transaction_versions()
+    transaction_1 = delta_table.transaction_version("app_1")
+    assert transaction_1 == 1
 
-    assert len(transactions) == 2
-
-    transaction_1 = transactions["app_1"]
-    assert transaction_1.app_id == "app_1"
-    assert transaction_1.version == 1
-    assert transaction_1.last_updated is None
-
-    transaction_2 = transactions["app_2"]
-    assert transaction_2.app_id == "app_2"
-    assert transaction_2.version == 2
-    assert transaction_2.last_updated == 123456
+    transaction_2 = delta_table.transaction_version("app_2")
+    assert transaction_2 == 2
 
 
 @pytest.mark.polars

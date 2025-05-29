@@ -17,9 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
-dependencies = [
-    "arro3-core>=0.4.6",
-]
+dependencies = ["arro3-core>=0.5.0", "deprecated>=1.2.18"]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
@@ -100,7 +98,8 @@ dev = [
     "pytest-timeout",
     "pytest-benchmark",
     "mypy==1.10.1",
-    "ruff>=0.11.2",
+    "ruff>=0.11.2,<0.11.12",
+    "types-deprecated>=1.2.15.20250304",
 ]
 polars = ["polars==1.17.1"]
 lakefs = ["lakefs==0.8.0"]

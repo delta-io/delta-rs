@@ -18,6 +18,7 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
+  # run various build comnfigurations, fmt, and clippy.
   build:
     strategy:
       fail-fast: true
@@ -25,17 +26,20 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
+          - macos-latest
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.82'
+          toolchain: "1.82"
           override: true
 
       - name: Format
@@ -56,10 +60,34 @@ jobs:
       - name: Check docs
         run: cargo doc --no-deps --features ${{ env.DEFAULT_FEATURES }}
 
+  unit_test:
+    name: Unit Tests
+    strategy:
+      fail-fast: true
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: "1.82"
+          override: true
+
       - name: Run tests
         run: |
-          gmake setup-dat
-          cargo test --verbose --features ${{ env.DEFAULT_FEATURES }}
+          make setup-dat
+          cargo test --features ${{ env.DEFAULT_FEATURES }}
 
   integration_test:
     name: Integration Tests
@@ -78,7 +106,8 @@ jobs:
       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -86,7 +115,62 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.82'
+          toolchain: "1.82"
+          override: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Start emulated services
+        run: docker compose up -d
+
+      - name: Run tests with rustls (default)
+        run: |
+          gmake setup-dat
+          cargo llvm-cov \
+            --features integration_test,${{ env.DEFAULT_FEATURES }} \
+            --workspace \
+            --exclude delta-inspect \
+            --exclude deltalake-hdfs \
+            --exclude deltalake-lakefs \
+            --codecov \
+            --output-path codecov.json
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  integration_test_native_tls:
+    name: Integration Tests (Native TLS)
+    runs-on: ubuntu-latest
+    env:
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: deltalake
+      AWS_SECRET_ACCESS_KEY: weloverust
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ALLOW_HTTP: "1"
+      AZURE_USE_EMULATOR: "1"
+      AZURE_STORAGE_ALLOW_HTTP: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: "1.82"
           override: true
 
       # Install Java and Hadoop for HDFS integration tests
@@ -104,16 +188,62 @@ jobs:
       - name: Start emulated services
         run: docker compose up -d
 
+      - name: Run tests with native-tls
+        run: |
+          gmake setup-dat
+          cargo test --no-default-features --features integration_test,s3-native-tls,datafusion
+
+  integration_test_hdfs:
+    name: Integration Tests (HDFS)
+    runs-on: ubuntu-latest
+    env:
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: "1.82"
+          override: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Install Java and Hadoop for HDFS integration tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Download Hadoop
+        run: |
+          wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
+          tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
+
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo test --features integration_test,${{ env.DEFAULT_FEATURES }}
+          cargo llvm-cov \
+            --features integration_test \
+            --package deltalake-hdfs \
+            --codecov \
+            --output-path codecov.json
 
-      - name: Run tests with native-tls
-        run: |
-          cargo clean
-          gmake setup-dat
-          cargo test --no-default-features --features integration_test,s3-native-tls,datafusion
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   integration_test_lakefs:
     name: Integration Tests (LakeFS v1.48)
@@ -123,7 +253,8 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -131,8 +262,11 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: '1.82'
+          toolchain: "1.82"
           override: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Download Lakectl
         run: |
@@ -146,5 +280,16 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo test --features integration_test_lakefs,lakefs,datafusion
+          cargo llvm-cov \
+            --package deltalake-lakefs \
+            --features integration_test_lakefs \
+            --codecov \
+            --output-path codecov.json
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

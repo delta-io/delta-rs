@@ -21,13 +21,13 @@ from arro3.core.types import (
     ArrowSchemaExportable,
     ArrowStreamExportable,
 )
+from deprecated import deprecated
 
 from deltalake._internal import (
     DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
-    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
@@ -285,6 +285,10 @@ class DeltaTable:
             partitions.append({k: v for (k, v) in partition})
         return partitions
 
+    @deprecated(
+        version="1.0.0",
+        reason="Not compatible with modern delta features (e.g. shallow clones). Use `file_uris` instead.",
+    )
     def files(
         self, partition_filters: list[tuple[str, str, Any]] | None = None
     ) -> list[str]:
@@ -413,6 +417,24 @@ class DeltaTable:
         predicate: str | None = None,
         allow_out_of_range: bool = False,
     ) -> RecordBatchReader:
+        """
+        Load the Change Data Feed (CDF) from the Delta table as a stream of record batches.
+
+        Parameters:
+            starting_version (int): The version of the Delta table to start reading CDF from.
+            ending_version (int | None): The version to stop reading CDF at. If None, reads up to the latest version.
+            starting_timestamp (str | None): An ISO 8601 timestamp to start reading CDF from. Ignored if starting_version is provided.
+            ending_timestamp (str | None): An ISO 8601 timestamp to stop reading CDF at. Ignored if ending_version is provided.
+            columns (list[str] | None): A list of column names to include in the output. If None, all columns are included.
+            predicate (str | None): An optional SQL predicate to filter the output rows.
+            allow_out_of_range (bool): If True, does not raise an error when specified versions or timestamps are outside the table's history.
+
+        Returns:
+            RecordBatchReader: An Arrow RecordBatchReader that streams the resulting change data.
+
+        Raises:
+            ValueError: If input parameters are invalid or if the specified range is not found (unless allow_out_of_range is True).
+        """
         return self._table.load_cdf(
             columns=columns,
             predicate=predicate,
@@ -1071,14 +1093,23 @@ class DeltaTable:
         )
         return deserialized_metrics
 
-    def transaction_versions(self) -> dict[str, Transaction]:
-        return self._table.transaction_versions()
+    def transaction_version(self, app_id: str) -> int | None:
+        """
+        Retrieve the latest transaction versions for the given application ID.
+
+        Args:
+            app_id (str): The application ID for which to retrieve the latest transaction version.
+
+        Returns:
+            int | None: The latest transaction version for the given application ID if it exists, otherwise None.
+        """
+        return self._table.transaction_version(app_id)
 
     def create_write_transaction(
         self,
         actions: list[AddAction],
         mode: str,
-        schema: pyarrow.Schema,
+        schema: DeltaSchema | ArrowSchemaExportable,
         partition_by: list[str] | str | None = None,
         partition_filters: FilterType | None = None,
         commit_properties: CommitProperties | None = None,
@@ -1086,6 +1117,9 @@ class DeltaTable:
     ) -> None:
         if isinstance(partition_by, str):
             partition_by = [partition_by]
+
+        if not isinstance(schema, DeltaSchema):
+            schema = DeltaSchema.from_arrow(schema)
 
         self._table.create_write_transaction(
             actions,
@@ -1781,6 +1815,50 @@ class TableAlterer:
             raise_if_not_exists,
             commit_properties,
         )
+
+    def set_table_name(
+        self,
+        name: str,
+        commit_properties: CommitProperties | None = None,
+    ) -> None:
+        """
+        Set the name of the table.
+
+        Args:
+            name: the name of the table
+            commit_properties: properties of the transaction commit. If None, default values are used.
+                              Note: This parameter is not yet implemented and will be ignored.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_name("new_table_name")
+            ```
+        """
+        self.table._table.set_table_name(name, commit_properties)
+
+    def set_table_description(
+        self,
+        description: str,
+        commit_properties: CommitProperties | None = None,
+    ) -> None:
+        """
+        Set the description of the table.
+
+        Args:
+            description: the description of the table
+            commit_properties: properties of the transaction commit. If None, default values are used.
+                              Note: This parameter is not yet implemented and will be ignored.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_description("new_table_description")
+            ```
+        """
+        self.table._table.set_table_description(description, commit_properties)
 
     def set_column_metadata(
         self,

@@ -111,10 +111,6 @@ impl LogStore for DefaultLogStore {
         super::get_latest_version(self, current_version).await
     }
 
-    async fn get_earliest_version(&self, current_version: i64) -> DeltaResult<i64> {
-        super::get_earliest_version(self, current_version).await
-    }
-
     fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
         self.prefixed_store.clone()
     }
