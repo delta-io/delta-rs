@@ -756,7 +756,7 @@ async fn execute(
         extension_planner: MergeMetricExtensionPlanner {},
     };
 
-    let state = SessionStateBuilder::new()
+    let state = SessionStateBuilder::new_from_existing(_state)
         .with_default_features()
         .with_query_planner(Arc::new(merge_planner))
         .build();
