@@ -17,7 +17,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Assign GitHub labels
         if: |
@@ -54,7 +54,7 @@ jobs:
         with:
           script: |
             const message = `**ACTION NEEDED**
-              
+
               delta-rs follows the [Conventional Commits\
               specification](https://www.conventionalcommits.org/en/v1.0.0/) for\
               release automation.

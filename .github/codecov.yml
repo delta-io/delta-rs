@@ -1,4 +1,3 @@
-
 coverage:
   status:
     project:
@@ -12,8 +11,8 @@ coverage:
         if_ci_failed: error
         informational: false
 
-
 ignore:
   - "delta-inspect/"
   - "proofs/"
   - "**/*.toml"
+  - "crates/benchmarks/"
