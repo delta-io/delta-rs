@@ -103,8 +103,9 @@ fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable, operation_id: Option<Uuid>) -> DeltaResult<()> {
+    let snapshot = table.snapshot()?;
     create_checkpoint_for(
-        table.version() as u64,
+        snapshot.version() as u64,
         table.log_store.as_ref(),
         operation_id,
     )
@@ -118,14 +119,11 @@ pub async fn cleanup_metadata(
     table: &DeltaTable,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<usize> {
+    let snapshot = table.snapshot()?;
     let log_retention_timestamp = Utc::now().timestamp_millis()
-        - table
-            .snapshot()?
-            .table_config()
-            .log_retention_duration()
-            .as_millis() as i64;
+        - snapshot.table_config().log_retention_duration().as_millis() as i64;
     cleanup_expired_logs_for(
-        table.version(),
+        snapshot.version(),
         table.log_store.as_ref(),
         log_retention_timestamp,
         operation_id,
@@ -149,7 +147,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
 
-    if table.version() >= 0 && enable_expired_log_cleanup {
+    if snapshot.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table, operation_id).await?;
         debug!("Deleted {deleted_log_num:?} log files.");
     }
@@ -271,7 +269,7 @@ mod tests {
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema);
         let res = create_checkpoint_for(0, table.log_store.as_ref(), None).await;
         assert!(res.is_ok());
@@ -301,7 +299,7 @@ mod tests {
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema);
 
         let part_cols: Vec<String> = vec![];
@@ -348,12 +346,16 @@ mod tests {
         table.load().await.expect("Failed to reload table");
         assert_eq!(
             table.version(),
-            1,
+            Some(1),
             "The loaded version of the table is not up to date"
         );
 
-        let res =
-            create_checkpoint_for(table.version() as u64, table.log_store.as_ref(), None).await;
+        let res = create_checkpoint_for(
+            table.version().unwrap() as u64,
+            table.log_store.as_ref(),
+            None,
+        )
+        .await;
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
@@ -368,7 +370,7 @@ mod tests {
         // If the regression exists, this will fail
         table.load().await.expect("Failed to reload the table, this likely means that the optional createdTime was not actually optional");
         assert_eq!(
-            1,
+            Some(1),
             table.version(),
             "The reloaded table doesn't have the right version"
         );
@@ -384,7 +386,7 @@ mod tests {
             .with_save_mode(crate::protocol::SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema);
         match create_checkpoint_for(1, table.log_store.as_ref(), None).await {
             Ok(_) => {
@@ -447,7 +449,7 @@ mod tests {
                 .log_retention_duration()
                 .as_millis() as i64;
         let count = cleanup_expired_logs_for(
-            table.version(),
+            table.version().unwrap(),
             table.log_store().as_ref(),
             log_retention_timestamp,
             None,
@@ -477,7 +479,7 @@ mod tests {
                 .log_retention_duration()
                 .as_millis() as i64;
         let count = cleanup_expired_logs_for(
-            table.version(),
+            table.version().unwrap(),
             table.log_store().as_ref(),
             log_retention_timestamp,
             None,
@@ -556,7 +558,7 @@ mod tests {
             .with_columns(table_schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let count = 20;
 
         for _ in 0..count {
@@ -579,7 +581,11 @@ mod tests {
         }
 
         table.load().await?;
-        assert_eq!(table.version(), count, "Expected {count} transactions");
+        assert_eq!(
+            table.version().unwrap(),
+            count,
+            "Expected {count} transactions"
+        );
         let pre_checkpoint_actions = table.snapshot()?.file_actions()?;
 
         let before = table.version();
@@ -630,7 +636,7 @@ mod tests {
             .write(vec![batch])
             .await?;
         table.load().await?;
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         create_checkpoint(&table, None).await?;
 
@@ -649,7 +655,7 @@ mod tests {
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
             .await?;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
 
         let expected = [
             "+----+-------+------------+",

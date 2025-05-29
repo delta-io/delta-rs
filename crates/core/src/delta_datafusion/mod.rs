@@ -2545,7 +2545,7 @@ mod tests {
             .with_partition_columns(["modified", "id"])
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let batch = RecordBatch::try_new(
             schema.clone(),

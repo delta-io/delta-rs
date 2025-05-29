@@ -792,7 +792,7 @@ mod tests {
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");
-            assert_eq!(table.version(), 0);
+            assert_eq!(table.version(), Some(0));
 
             let batch = get_record_batch(None, false);
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
@@ -801,7 +801,7 @@ mod tests {
             let version = writer.flush_and_commit(&mut table).await.unwrap();
             assert_eq!(version, 1);
             table.load().await.expect("Failed to load table");
-            assert_eq!(table.version(), 1);
+            assert_eq!(table.version(), Some(1));
 
             // Create a second batch with a different schema
             let second_schema = Arc::new(ArrowSchema::new(vec![
@@ -827,7 +827,7 @@ mod tests {
             let version = writer.flush_and_commit(&mut table).await.unwrap();
             assert_eq!(version, 2);
             table.load().await.expect("Failed to load table");
-            assert_eq!(table.version(), 2);
+            assert_eq!(table.version(), Some(2));
 
             let new_schema = table.metadata().unwrap().schema().unwrap();
             let expected_columns = vec!["id", "value", "modified", "vid", "name"];
@@ -853,7 +853,7 @@ mod tests {
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");
-            assert_eq!(table.version(), 0);
+            assert_eq!(table.version(), Some(0));
 
             let batch = get_record_batch(None, false);
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
@@ -862,7 +862,7 @@ mod tests {
             let version = writer.flush_and_commit(&mut table).await.unwrap();
             assert_eq!(version, 1);
             table.load().await.expect("Failed to load table");
-            assert_eq!(table.version(), 1);
+            assert_eq!(table.version(), Some(1));
 
             // Create a second batch with appended columns
             let second_batch = {
@@ -985,7 +985,7 @@ mod tests {
                 .await
                 .unwrap();
             table.load().await.expect("Failed to load table");
-            assert_eq!(table.version(), 0);
+            assert_eq!(table.version(), Some(0));
 
             // Hand-crafting the first RecordBatch to ensure that a write with non-nullable columns
             // works properly before attempting the second write
@@ -1066,7 +1066,7 @@ mod tests {
         assert_eq!(partitions[0].record_batch, batch);
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let add_actions = table.state.unwrap().file_actions().unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
@@ -1115,7 +1115,7 @@ mod tests {
         assert_eq!(partitions[0].record_batch, batch);
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let add_actions = table.state.unwrap().file_actions().unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":11,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"B\"},\"nullCount\":{\"id\":0}}";

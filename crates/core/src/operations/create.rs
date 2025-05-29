@@ -416,7 +416,7 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema)
     }
 
@@ -436,7 +436,7 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema)
     }
 
@@ -453,7 +453,7 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
     }
 
     #[tokio::test]
@@ -464,7 +464,7 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(
             table.protocol().unwrap().min_reader_version,
             PROTOCOL.default_reader_version()
@@ -520,7 +520,7 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let first_id = table.metadata().unwrap().id.clone();
 
         let log_store = table.log_store;
@@ -562,7 +562,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 1);
 
         let mut table = DeltaOps(table)
@@ -572,7 +572,7 @@ mod tests {
             .await
             .unwrap();
         table.load().await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         // Checks if files got removed after overwrite
         assert_eq!(table.get_files_count(), 0);
     }
@@ -587,7 +587,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 1);
 
         let mut table = DeltaOps(table)
@@ -598,7 +598,7 @@ mod tests {
             .await
             .unwrap();
         table.load().await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         // Checks if files got removed after overwrite
         assert_eq!(table.get_files_count(), 0);
     }

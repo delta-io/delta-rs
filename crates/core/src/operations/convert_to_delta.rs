@@ -567,7 +567,7 @@ mod tests {
     ) {
         assert_eq!(
             table.version(),
-            expected_version,
+            Some(expected_version),
             "Testing location: {test_data_from:?}"
         );
 

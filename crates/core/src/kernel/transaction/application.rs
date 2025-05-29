@@ -30,7 +30,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 2);
 
         let app_txns = table.get_app_transaction_version();
@@ -75,7 +75,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let app_txns = table.get_app_transaction_version();
         assert_eq!(app_txns.len(), 1);
         assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(3));
@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(txn_version, Some(3));
 
         table2.update_incremental(None).await.unwrap();
-        assert_eq!(table2.version(), 1);
+        assert_eq!(table2.version(), Some(1));
         let app_txns2 = table2.get_app_transaction_version();
         assert_eq!(app_txns2.len(), 1);
         assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(3));
@@ -109,7 +109,7 @@ mod tests {
         let app_txns3 = table3.get_app_transaction_version();
         assert_eq!(app_txns3.len(), 1);
         assert_eq!(app_txns3.get("my-app").map(|t| t.version), Some(3));
-        assert_eq!(table3.version(), 1);
+        assert_eq!(table3.version(), Some(1));
         let txn_version = table3
             .snapshot()
             .unwrap()

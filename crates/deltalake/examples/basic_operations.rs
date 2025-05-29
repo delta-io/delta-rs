@@ -81,7 +81,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
         .with_comment("A table to show how delta-rs works")
         .await?;
 
-    assert_eq!(table.version(), 0);
+    assert_eq!(table.version(), Some(0));
 
     let writer_properties = WriterProperties::builder()
         .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
@@ -93,7 +93,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
         .with_writer_properties(writer_properties)
         .await?;
 
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
 
     let writer_properties = WriterProperties::builder()
         .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
@@ -106,7 +106,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
         .with_writer_properties(writer_properties)
         .await?;
 
-    assert_eq!(table.version(), 2);
+    assert_eq!(table.version(), Some(2));
 
     let (_table, stream) = DeltaOps(table).load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;

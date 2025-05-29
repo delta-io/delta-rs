@@ -683,7 +683,7 @@ pub(super) mod tests {
             .with_storage_backend(slow_list_store, url::Url::parse("dummy:///").unwrap())
             .build_storage()?;
 
-        let version = table_to_checkpoint.version();
+        let version = table_to_checkpoint.version().unwrap();
         let load_task: JoinHandle<Result<LogSegment, DeltaTableError>> = tokio::spawn(async move {
             let segment = LogSegment::try_new(&slow_log_store, Some(version)).await?;
             Ok(segment)

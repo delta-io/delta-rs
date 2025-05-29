@@ -101,7 +101,7 @@ mod simple_checkpoint {
 
         // _last_checkpoint should exist and point to the correct version
         let version = get_last_checkpoint_version(&log_path);
-        assert_eq!(table.version(), version);
+        assert_eq!(table.version(), Some(version));
 
         // delta table should load just fine with the checkpoint in place
         let table_result = deltalake_core::open_table(table_location).await.unwrap();
@@ -223,7 +223,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
             &table.table_uri(),
-            table.version(),
+            table.version().unwrap(),
             None,
             None,
         )
@@ -273,7 +273,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
             &table.table_uri(),
-            table.version(),
+            table.version().unwrap(),
             None,
             None,
         )

@@ -212,7 +212,7 @@ async fn test_repair_on_update() -> TestResult<()> {
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     table.update().await?;
     // table update should find and update to newest, incomplete commit entry
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
     validate_lock_table_state(&table, 1).await?;
     Ok(())
 }
@@ -225,7 +225,7 @@ async fn test_repair_on_load() -> TestResult<()> {
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     table.load_version(1).await?;
     // table should fix the broken entry while loading a specific version
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
     validate_lock_table_state(&table, 1).await?;
     Ok(())
 }
