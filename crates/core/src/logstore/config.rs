@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ::object_store::RetryConfig;
-use object_store::{path::Path, prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
+use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
 
 use super::storage::file_cache::{self, FileCacheConfig};
 use super::storage::LimitConfig;
@@ -35,8 +35,9 @@ pub trait TryUpdateKey: Default {
     fn load_from_environment(&mut self) -> DeltaResult<()>;
 }
 
+#[derive(Debug)]
 /// Generic container for parsing configuration
-pub struct ParseResult<T> {
+pub struct ParseResult<T: std::fmt::Debug> {
     /// Parsed configuration
     pub config: T,
     /// Unrecognized key value pairs.
@@ -47,7 +48,7 @@ pub struct ParseResult<T> {
     pub is_default: bool,
 }
 
-impl<T> ParseResult<T> {
+impl<T: std::fmt::Debug> ParseResult<T> {
     pub fn raise_errors(&self) -> DeltaResult<()> {
         if !self.errors.is_empty() {
             return Err(DeltaTableError::Generic(format!(
@@ -59,7 +60,7 @@ impl<T> ParseResult<T> {
     }
 }
 
-impl<T, K, V> FromIterator<(K, V)> for ParseResult<T>
+impl<T: std::fmt::Debug, K, V> FromIterator<(K, V)> for ParseResult<T>
 where
     T: TryUpdateKey,
     K: AsRef<str> + Into<String>,
@@ -154,11 +155,7 @@ impl StorageConfig {
         store: T,
         table_root: &url::Url,
     ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let prefix = match ObjectStoreScheme::parse(table_root) {
-            Ok((ObjectStoreScheme::AmazonS3, _)) => Path::parse(table_root.path())?,
-            Ok((_, path)) => path,
-            _ => Path::parse(table_root.path())?,
-        };
+        let prefix = super::object_store_path(table_root)?;
         Ok(if prefix != Path::from("/") {
             Box::new(PrefixStore::new(store, prefix)) as Box<dyn ObjectStore>
         } else {
@@ -263,7 +260,9 @@ impl StorageConfig {
     }
 }
 
-pub(super) fn try_parse_impl<T, K, V, I>(options: I) -> DeltaResult<(T, HashMap<String, String>)>
+pub(super) fn try_parse_impl<T: std::fmt::Debug, K, V, I>(
+    options: I,
+) -> DeltaResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
@@ -323,11 +322,12 @@ pub fn str_is_truthy(val: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::FileCacheConfig;
+    use super::*;
     use maplit::hashmap;
     use object_store::RetryConfig;
     use std::time::Duration;
 
+    // Test retry config parsing
     #[test]
     fn test_retry_config_from_options() {
         let options = hashmap! {
@@ -377,5 +377,82 @@ mod tests {
             file_cache_config.last_checkpoint_valid_duration,
             Some(Duration::from_secs(3600))
         );
+    }
+
+    // Test ParseResult functionality
+    #[test]
+    fn test_parse_result_handling() {
+        let options = hashmap! {
+            "retry_timeout".to_string() => "300s".to_string(),
+            "max_retries".to_string() => "not_a_number".to_string(),
+            "unknown_key".to_string() => "value".to_string(),
+        };
+
+        let result: ParseResult<RetryConfig> = options.into_iter().collect();
+        println!("result: {:?}", result);
+        assert!(!result.errors.is_empty());
+        assert!(!result.unparsed.is_empty());
+        assert!(!result.is_default);
+
+        assert!(result.raise_errors().is_err());
+    }
+
+    // Test StorageConfig parsing
+    #[test]
+    fn test_storage_config_parsing() {
+        let options = hashmap! {
+            "max_retries".to_string() => "5".to_string(),
+            "retry_timeout".to_string() => "10s".to_string(),
+            "unknown_prop".to_string() => "value".to_string(),
+        };
+
+        let config = StorageConfig::parse_options(options).unwrap();
+        assert_eq!(config.retry.max_retries, 5);
+        assert_eq!(config.retry.retry_timeout, Duration::from_secs(10));
+        assert!(config.unknown_properties.contains_key("unknown_prop"));
+    }
+
+    // Test utility parsing functions
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn test_parsing_utilities() {
+        assert_eq!(parse_usize("42").unwrap(), 42);
+        assert!(parse_usize("not_a_number").is_err());
+
+        assert_eq!(parse_f64("3.14").unwrap(), 3.14);
+        assert!(parse_f64("not_a_number").is_err());
+
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+        assert!(parse_duration("invalid").is_err());
+
+        assert!(parse_bool("true").unwrap());
+        assert!(parse_bool("1").unwrap());
+        assert!(!parse_bool("false").unwrap());
+        assert!(!parse_bool("0").unwrap());
+
+        assert_eq!(parse_string("test").unwrap(), "test");
+    }
+
+    // Test str_is_truthy function
+    #[test]
+    fn test_str_is_truthy() {
+        let truthy_values = ["1", "true", "on", "YES", "Y", "True", "ON"];
+        let falsy_values = ["0", "false", "off", "NO", "n", "bork", "False", "OFF"];
+
+        for value in truthy_values {
+            assert!(str_is_truthy(value), "{} should be truthy", value);
+        }
+
+        for value in falsy_values {
+            assert!(!str_is_truthy(value), "{} should be falsy", value);
+        }
+    }
+
+    // Test StorageConfig with IO runtime
+    #[test]
+    fn test_storage_config_with_io_runtime() {
+        let config =
+            StorageConfig::default().with_io_runtime(IORuntime::Config(RuntimeConfig::default()));
+        assert!(config.runtime.is_some());
     }
 }

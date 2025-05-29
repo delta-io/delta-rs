@@ -67,7 +67,6 @@ pub fn create_add(
         deletion_vector: None,
         base_row_id: None,
         default_row_commit_version: None,
-        stats_parsed: None,
         clustering_provider: None,
     })
 }

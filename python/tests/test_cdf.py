@@ -1,28 +1,30 @@
 import os
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.dataset as ds
-import pyarrow.parquet as pq
 import pytest
+from arro3.core import Array, DataType, Field, Table
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError
 
+if TYPE_CHECKING:
+    import pyarrow as pa
+
 
 def test_read_cdf_partitioned_with_predicate():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
-    data = dt.load_cdf(0, 3, predicate="birthday = '2023-12-25'").read_all().to_pydict()
-    values = list(set(data["birthday"]))
+    data = dt.load_cdf(0, 3, predicate="birthday = '2023-12-25'").read_all()
+
+    values = list(set(data["birthday"].to_pylist()))
     assert len(values) == 1
     assert values[0] == date(2023, 12, 25)
 
 
 def test_read_cdf_partitioned():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
-    b = dt.load_cdf(0, 3).read_all().to_pydict()
-    assert sorted(b["id"]) == [
+    b = dt.load_cdf(0, 3).read_all()
+    assert sorted(b["id"].to_pylist()) == [
         1,
         2,
         2,
@@ -47,7 +49,7 @@ def test_read_cdf_partitioned():
         9,
         10,
     ]
-    assert sorted(b["name"]) == [
+    assert sorted(b["name"].to_pylist()) == [
         "Ada",
         "Bob",
         "Bob",
@@ -72,7 +74,7 @@ def test_read_cdf_partitioned():
         "Kate",
         "Steve",
     ]
-    assert sorted(b["_change_type"]) == [
+    assert sorted(b["_change_type"].to_pylist()) == [
         "delete",
         "insert",
         "insert",
@@ -97,7 +99,7 @@ def test_read_cdf_partitioned():
         "update_preimage",
         "update_preimage",
     ]
-    assert sorted(b["_commit_version"]) == [
+    assert sorted(b["_commit_version"].to_pylist()) == [
         0,
         0,
         0,
@@ -122,7 +124,7 @@ def test_read_cdf_partitioned():
         2,
         3,
     ]
-    assert sorted(b["_commit_timestamp"]) == [
+    assert sorted(b["_commit_timestamp"].to_pylist()) == [
         datetime(2023, 12, 22, 17, 10, 18, 828000),
         datetime(2023, 12, 22, 17, 10, 18, 828000),
         datetime(2023, 12, 22, 17, 10, 18, 828000),
@@ -147,7 +149,7 @@ def test_read_cdf_partitioned():
         datetime(2023, 12, 29, 21, 41, 33, 785000),
         datetime(2024, 1, 6, 16, 44, 59, 570000),
     ]
-    assert sorted(b["birthday"]) == [
+    assert sorted(b["birthday"].to_pylist()) == [
         date(2023, 12, 22),
         date(2023, 12, 22),
         date(2023, 12, 22),
@@ -176,9 +178,9 @@ def test_read_cdf_partitioned():
 
 def test_read_cdf_non_partitioned():
     dt = DeltaTable("../crates/test/tests/data/cdf-table-non-partitioned/")
-    b = dt.load_cdf(0, 3).read_all().to_pydict()
+    b = dt.load_cdf(0, 3).read_all()
 
-    assert sorted(b["id"]) == [
+    assert sorted(b["id"].to_pylist()) == [
         1,
         2,
         2,
@@ -203,7 +205,7 @@ def test_read_cdf_non_partitioned():
         9,
         10,
     ]
-    assert sorted(b["name"]) == [
+    assert sorted(b["name"].to_pylist()) == [
         "Ada",
         "Bob",
         "Bob",
@@ -228,7 +230,7 @@ def test_read_cdf_non_partitioned():
         "Kate",
         "Steve",
     ]
-    assert sorted(b["birthday"]) == [
+    assert sorted(b["birthday"].to_pylist()) == [
         date(2024, 4, 14),
         date(2024, 4, 14),
         date(2024, 4, 14),
@@ -253,7 +255,7 @@ def test_read_cdf_non_partitioned():
         date(2024, 4, 17),
         date(2024, 4, 17),
     ]
-    assert sorted(b["long_field"]) == [
+    assert sorted(b["long_field"].to_pylist()) == [
         1,
         1,
         1,
@@ -278,7 +280,7 @@ def test_read_cdf_non_partitioned():
         8,
         99999999999999999,
     ]
-    assert sorted(b["boolean_field"]) == [
+    assert sorted(b["boolean_field"].to_pylist()) == [
         True,
         True,
         True,
@@ -303,7 +305,7 @@ def test_read_cdf_non_partitioned():
         True,
         True,
     ]
-    assert sorted(b["double_field"]) == [
+    assert sorted(b["double_field"].to_pylist()) == [
         3.14,
         3.14,
         3.14,
@@ -328,7 +330,7 @@ def test_read_cdf_non_partitioned():
         3.14,
         3.14,
     ]
-    assert sorted(b["smallint_field"]) == [
+    assert sorted(b["smallint_field"].to_pylist()) == [
         1,
         1,
         1,
@@ -353,7 +355,7 @@ def test_read_cdf_non_partitioned():
         1,
         1,
     ]
-    assert sorted(b["_change_type"]) == [
+    assert sorted(b["_change_type"].to_pylist()) == [
         "delete",
         "insert",
         "insert",
@@ -378,7 +380,7 @@ def test_read_cdf_non_partitioned():
         "update_preimage",
         "update_preimage",
     ]
-    assert sorted(b["_commit_version"]) == [
+    assert sorted(b["_commit_version"].to_pylist()) == [
         0,
         0,
         0,
@@ -403,7 +405,7 @@ def test_read_cdf_non_partitioned():
         2,
         3,
     ]
-    assert sorted(b["_commit_timestamp"]) == [
+    assert sorted(b["_commit_timestamp"].to_pylist()) == [
         datetime(2024, 4, 14, 15, 58, 26, 249000),
         datetime(2024, 4, 14, 15, 58, 26, 249000),
         datetime(2024, 4, 14, 15, 58, 26, 249000),
@@ -436,12 +438,18 @@ def test_read_cdf_partitioned_projection():
     assert columns == dt.load_cdf(0, 3, columns=columns).schema.names
 
 
-def test_delete_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
+@pytest.mark.pyarrow
+def test_delete_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
     cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
-        sample_data,
+        sample_data_pyarrow,
         mode="append",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
@@ -449,7 +457,7 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     dt.delete("int64 > 2")
 
     expected_data = (
-        ds.dataset(sample_data)
+        ds.dataset(sample_data_pyarrow)
         .to_table(filter=(pc.field("int64") > 2))
         .append_column(
             field_=pa.field("_change_type", pa.string(), nullable=False),
@@ -462,12 +470,18 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     assert cdc_data == expected_data
 
 
-def test_delete_partitioned_cdf(tmp_path, sample_data: pa.Table):
+@pytest.mark.pyarrow
+def test_delete_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
     cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
-        sample_data,
+        sample_data_pyarrow,
         mode="overwrite",
         partition_by=["utf8"],
         configuration={"delta.enableChangeDataFeed": "true"},
@@ -476,14 +490,15 @@ def test_delete_partitioned_cdf(tmp_path, sample_data: pa.Table):
     dt.delete("int64 > 2")
 
     expected_data = (
-        ds.dataset(sample_data)
+        ds.dataset(sample_data_pyarrow)
         .to_table(filter=(pc.field("int64") > 2))
         .append_column(
             field_=pa.field("_change_type", pa.string(), nullable=False),
             column=[["delete"] * 2],
         )
     )
-    table_schema = dt.schema().to_pyarrow()
+
+    table_schema = pa.schema(dt.schema())
     table_schema = table_schema.insert(
         len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
     )
@@ -494,12 +509,18 @@ def test_delete_partitioned_cdf(tmp_path, sample_data: pa.Table):
     assert cdc_data == expected_data
 
 
-def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
+@pytest.mark.pyarrow
+def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
     cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
-        sample_data,
+        sample_data_pyarrow,
         mode="append",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
@@ -507,7 +528,7 @@ def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     write_deltalake(
         dt,
-        data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 2)),
+        data=ds.dataset(sample_data_pyarrow).to_table(filter=(pc.field("int64") > 2)),
         mode="overwrite",
         predicate="int64 > 2",
         configuration={"delta.enableChangeDataFeed": "true"},
@@ -515,13 +536,13 @@ def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
 
     expected_data = pa.concat_tables(
         [
-            ds.dataset(sample_data)
+            ds.dataset(sample_data_pyarrow)
             .to_table(filter=(pc.field("int64") > 2))
             .append_column(
                 field_=pa.field("_change_type", pa.string(), nullable=False),
                 column=[["delete"] * 2],
             ),
-            ds.dataset(sample_data)
+            ds.dataset(sample_data_pyarrow)
             .to_table(filter=(pc.field("int64") > 2))
             .append_column(
                 field_=pa.field("_change_type", pa.string(), nullable=False),
@@ -535,15 +556,21 @@ def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     assert cdc_data.sort_by([("_change_type", "ascending")]) == expected_data.sort_by(
         [("_change_type", "ascending")]
     )
-    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
+    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data_pyarrow
 
 
-def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
+@pytest.mark.pyarrow
+def test_write_predicate_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
     cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
-        sample_data,
+        sample_data_pyarrow,
         mode="overwrite",
         partition_by=["utf8"],
         configuration={"delta.enableChangeDataFeed": "true"},
@@ -551,7 +578,7 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     write_deltalake(
         dt,
-        data=ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 3)),
+        data=ds.dataset(sample_data_pyarrow).to_table(filter=(pc.field("int64") > 3)),
         mode="overwrite",
         predicate="int64 > 3",
         configuration={"delta.enableChangeDataFeed": "true"},
@@ -559,13 +586,13 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
 
     expected_data = pa.concat_tables(
         [
-            ds.dataset(sample_data)
+            ds.dataset(sample_data_pyarrow)
             .to_table(filter=(pc.field("int64") > 3))
             .append_column(
                 field_=pa.field("_change_type", pa.string(), nullable=False),
                 column=[["delete"] * 1],
             ),
-            ds.dataset(sample_data)
+            ds.dataset(sample_data_pyarrow)
             .to_table(filter=(pc.field("int64") > 3))
             .append_column(
                 field_=pa.field("_change_type", pa.string(), nullable=False),
@@ -574,7 +601,7 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
         ]
     )
 
-    table_schema = dt.schema().to_pyarrow()
+    table_schema = pa.schema(dt.schema())
     table_schema = table_schema.insert(
         len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
     )
@@ -588,15 +615,19 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data: pa.Table):
     cdc_data = cdc_data.combine_chunks().sort_by([("_change_type", "ascending")])
 
     assert expected_data == cdc_data
-    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
+    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data_pyarrow
 
 
-def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
+@pytest.mark.pyarrow
+def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+
     cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
-        sample_data,
+        sample_data_pyarrow,
         mode="append",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
@@ -604,13 +635,13 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
     dt = DeltaTable(tmp_path)
     write_deltalake(
         dt,
-        data=ds.dataset(sample_data).to_table(),
+        data=ds.dataset(sample_data_pyarrow).to_table(),
         mode="overwrite",
         configuration={"delta.enableChangeDataFeed": "true"},
     )
     sort_values = [("_change_type", "ascending"), ("utf8", "ascending")]
     expected_data = (
-        ds.dataset(pa.concat_tables([sample_data] * 3))
+        ds.dataset(pa.concat_tables([sample_data_pyarrow] * 3))
         .to_table()
         .append_column(
             field_=pa.field("_change_type", pa.string(), nullable=True),
@@ -622,30 +653,34 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data: pa.Table):
         "_change_data shouldn't exist since table was overwritten"
     )
 
-    ## TODO(ion): check if you see insert and deletes in commit version 1
+    tbl = dt.load_cdf().read_all()
 
-    assert (
-        dt.load_cdf()
-        .read_all()
-        .drop_columns(["_commit_version", "_commit_timestamp"])
-        .sort_by(sort_values)
-        == expected_data
-    )
-    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data
+    select_cols = [
+        col
+        for col in tbl.column_names
+        if col not in ["_commit_version", "_commit_timestamp"]
+    ]
+    assert pa.table(tbl.select(select_cols)).sort_by(sort_values) == expected_data
+    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data_pyarrow
 
 
-def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
+@pytest.mark.pyarrow
+def test_write_overwrite_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.dataset as ds
+
     cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
-        sample_data,
+        sample_data_pyarrow,
         mode="append",
         partition_by=["int64"],
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    batch2 = ds.dataset(sample_data).to_table(filter=(pc.field("int64") > 3))
+    batch2 = ds.dataset(sample_data_pyarrow).to_table(filter=(pc.field("int64") > 3))
 
     dt = DeltaTable(tmp_path)
     write_deltalake(
@@ -657,14 +692,14 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    table_schema = dt.schema().to_pyarrow()
+    table_schema = pa.schema(dt.schema())
     table_schema = table_schema.insert(
         len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
     )
 
     sort_values = [("_change_type", "ascending"), ("utf8", "ascending")]
 
-    first_batch = sample_data.append_column(
+    first_batch = sample_data_pyarrow.append_column(
         field_=pa.field("_change_type", pa.string(), nullable=True),
         column=[["insert"] * 5],
     )
@@ -678,7 +713,7 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data: pa.Table):
         "_change_data shouldn't exist since a specific partition was overwritten"
     )
 
-    assert dt.load_cdf().read_all().drop_columns(
+    assert pa.table(dt.load_cdf().read_all()).drop_columns(
         ["_commit_version", "_commit_timestamp"]
     ).sort_by(sort_values).select(expected_data.column_names) == pa.concat_tables(
         [first_batch, expected_data]
@@ -689,12 +724,9 @@ def test_read_cdf_version_out_of_range():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
 
     with pytest.raises(DeltaError) as e:
-        dt.load_cdf(4).read_all().to_pydict()
+        dt.load_cdf(4).read_all()
 
-    assert (
-        "invalid version. start version 4 is greater than end version 3"
-        in str(e).lower()
-    )
+    assert "invalid table version: 4" in str(e).lower()
 
 
 def test_read_cdf_version_out_of_range_with_flag():
@@ -709,7 +741,7 @@ def test_read_timestamp_cdf_out_of_range():
     start = "2033-12-22T17:10:21.675Z"
 
     with pytest.raises(DeltaError) as e:
-        dt.load_cdf(starting_timestamp=start).read_all().to_pydict()
+        dt.load_cdf(starting_timestamp=start).read_all()
 
     assert "is greater than latest commit timestamp" in str(e).lower()
 
@@ -724,13 +756,20 @@ def test_read_timestamp_cdf_out_of_range_with_flag():
 
 
 def test_read_cdf_last_version(tmp_path):
-    data = pa.Table.from_pydict({"foo": [1, 2, 3]})
+    data = Table.from_pydict(
+        {"foo": Array([1, 2, 3], type=Field("foo", DataType.int32(), nullable=True))}
+    )
 
-    expected = pa.Table.from_pydict(
+    expected = Table.from_pydict(
         {
-            "foo": [1, 2, 3],
-            "_change_type": ["insert", "insert", "insert"],
-            "_commit_version": [0, 0, 0],
+            "foo": Array([1, 2, 3], type=Field("foo", DataType.int32(), nullable=True)),
+            "_change_type": Array(
+                ["insert", "insert", "insert"],
+                type=Field("foo", DataType.string(), nullable=True),
+            ),
+            "_commit_version": Array(
+                [0, 0, 0], type=Field("foo", DataType.int64(), nullable=True)
+            ),
         }
     )
 

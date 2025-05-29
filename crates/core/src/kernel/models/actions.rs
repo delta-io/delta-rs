@@ -135,7 +135,7 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
     fields.any(|f| _check_type(f.data_type()))
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 /// Defines a protocol action
 pub struct Protocol {
@@ -153,6 +153,17 @@ pub struct Protocol {
     /// write this table (exist only when minWriterVersion is set to 7)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub writer_features: Option<HashSet<WriterFeature>>,
+}
+
+impl Default for Protocol {
+    fn default() -> Self {
+        Self {
+            min_reader_version: 1,
+            min_writer_version: 2,
+            reader_features: None,
+            writer_features: None,
+        }
+    }
 }
 
 impl Protocol {
@@ -714,14 +725,6 @@ pub struct Add {
 
     /// The name of the clustering implementation
     pub clustering_provider: Option<String>,
-
-    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    /// raw parquet format. This field needs to be written when statistics are available and the
-    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    ///
-    /// This field is only available in add action records read from checkpoints
-    #[serde(skip_serializing, skip_deserializing)]
-    pub stats_parsed: Option<parquet::record::Row>,
 }
 
 /// Represents a tombstone (deleted file) in the Delta log.

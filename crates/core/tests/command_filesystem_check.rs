@@ -25,7 +25,7 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     let version = table.snapshot()?.version();
     let active = table.snapshot()?.files_count();
 
-    // Validate a Dry run does not mutate the table log and indentifies orphaned add actions
+    // Validate a Dry run does not mutate the table log and identifies orphaned add actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().with_dry_run(true).await?;
     assert_eq!(version, table.snapshot()?.version());

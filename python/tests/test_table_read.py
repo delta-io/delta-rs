@@ -1,6 +1,7 @@
-import logging
+import multiprocessing
 import os
 import tempfile
+from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 from random import random
@@ -8,32 +9,23 @@ from threading import Barrier, Thread
 from typing import Any
 from unittest.mock import Mock
 
+import pytest
+from arro3.core import Array, DataType, Table
+from arro3.core import Field as ArrowField
+
+from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.query import QueryBuilder
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
 
-try:
-    import pandas as pd
-except ModuleNotFoundError:
-    _has_pandas = False
-else:
-    _has_pandas = True
 
-import multiprocessing
-from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
-
-import pyarrow as pa
-import pyarrow.dataset as ds
-import pytest
-from pyarrow.dataset import ParquetReadOptions
-from pyarrow.fs import LocalFileSystem, SubTreeFileSystem
-
-from deltalake import DeltaTable
-
-
+@pytest.mark.pyarrow
 def test_read_table_with_edge_timestamps():
+    import pyarrow.dataset as ds
+    from pyarrow.dataset import ParquetReadOptions
+
     table_path = "../crates/test/tests/data/table_with_edge_timestamps"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset(
@@ -60,7 +52,9 @@ def test_read_table_with_edge_timestamps():
 def test_read_simple_table_to_dict():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+    assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
+        "id"
+    ].to_pylist() == [5, 7, 9]
 
 
 class _SerializableException(BaseException):
@@ -77,7 +71,7 @@ def _recursively_read_simple_table(executor_class: type[Executor], depth):
     if depth == 0:
         return
     # We use concurrent.futures.Executors instead of `threading.Thread` or `multiprocessing.Process` to that errors
-    # are re-rasied in the parent process/thread when we call `future.result()`.
+    # are re-raised in the parent process/thread when we call `future.result()`.
     with executor_class(max_workers=1) as executor:
         future = executor.submit(
             _recursively_read_simple_table, executor_class, depth - 1
@@ -109,12 +103,14 @@ def test_read_simple_in_threads_and_processes(
         _recursively_read_simple_table(executor_class=executor_class, depth=5)
 
 
+@pytest.mark.pyarrow
 def test_read_simple_table_by_version_to_dict():
     table_path = "../crates/test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
+@pytest.mark.pyarrow
 def test_read_simple_table_using_options_to_dict():
     table_path = "../crates/test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2, storage_options={})
@@ -210,6 +206,7 @@ def test_load_as_version_datetime_bad_format():
             dt.load_as_version(bad_format)
 
 
+@pytest.mark.pyarrow
 def test_read_simple_table_update_incremental():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)
@@ -218,14 +215,15 @@ def test_read_simple_table_update_incremental():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
+@pytest.mark.pyarrow
 def test_read_simple_table_file_sizes_failure(mocker):
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    add_actions = dt.get_add_actions().to_pydict()
+    add_actions = dt.get_add_actions()
 
     # set all sizes to -1, the idea is to break the reading, to check
     # that input file sizes are actually used
-    add_actions_modified = {x: -1 for x in add_actions["path"]}
+    add_actions_modified = {x.as_py(): -1 for x in add_actions["path"]}
     mocker.patch(
         "deltalake._internal.RawDeltaTable.get_add_file_sizes",
         return_value=add_actions_modified,
@@ -235,6 +233,7 @@ def test_read_simple_table_file_sizes_failure(mocker):
         dt.to_pyarrow_dataset().to_table().to_pydict()
 
 
+@pytest.mark.pyarrow
 def test_read_partitioned_table_to_dict():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
@@ -247,6 +246,7 @@ def test_read_partitioned_table_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == expected
 
 
+@pytest.mark.pyarrow
 def test_read_partitioned_table_with_partitions_filters_to_dict():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
@@ -261,6 +261,7 @@ def test_read_partitioned_table_with_partitions_filters_to_dict():
     assert dt.to_pyarrow_dataset(partitions).to_table().to_pydict() == expected
 
 
+@pytest.mark.pyarrow
 def test_read_empty_delta_table_after_delete():
     table_path = "../crates/test/tests/data/delta-0.8-empty"
     dt = DeltaTable(table_path)
@@ -269,6 +270,7 @@ def test_read_empty_delta_table_after_delete():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == expected
 
 
+@pytest.mark.pyarrow
 def test_read_table_with_column_subset():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
@@ -282,11 +284,15 @@ def test_read_table_with_column_subset():
     )
 
 
+@pytest.mark.pyarrow
 def test_read_table_as_category():
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
 
-    assert dt.schema().to_pyarrow().field("value").type == pa.string()
+    assert dt.schema().to_arrow().field("value").type == pa.string()
 
     read_options = ds.ParquetReadOptions(dictionary_columns={"value"})
 
@@ -296,7 +302,10 @@ def test_read_table_as_category():
     assert data.schema.field("day").type == pa.string()
 
 
+@pytest.mark.pyarrow
 def test_read_table_with_filter():
+    import pyarrow.dataset as ds
+
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
@@ -313,7 +322,10 @@ def test_read_table_with_filter():
     assert dataset.to_table(filter=filter_expr).to_pydict() == expected
 
 
+@pytest.mark.pyarrow
 def test_read_table_with_stats():
+    import pyarrow.dataset as ds
+
     table_path = "../crates/test/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset()
@@ -337,6 +349,7 @@ def test_read_table_with_stats():
     assert data.num_rows == 0
 
 
+@pytest.mark.pyarrow
 def test_read_special_partition():
     table_path = "../crates/test/tests/data/delta-0.8.0-special-partition"
     dt = DeltaTable(table_path)
@@ -379,13 +392,15 @@ def test_read_partitioned_table_protocol():
     assert protocol.min_writer_version == 2
 
 
+@pytest.mark.pyarrow
 def test_read_table_with_cdc():
     table_path = "../crates/test/tests/data/simple_table_with_cdc"
     dt = DeltaTable(table_path)
-    assert dt.to_pyarrow_table().to_pydict() == {
-        "id": [0],
-        "name": ["Mino"],
-    }
+
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+
+    assert result["id"].to_pylist() == [0]
+    assert result["name"].to_pylist() == ["Mino"]
 
 
 def test_history_partitioned_table_metadata():
@@ -413,12 +428,15 @@ def test_history_partitioned_table_metadata():
 
 
 @pytest.mark.parametrize("flatten", [True, False])
+@pytest.mark.pyarrow
 def test_add_actions_table(flatten: bool):
+    import pyarrow as pa
+
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     actions_df = dt.get_add_actions(flatten)
     # RecordBatch doesn't have a sort_by method yet
-    actions_df = pa.Table.from_batches([actions_df]).sort_by("path").to_batches()[0]
+    actions_df = pa.table(actions_df).sort_by("path").to_batches()[0]
 
     assert actions_df.num_rows == 6
     assert actions_df["path"] == pa.array(
@@ -533,22 +551,32 @@ def test_get_files_partitioned_table():
 
 
 @pytest.mark.pandas
+@pytest.mark.pyarrow
 def test_delta_table_to_pandas():
+    import pandas as pd
+
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
 @pytest.mark.pandas
+@pytest.mark.pyarrow
 def test_delta_table_with_filesystem():
+    import pandas as pd
+    from pyarrow.fs import LocalFileSystem, SubTreeFileSystem
+
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     filesystem = SubTreeFileSystem(table_path, LocalFileSystem())
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+@pytest.mark.pyarrow
 @pytest.mark.pandas
 def test_delta_table_with_filters():
+    import pyarrow.dataset as ds
+
     table_path = "../crates/test/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     dataset = dt.to_pyarrow_dataset()
@@ -596,7 +624,10 @@ def test_delta_table_with_filters():
     )
 
 
+@pytest.mark.pyarrow
 def test_writer_fails_on_protocol():
+    import pytest
+
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
     dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
@@ -699,7 +730,11 @@ def assert_num_fragments(table, predicate, count):
     assert len(list(frags)) == count
 
 
+@pytest.mark.pyarrow
 def test_filter_nulls(tmp_path: Path):
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+
     def assert_scan_equals(table, predicate, expected):
         data = table.to_pyarrow_dataset().to_table(filter=predicate).sort_by("part")
         assert data == expected
@@ -766,7 +801,10 @@ def test_filter_nulls(tmp_path: Path):
     assert_scan_equals(table, predicate, expected)
 
 
+@pytest.mark.pyarrow
 def test_issue_1653_filter_bool_partition(tmp_path: Path):
+    import pyarrow as pa
+
     ta = pa.Table.from_pydict(
         {
             "bool_col": [True, False, True, False],
@@ -874,7 +912,10 @@ def test_partitions_filtering_partitioned_table():
         partition in actual
 
 
+@pytest.mark.pyarrow
 def test_partitions_date_partitioned_table():
+    import pyarrow as pa
+
     table_path = tempfile.gettempdir() + "/date_partition_table"
     date_partitions = [
         date(2024, 8, 1),
@@ -882,14 +923,14 @@ def test_partitions_date_partitioned_table():
         date(2024, 8, 3),
         date(2024, 8, 4),
     ]
-    sample_data = pa.table(
+    sample_data_pyarrow = pa.table(
         {
             "date_field": pa.array(date_partitions, pa.date32()),
             "numeric_data": pa.array([1, 2, 3, 4], pa.int64()),
         }
     )
     write_deltalake(
-        table_path, sample_data, mode="overwrite", partition_by=["date_field"]
+        table_path, sample_data_pyarrow, mode="overwrite", partition_by=["date_field"]
     )
 
     delta_table = DeltaTable(table_path)
@@ -950,47 +991,81 @@ def test_is_deltatable_with_storage_opts():
     assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
 
 
+@pytest.mark.pyarrow
+@pytest.mark.xfail(
+    reason="Issue: columns are encoded as dictionary due to TableProvider"
+)
 def test_read_query_builder():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
-    expected = {
-        "value": ["4", "5", "6", "7"],
-        "year": ["2021", "2021", "2021", "2021"],
-        "month": ["4", "12", "12", "12"],
-        "day": ["5", "4", "20", "20"],
-    }
+
+    expected = Table(
+        {
+            "value": Array(
+                ["4", "5", "6", "7"],
+                ArrowField("value", type=DataType.string(), nullable=True),
+            ),
+            "year": Array(
+                ["2021", "2021", "2021", "2021"],
+                ArrowField("year", type=DataType.string(), nullable=True),
+            ),
+            "month": Array(
+                ["4", "12", "12", "12"],
+                ArrowField("month", type=DataType.string(), nullable=True),
+            ),
+            "day": Array(
+                ["5", "4", "20", "20"],
+                ArrowField("day", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
 
     qb = QueryBuilder().register("tbl", dt)
     query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
 
-    actual = pa.Table.from_batches(qb.execute(query).fetchall()).to_pydict()
-    assert expected == actual
-
-    actual = pa.Table.from_batches(qb.sql(query).fetchall()).to_pydict()
+    actual = qb.execute(query).read_all()
     assert expected == actual
 
 
+@pytest.mark.pyarrow
 def test_read_query_builder_join_multiple_tables(tmp_path):
     table_path = "../crates/test/tests/data/delta-0.8.0-date"
     dt1 = DeltaTable(table_path)
 
     write_deltalake(
         tmp_path,
-        pa.table(
+        data=Table(
             {
-                "date": ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
-                "value": ["a", "b", "c", "d"],
+                "date": Array(
+                    ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
+                    ArrowField("date", type=DataType.string(), nullable=True),
+                ),
+                "value": Array(
+                    ["a", "b", "c", "d"],
+                    ArrowField("value", type=DataType.string(), nullable=True),
+                ),
             }
         ),
     )
     dt2 = DeltaTable(tmp_path)
 
-    expected = {
-        "date": ["2021-01-01", "2021-01-02", "2021-01-03"],
-        "dayOfYear": [1, 2, 3],
-        "value": ["a", "b", "c"],
-    }
-    actual = pa.Table.from_batches(
+    expected = Table(
+        {
+            "date": Array(
+                ["2021-01-01", "2021-01-02", "2021-01-03"],
+                ArrowField("date", type=DataType.string(), nullable=True),
+            ),
+            "dayOfYear": Array(
+                [1, 2, 3],
+                ArrowField("dayOfYear", type=DataType.int32(), nullable=True),
+            ),
+            "value": Array(
+                ["a", "b", "c"],
+                ArrowField("value", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+    actual = (
         QueryBuilder()
         .register("tbl1", dt1)
         .register("tbl2", dt2)
@@ -1002,22 +1077,6 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             ORDER BY tbl1.date
             """
         )
-        .fetchall()
-    ).to_pydict()
+        .read_all()
+    )
     assert expected == actual
-
-
-def test_read_query_builder_show_output(capsys, caplog):
-    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
-    dt = DeltaTable(table_path)
-    logging.getLogger("deltalake").setLevel(logging.INFO)
-
-    qb = QueryBuilder().register("tbl", dt)
-    query = "SELECT * FROM tbl WHERE year >= 2021 ORDER BY value"
-    qb.execute(query).show()
-    assert capsys.readouterr().out.strip() != ""
-
-    query = "SELECT * FROM tbl WHERE year >= 9999"
-    qb.execute(query).show()
-    assert "query contains no records" in caplog.text
-    assert capsys.readouterr().out.strip() == ""

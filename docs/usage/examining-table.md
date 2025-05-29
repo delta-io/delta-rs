@@ -57,7 +57,7 @@ the table will be loaded into.
     let schema = table.get_schema()?;
     println!("schema: {:?}", schema);
     ```
-These schemas have a JSON representation that can be retrieved. 
+These schemas have a JSON representation that can be retrieved.
 
 === "Python"
     To reconstruct from json, use [DeltaTable.schema.to_json()][deltalake.schema.Schema.to_json].
@@ -73,10 +73,10 @@ These schemas have a JSON representation that can be retrieved.
 It is also possible to retrieve the Arrow schema:
 === "Python"
 
-    Use [DeltaTable.schema.to_pyarrow()][deltalake.schema.Schema.to_pyarrow] to retrieve the PyArrow schema:
+    Use [DeltaTable.schema.to_arrow()][deltalake.schema.Schema.to_arrow] to retrieve the Arro3 schema:
 
     ``` python
-    >>> dt.schema().to_pyarrow()
+    >>> dt.schema().to_arrow()
     id: int64
     ```
 === "Rust"
@@ -129,6 +129,8 @@ which provide the list of files that are part of the table and metadata
 about them, such as creation time, size, and statistics. You can get a
 data frame of the add actions data using `DeltaTable.get_add_actions`:
 
+<!-- spellchecker:off --!>
+
 === "Python"
     ``` python
     >>> from deltalake import DeltaTable
@@ -162,3 +164,5 @@ This works even with past versions of the table:
     let actions = table.snapshot()?.add_actions_table(true)?;
     println!("{}", pretty_format_batches(&vec![actions])?);
     ```
+
+<!-- spellchecker:on --!>

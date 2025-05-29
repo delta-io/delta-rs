@@ -1,16 +1,32 @@
 import pathlib
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
 import pytest
+from arro3.core import Table
 
-from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltalake
 from deltalake.exceptions import DeltaError
+from deltalake.schema import PrimitiveType
+
+if TYPE_CHECKING:
+    pass
+
+schema = Schema(
+    fields=[
+        Field("id", type=PrimitiveType("string"), nullable=True),
+        Field("price", type=PrimitiveType("integer"), nullable=True),
+        Field("timestamp", type=PrimitiveType("timestamp_ntz"), nullable=True),
+        Field("deleted", type=PrimitiveType("boolean"), nullable=True),
+    ]
+)
 
 
-def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
+def test_create_roundtrip_metadata(
+    tmp_path: pathlib.Path,
+):
     dt = DeltaTable.create(
         tmp_path,
-        sample_data.schema,
+        schema,
         name="test_name",
         description="test_desc",
         configuration={
@@ -33,21 +49,21 @@ def test_create_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table
     assert {*dt.protocol().writer_features} == {"appendOnly", "timestampNtz"}  # type: ignore
 
 
-def test_create_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
-    dt = DeltaTable.create(tmp_path, sample_data.schema, mode="error")
+def test_create_modes(tmp_path: pathlib.Path):
+    dt = DeltaTable.create(tmp_path, schema, mode="error")
     last_action = dt.history(1)[0]
 
     with pytest.raises(DeltaError):
-        dt = DeltaTable.create(tmp_path, sample_data.schema, mode="error")
+        dt = DeltaTable.create(tmp_path, schema, mode="error")
 
     assert last_action["operation"] == "CREATE TABLE"
     with pytest.raises(DeltaError):
-        dt = DeltaTable.create(tmp_path, sample_data.schema, mode="append")
+        dt = DeltaTable.create(tmp_path, schema, mode="append")
 
-    dt = DeltaTable.create(tmp_path, sample_data.schema, mode="ignore")
+    dt = DeltaTable.create(tmp_path, schema, mode="ignore")
     assert dt.version() == 0
 
-    dt = DeltaTable.create(tmp_path, sample_data.schema, mode="overwrite")
+    dt = DeltaTable.create(tmp_path, schema, mode="overwrite")
     assert dt.version() == 1
 
     last_action = dt.history(1)[0]
@@ -55,23 +71,21 @@ def test_create_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert last_action["operation"] == "CREATE OR REPLACE TABLE"
 
 
-def test_create_schema(tmp_path: pathlib.Path, sample_data: pa.Table):
+def test_create_schema(tmp_path: pathlib.Path):
     dt = DeltaTable.create(
         tmp_path,
-        sample_data.schema,
+        schema,
     )
 
-    assert dt.schema().to_pyarrow() == sample_data.schema
+    assert dt.schema() == schema
 
 
 @pytest.mark.skip(reason="not implemented")
-def test_create_with_deletion_vectors_enabled(
-    tmp_path: pathlib.Path, sample_table: pa.Table
-):
+def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):
     """append only is set to false so shouldn't be converted to a feature"""
     dt = DeltaTable.create(
         tmp_path,
-        sample_table.schema,
+        schema,
         name="test_name",
         description="test_desc",
         configuration={
@@ -96,12 +110,18 @@ def test_create_with_deletion_vectors_enabled(
     assert dt.history()[0]["userName"] == "John Doe"
 
 
-def test_create_higher_protocol_versions(
-    tmp_path: pathlib.Path, sample_table: pa.Table
-):
+def test_create_higher_protocol_versions(tmp_path: pathlib.Path):
+    schema = Schema(
+        fields=[
+            Field("id", type=PrimitiveType("string"), nullable=True),
+            Field("price", type=PrimitiveType("integer"), nullable=True),
+            Field("deleted", type=PrimitiveType("boolean"), nullable=True),
+        ]
+    )
+
     dt = DeltaTable.create(
         tmp_path,
-        sample_table.schema,
+        schema,
         name="test_name",
         description="test_desc",
         configuration={
@@ -126,12 +146,13 @@ def test_create_higher_protocol_versions(
     assert dt.history()[0]["userName"] == "John Doe"
 
 
-def test_create_or_replace_existing_table(
-    tmp_path: pathlib.Path, sample_data: pa.Table
-):
-    write_deltalake(table_or_uri=tmp_path, data=sample_data)
+def test_create_or_replace_existing_table(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(table_or_uri=tmp_path, data=sample_table)
     dt = DeltaTable.create(
-        tmp_path, sample_data.schema, partition_by=["utf8"], mode="overwrite"
+        tmp_path,
+        schema,
+        partition_by=["id"],
+        mode="overwrite",
     )
 
     assert dt.files() == []

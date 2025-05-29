@@ -57,6 +57,7 @@ use datafusion_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
@@ -963,7 +964,7 @@ async fn execute(
         )?;
         let schema = Arc::new(schema_builder.finish());
         new_schema = Some(schema.clone());
-        let schema_struct: StructType = schema.try_into()?;
+        let schema_struct: StructType = schema.try_into_kernel()?;
         if &schema_struct != snapshot.schema() {
             let action = Action::Metadata(Metadata::try_new(
                 schema_struct,
@@ -1087,7 +1088,7 @@ async fn execute(
     let mut write_projection_with_cdf = Vec::new();
 
     let schema = if let Some(schema) = new_schema {
-        &schema.try_into()?
+        &schema.try_into_kernel()?
     } else {
         snapshot.schema()
     };
@@ -1111,7 +1112,7 @@ async fn execute(
             None => TableReference::none(),
         };
         let name = delta_field.name();
-        let mut cast_type: DataType = delta_field.data_type().try_into()?;
+        let mut cast_type: DataType = delta_field.data_type().try_into_arrow()?;
 
         // Receive the correct column reference given that some columns are only in source table
         let column = if let Some(field) = snapshot.schema().field(name) {
@@ -1126,7 +1127,7 @@ async fn execute(
         } else {
             null_target_column = Some(cast(
                 lit(ScalarValue::Null).alias(name),
-                delta_field.data_type().try_into()?,
+                delta_field.data_type().try_into_arrow()?,
             ));
             Column::new(source_qualifier.clone(), name)
         };
@@ -1601,6 +1602,7 @@ mod tests {
     use datafusion_expr::expr::Placeholder;
     use datafusion_expr::lit;
     use datafusion_expr::Expr;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
     use itertools::Itertools;
     use regex::Regex;
@@ -2155,7 +2157,7 @@ mod tests {
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
         assert_eq!(&expected_schema_struct, table.schema().unwrap());
         assert_batches_sorted_eq!(&expected, &actual);
     }
@@ -2223,7 +2225,7 @@ mod tests {
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
         assert_eq!(&expected_schema_struct, table.schema().unwrap());
         assert_batches_sorted_eq!(&expected, &actual);
     }
@@ -3310,7 +3312,7 @@ mod tests {
             "+----+-------+-------------+------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
         assert_eq!(&expected_schema_struct, table.schema().unwrap());
         assert_batches_sorted_eq!(&expected, &actual);
     }
@@ -3324,7 +3326,7 @@ mod tests {
                 true,
             ),
             StructField::new(
-                "vAlue".to_string(),
+                "vAlue".to_string(), // spellchecker:disable-line
                 DataType::Primitive(PrimitiveType::Integer),
                 true,
             ),
@@ -3337,7 +3339,7 @@ mod tests {
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("Id", ArrowDataType::Utf8, true),
-            Field::new("vAlue", ArrowDataType::Int32, true),
+            Field::new("vAlue", ArrowDataType::Int32, true), // spellchecker:disable-line
             Field::new("mOdifieD", ArrowDataType::Utf8, true),
         ]));
 
@@ -3374,7 +3376,7 @@ mod tests {
             .when_not_matched_insert(|insert| {
                 insert
                     .set("Id", "source.Id")
-                    .set("vAlue", "source.vAlue + 1")
+                    .set("vAlue", "source.vAlue + 1") // spellchecker:disable-line
                     .set("mOdifieD", "source.mOdifieD")
             })
             .unwrap()
@@ -3383,7 +3385,7 @@ mod tests {
 
         let expected = vec![
             "+----+-------+------------+",
-            "| Id | vAlue | mOdifieD   |",
+            "| Id | vAlue | mOdifieD   |", // spellchecker:disable-line
             "+----+-------+------------+",
             "| A  | 1     | 2021-02-01 |",
             "| B  | 10    | 2021-02-01 |",
@@ -4144,7 +4146,7 @@ mod tests {
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = source_schema.try_into().unwrap();
+        let expected_schema_struct: StructType = source_schema.try_into_kernel().unwrap();
         assert_eq!(&expected_schema_struct, table.schema().unwrap());
         assert_batches_sorted_eq!(&expected, &actual);
 

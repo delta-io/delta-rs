@@ -122,18 +122,23 @@ impl LakeFSLogStore {
         self.root_registry.register_store(url, store);
     }
 
-    fn get_transaction_objectstore(
-        &self,
-        operation_id: Uuid,
-    ) -> DeltaResult<(String, ObjectStoreRef, ObjectStoreRef)> {
-        let (repo, _, table) = self.client.decompose_url(self.config.location.to_string());
+    fn get_transaction_url(&self, operation_id: Uuid, base: String) -> DeltaResult<Url> {
+        let (repo, _, table) = self.client.decompose_url(base);
         let string_url = format!(
             "lakefs://{repo}/{}/{table}",
             self.client.get_transaction(operation_id)?,
         );
-        let transaction_url = Url::parse(&string_url).unwrap();
+        Ok(Url::parse(&string_url).unwrap())
+    }
+
+    fn get_transaction_objectstore(
+        &self,
+        operation_id: Uuid,
+    ) -> DeltaResult<(String, ObjectStoreRef, ObjectStoreRef)> {
+        let transaction_url =
+            self.get_transaction_url(operation_id, self.config.location.to_string())?;
         Ok((
-            string_url,
+            transaction_url.clone().to_string(),
             self.prefixed_registry.get_store(&transaction_url)?,
             self.root_registry.get_store(&transaction_url)?,
         ))
@@ -381,6 +386,10 @@ impl LogStore for LakeFSLogStore {
 
     fn config(&self) -> &LogStoreConfig {
         &self.config
+    }
+
+    fn transaction_url(&self, operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
+        self.get_transaction_url(operation_id, base.to_string())
     }
 }
 

@@ -27,6 +27,7 @@ use datafusion_proto::bytes::{
 use deltalake_core::delta_datafusion::{DeltaScan, DeltaTableFactory};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
+use deltalake_core::operations::write::SchemaMode;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
@@ -57,6 +58,7 @@ mod local {
         LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
     };
     use datafusion_physical_plan::displayable;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
@@ -124,7 +126,7 @@ mod local {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
-        let table_schema: StructType = batches[0].schema().try_into().unwrap();
+        let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
         let mut table = DeltaOps::try_from_uri(table_uri)
             .await
@@ -376,7 +378,7 @@ mod local {
             &ctx,
             &DeltaLogicalCodec {},
         )?);
-        let schema = StructType::try_from(source_scan.schema().as_arrow()).unwrap();
+        let schema: StructType = source_scan.schema().as_arrow().try_into_kernel().unwrap();
         let fields = schema.fields().cloned();
 
         dbg!(schema.fields().collect_vec().clone());
@@ -439,7 +441,7 @@ mod local {
 
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
-        // Validate a table that contains statisitics for all files
+        // Validate a table that contains statistics for all files
         let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
@@ -477,7 +479,7 @@ mod local {
         ];
         assert_batches_sorted_eq!(&expected, &actual);
 
-        // Validate a table that does not contain column statisitics
+        // Validate a table that does not contain column statistics
         let table = open_table("../test/tests/data/delta-0.2.0").await.unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
@@ -1355,6 +1357,79 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_schema_adapter_empty_batch() {
+    let ctx = SessionContext::new();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+
+    // Create table with a single column
+    let table = DeltaOps::try_from_uri(table_uri)
+        .await
+        .unwrap()
+        .create()
+        .with_column(
+            "a",
+            DataType::Primitive(PrimitiveType::Integer),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Write single column
+    let a_arr = Int32Array::from(vec![1, 2, 3]);
+    let table = DeltaOps(table)
+        .write(vec![RecordBatch::try_from_iter_with_nullable(vec![(
+            "a",
+            Arc::new(a_arr) as ArrayRef,
+            false,
+        )])
+        .unwrap()])
+        .await
+        .unwrap();
+
+    // Evolve schema by writing a batch with new nullable column
+    let a_arr = Int32Array::from(vec![4, 5, 6]);
+    let b_arr = Int32Array::from(vec![7, 8, 9]);
+    let table = DeltaOps(table)
+        .write(vec![RecordBatch::try_from_iter_with_nullable(vec![
+            ("a", Arc::new(a_arr) as ArrayRef, false),
+            ("b", Arc::new(b_arr) as ArrayRef, true),
+        ])
+        .unwrap()])
+        .with_schema_mode(SchemaMode::Merge)
+        .await
+        .unwrap();
+
+    // Ensure we can project only the new column which does not exist in files from first write
+    let batches = ctx
+        .read_table(Arc::new(table))
+        .unwrap()
+        .select_exprs(&["b"])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(
+        #[rustfmt::skip]
+        &[
+            "+---+",
+            "| b |",
+            "+---+",
+            "|   |",
+            "|   |",
+            "|   |",
+            "| 7 |",
+            "| 8 |",
+            "| 9 |",
+            "+---+",
+        ],
+        &batches
+    );
 }
 
 mod date_partitions {

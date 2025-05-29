@@ -13,6 +13,7 @@ use arrow_schema::{
     SchemaRef as ArrowSchemaRef,
 };
 use arrow_select::filter::filter_record_batch;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
@@ -53,7 +54,7 @@ impl<'a, S> ReplayStream<'a, S> {
         snapshot: &Snapshot,
         visitors: &'a mut Vec<Box<dyn ReplayVisitor>>,
     ) -> DeltaResult<Self> {
-        let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into()?);
+        let stats_schema = Arc::new((&snapshot.stats_schema(None)?).try_into_arrow()?);
         let partitions_schema = snapshot.partitions_schema(None)?.map(Arc::new);
         let mapper = Arc::new(LogMapper {
             stats_schema,
@@ -82,7 +83,7 @@ impl LogMapper {
         table_schema: Option<&StructType>,
     ) -> DeltaResult<Self> {
         Ok(Self {
-            stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into()?),
+            stats_schema: Arc::new((&snapshot.stats_schema(table_schema)?).try_into_arrow()?),
             partitions_schema: snapshot.partitions_schema(table_schema)?.map(Arc::new),
             config: snapshot.config.clone(),
         })
@@ -314,7 +315,7 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
             Fields::from(
                 partition_schema
                     .fields()
-                    .map(|f| f.try_into())
+                    .map(|f| f.try_into_arrow())
                     .collect::<Result<Vec<ArrowField>, _>>()?,
             ),
             columns,
@@ -602,8 +603,10 @@ pub(super) mod tests {
     use std::sync::Arc;
 
     use arrow_select::concat::concat_batches;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::DataType;
     use futures::TryStreamExt;
+    use object_store::path::Path;
 
     use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
@@ -680,7 +683,7 @@ pub(super) mod tests {
             app_metadata: Default::default(),
             app_transactions: Default::default(),
         };
-        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data], &Path::default())?;
 
         let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -689,11 +692,11 @@ pub(super) mod tests {
         assert!(ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed").is_none());
 
         let stats_schema = stats_schema(schema, table_config)?;
-        let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into()?), &config)?;
+        let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into_arrow()?), &config)?;
 
         assert!(ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").is_some());
         let parsed_col = ex::extract_and_cast::<StructArray>(&new_batch, "add.stats_parsed")?;
-        let delta_type: DataType = parsed_col.data_type().try_into()?;
+        let delta_type: DataType = parsed_col.data_type().try_into_kernel()?;
 
         match delta_type {
             DataType::Struct(fields) => {
@@ -743,7 +746,7 @@ pub(super) mod tests {
             app_metadata: Default::default(),
             app_transactions: Default::default(),
         };
-        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data], &Path::default())?;
 
         let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -762,7 +765,7 @@ pub(super) mod tests {
         );
         let parsed_col =
             ex::extract_and_cast::<StructArray>(&new_batch, "add.partitionValues_parsed")?;
-        let delta_type: DataType = parsed_col.data_type().try_into()?;
+        let delta_type: DataType = parsed_col.data_type().try_into_kernel()?;
 
         match delta_type {
             DataType::Struct(fields) => {

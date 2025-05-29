@@ -1,11 +1,10 @@
 import os
 
-import pyarrow as pa
-import pyarrow.fs as pa_fs
 import pytest
+from arro3.core import Array, ChunkedArray, DataType, Table
 from numpy.random import standard_normal
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, QueryBuilder, write_deltalake
 
 # NOTE: make sure to run these in release mode with
 # MATURIN_EXTRA_ARGS=--release make develop
@@ -14,13 +13,15 @@ from deltalake import DeltaTable, write_deltalake
 
 
 @pytest.fixture()
-def sample_table() -> pa.Table:
+def sample_table() -> Table:
     max_size_bytes = 128 * 1024 * 1024
     ncols = 20
     nrows = max_size_bytes // 20 // 8
-    tab = pa.table({f"x{i}": standard_normal(nrows) for i in range(ncols)})
+    tab = Table.from_pydict({f"x{i}": standard_normal(nrows) for i in range(ncols)})
     # Add index column for sorting
-    tab = tab.append_column("i", pa.array(range(nrows), type=pa.int64()))
+    tab = tab.append_column(
+        "i", ChunkedArray(Array(range(nrows), type=DataType.int64()))
+    )
     return tab
 
 
@@ -29,26 +30,36 @@ def test_benchmark_write(benchmark, sample_table, tmp_path):
     benchmark(write_deltalake, str(tmp_path), sample_table, mode="overwrite")
 
     dt = DeltaTable(str(tmp_path))
-    assert dt.to_pyarrow_table().sort_by("i") == sample_table
+    assert (
+        QueryBuilder().register("tbl", dt).execute("select * from tbl order by id")
+        == sample_table
+    )
 
 
+@pytest.mark.pyarrow
 @pytest.mark.benchmark(group="read")
 def test_benchmark_read(benchmark, sample_table, tmp_path):
+    import pyarrow as pa
+
     write_deltalake(str(tmp_path), sample_table)
     dt = DeltaTable(str(tmp_path))
 
     result = benchmark(dt.to_pyarrow_table)
-    assert result.sort_by("i") == sample_table
+    assert result.sort_by("i") == pa.table(sample_table)
 
 
+@pytest.mark.pyarrow
 @pytest.mark.benchmark(group="read")
 def test_benchmark_read_pyarrow(benchmark, sample_table, tmp_path):
+    import pyarrow as pa
+    import pyarrow.fs as pa_fs
+
     write_deltalake(str(tmp_path), sample_table)
     dt = DeltaTable(str(tmp_path))
 
     fs = pa_fs.SubTreeFileSystem(str(tmp_path), pa_fs.LocalFileSystem())
     result = benchmark(dt.to_pyarrow_table, filesystem=fs)
-    assert result.sort_by("i") == sample_table
+    assert result.sort_by("i") == pa.table(sample_table)
 
 
 @pytest.mark.benchmark(group="optimize")
@@ -62,7 +73,9 @@ def test_benchmark_optimize(benchmark, sample_table, tmp_path, max_tasks):
     nrows = int(sample_table.num_rows / files_per_part)
     for part in parts:
         tab = sample_table.slice(0, nrows)
-        tab = tab.append_column("part", pa.array([part] * nrows))
+        tab = tab.append_column(
+            "part", ChunkedArray(Array([part] * nrows), DataType.int64())
+        )
         for _ in range(files_per_part):
             write_deltalake(tmp_path, tab, mode="append", partition_by=["part"])
 

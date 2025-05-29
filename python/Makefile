@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
+PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' | tr -d '-' )
 
 .PHONY: setup
 setup: ## Setup the requirements
@@ -67,7 +67,7 @@ test-cov: ## Create coverage report
 
 .PHONY: test-pyspark
 test-pyspark:
-	uv run --no-sync pytest -m 'pyspark and integration'
+	uv run --no-sync pytest -m 'pyarrow and pyspark and integration'
 
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx

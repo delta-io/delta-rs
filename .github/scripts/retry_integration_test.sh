@@ -5,7 +5,7 @@ MAX_RETRIES=$2
 RETRY_DELAY=$3
 ATTEMPT=1
 run_command() {
-  uv run --no-sync pytest -m "($TEST_NAME and integration)" --doctest-modules 2>&1
+  uv run --no-sync pytest -m "($TEST_NAME and integration and pyarrow)" --doctest-modules 2>&1
 }
 until [ $ATTEMPT -gt $MAX_RETRIES ]
 do

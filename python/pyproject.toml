@@ -16,11 +16,15 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = ["pyarrow>=16"]
 dynamic = ["version"]
+dependencies = [
+    "arro3-core>=0.5.0",
+    "deprecated>=1.2.18",
+]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
+pyarrow = ["pyarrow>=16"]
 
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/"
@@ -69,7 +73,7 @@ ignore = ["E501", "ANN401", "RUF040"]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "-v -m 'not integration and not benchmark'"
+addopts = "-v -m 'not integration and not benchmark and not no_pyarrow'"
 testpaths = ["tests", "deltalake"]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
@@ -78,6 +82,8 @@ markers = [
     "pandas: marks tests that require pandas",
     "polars: marks tests that require polars",
     "lakefs: marks tests that require lakefs",
+    "pyarrow: marks tests that require pyarrow",
+    "no_pyarrow: marks tests that test deltalake functionality without pyarrow",
     "unitycatalog_databricks: marks tests that require unitycatalog_databricks",
     "unitycatalog_oss: marks tests that require unitycatalog_oss",
     "pyspark: marks tests that require pyspark",
@@ -96,6 +102,7 @@ dev = [
     "pytest-benchmark",
     "mypy==1.10.1",
     "ruff>=0.11.2",
+    "types-deprecated>=1.2.15.20250304",
 ]
 polars = ["polars==1.17.1"]
 lakefs = ["lakefs==0.8.0"]

@@ -26,10 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.10.0", features = [
-    "arrow-55",
-    "internal-api",
-] }
+delta_kernel = { version = "0.11.0", features = ["arrow-55", "internal-api"] }
 
 # arrow
 arrow = { version = "=55.0.0" }
@@ -78,3 +75,21 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+
+[workspace.metadata.typos]
+default.extend-ignore-re = [
+    # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
+    "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
+    # Line block with # spellchecker:<on|off>
+    "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
+    "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
+    # workaround for: https://github.com/crate-ci/typos/issues/850
+    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+]
+
+[workspace.metadata.typos.default.extend-words]
+arro = "arro"
+Arro = "Arro"
+arro3 = "arro3"
+Arro3 = "Arro3"
+AKS = "AKS"

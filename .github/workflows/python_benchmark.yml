@@ -39,7 +39,7 @@ jobs:
 
       - name: Run benchmark
         run: |
-          uv run pytest tests/test_benchmark.py -m benchmark --benchmark-json output.json
+          uv run pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json output.json
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
@@ -48,4 +48,3 @@ jobs:
           output-file-path: python/output.json
           external-data-json-path: ./cache/benchmark-data.json
           fail-on-alert: true
-

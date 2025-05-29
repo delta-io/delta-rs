@@ -49,9 +49,10 @@
 //! Querying from local filesystem:
 //! ```
 //! use std::sync::Arc;
-//! use datafusion::prelude::SessionContext;
 //!
+//! # #[cfg(feature="datafusion")]
 //! async {
+//!   use datafusion::prelude::SessionContext;
 //!   let mut ctx = SessionContext::new();
 //!   let table = deltalake_core::open_table("../test/tests/data/simple_table")
 //!       .await

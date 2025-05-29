@@ -7,12 +7,11 @@ from typing import (
     Literal,
 )
 
+from deltalake._internal import Schema
 from deltalake._internal import convert_to_deltalake as _convert_to_deltalake
 from deltalake.writer._utils import try_get_deltatable
 
 if TYPE_CHECKING:
-    import pyarrow as pa
-
     from deltalake.transaction import (
         CommitProperties,
         PostCommitHookProperties,
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
 def convert_to_deltalake(
     uri: str | Path,
     mode: Literal["error", "ignore"] = "error",
-    partition_by: pa.Schema | None = None,
+    partition_by: Schema | None = None,
     partition_strategy: Literal["hive"] | None = None,
     name: str | None = None,
     description: str | None = None,

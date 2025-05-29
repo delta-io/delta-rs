@@ -178,11 +178,14 @@ pub fn cast_record_batch(
         ..Default::default()
     };
 
-    let s = StructArray::new(
-        batch.schema().as_ref().to_owned().fields,
-        batch.columns().to_owned(),
-        None,
-    );
+    // Can be simplified with StructArray::try_new_with_length in arrow 55.1
+    let col_arrays = batch.columns().to_owned();
+    let s = if col_arrays.is_empty() {
+        StructArray::new_empty_fields(batch.num_rows(), None)
+    } else {
+        StructArray::new(batch.schema().as_ref().to_owned().fields, col_arrays, None)
+    };
+
     let struct_array = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
 
     Ok(RecordBatch::try_new_with_options(
@@ -206,6 +209,7 @@ mod tests {
     };
     use arrow::buffer::{Buffer, NullBuffer};
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use delta_kernel::schema::MetadataValue;
     use itertools::Itertools;
 
@@ -230,7 +234,7 @@ mod tests {
 
         let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
         assert_eq!(result.fields().len(), 1);
-        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into_kernel().unwrap();
         assert_eq!(delta_type, DeltaDataType::STRING);
         assert!(result.fields()[0].is_nullable());
     }
@@ -280,7 +284,7 @@ mod tests {
 
         let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
         assert_eq!(result.fields().len(), 1);
-        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into().unwrap();
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into_kernel().unwrap();
         assert_eq!(
             delta_type,
             DeltaDataType::Array(Box::new(DeltaArrayType::new(DeltaDataType::STRING, false)))

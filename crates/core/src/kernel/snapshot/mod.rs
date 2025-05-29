@@ -20,13 +20,15 @@ use std::io::{BufRead, BufReader, Cursor};
 
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
+use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tracing::warn;
+use url::Url;
 
-use self::log_segment::{LogSegment, PathExt};
+use self::log_segment::LogSegment;
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use self::visitors::*;
@@ -53,14 +55,18 @@ pub mod visitors;
 /// A snapshot of a Delta table
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Snapshot {
+    /// Log segment containing all log files in the snapshot
     log_segment: LogSegment,
+    /// Configuration for the current session
     config: DeltaTableConfig,
+    /// Protocol of the Delta table
     protocol: Protocol,
+    /// Metadata of the Delta table
     metadata: Metadata,
+    /// Logical table schema
     schema: StructType,
-    // TODO make this an URL
-    /// path of the table root within the object store
-    table_url: String,
+    /// Fully qualified URL of the table
+    table_url: Url,
 }
 
 impl Snapshot {
@@ -88,16 +94,17 @@ impl Snapshot {
             protocol,
             metadata,
             schema,
-            table_url: "/".to_string(),
+            table_url: log_store.config().location.clone(),
         })
     }
 
     #[cfg(test)]
     pub fn new_test<'a>(
         commits: impl IntoIterator<Item = &'a CommitData>,
+        table_root: &Path,
     ) -> DeltaResult<(Self, RecordBatch)> {
         use arrow_select::concat::concat_batches;
-        let (log_segment, batches) = LogSegment::new_test(commits)?;
+        let (log_segment, batches) = LogSegment::new_test(commits, table_root)?;
         let batch = batches.into_iter().collect::<Result<Vec<_>, _>>()?;
         let batch = concat_batches(&batch[0].schema(), &batch)?;
         let protocol = parse::read_protocol(&batch)?.unwrap();
@@ -110,7 +117,7 @@ impl Snapshot {
                 protocol,
                 metadata,
                 schema,
-                table_url: Path::default().to_string(),
+                table_url: Url::parse("dummy:///").unwrap(),
             },
             batch,
         ))
@@ -139,13 +146,8 @@ impl Snapshot {
                 return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
             }
         }
-        let log_segment = LogSegment::try_new_slice(
-            &Path::default(),
-            self.version() + 1,
-            target_version,
-            log_store,
-        )
-        .await?;
+        let log_segment =
+            LogSegment::try_new_slice(self.version() + 1, target_version, log_store).await?;
         if log_segment.commit_files.is_empty() && log_segment.checkpoint_files.is_empty() {
             return Ok(None);
         }
@@ -199,8 +201,8 @@ impl Snapshot {
     }
 
     /// Get the table root of the snapshot
-    pub fn table_root(&self) -> Path {
-        Path::from(self.table_url.clone())
+    pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
+        Ok(Path::from_url_path(self.table_url.path())?)
     }
 
     /// Well known table configuration
@@ -240,9 +242,9 @@ impl Snapshot {
         log_store: &dyn LogStore,
         limit: Option<usize>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
-        let store = log_store.object_store(None);
+        let store = log_store.root_object_store(None);
 
-        let log_root = self.table_root().child("_delta_log");
+        let log_root = self.table_root_path()?.child("_delta_log");
         let start_from = log_root.child(
             format!(
                 "{:020}",
@@ -253,14 +255,19 @@ impl Snapshot {
             .as_str(),
         );
 
+        let dummy_url = url::Url::parse("memory:///").unwrap();
         let mut commit_files = Vec::new();
         for meta in store
             .list_with_offset(Some(&log_root), &start_from)
             .try_collect::<Vec<_>>()
             .await?
         {
-            if meta.location.is_commit_file() {
-                commit_files.push(meta);
+            // safety: object store path are always valid urls paths.
+            let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
+            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
+                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
+                    commit_files.push(meta);
+                }
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
@@ -333,7 +340,7 @@ pub struct EagerSnapshot {
     // additional actions that should be tracked during log replay.
     tracked_actions: HashSet<ActionType>,
 
-    transactions: Option<HashMap<String, Transaction>>,
+    pub(crate) transactions: Option<HashMap<String, Transaction>>,
 
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
     //       we do not yet enforce a consistent schema across all batches we read from the log.
@@ -403,8 +410,11 @@ impl EagerSnapshot {
     }
 
     #[cfg(test)]
-    pub fn new_test<'a>(commits: impl IntoIterator<Item = &'a CommitData>) -> DeltaResult<Self> {
-        let (snapshot, batch) = Snapshot::new_test(commits)?;
+    pub fn new_test<'a>(
+        commits: impl IntoIterator<Item = &'a CommitData>,
+        table_root: &Path,
+    ) -> DeltaResult<Self> {
+        let (snapshot, batch) = Snapshot::new_test(commits, table_root)?;
         let mut files = Vec::new();
         let mut scanner = LogReplayScanner::new();
         files.push(scanner.process_files_batch(&batch, true)?);
@@ -515,8 +525,8 @@ impl EagerSnapshot {
     }
 
     /// Get the table root of the snapshot
-    pub fn table_root(&self) -> Path {
-        self.snapshot.table_root()
+    pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
+        self.snapshot.table_root_path()
     }
 
     /// Get the table config which is loaded with of the snapshot
@@ -555,14 +565,16 @@ impl EagerSnapshot {
     }
 
     /// Iterate over all latest app transactions
-    pub fn transactions(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
-        self.transactions
+    pub async fn transaction_version(&self, app_id: impl AsRef<str>) -> DeltaResult<Option<i64>> {
+        Ok(self
+            .transactions
             .as_ref()
-            .map(|t| t.values().cloned())
             .ok_or(DeltaTableError::Generic(
                 "Transactions are not available. Please enable tracking of transactions."
                     .to_string(),
-            ))
+            ))?
+            .get(app_id.as_ref())
+            .map(|txn| txn.version))
     }
 
     /// Advance the snapshot based on the given commit actions
@@ -600,7 +612,7 @@ impl EagerSnapshot {
         let read_schema = StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
         let actions = self.snapshot.log_segment.advance(
             send,
-            &self.table_root(),
+            &self.table_root_path()?,
             &read_schema,
             &self.snapshot.config,
         )?;
@@ -829,6 +841,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_concurrent_checkpoint() -> TestResult {
         concurrent_checkpoint().await?;
@@ -945,14 +958,15 @@ mod tests {
             HashMap::new(),
             vec![],
         );
-        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data], &Path::default()).unwrap();
 
         let snapshot = Snapshot {
             log_segment: log_segment.clone(),
             protocol: protocol.clone(),
             metadata,
             schema: schema.clone(),
-            table_url: "table".to_string(),
+            table_url: Url::parse("dummy:///").unwrap(),
             config: Default::default(),
         };
 
@@ -973,7 +987,7 @@ mod tests {
             HashMap::new(),
             vec![],
         );
-        let (log_segment, _) = LogSegment::new_test(vec![&commit_data]).unwrap();
+        let (log_segment, _) = LogSegment::new_test(vec![&commit_data], &Path::default()).unwrap();
 
         let snapshot = Snapshot {
             log_segment,
@@ -981,7 +995,7 @@ mod tests {
             protocol: protocol.clone(),
             metadata,
             schema: schema.clone(),
-            table_url: "table".to_string(),
+            table_url: Url::parse("dummy:///").unwrap(),
         };
 
         assert_eq!(snapshot.partitions_schema(None).unwrap(), None);

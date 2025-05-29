@@ -265,11 +265,11 @@ from json, use `schema.Schema.from_json()`.
     >>> dt.schema().json()
     '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 
-Use `deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
+Use `deltalake.schema.Schema.to_arrow()` to retrieve the Arro3 schema:
 
 .. code-block:: python
 
-    >>> dt.schema().to_pyarrow()
+    >>> dt.schema().to_arrow()
     id: int64
 
 
@@ -309,6 +309,8 @@ provide the list of files that are part of the table and metadata about them,
 such as creation time, size, and statistics. You can get a data frame of
 the add actions data using :meth:`DeltaTable.get_add_actions`:
 
+<!-- spellchecker:off --!>
+
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
@@ -328,6 +330,7 @@ This works even with past versions of the table:
     0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
     1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4
 
+<!-- spellchecker:on --!>
 
 Querying Delta Tables
 ---------------------
@@ -351,7 +354,7 @@ support filtering partitions and selecting particular columns.
 
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
-    >>> dt.schema().to_pyarrow()
+    >>> dt.schema().to_arrow()
     value: string
     year: string
     month: string

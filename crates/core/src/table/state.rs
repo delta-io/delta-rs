@@ -12,7 +12,7 @@ use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig}
 use crate::kernel::Action;
 use crate::kernel::{
     ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
-    Protocol, Remove, StructType, Transaction,
+    Protocol, Remove, StructType,
 };
 use crate::logstore::LogStore;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
@@ -56,7 +56,7 @@ impl DeltaTableState {
 
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
-    pub fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
+    pub fn from_actions(actions: Vec<Action>, table_root: &Path) -> DeltaResult<Self> {
         use crate::kernel::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -87,7 +87,7 @@ impl DeltaTableState {
             Vec::new(),
         )];
 
-        let snapshot = EagerSnapshot::new_test(&commit_data).unwrap();
+        let snapshot = EagerSnapshot::new_test(&commit_data, table_root).unwrap();
         Ok(Self { snapshot })
     }
 
@@ -158,9 +158,15 @@ impl DeltaTableState {
             .map(|add| add.object_store_path())
     }
 
-    /// HashMap containing the last transaction stored for every application.
-    pub fn app_transaction_version(&self) -> DeltaResult<impl Iterator<Item = Transaction> + '_> {
-        self.snapshot.transactions()
+    /// Get the transaction version for the given application ID.
+    ///
+    /// Returns `None` if the application ID is not found.
+    pub async fn transaction_version(
+        &self,
+        _log_store: &dyn LogStore,
+        app_id: impl AsRef<str>,
+    ) -> DeltaResult<Option<i64>> {
+        self.snapshot.transaction_version(app_id).await
     }
 
     /// The most recent protocol of the table.
