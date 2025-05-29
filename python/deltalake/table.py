@@ -158,12 +158,29 @@ class DeltaTable:
 
         """
         self._storage_options = storage_options
+        self._without_files = without_files
+        self._log_buffer_size = log_buffer_size
         self._table = RawDeltaTable(
             str(table_uri),
             version=version,
             storage_options=storage_options,
             without_files=without_files,
             log_buffer_size=log_buffer_size,
+        )
+
+    def __reduce__(self) -> tuple:
+        """
+        This allows DeltaTable to be pickled.
+        """
+        return (
+            self.__class__,
+            (
+                self.table_uri,
+                self.version(),
+                self._storage_options,
+                self._without_files,
+                self._log_buffer_size,
+            ),
         )
 
     @staticmethod
