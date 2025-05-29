@@ -14,7 +14,7 @@ on:
   # Allow manual trigger for now
   workflow_dispatch:
 
-env:    
+env:
   IS_RELEASE: ${{ github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch' }}
   BUILD_ARGS: ${{ (github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch') && 'install MATURIN_EXTRA_ARGS="--manylinux off"' || 'develop' }}
 
@@ -22,31 +22,27 @@ jobs:
   markdown-link-check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: gaurav-nelson/github-action-markdown-link-check@v1
-      with:
-        config-file: docs/mlc-config.json
-        folder-path: docs
+      - uses: actions/checkout@v4
+      - uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          config-file: docs/mlc-config.json
+          folder-path: docs
 
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: |
           cd docs
           make check
 
   build-deploy:
-    needs:
-      [
-        lint,
-        markdown-link-check,
-      ]
+    needs: [lint, markdown-link-check]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env
@@ -80,5 +76,3 @@ jobs:
           git-config-name: "Github Action"
           git-config-email: "deltars@users.noreply.github.com"
           commit-message: "doc update for tag `${{ github.event.client_payload.tag || github.ref_name }}`"
-
-
