@@ -11,7 +11,7 @@ defaults:
 jobs:
   validate-release-tag:
     name: Validate git tag
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - name: compare git tag with cargo metadata
@@ -80,7 +80,7 @@ jobs:
 
   release-pypi-manylinux-217-aarch64:
     needs: validate-release-tag
-    name: PyPI release manylinux-2_17 aarch64 
+    name: PyPI release manylinux-2_17 aarch64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
