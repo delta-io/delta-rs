@@ -326,7 +326,7 @@ mod tests {
             .with_constraint("id", "value <    1000")
             .await?;
         let version = table.version();
-        assert_eq!(version, 1);
+        assert_eq!(version, Some(1));
 
         let expected_expr = "value < 1000";
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
@@ -351,7 +351,7 @@ mod tests {
             .with_constraint("valid_values", col("value").lt(lit(1000)))
             .await?;
         let version = table.version();
-        assert_eq!(version, 1);
+        assert_eq!(version, Some(1));
 
         let expected_expr = "value < 1000";
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
@@ -392,7 +392,7 @@ mod tests {
             .with_constraint("valid_values", "vAlue < 1000") // spellchecker:disable-line
             .await?;
         let version = table.version();
-        assert_eq!(version, 1);
+        assert_eq!(version, Some(1));
 
         let expected_expr = "vAlue < 1000"; // spellchecker:disable-line
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);

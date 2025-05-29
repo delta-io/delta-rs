@@ -201,7 +201,7 @@ mod tests {
             .clone()
             .unwrap_or_default()
             .contains(&ReaderFeature::DeletionVectors));
-        assert_eq!(result.version(), 2);
+        assert_eq!(result.version(), Some(2));
         Ok(())
     }
 

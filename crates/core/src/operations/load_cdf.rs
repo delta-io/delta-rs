@@ -818,7 +818,7 @@ pub(crate) mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
 
@@ -850,14 +850,14 @@ pub(crate) mod tests {
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
 
         let table = DeltaOps(table)
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
         let cdf_scan = DeltaOps(table.clone())

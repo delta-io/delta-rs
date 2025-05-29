@@ -491,7 +491,7 @@ mod tests {
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         table
     }
 
@@ -533,12 +533,12 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 0);
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
@@ -555,7 +555,7 @@ mod tests {
 
         // Deletes with no changes to state must not commit
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 0);
         assert_eq!(metrics.num_deleted_rows, 0);
@@ -592,7 +592,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let batch = RecordBatch::try_new(
@@ -616,7 +616,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 2);
 
         let (table, metrics) = DeltaOps(table)
@@ -624,7 +624,7 @@ mod tests {
             .with_predicate(col("value").eq(lit(1)))
             .await
             .unwrap();
-        assert_eq!(table.version(), 3);
+        assert_eq!(table.version(), Some(3));
         assert_eq!(table.get_files_count(), 2);
 
         assert_eq!(metrics.num_added_files, 1);
@@ -772,7 +772,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let (table, metrics) = DeltaOps(table)
@@ -780,7 +780,7 @@ mod tests {
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 1);
 
         assert_eq!(metrics.num_added_files, 0);
@@ -829,7 +829,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 3);
 
         let (table, metrics) = DeltaOps(table)
@@ -841,7 +841,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 2);
 
         assert_eq!(metrics.num_added_files, 0);
@@ -944,7 +944,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
@@ -961,14 +961,14 @@ mod tests {
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
 
         let (table, _metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("value").eq(lit(2)))
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
@@ -1021,7 +1021,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("year", DataType::Utf8, true),
@@ -1045,14 +1045,14 @@ mod tests {
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
 
         let (table, _metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("value").eq(lit(2)))
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
         let table = DeltaOps(table)

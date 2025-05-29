@@ -36,7 +36,7 @@ async fn test_log_buffering() {
             .await
             .expect("Failed to load table");
         table_seq.update_incremental(None).await.unwrap();
-        seq_version = table_seq.version();
+        seq_version = table_seq.version().unwrap();
     }
     let time_seq = t.elapsed().unwrap();
 
@@ -52,7 +52,7 @@ async fn test_log_buffering() {
             .await
             .unwrap();
         table_buf.update_incremental(None).await.unwrap();
-        buf_version = table_buf.version();
+        buf_version = table_buf.version().unwrap();
     }
     let time_buf = t2.elapsed().unwrap();
 
@@ -83,7 +83,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(None).await.unwrap();
-        assert_eq!(table.version(), 10);
+        assert_eq!(table.version(), Some(10));
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
@@ -93,7 +93,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(0)).await.unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
@@ -103,7 +103,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(1)).await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
@@ -113,7 +113,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(10)).await.unwrap();
-        assert_eq!(table.version(), 10);
+        assert_eq!(table.version(), Some(10));
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
@@ -123,7 +123,7 @@ async fn test_log_buffering_success_explicit_version() {
             .await
             .unwrap();
         table.update_incremental(Some(20)).await.unwrap();
-        assert_eq!(table.version(), 10);
+        assert_eq!(table.version(), Some(10));
     }
 }
 
@@ -166,7 +166,7 @@ async fn read_delta_table_from_dlt() {
     let table = deltalake_core::open_table("../test/tests/data/delta-live-table")
         .await
         .unwrap();
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
     assert!(table.get_schema().is_ok());
 }
 
@@ -176,7 +176,7 @@ async fn read_delta_table_with_null_stats_in_notnull_struct() {
         deltalake_core::open_table("../test/tests/data/table_with_null_stats_in_notnull_struct")
             .await
             .unwrap();
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
     assert!(table.get_schema().is_ok());
 }
 
@@ -186,6 +186,6 @@ async fn read_delta_table_with_renamed_partitioning_column() {
     let table = deltalake_core::open_table("../test/tests/data/table_with_partitioning_mapping")
         .await
         .unwrap();
-    assert_eq!(table.version(), 4);
+    assert_eq!(table.version(), Some(4));
     assert!(table.get_schema().is_ok());
 }

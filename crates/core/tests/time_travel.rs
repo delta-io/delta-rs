@@ -36,7 +36,7 @@ async fn time_travel_by_ds() {
     .await
     .unwrap();
 
-    assert_eq!(table.version(), 0);
+    assert_eq!(table.version(), Some(0));
 
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
@@ -44,7 +44,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
 
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
@@ -52,7 +52,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
 
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
@@ -60,7 +60,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 2);
+    assert_eq!(table.version(), Some(2));
 
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
@@ -68,7 +68,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 3);
+    assert_eq!(table.version(), Some(3));
 
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
@@ -76,7 +76,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 3);
+    assert_eq!(table.version(), Some(3));
 
     table = deltalake_core::open_table_with_ds(
         "../test/tests/data/simple_table",
@@ -84,7 +84,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 4);
+    assert_eq!(table.version(), Some(4));
 
     // Final append in .tmp subdir is uncommitted and should be ignored
     table = deltalake_core::open_table_with_ds(
@@ -93,7 +93,7 @@ async fn time_travel_by_ds() {
     )
     .await
     .unwrap();
-    assert_eq!(table.version(), 4);
+    assert_eq!(table.version(), Some(4));
 }
 
 fn ds_to_ts(ds: &str) -> DateTime<Utc> {

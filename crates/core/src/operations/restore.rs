@@ -176,11 +176,15 @@ async fn execute(
     let version = match datetime_to_restore {
         Some(datetime) => {
             table.load_with_datetime(datetime).await?;
-            table.version()
+            table
+                .version()
+                .ok_or_else(|| DeltaTableError::NotInitialized)?
         }
         None => {
             table.load_version(version_to_restore.unwrap()).await?;
-            table.version()
+            table
+                .version()
+                .ok_or_else(|| DeltaTableError::NotInitialized)?
         }
     };
 
@@ -381,7 +385,7 @@ mod tests {
         let table = DeltaOps(create_bare_table())
             .write(vec![batch.clone()])
             .await?;
-        let first_v = table.version();
+        let first_v = table.version().unwrap();
 
         let constraint = DeltaOps(table)
             .add_constraint()
@@ -402,7 +406,7 @@ mod tests {
             .restore()
             .with_version_to_restore(first_v)
             .await?;
-        assert_ne!(table.version(), first_v);
+        assert_ne!(table.version(), Some(first_v));
 
         let constraints = table.state.unwrap().table_config().get_constraints();
         assert!(constraints.is_empty());

@@ -480,7 +480,7 @@ mod tests {
             .await
             .unwrap();
         table.load().await.expect("Failed to load table");
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         table
     }
 
@@ -675,7 +675,7 @@ mod tests {
             // TODO This should fail because we haven't asked to evolve the schema
             writer.write(vec![second_data]).await.unwrap();
             writer.flush_and_commit(&mut table).await.unwrap();
-            assert_eq!(table.version(), 1);
+            assert_eq!(table.version(), Some(1));
         }
     }
 
@@ -704,7 +704,7 @@ mod tests {
             .with_configuration(config)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let mut writer = JsonWriter::for_table(&table).unwrap();
         let data = serde_json::json!(
             {
@@ -748,7 +748,7 @@ mod tests {
             .with_configuration(config)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let mut writer = JsonWriter::for_table(&table).unwrap();
         let data = serde_json::json!(
             {
@@ -760,7 +760,7 @@ mod tests {
 
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let add_actions = table.state.unwrap().file_actions().unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":1,\"minValues\":{\"id\":\"A\",\"value\":42},\"maxValues\":{\"id\":\"A\",\"value\":42},\"nullCount\":{\"id\":0,\"value\":0}}";
@@ -797,7 +797,7 @@ mod tests {
             .with_configuration(config)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let mut writer = JsonWriter::for_table(&table).unwrap();
         let data = serde_json::json!(
             {
@@ -809,7 +809,7 @@ mod tests {
 
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let add_actions = table.state.unwrap().file_actions().unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":1,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"A\"},\"nullCount\":{\"id\":0}}";

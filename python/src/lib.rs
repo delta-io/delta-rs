@@ -237,7 +237,7 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.table_uri()))
     }
 
-    pub fn version(&self) -> PyResult<i64> {
+    pub fn version(&self) -> PyResult<Option<i64>> {
         self.with_table(|t| Ok(t.version()))
     }
 
@@ -1379,7 +1379,7 @@ impl RawDeltaTable {
                                 DeltaTableState::try_new(
                                     &table.log_store(),
                                     table.config.clone(),
-                                    Some(table.version()),
+                                    table.version(),
                                 )
                                 .await
                                 .map_err(PythonError::from)?,

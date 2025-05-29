@@ -48,7 +48,7 @@ async fn read_null_partitions_from_checkpoint() {
     let table = deltalake_core::open_table(&table.table_uri())
         .await
         .unwrap();
-    assert_eq!(table.version(), 2);
+    assert_eq!(table.version(), Some(2));
 }
 
 #[cfg(feature = "datafusion")]
