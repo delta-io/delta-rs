@@ -357,10 +357,6 @@ impl LogStore for LakeFSLogStore {
         get_latest_version(self, current_version).await
     }
 
-    async fn get_earliest_version(&self, current_version: i64) -> DeltaResult<i64> {
-        get_earliest_version(self, current_version).await
-    }
-
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
         match operation_id {
             Some(id) => {
