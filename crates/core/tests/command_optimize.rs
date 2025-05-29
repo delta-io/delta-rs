@@ -168,13 +168,13 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
     assert_eq!(dt.get_files_count(), 5);
 
     let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000);
     let (dt, metrics) = optimize.await?;
 
-    assert_eq!(version + 1, dt.version());
+    assert_eq!(version + 1, dt.version().unwrap());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(metrics.total_considered_files, 5);
@@ -232,13 +232,13 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
     let optimize = DeltaOps(dt).optimize().with_filters(&filter);
     let (dt, metrics) = optimize.await?;
 
-    assert_eq!(version + 1, dt.version());
+    assert_eq!(version + 1, dt.version().unwrap());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
     assert_eq!(dt.get_files_count(), 3);
@@ -279,7 +279,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
 
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
@@ -317,7 +317,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     assert!(maybe_metrics.is_err());
     dt.update().await?;
-    assert_eq!(dt.version(), version + 1);
+    assert_eq!(dt.version().unwrap(), version + 1);
     Ok(())
 }
 
@@ -342,7 +342,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
@@ -379,7 +379,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 2);
 
     dt.update().await.unwrap();
-    assert_eq!(dt.version(), version + 2);
+    assert_eq!(dt.version().unwrap(), version + 2);
     Ok(())
 }
 
@@ -402,7 +402,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
 
     let plan = create_merge_plan(
         OptimizeType::Compact,
@@ -428,7 +428,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 4);
 
     dt.update().await.unwrap();
-    assert_eq!(dt.version(), version + 2);
+    assert_eq!(dt.version().unwrap(), version + 2);
     Ok(())
 }
 
@@ -460,7 +460,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
@@ -471,7 +471,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(dt.version(), version + 1);
+    assert_eq!(dt.version().unwrap(), version + 1);
 
     let optimize = DeltaOps(dt)
         .optimize()
@@ -481,7 +481,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
 
     assert_eq!(metrics.num_files_added, 0);
     assert_eq!(metrics.num_files_removed, 0);
-    assert_eq!(dt.version(), version + 1);
+    assert_eq!(dt.version().unwrap(), version + 1);
 
     Ok(())
 }
@@ -569,7 +569,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
@@ -580,7 +580,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 2);
     assert_eq!(metrics.num_files_removed, 4);
-    assert_eq!(dt.version(), version + 1);
+    assert_eq!(dt.version().unwrap(), version + 1);
 
     let optimize = DeltaOps(dt)
         .optimize()
@@ -589,7 +589,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 0);
     assert_eq!(metrics.num_files_removed, 0);
-    assert_eq!(dt.version(), version + 1);
+    assert_eq!(dt.version().unwrap(), version + 1);
 
     Ok(())
 }
@@ -615,7 +615,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let version = dt.version();
+    let version = dt.version().unwrap();
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 

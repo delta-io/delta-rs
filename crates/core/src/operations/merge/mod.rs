@@ -1621,7 +1621,7 @@ mod tests {
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         table
     }
 
@@ -1722,14 +1722,14 @@ mod tests {
         let table = setup_table(None).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         (table, merge_source(schema))
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(table.get_files_count() >= 1);
         assert!(metrics.num_target_files_added >= 1);
         assert_eq!(metrics.num_target_files_removed, 1);
@@ -2403,7 +2403,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -2459,7 +2459,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(table.get_files_count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
@@ -2500,7 +2500,7 @@ mod tests {
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -2539,7 +2539,7 @@ mod tests {
             .unwrap()
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         let commit_info = table.history(None).await.unwrap();
         let last_commit = &commit_info[0];
         let parameters = last_commit.operation_parameters.clone().unwrap();
@@ -2560,7 +2560,7 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 4);
 
         let ctx = SessionContext::new();
@@ -2599,7 +2599,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(table.get_files_count() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
@@ -2639,7 +2639,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -2703,7 +2703,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(table.get_files_count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
@@ -2749,7 +2749,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -2777,7 +2777,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(table.get_files_count() >= 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
@@ -2819,7 +2819,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -2847,7 +2847,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(table.get_files_count() >= 2);
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
@@ -2888,7 +2888,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -2916,7 +2916,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
@@ -2952,7 +2952,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -2982,7 +2982,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(metrics.num_target_files_added == 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -3022,7 +3022,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -3051,7 +3051,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
@@ -3087,7 +3087,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 2);
 
         let ctx = SessionContext::new();
@@ -3117,7 +3117,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(metrics.num_target_files_added == 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -3154,7 +3154,7 @@ mod tests {
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
 
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 0);
 
         let ctx = SessionContext::new();
@@ -3198,7 +3198,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert!(table.get_files_count() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
@@ -3241,7 +3241,7 @@ mod tests {
         ]));
         let table = setup_table(Some(vec!["modified"])).await;
 
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 0);
 
         let ctx = SessionContext::new();
@@ -3282,7 +3282,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert!(table.get_files_count() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
@@ -3366,7 +3366,7 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let table = write_data(table, &arrow_schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let (table, _metrics) = DeltaOps(table)
@@ -3662,7 +3662,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let batch = RecordBatch::try_new(
@@ -3777,7 +3777,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let batch = RecordBatch::try_new(
@@ -3887,7 +3887,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let batch = RecordBatch::try_new(
@@ -3996,12 +3996,12 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = get_arrow_schema(&None);
         let table = write_data(table, &schema).await;
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
         let source = merge_source(schema);
 
@@ -4089,7 +4089,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = get_arrow_schema(&None);
 
@@ -4101,7 +4101,7 @@ mod tests {
         ]));
         let table = write_data(table, &schema).await;
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
         let source = merge_source(schema);
         let source = source.with_column("inserted_by", lit("new_value")).unwrap();
@@ -4206,12 +4206,12 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = get_arrow_schema(&None);
         let table = write_data(table, &schema).await;
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
         let source = merge_source(schema);
 

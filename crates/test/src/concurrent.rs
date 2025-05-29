@@ -37,7 +37,7 @@ async fn prepare_table(
         .with_columns(schema.fields().cloned())
         .await?;
 
-    assert_eq!(0, table.version());
+    assert_eq!(Some(0), table.version());
     assert_eq!(1, table.protocol()?.min_reader_version);
     assert_eq!(2, table.protocol()?.min_writer_version);
     // assert_eq!(0, table.get_files_iter().count());

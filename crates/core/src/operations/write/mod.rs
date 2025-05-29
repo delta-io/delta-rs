@@ -823,7 +823,7 @@ mod tests {
             .with_columns(table_schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.history(None).await.unwrap().len(), 1);
 
         // write some data
@@ -834,7 +834,7 @@ mod tests {
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         assert_eq!(table.get_files_count(), 1);
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
@@ -863,7 +863,7 @@ mod tests {
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert_eq!(table.get_files_count(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
@@ -891,7 +891,7 @@ mod tests {
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
             .await
             .unwrap();
-        assert_eq!(table.version(), 3);
+        assert_eq!(table.version(), Some(3));
         assert_eq!(table.get_files_count(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
@@ -1030,7 +1030,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
@@ -1045,7 +1045,7 @@ mod tests {
             .with_partition_columns(["modified"])
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_files, 2);
@@ -1057,7 +1057,7 @@ mod tests {
             .with_partition_columns(["modified", "id"])
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_files_count(), 4);
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
@@ -1073,7 +1073,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
@@ -1119,7 +1119,7 @@ mod tests {
             .await
             .unwrap();
         table.load().await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let new_schema = table.metadata().unwrap().schema().unwrap();
         let fields = new_schema.fields();
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
@@ -1147,7 +1147,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
@@ -1192,7 +1192,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let new_schema = table.metadata().unwrap().schema().unwrap();
         let fields = new_schema.fields();
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
@@ -1213,7 +1213,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
@@ -1267,7 +1267,7 @@ mod tests {
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
 
@@ -1321,10 +1321,10 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await.unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
 
@@ -1345,7 +1345,7 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await;
         assert!(table.is_err());
@@ -1361,14 +1361,14 @@ mod tests {
             .with_columns(table_schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
 
@@ -1453,7 +1453,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 4);
         assert_common_write_metrics(write_metrics);
@@ -1474,7 +1474,7 @@ mod tests {
             .with_replace_where(col("id").eq(lit("C")))
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert_common_write_metrics(write_metrics);
@@ -1515,7 +1515,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
 
@@ -1559,7 +1559,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
 
@@ -1583,7 +1583,7 @@ mod tests {
             .with_replace_where(col("id").eq(lit("A")))
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
@@ -1615,7 +1615,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
 
@@ -1647,7 +1647,7 @@ mod tests {
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
@@ -1657,7 +1657,7 @@ mod tests {
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert!(write_metrics.num_removed_files > 0);
@@ -1688,7 +1688,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
 
@@ -1720,7 +1720,7 @@ mod tests {
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
@@ -1731,7 +1731,7 @@ mod tests {
             .with_replace_where("id='3'")
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert!(write_metrics.num_removed_files > 0);
@@ -1762,7 +1762,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
 
@@ -1794,7 +1794,7 @@ mod tests {
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
 
         let table = DeltaOps(table)
             .write([second_batch])
@@ -1802,7 +1802,7 @@ mod tests {
             .with_replace_where("value=3")
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
         let cdf_scan = DeltaOps(table.clone())

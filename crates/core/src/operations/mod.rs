@@ -187,7 +187,7 @@ impl DeltaOps {
     /// async {
     ///     let ops = DeltaOps::try_from_uri("memory:///").await.unwrap();
     ///     let table = ops.create().with_table_name("my_table").await.unwrap();
-    ///     assert_eq!(table.version(), 0);
+    ///     assert_eq!(table.version(), Some(0));
     /// };
     /// ```
     #[must_use]

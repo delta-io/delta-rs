@@ -61,6 +61,11 @@ pub(crate) fn get_partition_col_data_types<'a>(
 }
 
 /// In memory representation of a Delta Table
+///
+/// A DeltaTable is a purely logical concept that represents a dataset that can ewvolve over time.
+/// To attain concrete information about a table a snapshot need to be loaded.
+/// Most commonly this is the latest state of the tablem but may also loaded for a specific
+/// version or point in time.
 #[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
@@ -176,12 +181,17 @@ impl DeltaTable {
 
     /// returns the latest available version of the table
     pub async fn get_latest_version(&self) -> Result<i64, DeltaTableError> {
-        self.log_store.get_latest_version(self.version()).await
+        self.log_store
+            .get_latest_version(self.version().unwrap_or(0))
+            .await
     }
 
-    /// Currently loaded version of the table
-    pub fn version(&self) -> i64 {
-        self.state.as_ref().map(|s| s.version()).unwrap_or(-1)
+    /// Currently loaded version of the table - if any.
+    ///
+    /// This will return the latest version of the table if it has been loaded.
+    /// Returns `None` if the table has not been loaded.
+    pub fn version(&self) -> Option<i64> {
+        self.state.as_ref().map(|s| s.version())
     }
 
     /// Load DeltaTable with data from latest checkpoint
@@ -444,7 +454,7 @@ impl DeltaTable {
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri())?;
-        writeln!(f, "\tversion: {}", self.version())
+        writeln!(f, "\tversion: {:?}", self.version())
     }
 }
 
