@@ -757,7 +757,6 @@ async fn execute(
     };
 
     let state = SessionStateBuilder::new_from_existing(_state)
-        .with_default_features()
         .with_query_planner(Arc::new(merge_planner))
         .build();
 
