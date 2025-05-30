@@ -3,7 +3,6 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::LazyTableProvider;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
@@ -16,6 +15,7 @@ use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::sync::Arc;
 
+use crate::datafusion::LazyTableProvider;
 use crate::error::PythonError;
 use crate::utils::rt;
 use crate::writer::{maybe_lazy_cast_reader, ArrowStreamBatchGenerator};
