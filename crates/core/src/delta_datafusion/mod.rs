@@ -1612,14 +1612,20 @@ impl DeltaDataChecker {
                 check_name
             };
 
+            use regex::Regex;
             // Loop through schema to find the matching field. If the field has a whitespace, we
             // need to backtick it, since the expression is an unquoted string
             let mut expression = check.get_expression().to_string();
             for field in schema.fields() {
-                if expression.contains(field.name()) {
-                    expression =
-                        expression.replace(field.name(), format!("`{}` ", field.name()).as_str());
-                    break;
+                let field_name = field.name();
+                if field_name.contains(char::is_whitespace)
+                    | field_name.as_bytes().iter().any(u8::is_ascii_whitespace)
+                {
+                    let pattern = format!(r"\b{}\b", regex::escape(field_name));
+                    let re = Regex::new(&pattern).unwrap();
+                    expression = re
+                        .replace(&expression, format!("`{}`", field_name))
+                        .to_string();
                 }
             }
             let sql = format!(
