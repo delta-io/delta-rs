@@ -1,3 +1,4 @@
+mod datafusion;
 mod error;
 mod features;
 mod filesystem;
