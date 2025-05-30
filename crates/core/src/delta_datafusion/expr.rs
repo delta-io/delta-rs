@@ -730,7 +730,7 @@ mod test {
             },
             simple!(
                 Expr::Column(Column::from_qualified_name_ignore_case("Value3")).eq(lit(3_i64)),
-                "Value3 = 3".to_string()
+                "\"Value3\" = 3".to_string()
             ),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),
