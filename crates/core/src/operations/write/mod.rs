@@ -593,7 +593,6 @@ impl std::future::IntoFuture for WriteBuilder {
                         Expression::String(s) => {
                             let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
                             parse_predicate_expression(&df_schema, s, &state)?
-                            // this.snapshot.unwrap().parse_predicate_expression(s, &state)?
                         }
                     };
                     (Some(fmt_expr_to_sql(&pred)?), Some(pred))
