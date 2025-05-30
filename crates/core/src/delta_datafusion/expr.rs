@@ -333,10 +333,7 @@ impl Display for BinaryExprFormat<'_> {
 impl Display for SqlFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expr {
-            Expr::Column(c) => {
-                let c = c.quoted_flat_name();
-                write!(f, "{c}")
-            }
+            Expr::Column(c) => write!(f, "{}", c.quoted_flat_name()),
             Expr::Literal(v) => write!(f, "{}", ScalarValueFormat { scalar: v }),
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
