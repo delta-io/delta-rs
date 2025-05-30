@@ -1601,7 +1601,8 @@ impl DeltaDataChecker {
         for check in checks {
             if check.get_name().contains('.') {
                 return Err(DeltaTableError::Generic(
-                    "Support for nested columns is not supported.".to_string(),
+                    "delta constraints for nested columns are not supported at the moment."
+                        .to_string(),
                 ));
             }
 
