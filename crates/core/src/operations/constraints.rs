@@ -394,7 +394,7 @@ mod tests {
         let version = table.version();
         assert_eq!(version, Some(1));
 
-        let expected_expr = "vAlue < 1000"; // spellchecker:disable-line
+        let expected_expr = "\"vAlue\" < 1000"; // spellchecker:disable-line
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
         assert_eq!(
             get_constraint(&table, "delta.constraints.valid_values"),
