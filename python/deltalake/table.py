@@ -168,7 +168,7 @@ class DeltaTable:
             log_buffer_size=log_buffer_size,
         )
 
-    def __reduce__(self) -> tuple:
+    def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
         """
         This allows DeltaTable to be pickled.
         """
