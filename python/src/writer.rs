@@ -1,6 +1,7 @@
 //! This module contains helper functions to create a LazyTableProvider from an ArrowArrayStreamReader
+use std::fmt::{self};
+use std::sync::{Arc, Mutex};
 
-use crate::DeltaResult;
 use arrow_schema::SchemaRef;
 use deltalake::arrow::array::RecordBatchReader;
 use deltalake::arrow::error::ArrowError;
@@ -8,11 +9,11 @@ use deltalake::arrow::error::Result as ArrowResult;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
-use deltalake::delta_datafusion::LazyTableProvider;
 use deltalake::operations::cast::cast_record_batch;
 use parking_lot::RwLock;
-use std::fmt::{self};
-use std::sync::{Arc, Mutex};
+
+use crate::datafusion::LazyTableProvider;
+use crate::DeltaResult;
 
 /// Convert an [ArrowArrayStreamReader] into a [LazyTableProvider]
 pub fn to_lazy_table(
