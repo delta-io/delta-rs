@@ -184,7 +184,8 @@ impl RawDeltaTable {
         log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         py.allow_threads(|| {
-            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri)
+            let mut builder = deltalake::DeltaTableBuilder::from_valid_uri(table_uri)
+                .map_err(error::PythonError::from)?
                 .with_io_runtime(IORuntime::default());
             let options = storage_options.clone().unwrap_or_default();
             if let Some(storage_options) = storage_options {
