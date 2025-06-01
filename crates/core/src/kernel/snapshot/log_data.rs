@@ -561,12 +561,12 @@ mod datafusion {
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::Column;
-    use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
     use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
 
     use super::*;
+    use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
     use crate::kernel::ARROW_HANDLER;
 
@@ -801,16 +801,8 @@ mod datafusion {
             );
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
-                let engine = ArrowEngineData::new(batch.clone());
-                let result = evaluator.evaluate(&engine).ok()?;
-                let result = result
-                    .any_ref()
-                    .downcast_ref::<ArrowEngineData>()
-                    .ok_or(DeltaTableError::generic(
-                        "failed to downcast evaluator result to ArrowEngineData.",
-                    ))
-                    .ok()?;
-                results.push(result.record_batch().clone());
+                let result = evaluator.evaluate_arrow(batch.clone()).ok()?;
+                results.push(result);
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
             batch.column_by_name("output").cloned()
@@ -875,16 +867,8 @@ mod datafusion {
 
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
-                let engine = ArrowEngineData::new(batch.clone());
-                let result = ROW_COUNTS_EVAL.evaluate(&engine).ok()?;
-                let result = result
-                    .any_ref()
-                    .downcast_ref::<ArrowEngineData>()
-                    .ok_or(DeltaTableError::generic(
-                        "failed to downcast evaluator result to ArrowEngineData.",
-                    ))
-                    .ok()?;
-                results.push(result.record_batch().clone());
+                let result = ROW_COUNTS_EVAL.evaluate_arrow(batch.clone()).ok()?;
+                results.push(result);
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
             arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
