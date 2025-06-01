@@ -55,15 +55,13 @@ impl PyMergeBuilder {
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();
-        let schema = source
-            .schema_ref()
-            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
         let source = source
             .into_reader()
             .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
         let source = maybe_lazy_cast_reader(source, batch_schema.into_inner());
+        let schema = source.schema();
 
         let source_df = if streamed_exec {
             let arrow_stream_batch_generator: Arc<RwLock<dyn LazyBatchGenerator>> =
