@@ -17,6 +17,63 @@ pub async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult 
     Ok(())
 }
 
+pub async fn test_concurrent_table_creation(context: &IntegrationContext) -> TestResult {
+    let table_uri = context.uri_for_table(TestTables::Custom("concurrent_create".into()));
+
+    if table_uri.starts_with("file://") {
+        let path = table_uri.strip_prefix("file://").unwrap();
+        std::fs::create_dir_all(path)?;
+    }
+
+    let schema = StructType::try_new(vec![StructField::new(
+        "Id",
+        DataType::Primitive(PrimitiveType::Integer),
+        true,
+    )])?;
+
+    const NUM_WRITERS: usize = 5;
+
+    // Spawn multiple tasks that all try to create the table simultaneously
+    let mut futures = Vec::new();
+    for i in 0..NUM_WRITERS {
+        let uri = table_uri.clone();
+        let schema = schema.clone();
+        futures.push(tokio::spawn(async move {
+            let table_url = url::Url::parse(&uri).unwrap();
+            let table = DeltaTableBuilder::from_uri(table_url)
+                .unwrap()
+                .with_allow_http(true)
+                .build()
+                .unwrap();
+
+            // Each writer tries to create the table
+            let result = DeltaOps(table)
+                .create()
+                .with_columns(schema.fields().cloned())
+                .await;
+
+            (i, result)
+        }));
+    }
+
+    // Collect results - all writers must succeed
+    let mut versions = Vec::new();
+    for f in futures {
+        let (i, result) = f.await.unwrap();
+        let table = result.unwrap_or_else(|e| panic!("Writer {i} failed: {e}"));
+        versions.push(table.version());
+    }
+
+    // Exactly one should have version 0
+    let version_zero_count = versions.iter().filter(|v| **v == Some(0)).count();
+    assert_eq!(
+        version_zero_count, 1,
+        "Exactly one writer should get version 0"
+    );
+
+    Ok(())
+}
+
 async fn prepare_table(
     context: &IntegrationContext,
 ) -> Result<(DeltaTable, String), Box<dyn std::error::Error + 'static>> {
