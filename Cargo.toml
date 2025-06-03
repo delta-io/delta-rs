@@ -93,3 +93,5 @@ Arro = "Arro"
 arro3 = "arro3"
 Arro3 = "Arro3"
 AKS = "AKS"
+# to avoid using 'type' as a field name.
+tpe = "tpe"
