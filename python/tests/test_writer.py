@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import pathlib
@@ -10,7 +11,13 @@ from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
-from deltalake._internal import Field, PrimitiveType, Schema, StructType
+from deltalake._internal import (
+    CommitFailedError,
+    Field,
+    PrimitiveType,
+    Schema,
+    StructType,
+)
 from deltalake.exceptions import (
     DeltaError,
     DeltaProtocolError,
@@ -2198,6 +2205,84 @@ def test_write_transactions(tmp_path: pathlib.Path, sample_table: Table):
 
     transaction_2 = delta_table.transaction_version("app_2")
     assert transaction_2 == 2
+
+
+@pytest.mark.parametrize(
+    "writer1_txn, writer2_txn, update_second_writer, should_fail",
+    [
+        # writers have the same snapshot, conflict checker should fail second writer
+        (
+            [Transaction(app_id="shared", version=1)],
+            [Transaction(app_id="shared", version=1)],
+            False,
+            True,
+        ),
+        # writers for different app_ids should not conflict even on the same snapshot
+        (
+            [Transaction(app_id="app1", version=1)],
+            [Transaction(app_id="app2", version=1)],
+            False,
+            False,
+        ),
+        # different versions for same app_id still fail
+        (
+            [Transaction(app_id="shared", version=1)],
+            [Transaction(app_id="shared", version=2)],
+            False,
+            True,
+        ),
+        # writes to the same app_id succeed if writer2 uses a fresh snapshot
+        (
+            [Transaction(app_id="shared", version=1)],
+            [Transaction(app_id="shared", version=2)],
+            True,
+            False,
+        ),
+        # all concurrent writes need transactions to be eligible to conflict
+        # put another way: writes without transactions should not fail
+        (
+            None,
+            None,
+            False,
+            False,
+        ),
+        (
+            [Transaction(app_id="app1", version=1)],
+            None,
+            False,
+            False,
+        ),
+    ],
+)
+def test_write_concurrent_blind_appends(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    writer1_txn: list[Transaction],
+    writer2_txn: list[Transaction],
+    update_second_writer: bool,
+    should_fail: bool,
+):
+    # initialize a table
+    write_deltalake(table_or_uri=tmp_path, data=sample_table)
+    # create multiple writers
+    writer1_table = DeltaTable(tmp_path)
+    writer2_table = DeltaTable(tmp_path)
+    # "concurrently" write
+    write_deltalake(
+        writer1_table,
+        sample_table,
+        mode="append",
+        commit_properties=CommitProperties(app_transactions=writer1_txn),
+    )
+    if update_second_writer:
+        writer2_table.update_incremental()
+    with pytest.raises(CommitFailedError) if should_fail else contextlib.nullcontext():
+        write_deltalake(
+            writer2_table,
+            sample_table,
+            mode="append",
+            commit_properties=CommitProperties(app_transactions=writer2_txn),
+        )
 
 
 @pytest.mark.polars
