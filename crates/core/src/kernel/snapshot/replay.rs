@@ -608,8 +608,9 @@ pub(super) mod tests {
     use futures::TryStreamExt;
     use object_store::path::Path;
 
-    use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
+    use super::super::{log_segment::LogSegment, partitions_schema};
     use super::*;
+    use crate::kernel::arrow::engine_ext::stats_schema_from_config;
     use crate::kernel::transaction::CommitData;
     use crate::kernel::{models::ActionType, StructType};
     use crate::protocol::DeltaOperation;
@@ -691,8 +692,12 @@ pub(super) mod tests {
         assert!(ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").is_some());
         assert!(ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed").is_none());
 
-        let stats_schema = stats_schema(schema, table_config)?;
-        let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into_arrow()?), &config)?;
+        let stats_schema = stats_schema_from_config(schema, table_config)?;
+        let new_batch = parse_stats(
+            batch,
+            Arc::new(stats_schema.as_ref().try_into_arrow()?),
+            &config,
+        )?;
 
         assert!(ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").is_some());
         let parsed_col = ex::extract_and_cast::<StructArray>(&new_batch, "add.stats_parsed")?;
@@ -700,7 +705,7 @@ pub(super) mod tests {
 
         match delta_type {
             DataType::Struct(fields) => {
-                assert_eq!(fields.as_ref(), &stats_schema);
+                assert_eq!(fields.as_ref(), stats_schema.as_ref());
             }
             _ => panic!("unexpected data type"),
         }

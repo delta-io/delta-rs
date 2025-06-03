@@ -3,7 +3,9 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
+use delta_kernel::expressions::ColumnName;
 use delta_kernel::table_features::ColumnMappingMode;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use serde::{Deserialize, Serialize};
 
 use super::Constraint;
@@ -378,6 +380,27 @@ impl TableConfig<'_> {
         self.0
             .get(TableProperty::DataSkippingStatsColumns.as_ref())
             .and_then(|o| o.as_ref().map(|v| v.split(',').collect()))
+    }
+
+    pub fn stats_columns_kernel(&self) -> Option<Vec<ColumnName>> {
+        self.0
+            .get(TableProperty::DataSkippingStatsColumns.as_ref())
+            .and_then(|o| {
+                o.as_ref().and_then(|v| {
+                    ColumnName::parse_column_name_list(v)
+                        .inspect_err(|e| println!("{:?}", e))
+                        .ok()
+                })
+            })
+    }
+
+    pub fn num_indexed_cols_kernel(&self) -> Option<DataSkippingNumIndexedCols> {
+        self.0
+            .get(TableProperty::DataSkippingNumIndexedCols.as_ref())
+            .and_then(|o| {
+                o.as_ref()
+                    .and_then(|v| DataSkippingNumIndexedCols::try_from(v.as_str()).ok())
+            })
     }
 }
 
