@@ -6,7 +6,7 @@ use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{Aggregate, BinaryExpr, LogicalPlan, Operator};
+use datafusion::logical_expr::{lit, Aggregate, BinaryExpr, LogicalPlan, Operator};
 use datafusion::logical_expr::{Between, Expr};
 
 use either::{Left, Right};
@@ -54,7 +54,7 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
             }
         }
         Expr::IsNull(inner) => references_table(inner, table),
-        Expr::Literal(_) => ReferenceTableCheck::NoReference,
+        Expr::Literal(_, _) => ReferenceTableCheck::NoReference,
         _ => ReferenceTableCheck::Unknown,
     };
     res
@@ -140,7 +140,7 @@ fn replace_placeholders(expr: Expr, placeholders: &HashMap<String, ScalarValue>)
         Expr::Placeholder(Placeholder { id, .. }) => {
             let value = placeholders[&id].clone();
             // Replace the placeholder with the value
-            Ok(Transformed::yes(Expr::Literal(value)))
+            Ok(Transformed::yes(lit(value)))
         }
         _ => Ok(Transformed::no(expr)),
     })
@@ -270,7 +270,7 @@ pub(crate) fn generalize_filter(
             for item in in_list.list.into_iter() {
                 match item {
                     // If it's a literal just immediately push it in list_expr so we can avoid the unnecessary generalizing
-                    Expr::Literal(_) => list_expr.push(item),
+                    Expr::Literal(_, _) => list_expr.push(item),
                     _ => {
                         if let Some(item) = generalize_filter(
                             item.clone(),
@@ -483,7 +483,7 @@ mod tests {
                         };
 
                         let value = match *ex.left {
-                            Expr::Literal(ScalarValue::Utf8(Some(value))) => value,
+                            Expr::Literal(ScalarValue::Utf8(Some(value)), _) => value,
                             ex => panic!("expected value in predicate, got {ex}!"),
                         };
 

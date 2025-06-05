@@ -53,7 +53,7 @@ mod local {
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::{
-        LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
+        lit, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
     };
     use datafusion::physical_plan::displayable;
     use datafusion::prelude::SessionConfig;
@@ -748,10 +748,10 @@ mod local {
 
     fn wrap_expression(e: Expr) -> Expr {
         let value = match e {
-            Expr::Literal(lit) => lit,
+            Expr::Literal(lit, _) => lit,
             _ => unreachable!(),
         };
-        Expr::Literal(ScalarValue::Dictionary(
+        lit(ScalarValue::Dictionary(
             Box::new(ArrowDataType::UInt16),
             Box::new(value),
         ))
