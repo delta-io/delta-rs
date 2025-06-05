@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::common::Result as DataFusionResult;
+use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+use datafusion::physical_plan::{metrics::MetricBuilder, ExecutionPlan};
 use datafusion::{
     execution::SessionState,
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
 };
-use datafusion_common::Result as DataFusionResult;
-use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_plan::{metrics::MetricBuilder, ExecutionPlan};
 
 use crate::delta_datafusion::{logical::MetricObserver, physical::MetricObserverExec};
 

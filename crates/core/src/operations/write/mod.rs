@@ -45,11 +45,11 @@ use std::vec;
 
 use arrow_array::RecordBatch;
 use datafusion::catalog::TableProvider;
+use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::logical_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
 use datafusion::prelude::DataFrame;
-use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
 use execution::{prepare_predicate_actions, write_execution_plan_v2};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;

@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use datafusion_sql::parser::{DFParserBuilder, Statement as DFStatement};
-use datafusion_sql::sqlparser::ast::{ObjectName, Value};
-use datafusion_sql::sqlparser::dialect::{keywords::Keyword, Dialect, GenericDialect};
-use datafusion_sql::sqlparser::parser::{Parser, ParserError};
-use datafusion_sql::sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
+use datafusion::sql::sqlparser::ast::{ObjectName, Value};
+use datafusion::sql::sqlparser::dialect::{keywords::Keyword, Dialect, GenericDialect};
+use datafusion::sql::sqlparser::parser::{Parser, ParserError};
+use datafusion::sql::sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -223,8 +223,8 @@ impl<'a> DeltaParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_sql::sqlparser::ast::{Ident, ObjectNamePart};
-    use datafusion_sql::sqlparser::tokenizer::Span;
+    use datafusion::sql::sqlparser::ast::{Ident, ObjectNamePart};
+    use datafusion::sql::sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DeltaParser::parse_sql(sql)?;
