@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::error::Result as DataFusionResult;
+use datafusion_common::Statistics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::{
     DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -107,8 +108,11 @@ impl ExecutionPlan for MetricObserverExec {
         }))
     }
 
-    fn statistics(&self) -> DataFusionResult<datafusion_common::Statistics> {
-        self.parent.statistics()
+    fn partition_statistics(
+        &self,
+        partition: Option<usize>,
+    ) -> datafusion_common::Result<Statistics> {
+        self.parent.partition_statistics(partition)
     }
 
     fn with_new_children(
