@@ -7,10 +7,10 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{RecordBatch, StringArray, UInt32Array};
 use chrono::Duration;
 use clap::{command, Args, Parser, Subcommand};
+use datafusion::common::DataFusionError;
 use datafusion::functions::expr_fn::random;
+use datafusion::logical_expr::{cast, col, lit};
 use datafusion::{datasource::MemTable, prelude::DataFrame};
-use datafusion_common::DataFusionError;
-use datafusion_expr::{cast, col, lit};
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{
     arrow::{
@@ -223,7 +223,7 @@ async fn benchmark_merge_tpcds(
 
     let row_sample = ctx.table("t1").await?.join(
         ctx.table("file_sample").await?,
-        datafusion_common::JoinType::Inner,
+        datafusion::common::JoinType::Inner,
         &["file_path"],
         &["file"],
         None,
@@ -619,7 +619,7 @@ async fn main() {
             before_stats
                 .join(
                     after_stats,
-                    datafusion_common::JoinType::Inner,
+                    datafusion::common::JoinType::Inner,
                     &["before_name"],
                     &["after_name"],
                     None,

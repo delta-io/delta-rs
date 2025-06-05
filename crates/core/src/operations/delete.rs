@@ -18,17 +18,19 @@
 //! ````
 
 use async_trait::async_trait;
+use datafusion::common::ScalarValue;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::logical_expr::{
+    lit, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+};
+use datafusion::physical_plan::metrics::MetricBuilder;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{lit, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode};
-use datafusion_physical_plan::metrics::MetricBuilder;
-use datafusion_physical_plan::ExecutionPlan;
 
 use futures::future::BoxFuture;
 use std::sync::Arc;

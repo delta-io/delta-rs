@@ -30,7 +30,6 @@ reqwest-middleware = { version = "0.4.0", features = ["json"] }
 rand = "0.8"
 dashmap = "6"
 datafusion = { workspace = true, optional = true }
-datafusion-common = { workspace = true, optional = true }
 moka = { version = "0.12", optional = true, features = ["future"] }
 
 [dev-dependencies]
@@ -45,7 +44,7 @@ aws = ["deltalake-aws"]
 azure = ["deltalake-azure"]
 gcp = ["deltalake-gcp"]
 r2 = ["deltalake-aws"]
-datafusion = ["dep:datafusion", "datafusion-common", "deltalake-core/datafusion", "moka"]
+datafusion = ["dep:datafusion", "deltalake-core/datafusion", "moka"]
 
 [[example]]
 name = "uc_example"

@@ -16,7 +16,7 @@ use crate::DeltaTableError;
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
 #[cfg(feature = "datafusion")]
-use datafusion_expr::Expr;
+use datafusion::logical_expr::Expr;
 #[cfg(feature = "datafusion")]
 use itertools::Either;
 
@@ -648,7 +648,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[cfg(feature = "datafusion")]
-    use datafusion_expr::{col, lit};
+    use datafusion::logical_expr::{col, lit};
     use serde_json::json;
 
     use super::*;

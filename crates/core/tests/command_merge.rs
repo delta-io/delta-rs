@@ -3,10 +3,10 @@ mod fs_common;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use datafusion::common::Column;
 use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::{col, lit, Expr};
 use datafusion::prelude::SessionContext;
-use datafusion_common::Column;
-use datafusion_expr::{col, lit, Expr};
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::merge::MergeMetrics;
