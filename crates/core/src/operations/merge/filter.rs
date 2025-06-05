@@ -2,12 +2,12 @@
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use std::collections::HashMap;
 
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{ScalarValue, TableReference};
-use datafusion_expr::expr::{InList, Placeholder};
-use datafusion_expr::{Aggregate, BinaryExpr, LogicalPlan, Operator};
-use datafusion_expr::{Between, Expr};
+use datafusion::logical_expr::expr::{InList, Placeholder};
+use datafusion::logical_expr::{Aggregate, BinaryExpr, LogicalPlan, Operator};
+use datafusion::logical_expr::{Between, Expr};
 
 use either::{Left, Right};
 
@@ -405,15 +405,15 @@ mod tests {
 
     use datafusion::datasource::provider_as_source;
 
+    use datafusion::common::Column;
+    use datafusion::common::ScalarValue;
+    use datafusion::common::TableReference;
+    use datafusion::logical_expr::col;
     use datafusion::prelude::*;
-    use datafusion_common::Column;
-    use datafusion_common::ScalarValue;
-    use datafusion_common::TableReference;
-    use datafusion_expr::col;
 
-    use datafusion_expr::Expr;
-    use datafusion_expr::LogicalPlanBuilder;
-    use datafusion_expr::Operator;
+    use datafusion::logical_expr::Expr;
+    use datafusion::logical_expr::LogicalPlanBuilder;
+    use datafusion::logical_expr::Operator;
 
     use std::sync::Arc;
 

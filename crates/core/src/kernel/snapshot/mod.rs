@@ -678,7 +678,7 @@ pub(crate) fn partitions_schema(
 
 #[cfg(feature = "datafusion")]
 mod datafusion {
-    use datafusion_common::stats::Statistics;
+    use ::datafusion::common::stats::Statistics;
 
     use super::*;
 

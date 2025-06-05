@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use datafusion::common::ToDFSchema;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::ToDFSchema;
-use datafusion_physical_plan::ExecutionPlan;
 use delta_kernel::table_features::WriterFeature;
 use futures::future::BoxFuture;
 use futures::StreamExt;
@@ -241,7 +241,7 @@ mod tests {
 
     use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
-    use datafusion_expr::{col, lit};
+    use datafusion::logical_expr::{col, lit};
 
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};

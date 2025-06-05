@@ -34,11 +34,6 @@ serde_json = { workspace = true }
 
 # datafusion
 datafusion = { workspace = true }
-datafusion-expr = { workspace = true }
-datafusion-common = { workspace = true }
-datafusion-proto = { workspace = true }
-datafusion-sql = { workspace = true }
-datafusion-physical-expr = { workspace = true }
 
 [dependencies.deltalake-core]
 path = "../core"

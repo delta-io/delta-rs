@@ -3,20 +3,20 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use arrow_schema::Schema as ArrowSchema;
-use datafusion_expr::utils::conjunction;
-use datafusion_physical_expr::execution_props::ExecutionProps;
-use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::GlobalLimitExec;
-use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::{ExecutionPlan, Statistics};
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use deltalake::datafusion::catalog::{Session, TableProvider};
 use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use deltalake::datafusion::datasource::TableType;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
-use deltalake::{DeltaResult, DeltaTableError};
+use deltalake::{datafusion, DeltaResult, DeltaTableError};
 use parking_lot::RwLock;
 
 #[derive(Debug)]
@@ -124,8 +124,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
-    use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::memory::LazyBatchGenerator;
+    use datafusion::logical_expr::{col, lit};
+    use datafusion::physical_plan::memory::LazyBatchGenerator;
     use deltalake::arrow::array::{Int32Array, StringArray};
     use deltalake::arrow::record_batch::RecordBatch;
     use deltalake::datafusion::common::Result as DataFusionResult;
@@ -295,10 +295,7 @@ mod tests {
 
         // The plan should include a LimitExec
         // We can verify this by checking that the plan type is correct
-        assert!(plan
-            .as_any()
-            .downcast_ref::<datafusion_physical_plan::limit::GlobalLimitExec>()
-            .is_some());
+        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
     }
 
     #[tokio::test]
@@ -335,9 +332,6 @@ mod tests {
 
         // The resulting plan should have a chain of operations:
         // GlobalLimitExec -> ProjectionExec -> FilterExec -> LazyMemoryExec
-        assert!(plan
-            .as_any()
-            .downcast_ref::<datafusion_physical_plan::limit::GlobalLimitExec>()
-            .is_some());
+        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
     }
 }

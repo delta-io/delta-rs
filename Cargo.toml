@@ -45,15 +45,8 @@ parquet = { version = "=55.0.0" }
 
 # datafusion
 datafusion = "47.0.0"
-datafusion-expr = "47.0.0"
-datafusion-common = "47.0.0"
 datafusion-ffi = "47.0.0"
-datafusion-functions = "47.0.0"
-datafusion-functions-aggregate = "47.0.0"
-datafusion-physical-expr = "47.0.0"
-datafusion-physical-plan = "47.0.0"
 datafusion-proto = "47.0.0"
-datafusion-sql = "47.0.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

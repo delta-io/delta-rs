@@ -26,11 +26,7 @@ pyo3-arrow = { version = "0.9.0", default-features = false }
 arrow-schema = { workspace = true, features = ["serde"] }
 
 # datafusion
-# datafusion-catalog = { workspace = true }
-datafusion-expr = { workspace = true }
 datafusion-ffi = { workspace = true }
-datafusion-physical-expr = { workspace = true }
-datafusion-physical-plan = { workspace = true }
 
 # serde
 serde = { workspace = true }

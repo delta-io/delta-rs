@@ -42,6 +42,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
+use datafusion::common::scalar::ScalarValue;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion::common::{
+    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
+    TableReference, ToDFSchema,
+};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
@@ -51,33 +57,27 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion_common::scalar::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{
-    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
-    TableReference, ToDFSchema,
-};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::logical_plan::CreateExternalTable;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::logical_plan::CreateExternalTable;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction};
+use datafusion::logical_expr::{
     col, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
     Volatility,
 };
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::LocalLimitExec;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use datafusion_physical_plan::{
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use datafusion_sql::planner::ParserOptions;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 use futures::TryStreamExt;
@@ -1663,7 +1663,7 @@ pub(crate) struct FindFilesExprProperties {
 impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: &Self::Node) -> datafusion_common::Result<TreeNodeRecursion> {
+    fn f_down(&mut self, expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
         // TODO: We can likely relax the volatility to STABLE. Would require further
         // research to confirm the same value is generated during the scan and
         // rewrite phases.
@@ -2048,9 +2048,9 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
