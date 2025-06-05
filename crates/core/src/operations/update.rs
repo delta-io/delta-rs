@@ -313,7 +313,7 @@ async fn execute(
         return Ok((snapshot, metrics));
     }
 
-    let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
+    let predicate = predicate.unwrap_or(lit(true));
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
