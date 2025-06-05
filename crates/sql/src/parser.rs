@@ -1,3 +1,4 @@
+use datafusion::common::DataFusionError;
 use std::collections::VecDeque;
 use std::fmt;
 
@@ -136,29 +137,45 @@ impl<'a> DeltaParser<'a> {
     /// Parse a new expression
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
         match self.parser.peek_token().token {
-            Token::Word(w) => {
-                match w.keyword {
-                    Keyword::VACUUM => {
-                        self.parser.next_token();
-                        self.parse_vacuum()
-                    }
-                    _ => {
-                        // use the native parser
-                        // TODO fix for multiple statememnts and keeping parsers in sync
-                        let stmt = DFParserBuilder::new(self.sql).build()?.parse_statement()?;
-                        self.parser.parse_statement()?;
-                        Ok(Statement::Datafusion(stmt))
-                    }
+            Token::Word(w) => match w.keyword {
+                Keyword::VACUUM => {
+                    self.parser.next_token();
+                    self.parse_vacuum()
                 }
-            }
-            _ => {
-                // use the native parser
-                // TODO fix for multiple statememnts and keeping parsers in sync
-                let stmt = DFParserBuilder::new(self.sql).build()?.parse_statement()?;
-                self.parser.parse_statement()?;
-                Ok(Statement::Datafusion(stmt))
+                _ => self.parse_with_native(),
+            },
+            _ => self.parse_with_native(),
+        }
+    }
+
+    /// Use the native parser to parse the statement
+    // TODO fix for multiple statememnts and keeping parsers in sync
+    fn parse_with_native(&mut self) -> Result<Statement, ParserError> {
+        // DataFusion's parser returns DataFusionError as it may also add
+        // additional context to the error, so find the underlying ParserError
+        // if it exists.
+        fn unwrap_err(df_err: DataFusionError) -> DataFusionError {
+            if let DataFusionError::Context(_message, inner_error) = df_err {
+                unwrap_err(*inner_error)
+            } else {
+                df_err
             }
         }
+        self.parse_with_native_inner()
+            .map_err(unwrap_err)
+            .map_err(|df_err| {
+                if let DataFusionError::SQL(parser_error, _backtrace) = df_err {
+                    parser_error
+                } else {
+                    ParserError::ParserError(df_err.to_string())
+                }
+            })
+    }
+
+    fn parse_with_native_inner(&mut self) -> Result<Statement, DataFusionError> {
+        let stmt = DFParserBuilder::new(self.sql).build()?.parse_statement()?;
+        self.parser.parse_statement()?;
+        Ok(Statement::Datafusion(stmt))
     }
 
     pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {
