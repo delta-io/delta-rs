@@ -327,7 +327,7 @@ async fn execute(
     let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
-    let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
+    let predicate = predicate.unwrap_or(lit(true));
 
     let mut actions = {
         let write_start = Instant::now();
