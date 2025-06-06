@@ -381,8 +381,7 @@ impl CdfLoadBuilder {
         // Create the parquet scans for each associated type of file.
         let mut parquet_source = ParquetSource::new(TableParquetOptions::new());
         if let Some(filters) = filters {
-            parquet_source =
-                parquet_source.with_predicate(Arc::clone(&cdc_file_schema), Arc::clone(filters));
+            parquet_source = parquet_source.with_predicate(Arc::clone(filters));
         }
         let parquet_source: Arc<dyn FileSource> = Arc::new(parquet_source);
         let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(

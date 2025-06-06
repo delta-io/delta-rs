@@ -29,31 +29,31 @@ debug = "line-tables-only"
 delta_kernel = { version = "0.11.0", features = ["arrow-55", "internal-api"] }
 
 # arrow
-arrow = { version = "=55.0.0" }
-arrow-arith = { version = "=55.0.0" }
-arrow-array = { version = "=55.0.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "=55.0.0" }
-arrow-cast = { version = "=55.0.0" }
-arrow-ipc = { version = "=55.0.0" }
-arrow-json = { version = "=55.0.0" }
-arrow-ord = { version = "=55.0.0" }
-arrow-row = { version = "=55.0.0" }
-arrow-schema = { version = "=55.0.0" }
-arrow-select = { version = "=55.0.0" }
+arrow = { version = "55.0.0" }
+arrow-arith = { version = "55.0.0" }
+arrow-array = { version = "55.0.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "55.0.0" }
+arrow-cast = { version = "55.0.0" }
+arrow-ipc = { version = "55.0.0" }
+arrow-json = { version = "55.0.0" }
+arrow-ord = { version = "55.0.0" }
+arrow-row = { version = "55.0.0" }
+arrow-schema = { version = "55.0.0" }
+arrow-select = { version = "55.0.0" }
 object_store = { version = "0.12.1" }
-parquet = { version = "=55.0.0" }
+parquet = { version = "55.0.0" }
 
 # datafusion
-datafusion = "47.0.0"
-datafusion-expr = "47.0.0"
-datafusion-common = "47.0.0"
-datafusion-ffi = "47.0.0"
-datafusion-functions = "47.0.0"
-datafusion-functions-aggregate = "47.0.0"
-datafusion-physical-expr = "47.0.0"
-datafusion-physical-plan = "47.0.0"
-datafusion-proto = "47.0.0"
-datafusion-sql = "47.0.0"
+datafusion = "48.0.0"
+datafusion-expr = "48.0.0"
+datafusion-common = "48.0.0"
+datafusion-ffi = "48.0.0"
+datafusion-functions = "48.0.0"
+datafusion-functions-aggregate = "48.0.0"
+datafusion-physical-expr = "48.0.0"
+datafusion-physical-plan = "48.0.0"
+datafusion-proto = "48.0.0"
+datafusion-sql = "48.0.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -95,3 +95,31 @@ Arro3 = "Arro3"
 AKS = "AKS"
 # to avoid using 'type' as a field name.
 tpe = "tpe"
+
+
+[patch.crates-io]
+datafusion = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-ffi = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", tag = "48.0.0-rc2" }
+# Temp patch before arrow 55.2.0 is released
+# needed to get https://github.com/apache/arrow-rs/pull/7539
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-arith = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-json = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-row = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "f92ff183aad326b1a818f6495215f60b27d9ad4b" }
