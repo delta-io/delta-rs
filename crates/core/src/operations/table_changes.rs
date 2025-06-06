@@ -7,6 +7,7 @@ use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::prelude::SessionContext;
 use datafusion_physical_plan::ExecutionPlan;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::history_manager::timestamp_range_to_versions;
 use delta_kernel::Table;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -89,9 +90,13 @@ impl TableChangesBuilder {
         } else {
             let start_time = self.starting_timestamp.unwrap_or(DateTime::<Utc>::MIN_UTC);
             let end_time = self.ending_timestamp.map(|ts| ts.timestamp());
-            table
-                .history_manager(engine.as_ref(), self.version_limit)?
-                .timestamp_range_to_versions(engine.as_ref(), start_time.timestamp(), end_time)?
+            let snapshot = table.snapshot(engine.as_ref(), None)?;
+            timestamp_range_to_versions(
+                &snapshot,
+                engine.as_ref(),
+                start_time.timestamp(),
+                end_time,
+            )?
         };
 
         let table_changes = table
