@@ -156,3 +156,13 @@ def test_create_or_replace_existing_table(tmp_path: pathlib.Path, sample_table: 
     )
 
     assert dt.files() == []
+
+
+def test_delta_table_invalid_path_raises_error(tmp_path: pathlib.Path):
+    nonexistent_path = tmp_path / "does_not_exist"
+    assert not nonexistent_path.exists()
+
+    with pytest.raises(DeltaError):
+        DeltaTable(str(nonexistent_path))
+
+    assert not nonexistent_path.exists()
