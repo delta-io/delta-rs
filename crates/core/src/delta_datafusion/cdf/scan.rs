@@ -62,7 +62,7 @@ impl TableProvider for DeltaCdfTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let session_state = session_state_from_session(session)?;
+        session_state_from_session(session)?;
         let schema: DFSchema = self.schema().try_into()?;
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
