@@ -39,7 +39,7 @@ serial_test = "3"
 deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
 rand = "0.8"
-which = "7"
+which = "8"
 maplit = "1"
 mockito =  { version = "1.6.1"}
 

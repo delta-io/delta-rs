@@ -23,7 +23,7 @@ url = { workspace = true }
 [dev-dependencies]
 serial_test = "3"
 deltalake-test = { path = "../test" }
-which = "7"
+which = "8"
 
 [features]
 integration_test = ["hdfs-native-object-store/integration-test"]
