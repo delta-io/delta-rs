@@ -726,7 +726,7 @@ async fn execute(
     mut source: DataFrame,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
-    _state: SessionState,
+    state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
@@ -756,7 +756,7 @@ async fn execute(
         extension_planner: MergeMetricExtensionPlanner {},
     };
 
-    let state = SessionStateBuilder::new_from_existing(_state)
+    let state = SessionStateBuilder::new_from_existing(state)
         .with_query_planner(Arc::new(merge_planner))
         .build();
 
