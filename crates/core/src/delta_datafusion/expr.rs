@@ -334,7 +334,7 @@ impl Display for SqlFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expr {
             Expr::Column(c) => write!(f, "{}", c.quoted_flat_name()),
-            Expr::Literal(v) => write!(f, "{}", ScalarValueFormat { scalar: v }),
+            Expr::Literal(v, _) => write!(f, "{}", ScalarValueFormat { scalar: v }),
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {

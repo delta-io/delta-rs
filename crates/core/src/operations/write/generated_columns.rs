@@ -1,6 +1,7 @@
 use crate::table::state::DeltaTableState;
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::{col, when, Expr, ExprSchemable};
+use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
@@ -43,9 +44,7 @@ pub fn add_missing_generated_columns(
             // all the merge is projected.
             // Other generated columns that were provided upon the start we only validate during write
             missing_cols.push(col_name.to_string());
-            df = df
-                .clone()
-                .with_column(col_name, Expr::Literal(ScalarValue::Null))?;
+            df = df.clone().with_column(col_name, lit(ScalarValue::Null))?;
         }
     }
     Ok((df, missing_cols))

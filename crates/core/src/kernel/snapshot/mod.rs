@@ -314,7 +314,7 @@ impl Snapshot {
     /// Get the statistics schema of the snapshot
     pub fn stats_schema(&self, table_schema: Option<&StructType>) -> DeltaResult<StructType> {
         let schema = table_schema.unwrap_or_else(|| self.schema());
-        Ok(stats_schema_from_config(&schema, self.table_config())?
+        Ok(stats_schema_from_config(schema, self.table_config())?
             .as_ref()
             .clone())
     }
