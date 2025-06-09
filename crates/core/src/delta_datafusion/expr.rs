@@ -26,25 +26,25 @@ use std::sync::Arc;
 use arrow_array::{Array, GenericListArray};
 use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDate};
+use datafusion::common::Result as DFResult;
+use datafusion::common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_nested::make_array::MakeArray;
 use datafusion::functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
-use datafusion_common::Result as DFResult;
-use datafusion_common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
-use datafusion_expr::expr::InList;
-use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{
+use datafusion::logical_expr::expr::InList;
+use datafusion::logical_expr::planner::ExprPlanner;
+use datafusion::logical_expr::{
     AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, ScalarFunctionArgs, TableSource,
 };
 // Needed for MakeParquetArray
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
-use datafusion_functions::core::planner::CoreFunctionPlanner;
-use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use datafusion_sql::sqlparser::ast::escape_quoted_string;
-use datafusion_sql::sqlparser::dialect::GenericDialect;
-use datafusion_sql::sqlparser::parser::Parser;
-use datafusion_sql::sqlparser::tokenizer::Tokenizer;
+use datafusion::functions::core::planner::CoreFunctionPlanner;
+use datafusion::logical_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
+use datafusion::sql::planner::{ContextProvider, SqlToRel};
+use datafusion::sql::sqlparser::ast::escape_quoted_string;
+use datafusion::sql::sqlparser::dialect::GenericDialect;
+use datafusion::sql::sqlparser::parser::Parser;
+use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 use tracing::log::*;
 
 use super::DeltaParserOptions;
@@ -158,7 +158,7 @@ impl Default for CustomNestedFunctionPlanner {
     }
 }
 
-use datafusion_expr::planner::{PlannerResult, RawBinaryExpr};
+use datafusion::logical_expr::planner::{PlannerResult, RawBinaryExpr};
 impl ExprPlanner for CustomNestedFunctionPlanner {
     fn plan_array_literal(
         &self,
@@ -223,7 +223,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
         self.planners.as_slice()
     }
 
-    fn get_function_meta(&self, name: &str) -> Option<Arc<datafusion_expr::ScalarUDF>> {
+    fn get_function_meta(&self, name: &str) -> Option<Arc<datafusion::logical_expr::ScalarUDF>> {
         self.state.scalar_functions().get(name).cloned()
     }
 
@@ -231,7 +231,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
         self.state.aggregate_functions().get(name).cloned()
     }
 
-    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion::logical_expr::WindowUDF>> {
         self.state.window_functions().get(name).cloned()
     }
 
@@ -571,16 +571,16 @@ impl fmt::Display for ScalarValueFormat<'_> {
 #[cfg(test)]
 mod test {
     use arrow_schema::DataType as ArrowDataType;
+    use datafusion::common::{Column, ScalarValue, ToDFSchema};
+    use datafusion::functions::core::arrow_cast;
+    use datafusion::functions::core::expr_ext::FieldAccessor;
+    use datafusion::functions::encoding::expr_fn::decode;
+    use datafusion::functions::expr_fn::substring;
     use datafusion::functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
     use datafusion::functions_nested::expr_fn::cardinality;
+    use datafusion::logical_expr::expr::ScalarFunction;
+    use datafusion::logical_expr::{col, lit, BinaryExpr, Cast, Expr, ExprSchemable};
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{Column, ScalarValue, ToDFSchema};
-    use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{col, lit, BinaryExpr, Cast, Expr, ExprSchemable};
-    use datafusion_functions::core::arrow_cast;
-    use datafusion_functions::core::expr_ext::FieldAccessor;
-    use datafusion_functions::encoding::expr_fn::decode;
-    use datafusion_functions::expr_fn::substring;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
@@ -714,7 +714,7 @@ mod test {
                 }),
                 expected: "arrow_cast(1, 'Int32')".to_string(),
                 override_expected_expr: Some(
-                    datafusion_expr::Expr::ScalarFunction(
+                    datafusion::logical_expr::Expr::ScalarFunction(
                         ScalarFunction {
                             func: arrow_cast(),
                             args: vec![
@@ -820,8 +820,8 @@ mod test {
                     .eq(lit("1")),
                 expected: "arrow_cast(value, 'Utf8') = '1'".to_string(),
                 override_expected_expr: Some(
-                    datafusion_expr::Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(datafusion_expr::Expr::ScalarFunction(
+                    datafusion::logical_expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(datafusion::logical_expr::Expr::ScalarFunction(
                             ScalarFunction {
                                 func: arrow_cast(),
                                 args: vec![
@@ -830,7 +830,7 @@ mod test {
                                 ]
                             }
                         )),
-                        op: datafusion_expr::Operator::Eq,
+                        op: datafusion::logical_expr::Operator::Eq,
                         right: Box::new(lit(ScalarValue::Utf8(Some("1".into()))))
                     })
                 ),
@@ -855,7 +855,7 @@ mod test {
                 expr: col("_timestamp_ntz").gt(lit(ScalarValue::TimestampMicrosecond(Some(1262304000000000), None))),
                 expected: "_timestamp_ntz > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, None)')".to_string(),
                 override_expected_expr: Some(col("_timestamp_ntz").gt(
-                    datafusion_expr::Expr::ScalarFunction(
+                    datafusion::logical_expr::Expr::ScalarFunction(
                         ScalarFunction {
                             func: arrow_cast(),
                             args: vec![
@@ -873,7 +873,7 @@ mod test {
                 ))),
                 expected: "_timestamp > arrow_cast('2010-01-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))')".to_string(),
                 override_expected_expr: Some(col("_timestamp").gt(
-                    datafusion_expr::Expr::ScalarFunction(
+                    datafusion::logical_expr::Expr::ScalarFunction(
                         ScalarFunction {
                             func: arrow_cast(),
                             args: vec![

@@ -561,9 +561,9 @@ impl MergePlan {
         context: Arc<zorder::ZOrderExecContext>,
         table_provider: DeltaTableProvider,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion_common::Column;
-        use datafusion_expr::expr::ScalarFunction;
-        use datafusion_expr::{Expr, ScalarUDF};
+        use datafusion::common::Column;
+        use datafusion::logical_expr::expr::ScalarFunction;
+        use datafusion::logical_expr::{Expr, ScalarUDF};
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
@@ -1039,16 +1039,16 @@ pub(super) mod zorder {
         use super::*;
         use url::Url;
 
+        use ::datafusion::common::DataFusionError;
+        use ::datafusion::logical_expr::{
+            ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
+            Volatility,
+        };
         use ::datafusion::{
             execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder},
             prelude::{SessionConfig, SessionContext},
         };
         use arrow_schema::DataType;
-        use datafusion_common::DataFusionError;
-        use datafusion_expr::{
-            ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
-            Volatility,
-        };
         use itertools::Itertools;
         use std::any::Any;
 
@@ -1106,7 +1106,7 @@ pub(super) mod zorder {
             fn invoke_with_args(
                 &self,
                 args: ScalarFunctionArgs,
-            ) -> datafusion_common::Result<ColumnarValue> {
+            ) -> ::datafusion::common::Result<ColumnarValue> {
                 zorder_key_datafusion(&args.args)
             }
         }

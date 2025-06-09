@@ -25,13 +25,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion::{
     execution::{context::QueryPlanner, session_state::SessionState},
     physical_plan::ExecutionPlan,
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner},
 };
-use datafusion_expr::LogicalPlan;
 
 use crate::delta_datafusion::DataFusionResult;
 

@@ -109,7 +109,7 @@ pub enum UnityCatalogError {
 
     #[cfg(feature = "datafusion")]
     #[error("Datafusion error: {0}")]
-    DatafusionError(#[from] datafusion_common::DataFusionError),
+    DatafusionError(#[from] ::datafusion::common::DataFusionError),
 
     /// Cannot initialize DynamoDbConfiguration due to some sort of threading issue
     #[error("Unable to initialize Unity Catalog, potentially a threading issue")]
