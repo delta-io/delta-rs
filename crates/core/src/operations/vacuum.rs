@@ -209,6 +209,7 @@ impl VacuumBuilder {
     }
 
     /// Determine which files can be deleted. Does not actually perform the deletion
+    /// TODO: update this logic to exclude specific versions
     async fn create_vacuum_plan(&self) -> Result<VacuumPlan, VacuumError> {
         if self.mode == VacuumMode::Full {
             info!("Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!");

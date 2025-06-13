@@ -1,3 +1,4 @@
+use std::fs;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
     datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
@@ -64,11 +65,15 @@ fn get_table_batches() -> RecordBatch {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     // Create a delta operations client pointing at an un-initialized location.
-    let ops = if let Ok(table_uri) = std::env::var("TABLE_URI") {
-        DeltaOps::try_from_uri(table_uri).await?
-    } else {
-        DeltaOps::new_in_memory()
-    };
+    let path = "/home/cjoy/src/delta-rs/crates/deltalake/examples/test_v";
+    let joined = String::from("file://") + path;
+    let table_uri = joined.as_str();
+
+    let _ = fs::remove_dir_all(path);
+    fs::create_dir(path)?;
+    
+    let ops = DeltaOps::try_from_uri(table_uri).await?
+    ;
 
     // The operations module uses a builder pattern that allows specifying several options
     // on how the command behaves. The builders implement `Into<Future>`, so once
@@ -76,7 +81,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     let table = ops
         .create()
         .with_columns(get_table_columns())
-        .with_partition_columns(["timestamp"])
+        // .with_partition_columns(["timestamp"])
         .with_table_name("my_table")
         .with_comment("A table to show how delta-rs works")
         .await?;
@@ -103,10 +108,23 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
-        .with_writer_properties(writer_properties)
+        .with_writer_properties(writer_properties.clone())
         .await?;
 
     assert_eq!(table.version(), Some(2));
+    
+    // To append data, you can use the same `write` method again:
+    let table = DeltaOps(table)
+        .write(vec![batch.clone()])
+        .await?;
+    let table = DeltaOps(table)
+        .write(vec![batch.clone()])
+        .with_writer_properties(writer_properties)
+        .await?;
+
+    assert_eq!(table.version(), Some(3));
+    
+    // TODO show history
 
     let (_table, stream) = DeltaOps(table).load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
