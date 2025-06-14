@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
@@ -116,20 +117,84 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     // To append data, you can use the same `write` method again:
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
-        .await?;
-    let table = DeltaOps(table)
-        .write(vec![batch.clone()])
         .with_writer_properties(writer_properties)
         .await?;
 
     assert_eq!(table.version(), Some(3));
     
     // TODO show history
+    let mut history = table
+        .history(None)
+        .await?;
+    
+    history.reverse();
+    
+    println!("###############################################################################");
+    println!("history:");
+    for (version, action) in history.iter().enumerate() {
+        println!("version:{}\n, {:#?}", version, action);
+    }
+    
+    let tombstones = table.snapshot()
+        .unwrap()
+        .all_tombstones(&table.log_store())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>();
 
-    let (_table, stream) = DeltaOps(table).load().await?;
-    let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
+    println!("###############################################################################");
+    println!("tombstones:");
+    println!("{:#?}", tombstones);
+    
+    let tombstone_files = table
+        .snapshot()
+        .unwrap()
+        .all_tombstones(&table.log_store())
+        .await
+        .unwrap()
+        .map(|r| r.path.clone())
+        .collect::<Vec<_>>();
+;
+    println!("###############################################################################");
+    println!("tombstone_files:");
+    println!("{:#?}", tombstone_files);
+    
+    let max_version = table
+        .snapshot()
+        .unwrap()
+        .version();
 
-    println!("{data:?}");
+    println!("###############################################################################");
+    println!("all active files used by version:");
+    let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut tv = table.clone();
+    for i in 0..=max_version {
+        tv.load_version(i).await?;
+        let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
+        println!("version:{}\n, {:#?}", i, files);
+        files_by_version.insert(i, files);
+    }
+    
+    let versions_to_keep = vec![1, 2];
+    let mut keep_files = HashSet::new();
+    for version in versions_to_keep.iter() {
+        if let Some(files) = files_by_version.get(&version) {
+            for file in files {
+                keep_files.insert(file.clone());
+            }
+        }
+    }
+
+    println!("###############################################################################");
+    println!("keep file list:");
+    println!("versions_to_keep:{:#?}", versions_to_keep);
+    println!("keep_files:{:#?}", keep_files);
+
+
+    //let (_table, stream) = DeltaOps(table).load().await?;
+    //let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
+
+    //println!("{data:?}");
 
     Ok(())
 }
