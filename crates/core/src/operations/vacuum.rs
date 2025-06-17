@@ -594,7 +594,7 @@ mod tests {
         let mut non_version_files_deleted = result.files_deleted.clone();
         non_version_files_deleted.sort();
 
-        // Compute the files that should be deleted
+        // Compute the files that should be kept based on versions_to_keep
         let keep_files = compute_files_to_keep(&table, &versions_to_keep).await?;
 
         let mut expected_files_deleted: Vec<String> = all_files_deleted
