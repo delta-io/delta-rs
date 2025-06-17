@@ -8,7 +8,6 @@ from time import sleep
 from typing import TYPE_CHECKING
 
 import pytest
-import pytest
 try:
     from arro3.core import Array, DataType, Field, Schema, Table
 except ImportError:
