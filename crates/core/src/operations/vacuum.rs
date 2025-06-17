@@ -633,7 +633,10 @@ mod tests {
         Ok(())
     }
 
-    async fn compute_files_to_keep(table: &DeltaTable, versions_to_keep: &Vec<i64>) -> Result<HashSet<String>, DeltaTableError> {
+    async fn compute_files_to_keep(
+        table: &DeltaTable,
+        versions_to_keep: &Vec<i64>,
+    ) -> Result<HashSet<String>, DeltaTableError> {
         let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
         let mut tv = table.clone();
         let max_version = tv.snapshot()?.version();
