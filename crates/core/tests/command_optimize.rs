@@ -289,6 +289,8 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
+        false,
+        Vec::new(),
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -351,6 +353,8 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
+        false,
+        Vec::new(),
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -410,6 +414,8 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
+        false,
+        Vec::new(),
     )?;
 
     let metrics = plan
@@ -866,6 +872,7 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
 
 async fn read_parquet_file(
     path: &Path,
