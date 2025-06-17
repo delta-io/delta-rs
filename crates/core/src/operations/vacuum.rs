@@ -168,13 +168,14 @@ impl VacuumBuilder {
         }
     }
 
-    /// Override the default rention period for which files are deleted.
+    /// Override the default retention period for which files are deleted.
     pub fn with_retention_period(mut self, retention_period: Duration) -> Self {
         self.retention_period = Some(retention_period);
         self
     }
 
-    /// Override the default rention period for which files are deleted.
+    /// Specify table versions that we want to keep for time travel.
+    /// This will prevent deletion of files required by these versions.
     pub fn with_keep_versions(mut self, versions: Vec<i64>) -> Self {
         self.keep_versions = Some(versions);
         self
