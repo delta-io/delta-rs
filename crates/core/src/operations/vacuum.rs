@@ -572,6 +572,7 @@ mod tests {
         let table = open_table(table_loc).await?;
         let versions_to_keep = vec![2, 3];
 
+        // First, vacuum without keeping any particular versions
         let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
             .with_retention_period(Duration::hours(0))
             // .with_keep_versions(versions_to_keep)
@@ -582,28 +583,19 @@ mod tests {
         let mut all_files_deleted = result.files_deleted.clone();
         all_files_deleted.sort();
 
-        let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
-        let mut tv = table.clone();
-        let max_version = tv.snapshot()?.version();
+        // Next, vacuum with specific versions retained
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_keep_versions(versions_to_keep.clone())
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        let mut non_version_files_deleted = result.files_deleted.clone();
+        non_version_files_deleted.sort();
 
-        for i in 0..=max_version {
-            tv.load_version(i).await?;
-            let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
-            // println!("version:{}\n, {:#?}", i, files);
-            files_by_version.insert(i, files);
-        }
-
-        // Collect files to keep based on the versions to keep
-        let keep_files = versions_to_keep
-            .iter()
-            .map(|v| {
-                files_by_version
-                    .get(v)
-                    .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
-                    .unwrap_or_default()
-            })
-            .flatten()
-            .collect::<HashSet<_>>();
+        // Compute the files that should be deleted
+        let keep_files = compute_files_to_keep(&table, &versions_to_keep).await?;
 
         let mut expected_files_deleted: Vec<String> = all_files_deleted
             .clone()
@@ -611,16 +603,6 @@ mod tests {
             .filter(|file| !keep_files.contains(file))
             .collect();
         expected_files_deleted.sort();
-
-        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
-            .with_retention_period(Duration::hours(0))
-            .with_keep_versions(versions_to_keep)
-            .with_dry_run(true)
-            .with_mode(VacuumMode::Full)
-            .with_enforce_retention_duration(false)
-            .await?;
-        let mut non_version_files_deleted = result.files_deleted.clone();
-        non_version_files_deleted.sort();
 
         // manually check the difference in files deleted
         if false {
@@ -649,6 +631,33 @@ mod tests {
         assert_eq!(non_version_files_deleted, expected_files_deleted,);
 
         Ok(())
+    }
+
+    async fn compute_files_to_keep(table: &DeltaTable, versions_to_keep: &Vec<i64>) -> Result<HashSet<String>, DeltaTableError> {
+        let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
+        let mut tv = table.clone();
+        let max_version = tv.snapshot()?.version();
+
+        // Find files for each version
+        for i in 0..=max_version {
+            tv.load_version(i).await?;
+            let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
+            // println!("version:{}\n, {:#?}", i, files);
+            files_by_version.insert(i, files);
+        }
+
+        // Collect complete set of files to keep
+        let keep_files = versions_to_keep
+            .iter()
+            .map(|v| {
+                files_by_version
+                    .get(v)
+                    .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
+        Ok(keep_files)
     }
 
     #[tokio::test]
