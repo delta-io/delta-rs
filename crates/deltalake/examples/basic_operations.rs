@@ -6,7 +6,6 @@ use deltalake::arrow::{
     record_batch::RecordBatch,
 };
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
-use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
@@ -154,28 +153,30 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
         .unwrap()
         .map(|r| r.path.clone())
         .collect::<Vec<_>>();
-;
+
     println!("###############################################################################");
     println!("tombstone_files:");
     println!("{:#?}", tombstone_files);
     
     let max_version = table
-        .snapshot()
-        .unwrap()
+        .snapshot()?
         .version();
 
     println!("###############################################################################");
     println!("all active files used by version:");
     let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
     let mut tv = table.clone();
+    tv.state = None;
+    
+    
     for i in 0..=max_version {
-        tv.load_version(i).await?;
+        tv.update_incremental(Some(i)).await?;
         let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
         println!("version:{}\n, {:#?}", i, files);
         files_by_version.insert(i, files);
     }
     
-    let versions_to_keep = vec![1, 2];
+    let versions_to_keep = vec![3];
     let mut keep_files = HashSet::new();
     for version in versions_to_keep.iter() {
         if let Some(files) = files_by_version.get(&version) {
@@ -189,6 +190,18 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     println!("keep file list:");
     println!("versions_to_keep:{:#?}", versions_to_keep);
     println!("keep_files:{:#?}", keep_files);
+    
+    // Vacuum
+    println!("###############################################################################");
+    println!("vacuum:");
+    let (_, metrics) = DeltaOps(table).vacuum()
+        .with_retention_period(chrono::Duration::seconds(0))
+        .with_enforce_retention_duration(false)
+        .with_keep_versions(versions_to_keep)
+        .await?;
+    println!("###############################################################################");
+    println!("vacuum metrics:");
+    println!("{:#?}", metrics);
 
 
     //let (_table, stream) = DeltaOps(table).load().await?;

@@ -21,7 +21,7 @@
 //! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
+use crate::{DeltaTable, DeltaTableConfig};
 
 /// Errors that can occur during vacuum
 #[derive(thiserror::Error, Debug)]
@@ -99,6 +99,8 @@ pub struct VacuumBuilder {
     retention_period: Option<Duration>,
     /// Validate the retention period is not below the retention period configured in the table
     enforce_retention_duration: bool,
+    /// Keep files associated with particular versions
+    keep_versions: Option<Vec<i64>>,
     /// Don't delete the files. Just determine which files can be deleted
     dry_run: bool,
     /// Mode of vacuum that should be run
@@ -157,6 +159,7 @@ impl VacuumBuilder {
             log_store,
             retention_period: None,
             enforce_retention_duration: true,
+            keep_versions: None,
             dry_run: false,
             mode: VacuumMode::Lite,
             clock: None,
@@ -168,6 +171,12 @@ impl VacuumBuilder {
     /// Override the default rention period for which files are deleted.
     pub fn with_retention_period(mut self, retention_period: Duration) -> Self {
         self.retention_period = Some(retention_period);
+        self
+    }
+
+    /// Override the default rention period for which files are deleted.
+    pub fn with_keep_versions(mut self, versions: Vec<i64>) -> Self {
+        self.keep_versions = Some(versions);
         self
     }
 
@@ -235,6 +244,40 @@ impl VacuumBuilder {
             Some(clock) => clock.current_timestamp_millis(),
             None => Utc::now().timestamp_millis(),
         };
+        
+        let keep_files = match &self.keep_versions {
+            Some(versions) => {
+                let max_version = self.snapshot.version();
+                let mut keep_files: HashSet<String> = HashSet::new();
+                let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
+
+                let mut state =
+                    DeltaTableState::try_new(&self.log_store, DeltaTableConfig::default(), Some(0))
+                        .await?;
+
+                let mut i = 0;
+                loop {
+                    let files: Vec<String> = state.file_paths_iter().map(|path| path.to_string()).collect();
+                    // println!("keep version:{}\n, {:#?}", i, files);
+                    files_by_version.insert(i, files);
+                    i += 1;
+                    if i > max_version {
+                        break;
+                    }
+                    state.update(&self.log_store, Some(i)).await?;
+                }
+                
+                for version in versions.iter() {
+                    if let Some(files) = files_by_version.get(&version) {
+                        for file in files {
+                            keep_files.insert(file.clone());
+                        }
+                    }
+                }
+                keep_files
+            }
+            None => HashSet::new(),
+        };
 
         let expired_tombstones = get_stale_files(
             &self.snapshot,
@@ -256,6 +299,11 @@ impl VacuumBuilder {
             let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
             // file is still being tracked in table
             if valid_files.contains(&obj_meta.location) {
+                continue;
+            }
+            // file is associated with a version that we are keeping
+            if keep_files.contains(&obj_meta.location.to_string()) {
+                debug!("The file {:?} is in a version specified to be kept by the user, skipping", &obj_meta.location);
                 continue;
             }
             if is_hidden_directory(partition_columns, &obj_meta.location)? {
