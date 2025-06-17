@@ -271,7 +271,7 @@ impl VacuumBuilder {
                 }
 
                 for version in versions.iter() {
-                    if let Some(files) = files_by_version.get(&version) {
+                    if let Some(files) = files_by_version.get(version) {
                         for file in files {
                             keep_files.insert(file.clone());
                         }
