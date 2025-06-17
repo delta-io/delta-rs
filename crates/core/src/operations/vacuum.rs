@@ -258,7 +258,7 @@ impl VacuumBuilder {
                 let mut i = 0;
                 loop {
                     let files: Vec<String> = state.file_paths_iter().map(|path| path.to_string()).collect();
-                    // println!("keep version:{}\n, {:#?}", i, files);
+                    debug!("keep version:{}\n, {:#?}", i, files);
                     files_by_version.insert(i, files);
                     i += 1;
                     if i > max_version {
@@ -555,6 +555,92 @@ mod tests {
                 "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
             ]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_keep_version() -> DeltaResult<()> {
+        use std::path::{PathBuf, Path};
+        use std::fs::read_to_string;
+        let table_loc = "../test/tests/data/simple_table";
+        let table = open_table(table_loc).await?;
+        let versions_to_keep = vec![2, 3];
+        
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            // .with_keep_versions(versions_to_keep)
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        let mut all_files_deleted = result.files_deleted.clone();
+        all_files_deleted.sort();
+
+        let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
+        let mut tv = table.clone();
+        let max_version = tv.snapshot()?.version();
+        
+        for i in 0..=max_version {
+            tv.load_version(i).await?;
+            let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
+            // println!("version:{}\n, {:#?}", i, files);
+            files_by_version.insert(i, files);
+        }
+        
+        // Collect files to keep based on the versions to keep
+        let keep_files = versions_to_keep.iter().map(|v| {
+            files_by_version
+                .get(v)
+                .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+                .unwrap_or_default()
+        }).flatten().collect::<HashSet<_>>();
+        
+        let mut expected_files_deleted: Vec<String> = all_files_deleted
+            .clone()
+            .into_iter()
+            .filter(|file| !keep_files.contains(file))
+            .collect();
+        expected_files_deleted.sort();
+
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_keep_versions(versions_to_keep)
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        let mut non_version_files_deleted = result.files_deleted.clone();
+        non_version_files_deleted.sort();
+        
+        // manually check the difference in files deleted
+        if false {
+            let mut difference = vec![];
+            for file in all_files_deleted.iter() {
+                if !non_version_files_deleted.contains(file) {
+                    difference.push(file);
+                }
+            }
+            println!("difference in files deleted: {:#?}", difference);
+
+            println!("removal actions in the log files:");
+            for logfile in vec!["00000000000000000003.json", "00000000000000000004.json"] {
+                println!("logfile: {}", logfile);
+                let logpath: PathBuf = Path::new(table_loc).join("_delta_log").join(logfile);
+                let lines: Vec<_> = read_to_string(logpath)
+                    .unwrap()
+                    .lines()
+                    .map(String::from)
+                    .filter(|line| line.contains("remove"))
+                    .collect();
+                println!("lines: {:#?}", lines);
+            }
+        }
+        
+        assert_eq!(
+            non_version_files_deleted,
+            expected_files_deleted,
+        );
+        
         Ok(())
     }
 
