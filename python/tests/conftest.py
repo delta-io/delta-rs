@@ -8,7 +8,11 @@ from time import sleep
 from typing import TYPE_CHECKING
 
 import pytest
-from arro3.core import Array, DataType, Field, Schema, Table
+import pytest
+try:
+    from arro3.core import Array, DataType, Field, Schema, Table
+except ImportError:
+    pytest.skip("arro3 not installed; skipping Python deltarlake tests", allow_module_level=True)
 from azure.storage import blob
 
 from deltalake import DeltaTable, WriterProperties, write_deltalake
