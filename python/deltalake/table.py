@@ -23,6 +23,7 @@ from arro3.core.types import (
 )
 from deprecated import deprecated
 
+import os
 from deltalake._internal import (
     DeltaError,
     PyMergeBuilder,
@@ -163,8 +164,12 @@ class DeltaTable:
 
         """
         self._storage_options = storage_options
+        # Resolve local paths to absolute, leave remote URLs intact
+        uri_str = str(table_uri)
+        if "://" not in uri_str:
+            uri_str = os.path.abspath(uri_str)
         self._table = RawDeltaTable(
-            str(table_uri),
+            uri_str,
             version=version,
             storage_options=storage_options,
             without_files=without_files,
