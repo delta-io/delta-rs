@@ -244,7 +244,7 @@ impl VacuumBuilder {
             Some(clock) => clock.current_timestamp_millis(),
             None => Utc::now().timestamp_millis(),
         };
-        
+
         let keep_files = match &self.keep_versions {
             Some(versions) => {
                 let max_version = self.snapshot.version();
@@ -257,7 +257,10 @@ impl VacuumBuilder {
 
                 let mut i = 0;
                 loop {
-                    let files: Vec<String> = state.file_paths_iter().map(|path| path.to_string()).collect();
+                    let files: Vec<String> = state
+                        .file_paths_iter()
+                        .map(|path| path.to_string())
+                        .collect();
                     debug!("keep version:{}\n, {:#?}", i, files);
                     files_by_version.insert(i, files);
                     i += 1;
@@ -266,7 +269,7 @@ impl VacuumBuilder {
                     }
                     state.update(&self.log_store, Some(i)).await?;
                 }
-                
+
                 for version in versions.iter() {
                     if let Some(files) = files_by_version.get(&version) {
                         for file in files {
@@ -303,7 +306,10 @@ impl VacuumBuilder {
             }
             // file is associated with a version that we are keeping
             if keep_files.contains(&obj_meta.location.to_string()) {
-                debug!("The file {:?} is in a version specified to be kept by the user, skipping", &obj_meta.location);
+                debug!(
+                    "The file {:?} is in a version specified to be kept by the user, skipping",
+                    &obj_meta.location
+                );
                 continue;
             }
             if is_hidden_directory(partition_columns, &obj_meta.location)? {
@@ -560,12 +566,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_vacuum_keep_version() -> DeltaResult<()> {
-        use std::path::{PathBuf, Path};
         use std::fs::read_to_string;
+        use std::path::{Path, PathBuf};
         let table_loc = "../test/tests/data/simple_table";
         let table = open_table(table_loc).await?;
         let versions_to_keep = vec![2, 3];
-        
+
         let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
             .with_retention_period(Duration::hours(0))
             // .with_keep_versions(versions_to_keep)
@@ -579,22 +585,26 @@ mod tests {
         let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
         let mut tv = table.clone();
         let max_version = tv.snapshot()?.version();
-        
+
         for i in 0..=max_version {
             tv.load_version(i).await?;
             let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
             // println!("version:{}\n, {:#?}", i, files);
             files_by_version.insert(i, files);
         }
-        
+
         // Collect files to keep based on the versions to keep
-        let keep_files = versions_to_keep.iter().map(|v| {
-            files_by_version
-                .get(v)
-                .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
-                .unwrap_or_default()
-        }).flatten().collect::<HashSet<_>>();
-        
+        let keep_files = versions_to_keep
+            .iter()
+            .map(|v| {
+                files_by_version
+                    .get(v)
+                    .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
+
         let mut expected_files_deleted: Vec<String> = all_files_deleted
             .clone()
             .into_iter()
@@ -611,7 +621,7 @@ mod tests {
             .await?;
         let mut non_version_files_deleted = result.files_deleted.clone();
         non_version_files_deleted.sort();
-        
+
         // manually check the difference in files deleted
         if false {
             let mut difference = vec![];
@@ -635,12 +645,9 @@ mod tests {
                 println!("lines: {:#?}", lines);
             }
         }
-        
-        assert_eq!(
-            non_version_files_deleted,
-            expected_files_deleted,
-        );
-        
+
+        assert_eq!(non_version_files_deleted, expected_files_deleted,);
+
         Ok(())
     }
 
