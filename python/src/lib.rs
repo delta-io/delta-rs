@@ -559,7 +559,9 @@ impl RawDeltaTable {
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
-        post_commithook_properties=None
+        post_commithook_properties=None,
+        sort_enabled = true,
+        sort_columns = None
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn compact_optimize(
@@ -572,6 +574,8 @@ impl RawDeltaTable {
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
+        sort_enabled: bool,
+        sort_columns: Option<Vec<String>>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
@@ -597,6 +601,13 @@ impl RawDeltaTable {
 
             if self.log_store()?.name() == "LakeFSLogStore" {
                 cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+            // Apply sorting flags
+            if !sort_enabled {
+                cmd = cmd.disable_sort();
+            }
+            if let Some(cols) = sort_columns {
+                cmd = cmd.with_sort_columns(&cols);
             }
 
             let converted_filters =
