@@ -119,6 +119,11 @@ class Metadata:
         )
 
 
+class DeltaTableConfig(NamedTuple):
+    without_files: bool
+    log_buffer_size: int
+
+
 class ProtocolVersions(NamedTuple):
     min_reader_version: int
     min_writer_version: int
@@ -165,6 +170,10 @@ class DeltaTable:
             without_files=without_files,
             log_buffer_size=log_buffer_size,
         )
+
+    @property
+    def table_config(self) -> DeltaTableConfig:
+        return DeltaTableConfig(*self._table.table_config())
 
     @staticmethod
     def is_deltatable(

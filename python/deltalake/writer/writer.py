@@ -107,7 +107,6 @@ def write_deltalake(
     if table is not None:
         storage_options = table._storage_options or {}
         storage_options.update(storage_options or {})
-        table.update_incremental()
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]

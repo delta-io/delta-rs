@@ -246,6 +246,14 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.config.require_files))
     }
 
+    pub fn table_config(&self) -> PyResult<(bool, usize)> {
+        self.with_table(|t| {
+            let config = t.config.clone();
+            // Require_files inverted to reflect without_files
+            Ok((!config.require_files, config.log_buffer_size))
+        })
+    }
+
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
         let metadata = self.with_table(|t| {
             t.metadata()
