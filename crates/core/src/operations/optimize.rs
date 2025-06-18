@@ -100,12 +100,13 @@ mod builder_tests {
         let builder = ops.optimize();
         // By default, sorting is disabled until explicitly enabled
         assert!(!builder.sort_enabled);
-        assert_eq!(builder.sort_columns, vec!["objectId".to_string(), "dateTime".to_string()]);
+        // No default sort columns; user must opt in
+        assert!(builder.sort_columns.is_empty());
 
-        // Disabling sort should keep sorting disabled and retain columns
+        // Disabling sort should keep sorting disabled and leave columns unchanged (empty)
         let builder2 = builder.disable_sort();
         assert!(!builder2.sort_enabled);
-        assert_eq!(builder2.sort_columns, vec!["objectId".to_string(), "dateTime".to_string()]);
+        assert!(builder2.sort_columns.is_empty());
 
         // Overriding sort columns should update both the columns and re-enable sorting
         let builder3 = builder2.with_sort_columns(&["foo", "bar"]);
@@ -130,9 +131,9 @@ mod builder_tests {
             builder.sort_columns.clone(),
         )
         .unwrap();
-        // Plan should reflect sorting disabled
+        // Plan should reflect sorting disabled with no sort columns
         assert!(!plan.sort_enabled);
-        assert_eq!(plan.sort_columns, vec!["objectId".to_string(), "dateTime".to_string()]);
+        assert!(plan.sort_columns.is_empty());
 
         // Create a fresh builder with custom sort columns
         let builder2 = DeltaOps::new_in_memory().optimize().with_sort_columns(&["x"]);
@@ -406,7 +407,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             sort_enabled: false,
-            sort_columns: vec!["objectId".to_string(), "dateTime".to_string()],
+            sort_columns: Vec::new(),
             min_commit_interval: None,
             custom_execute_handler: None,
         }
