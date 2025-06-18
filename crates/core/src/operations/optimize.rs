@@ -98,11 +98,11 @@ mod builder_tests {
         // Initialize a builder from an in-memory DeltaOps
         let ops = DeltaOps::new_in_memory();
         let builder = ops.optimize();
-        // By default, sorting is enabled on objectId then dateTime
-        assert!(builder.sort_enabled);
+        // By default, sorting is disabled until explicitly enabled
+        assert!(!builder.sort_enabled);
         assert_eq!(builder.sort_columns, vec!["objectId".to_string(), "dateTime".to_string()]);
 
-        // Disabling sort should flip the flag but retain columns
+        // Disabling sort should keep sorting disabled and retain columns
         let builder2 = builder.disable_sort();
         assert!(!builder2.sort_enabled);
         assert_eq!(builder2.sort_columns, vec!["objectId".to_string(), "dateTime".to_string()]);
@@ -183,7 +183,12 @@ mod integration_tests {
 
         // Write and optimize
         let table = DeltaOps(table).write(vec![batch]).await.unwrap();
-        let (table_opt, _) = DeltaOps(table).optimize().await.unwrap();
+        // Enable global sort explicitly (default is now disabled)
+        let (table_opt, _) = DeltaOps(table)
+            .optimize()
+            .with_sort_columns(&["objectId", "dateTime"])
+            .await
+            .unwrap();
 
         // Load and gather rows
         let batches = get_data(&table_opt).await;
@@ -400,7 +405,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_concurrent_tasks: num_cpus::get(),
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
-            sort_enabled: true,
+            sort_enabled: false,
             sort_columns: vec!["objectId".to_string(), "dateTime".to_string()],
             min_commit_interval: None,
             custom_execute_handler: None,
