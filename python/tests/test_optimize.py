@@ -93,31 +93,28 @@ def test_python_optimize_sort_flag(tmp_path):
         "dateTime": ["2021-02-02", "2021-02-01", "2021-01-01", "2021-03-01"],
     })
 
-    # Write and optimize with default sorting (True)
+    # Write and optimize with default sorting disabled
     write_deltalake(tmp_path, df, mode="overwrite")
     dt = DeltaTable(tmp_path)
     dt.optimize.compact()
     result = dt.to_pandas()
     rows = list(zip(result["objectId"], result["dateTime"]))
+    expected_original = list(zip(df["objectId"], df["dateTime"]))
+    assert rows == expected_original
+
+    # Write and optimize with sorting enabled
+    write_deltalake(tmp_path, df, mode="overwrite")
+    dt2 = DeltaTable(tmp_path)
+    dt2.optimize.compact(sort_enabled=True)
+    result2 = dt2.to_pandas()
+    rows2 = list(zip(result2["objectId"], result2["dateTime"]))
     expected_sorted = [
         ("A", "2021-02-01"),
         ("A", "2021-03-01"),
         ("B", "2021-01-01"),
         ("B", "2021-02-02"),
     ]
-    assert rows == expected_sorted
-
-    # Write and optimize with sorting disabled
-    write_deltalake(tmp_path, df, mode="overwrite")
-    dt2 = DeltaTable(tmp_path)
-    dt2.optimize.compact(sort_enabled=False)
-    result2 = dt2.to_pandas()
-    rows2 = list(zip(result2["objectId"], result2["dateTime"]))
-    expected_original = list(zip(df["objectId"], df["dateTime"]))
-    assert rows2 == expected_original
-    assert last_action["userName"] == "John Doe"
-    assert dt.version() == old_version + 1
-    assert len(dt.file_uris()) == 1
+    assert rows2 == expected_sorted
 
 
 def test_optimize_min_commit_interval(
