@@ -856,12 +856,12 @@ impl MergePlan {
                         util::flatten_join_error(rewrite_result)
                     } else {
                         // === Compaction with global sort ===
-                        // Instead of simply merging files, we build a DataFusion plan
-                        // over the same set of files, apply a full global sort on the
-                        // user-specified `sort_columns`, and then rewrite pages in that
-                        // sorted order. This guarantees monotonic ordering across all
-                        // output files. Note: this is a standard DataFusion `sort(...)`
-                        // operation, not Z-ordering (see the ZOrder branch below).
+                        // Build a DataFusion plan over the files in this compaction batch,
+                        // apply a global sort on the user-specified `sort_columns`,
+                        // and rewrite only these files in sorted order. This ensures monotonic
+                        // ordering across the output of this batch (not the entire table).
+                        // Note: this is a standard DataFusion `sort(...)` operation, not Z-ordering
+                        // (see the ZOrder branch below).
                         use crate::delta_datafusion::DataFusionMixins;
                         use crate::delta_datafusion::DeltaScanConfigBuilder;
                         use crate::delta_datafusion::DeltaTableProvider;
