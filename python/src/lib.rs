@@ -568,7 +568,7 @@ impl RawDeltaTable {
         writer_properties=None,
         commit_properties=None,
         post_commithook_properties=None,
-        sort_enabled = true,
+        sort_enabled = false,
         sort_columns = None
     ))]
     #[allow(clippy::too_many_arguments)]
