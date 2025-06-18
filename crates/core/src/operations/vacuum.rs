@@ -247,35 +247,23 @@ impl VacuumBuilder {
 
         let keep_files = match &self.keep_versions {
             Some(versions) => {
-                let max_version = self.snapshot.version();
                 let mut keep_files: HashSet<String> = HashSet::new();
-                let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
-
                 let mut state =
                     DeltaTableState::try_new(&self.log_store, DeltaTableConfig::default(), Some(0))
                         .await?;
-
-                let mut i = 0;
-                loop {
+                let mut sorted_versions = versions.clone();
+                sorted_versions.sort();
+                for version in sorted_versions {
+                    if version == 0 {
+                        continue;
+                    }
+                    state.update(&self.log_store, Some(version)).await?;
                     let files: Vec<String> = state
                         .file_paths_iter()
                         .map(|path| path.to_string())
                         .collect();
-                    debug!("keep version:{}\n, {:#?}", i, files);
-                    files_by_version.insert(i, files);
-                    i += 1;
-                    if i > max_version {
-                        break;
-                    }
-                    state.update(&self.log_store, Some(i)).await?;
-                }
-
-                for version in versions.iter() {
-                    if let Some(files) = files_by_version.get(version) {
-                        for file in files {
-                            keep_files.insert(file.clone());
-                        }
-                    }
+                    debug!("keep version:{}\n, {:#?}", version, files);
+                    keep_files.extend(files);
                 }
                 keep_files
             }
