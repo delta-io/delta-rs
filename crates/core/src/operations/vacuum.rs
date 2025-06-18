@@ -250,9 +250,12 @@ impl VacuumBuilder {
                 let mut sorted_versions = versions.clone();
                 sorted_versions.sort();
                 let mut keep_files: HashSet<String> = HashSet::new();
-                let mut state =
-                    DeltaTableState::try_new(&self.log_store, DeltaTableConfig::default(), Some(versions[0]))
-                        .await?;
+                let mut state = DeltaTableState::try_new(
+                    &self.log_store,
+                    DeltaTableConfig::default(),
+                    Some(versions[0]),
+                )
+                .await?;
                 for version in sorted_versions {
                     state.update(&self.log_store, Some(version)).await?;
                     let files: Vec<String> = state
