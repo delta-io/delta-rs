@@ -246,13 +246,13 @@ impl VacuumBuilder {
         };
 
         let keep_files = match &self.keep_versions {
-            Some(versions) => {
-                let mut keep_files: HashSet<String> = HashSet::new();
-                let mut state =
-                    DeltaTableState::try_new(&self.log_store, DeltaTableConfig::default(), Some(0))
-                        .await?;
+            Some(versions) if !versions.is_empty() => {
                 let mut sorted_versions = versions.clone();
                 sorted_versions.sort();
+                let mut keep_files: HashSet<String> = HashSet::new();
+                let mut state =
+                    DeltaTableState::try_new(&self.log_store, DeltaTableConfig::default(), Some(versions[0]))
+                        .await?;
                 for version in sorted_versions {
                     state.update(&self.log_store, Some(version)).await?;
                     let files: Vec<String> = state
@@ -262,9 +262,10 @@ impl VacuumBuilder {
                     debug!("keep version:{}\n, {:#?}", version, files);
                     keep_files.extend(files);
                 }
+
                 keep_files
             }
-            None => HashSet::new(),
+            _ => HashSet::new(),
         };
 
         let expired_tombstones = get_stale_files(
