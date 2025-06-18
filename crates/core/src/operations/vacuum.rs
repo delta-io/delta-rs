@@ -254,9 +254,6 @@ impl VacuumBuilder {
                 let mut sorted_versions = versions.clone();
                 sorted_versions.sort();
                 for version in sorted_versions {
-                    if version == 0 {
-                        continue;
-                    }
                     state.update(&self.log_store, Some(version)).await?;
                     let files: Vec<String> = state
                         .file_paths_iter()
