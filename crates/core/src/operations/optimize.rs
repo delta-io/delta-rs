@@ -173,10 +173,10 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_optimize_global_sort_enabled() {
-        // Initialize table
+        // Initialize a partitioned table (by objectId) to validate cross-partition ordering
         let tmp = TempDir::new().expect("temp dir");
         let path = tmp.path().to_str().unwrap();
-        let table = create_initialized_table(path, &Vec::<String>::new()).await;
+        let table = create_initialized_table(path, &["objectId".to_string()]).await;
 
         // Unordered batch
         let schema = Arc::new(ArrowSchema::new(vec![
