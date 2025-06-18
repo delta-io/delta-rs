@@ -111,7 +111,10 @@ mod builder_tests {
         // Overriding sort columns should update both the columns and re-enable sorting
         let builder3 = builder2.with_sort_columns(&["foo", "bar"]);
         assert!(builder3.sort_enabled);
-        assert_eq!(builder3.sort_columns, vec!["foo".to_string(), "bar".to_string()]);
+        assert_eq!(
+            builder3.sort_columns,
+            vec!["foo".to_string(), "bar".to_string()]
+        );
     }
 
     #[test]
@@ -136,7 +139,9 @@ mod builder_tests {
         assert!(plan.sort_columns.is_empty());
 
         // Create a fresh builder with custom sort columns
-        let builder2 = DeltaOps::new_in_memory().optimize().with_sort_columns(&["x"]);
+        let builder2 = DeltaOps::new_in_memory()
+            .optimize()
+            .with_sort_columns(&["x"]);
         let plan2 = create_merge_plan(
             builder2.optimize_type,
             &builder2.snapshot,
@@ -161,7 +166,7 @@ mod integration_tests {
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::create_initialized_table;
     use crate::writer::test_utils::datafusion::get_data;
-    use arrow_array::{StringArray, RecordBatch};
+    use arrow_array::{RecordBatch, StringArray};
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -179,7 +184,12 @@ mod integration_tests {
             Field::new("dateTime", ArrowDataType::Utf8, false),
         ]));
         let col0 = Arc::new(StringArray::from(vec!["B", "A", "B", "A"])) as _;
-        let col1 = Arc::new(StringArray::from(vec!["2021-02-02", "2021-02-01", "2021-01-01", "2021-03-01"])) as _;
+        let col1 = Arc::new(StringArray::from(vec![
+            "2021-02-02",
+            "2021-02-01",
+            "2021-01-01",
+            "2021-03-01",
+        ])) as _;
         let batch = RecordBatch::try_new(schema.clone(), vec![col0, col1]).unwrap();
 
         // Write and optimize
@@ -223,7 +233,12 @@ mod integration_tests {
             Field::new("dateTime", ArrowDataType::Utf8, false),
         ]));
         let col0 = Arc::new(StringArray::from(vec!["B", "A", "B", "A"])) as _;
-        let col1 = Arc::new(StringArray::from(vec!["2021-02-02", "2021-02-01", "2021-01-01", "2021-03-01"])) as _;
+        let col1 = Arc::new(StringArray::from(vec![
+            "2021-02-02",
+            "2021-02-01",
+            "2021-01-01",
+            "2021-03-01",
+        ])) as _;
         let batch = RecordBatch::try_new(schema.clone(), vec![col0, col1]).unwrap();
 
         // Write and optimize without sorting
@@ -840,7 +855,13 @@ impl MergePlan {
                         ));
                         util::flatten_join_error(rewrite_result)
                     } else {
-                        // Compaction with sorting by specified columns
+                        // === Compaction with global sort ===
+                        // Instead of simply merging files, we build a DataFusion plan
+                        // over the same set of files, apply a full global sort on the
+                        // user-specified `sort_columns`, and then rewrite pages in that
+                        // sorted order. This guarantees monotonic ordering across all
+                        // output files. Note: this is a standard DataFusion `sort(...)`
+                        // operation, not Z-ordering (see the ZOrder branch below).
                         use crate::delta_datafusion::DataFusionMixins;
                         use crate::delta_datafusion::DeltaScanConfigBuilder;
                         use crate::delta_datafusion::DeltaTableProvider;
