@@ -865,11 +865,8 @@ impl MergePlan {
                         use crate::delta_datafusion::DataFusionMixins;
                         use crate::delta_datafusion::DeltaScanConfigBuilder;
                         use crate::delta_datafusion::DeltaTableProvider;
-                        use datafusion::execution::context::{SessionConfig, SessionContext};
-                        use datafusion::execution::memory_pool::FairSpillPool;
-                        use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+                        use datafusion::execution::context::SessionContext;
                         use datafusion::logical_expr::col;
-                        use url::Url;
 
                         // Use cloned store for DataFusion operations
                         let log_store_ref = store.clone();
@@ -879,19 +876,7 @@ impl MergePlan {
                         let files_for_provider = files.files.clone();
                         // Asynchronous DataFrame-based sorted reader
                         let read_sorted = async move {
-                            let memory_pool = FairSpillPool::new(max_spill_size);
-                            let runtime = RuntimeEnvBuilder::new()
-                                .with_memory_pool(Arc::new(memory_pool))
-                                .build_arc()
-                                .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-                            runtime.register_object_store(
-                                &Url::parse("delta-rs://").unwrap(),
-                                log_store_ref.object_store(Some(operation_id)),
-                            );
-                            let mut ctx = SessionContext::new_with_config_rt(
-                                SessionConfig::default(),
-                                runtime,
-                            );
+                            let ctx = SessionContext::new();
                             let scan_config = DeltaScanConfigBuilder::default()
                                 .with_file_column(false)
                                 .with_schema(snapshot.input_schema()?)
