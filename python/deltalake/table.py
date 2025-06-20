@@ -566,8 +566,9 @@ class DeltaTable:
     def update(
         self,
         updates: dict[str, str] | None = None,
-        new_values: dict[str, int | float | str | datetime | bool | list[Any]]
-        | None = None,
+        new_values: (
+            dict[str, int | float | str | datetime | bool | list[Any]] | None
+        ) = None,
         predicate: str | None = None,
         writer_properties: WriterProperties | None = None,
         error_on_type_mismatch: bool = True,
