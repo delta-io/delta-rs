@@ -2,7 +2,7 @@ use std::fmt;
 
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use object_store::ObjectMeta;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::{ser::SerializeSeq, Deserialize, Serialize};
@@ -97,13 +97,16 @@ impl<'de> Visitor<'de> for LogSegmentVisitor {
                 .collect(),
             checkpoint_files: checkpoint_files
                 .into_iter()
-                .map(|f| ObjectMeta {
-                    location: f.path.into(),
-                    size: f.size as u64,
-                    last_modified: DateTime::from_timestamp_millis(f.last_modified).unwrap(),
-
-                    version: None,
-                    e_tag: None,
+                .map(|f| {
+                    let seconds = f.last_modified / 1_000_000_000;
+                    let nano_seconds = (f.last_modified % 1_000_000_000) as u32;
+                    ObjectMeta {
+                        location: f.path.into(),
+                        size: f.size as u64,
+                        last_modified: Utc.timestamp_opt(seconds, nano_seconds).single().unwrap(),
+                        version: None,
+                        e_tag: None,
+                    }
                 })
                 .collect(),
         })
