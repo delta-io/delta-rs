@@ -644,7 +644,7 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
 }
 
 static DELTA_LOG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
 
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
