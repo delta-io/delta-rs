@@ -120,7 +120,7 @@ impl super::Operation<()> for VacuumBuilder {
 }
 
 /// Details for the Vacuum operation including which files were
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct VacuumMetrics {
     /// Was this a dry run
     pub dry_run: bool,
@@ -310,7 +310,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let metrics = plan
+            let result = plan
                 .execute(
                     this.log_store.clone(),
                     &this.snapshot,
@@ -321,10 +321,17 @@ impl std::future::IntoFuture for VacuumBuilder {
                 .await?;
 
             this.post_execute(operation_id).await?;
-            Ok((
-                DeltaTable::new_with_state(this.log_store, this.snapshot),
-                metrics,
-            ))
+
+            Ok(match result {
+                Some((snapshot, metrics)) => (
+                    DeltaTable::new_with_state(this.log_store, snapshot),
+                    metrics,
+                ),
+                None => (
+                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    Default::default(),
+                ),
+            })
         })
     }
 }
@@ -352,12 +359,9 @@ impl VacuumPlan {
         mut commit_properties: CommitProperties,
         operation_id: uuid::Uuid,
         handle: Option<Arc<dyn CustomExecuteHandler>>,
-    ) -> Result<VacuumMetrics, DeltaTableError> {
+    ) -> Result<Option<(DeltaTableState, VacuumMetrics)>, DeltaTableError> {
         if self.files_to_delete.is_empty() {
-            return Ok(VacuumMetrics {
-                dry_run: false,
-                files_deleted: Vec::new(),
-            });
+            return Ok(None);
         }
 
         let start_operation = DeltaOperation::VacuumStart {
@@ -383,7 +387,7 @@ impl VacuumPlan {
             serde_json::to_value(start_metrics)?,
         );
 
-        CommitBuilder::from(start_props)
+        let last_commit = CommitBuilder::from(start_props)
             .with_operation_id(operation_id)
             .with_post_commit_hook_handler(handle.clone())
             .build(Some(snapshot), store.clone(), start_operation)
@@ -416,17 +420,20 @@ impl VacuumPlan {
             "operationMetrics".to_owned(),
             serde_json::to_value(end_metrics)?,
         );
-        CommitBuilder::from(commit_properties)
+        let last_commit = CommitBuilder::from(commit_properties)
             .with_operation_id(operation_id)
             .with_post_commit_hook_handler(handle)
-            .build(Some(snapshot), store.clone(), end_operation)
+            .build(Some(&last_commit.snapshot), store.clone(), end_operation)
             .await?;
         // Finish VACUUM END COMMIT
 
-        Ok(VacuumMetrics {
-            files_deleted,
-            dry_run: false,
-        })
+        Ok(Some((
+            last_commit.snapshot,
+            VacuumMetrics {
+                files_deleted,
+                dry_run: false,
+            },
+        )))
     }
 }
 
