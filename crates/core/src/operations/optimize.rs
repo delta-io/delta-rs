@@ -866,7 +866,7 @@ impl MergePlan {
                         use crate::delta_datafusion::DeltaScanConfigBuilder;
                         use crate::delta_datafusion::DeltaTableProvider;
                         use datafusion::execution::context::SessionContext;
-                        use datafusion::logical_expr::col;
+                        use datafusion::logical_expr::ident;
 
                         // Use cloned store for DataFusion operations
                         let log_store_ref = store.clone();
@@ -892,7 +892,7 @@ impl MergePlan {
                                 .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
                             let sort_exprs = sort_cols
                                 .iter()
-                                .map(|c| col(c).sort(true, true))
+                                .map(|c| ident(c).sort(true, true))
                                 .collect::<Vec<_>>();
                             let df = df
                                 .sort(sort_exprs)
