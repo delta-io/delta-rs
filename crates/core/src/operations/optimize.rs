@@ -86,6 +86,39 @@ pub struct Metrics {
     /// The order of records from source files is preserved
     pub preserve_insertion_order: bool,
 }
+/// Build a plan to globally sort all files per partition (for sort-enabled compaction)
+fn build_global_sort_plan(
+    snapshot: &DeltaTableState,
+    filters: &[PartitionFilter],
+) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
+    let mut metrics = Metrics::default();
+    // Collect all active add actions by partition
+    let mut partition_map: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
+    for add_res in snapshot.get_active_add_actions_by_partitions(filters)? {
+        let add = add_res?;
+        metrics.total_considered_files += 1;
+        // Extract partition values and path
+        let part_vals = add.partition_values()?;
+        let partition_values = part_vals
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<IndexMap<_, _>>();
+        let part_path = part_vals.hive_partition_path();
+        // Insert or update the merge bin for this partition
+        let entry = partition_map
+            .entry(part_path)
+            .or_insert_with(|| (partition_values, MergeBin::new()));
+        entry.1.add(add.add_action());
+    }
+    // Build operations: one MergeBin per partition with all its files
+    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    for (path, (partition_values, bin)) in partition_map {
+        operations.insert(path, (partition_values, vec![bin]));
+    }
+    metrics.partitions_optimized = operations.len() as u64;
+    Ok((OptimizeOperations::Compact(operations), metrics))
+}
 
 // Unit tests for sorting flags in OptimizeBuilder and create_merge_plan
 #[cfg(test)]
@@ -1071,7 +1104,14 @@ pub fn create_merge_plan(
     let partitions_keys = &snapshot.metadata().partition_columns;
 
     let (operations, metrics) = match optimize_type {
-        OptimizeType::Compact => build_compaction_plan(snapshot, filters, target_size)?,
+        OptimizeType::Compact => {
+            if sort_enabled {
+                // Sorts all files per partition, regardless of bin size
+                build_global_sort_plan(snapshot, filters)?
+            } else {
+                build_compaction_plan(snapshot, filters, target_size)?
+            }
+        }
         OptimizeType::ZOrder(zorder_columns) => {
             build_zorder_plan(zorder_columns, snapshot, partitions_keys, filters)?
         }
