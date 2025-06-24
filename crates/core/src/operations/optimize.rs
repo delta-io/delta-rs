@@ -191,7 +191,7 @@ mod builder_tests {
     }
 }
 
-// Integration tests validating global (objectId, dateTime) ordering after OPTIMIZE
+// Integration tests validating global ordering after OPTIMIZE
 #[cfg(test)]
 #[cfg(feature = "datafusion")]
 mod integration_tests {
