@@ -690,7 +690,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let source_plan = source.clone().create_physical_plan().await?;
 
             // Here we need to validate if the new data conforms to a predicate if one is provided
-            let add_actions = write_execution_plan_v2(
+            let (add_actions, _) = write_execution_plan_v2(
                 this.snapshot.as_ref(),
                 state.clone(),
                 source_plan.clone(),

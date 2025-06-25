@@ -36,6 +36,12 @@ use datafusion::logical_expr::col;
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::{WriteError, WriterStatsConfig};
 
+#[derive(Debug, Default)]
+pub(crate) struct WriteExecutionPlanMetrics {
+    pub scan_time_ms: u64,
+    pub write_time_ms: u64,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
     snapshot: Option<&DeltaTableState>,
@@ -95,7 +101,7 @@ pub(crate) async fn write_execution_plan(
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
-    write_execution_plan_v2(
+    let (actions, _) = write_execution_plan_v2(
         snapshot,
         state,
         plan,
@@ -108,7 +114,8 @@ pub(crate) async fn write_execution_plan(
         None,
         false,
     )
-    .await
+    .await?;
+    Ok(actions)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -250,7 +257,7 @@ pub(crate) async fn write_execution_plan_v2(
     writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,
-) -> DeltaResult<Vec<Action>> {
+) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
     let schema: ArrowSchemaRef = plan.schema();
@@ -290,21 +297,37 @@ pub(crate) async fn write_execution_plan_v2(
             );
             let mut writer = DeltaWriter::new(object_store.clone(), config);
             let checker_stream = checker.clone();
+            let scan_start = std::time::Instant::now();
             let mut stream = inner_plan.execute(i, task_ctx)?;
 
-            let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =
-                tokio::task::spawn(async move {
-                    while let Some(maybe_batch) = stream.next().await {
-                        let batch = maybe_batch?;
-                        checker_stream.check_batch(&batch).await?;
-                        writer.write(&batch).await?;
-                    }
-                    let add_actions = writer.close().await;
-                    match add_actions {
-                        Ok(actions) => Ok(actions.into_iter().map(Action::Add).collect::<Vec<_>>()),
-                        Err(err) => Err(err),
-                    }
-                });
+            let handle: tokio::task::JoinHandle<
+                DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)>,
+            > = tokio::task::spawn(async move {
+                let mut write_time_ms = 0;
+                while let Some(maybe_batch) = stream.next().await {
+                    let batch = maybe_batch?;
+                    let write_start = std::time::Instant::now();
+                    checker_stream.check_batch(&batch).await?;
+                    writer.write(&batch).await?;
+                    write_time_ms += write_start.elapsed().as_millis() as u64;
+                }
+                let scan_time_ms = scan_start.elapsed().as_millis() as u64 - write_time_ms;
+
+                let write_start = std::time::Instant::now();
+                let add_actions = writer.close().await;
+                write_time_ms += write_start.elapsed().as_millis() as u64;
+                let metrics = WriteExecutionPlanMetrics {
+                    scan_time_ms,
+                    write_time_ms,
+                };
+                match add_actions {
+                    Ok(actions) => Ok((
+                        actions.into_iter().map(Action::Add).collect::<Vec<_>>(),
+                        metrics,
+                    )),
+                    Err(err) => Err(err),
+                }
+            });
             tasks.push(handle);
         }
     } else {
@@ -354,100 +377,121 @@ pub(crate) async fn write_execution_plan_v2(
             let mut cdf_writer = DeltaWriter::new(cdf_store.clone(), cdf_config);
 
             let checker_stream = checker.clone();
+            let scan_start = std::time::Instant::now();
             let mut stream = inner_plan.execute(i, task_ctx)?;
 
             let session_context = SessionContext::new();
 
-            let handle: tokio::task::JoinHandle<DeltaResult<Vec<Action>>> =
-                tokio::task::spawn(async move {
-                    while let Some(maybe_batch) = stream.next().await {
-                        let batch = maybe_batch?;
+            let handle: tokio::task::JoinHandle<
+                DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)>,
+            > = tokio::task::spawn(async move {
+                let mut write_time_ms = 0;
+                while let Some(maybe_batch) = stream.next().await {
+                    let batch = maybe_batch?;
 
-                        // split batch since we unioned upstream the operation write and cdf plan
-                        let table_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
-                            batch.schema(),
-                            vec![vec![batch.clone()]],
-                        )?);
-                        let batch_df = session_context.read_table(table_provider).unwrap();
+                    let write_start = std::time::Instant::now();
+                    // split batch since we unioned upstream the operation write and cdf plan
+                    let table_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+                        batch.schema(),
+                        vec![vec![batch.clone()]],
+                    )?);
+                    let batch_df = session_context.read_table(table_provider).unwrap();
 
-                        let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
-                            vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
-                            true,
-                        ))?;
+                    let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
+                        vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
+                        true,
+                    ))?;
 
-                        let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
-                            vec![
-                                lit("delete"),
-                                lit("insert"),
-                                lit("update_preimage"),
-                                lit("update_postimage"),
-                            ],
-                            false,
-                        ))?;
+                    let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
+                        vec![
+                            lit("delete"),
+                            lit("insert"),
+                            lit("update_preimage"),
+                            lit("update_postimage"),
+                        ],
+                        false,
+                    ))?;
 
-                        // Concatenate with the CDF_schema, since we need to keep the _change_type col
-                        let mut normal_batch =
-                            concat_batches(&cdf_schema, &normal_df.collect().await?)?;
-                        checker_stream.check_batch(&normal_batch).await?;
+                    // Concatenate with the CDF_schema, since we need to keep the _change_type col
+                    let mut normal_batch =
+                        concat_batches(&cdf_schema, &normal_df.collect().await?)?;
+                    checker_stream.check_batch(&normal_batch).await?;
 
-                        // Drop the CDC_COLUMN ("_change_type")
-                        let mut idx: Option<usize> = None;
-                        for (i, field) in normal_batch.schema_ref().fields().iter().enumerate() {
-                            if field.name() == CDC_COLUMN_NAME {
-                                idx = Some(i);
-                                break;
-                            }
+                    // Drop the CDC_COLUMN ("_change_type")
+                    let mut idx: Option<usize> = None;
+                    for (i, field) in normal_batch.schema_ref().fields().iter().enumerate() {
+                        if field.name() == CDC_COLUMN_NAME {
+                            idx = Some(i);
+                            break;
                         }
-
-                        normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
-                            "idx of _change_type col not found. This shouldn't have happened.",
-                        ))?);
-
-                        let cdf_batch = concat_batches(&cdf_schema, &cdf_df.collect().await?)?;
-                        checker_stream.check_batch(&cdf_batch).await?;
-
-                        writer.write(&normal_batch).await?;
-                        cdf_writer.write(&cdf_batch).await?;
                     }
-                    let mut add_actions = writer
-                        .close()
-                        .await?
-                        .into_iter()
-                        .map(Action::Add)
-                        .collect::<Vec<_>>();
-                    let cdf_actions = cdf_writer.close().await.map(|v| {
-                        v.into_iter()
-                            .map(|add| {
-                                {
-                                    Action::Cdc(AddCDCFile {
-                                        // This is a gnarly hack, but the action needs the nested path, not the
-                                        // path inside the prefixed store
-                                        path: format!("_change_data/{}", add.path),
-                                        size: add.size,
-                                        partition_values: add.partition_values,
-                                        data_change: false,
-                                        tags: add.tags,
-                                    })
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    })?;
-                    add_actions.extend(cdf_actions);
-                    Ok(add_actions)
-                });
+
+                    normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
+                        "idx of _change_type col not found. This shouldn't have happened.",
+                    ))?);
+
+                    let cdf_batch = concat_batches(&cdf_schema, &cdf_df.collect().await?)?;
+                    checker_stream.check_batch(&cdf_batch).await?;
+
+                    writer.write(&normal_batch).await?;
+                    cdf_writer.write(&cdf_batch).await?;
+                    write_time_ms += write_start.elapsed().as_millis() as u64;
+                }
+                let scan_time_ms = scan_start.elapsed().as_millis() as u64 - write_time_ms;
+
+                let write_start = std::time::Instant::now();
+                let mut add_actions = writer
+                    .close()
+                    .await?
+                    .into_iter()
+                    .map(Action::Add)
+                    .collect::<Vec<_>>();
+                let cdf_actions = cdf_writer.close().await.map(|v| {
+                    v.into_iter()
+                        .map(|add| {
+                            {
+                                Action::Cdc(AddCDCFile {
+                                    // This is a gnarly hack, but the action needs the nested path, not the
+                                    // path inside the prefixed store
+                                    path: format!("_change_data/{}", add.path),
+                                    size: add.size,
+                                    partition_values: add.partition_values,
+                                    data_change: false,
+                                    tags: add.tags,
+                                })
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })?;
+                write_time_ms += write_start.elapsed().as_millis() as u64;
+                let metrics = WriteExecutionPlanMetrics {
+                    scan_time_ms,
+                    write_time_ms,
+                };
+
+                add_actions.extend(cdf_actions);
+                Ok((add_actions, metrics))
+            });
             tasks.push(handle);
         }
     }
-    let actions = futures::future::join_all(tasks)
+    let (actions, metrics) = futures::future::join_all(tasks)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| WriteError::WriteTask { source: err })?
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?
-        .concat()
         .into_iter()
-        .collect::<Vec<_>>();
+        .fold(
+            (vec![], WriteExecutionPlanMetrics::default()),
+            |mut acc, (actions, metrics)| {
+                acc.0.extend(actions);
+                acc.1.scan_time_ms += metrics.scan_time_ms;
+                acc.1.write_time_ms += metrics.write_time_ms;
+                acc
+            },
+        );
     // Collect add actions to add to commit
-    Ok(actions)
+    Ok((actions, metrics))
 }
