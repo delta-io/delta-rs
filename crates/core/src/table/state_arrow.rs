@@ -244,13 +244,16 @@ impl DeltaTableState {
                 .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true))
                 .collect::<Vec<_>>();
 
+            let num_rows = partition_columns.first().map(|arr| arr.len()).unwrap_or(0);
+
             if fields.is_empty() {
                 vec![]
             } else {
-                let arr = Arc::new(arrow::array::StructArray::try_new(
+                let arr = Arc::new(StructArray::try_new_with_length(
                     Fields::from(fields),
                     partition_columns,
                     None,
+                    num_rows,
                 )?);
                 vec![(Cow::Borrowed("partition_values"), arr)]
             }
