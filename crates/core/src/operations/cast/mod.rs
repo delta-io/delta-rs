@@ -19,7 +19,8 @@ fn cast_struct(
     cast_options: &CastOptions,
     add_missing: bool,
 ) -> Result<StructArray, ArrowError> {
-    StructArray::try_new(
+    let num_rows = struct_array.len();
+    StructArray::try_new_with_length(
         fields.to_owned(),
         fields
             .iter()
@@ -41,6 +42,7 @@ fn cast_struct(
             })
             .collect::<Result<Vec<_>, _>>()?,
         struct_array.nulls().map(ToOwned::to_owned),
+        num_rows,
     )
 }
 
