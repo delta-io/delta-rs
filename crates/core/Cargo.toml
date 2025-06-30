@@ -85,7 +85,7 @@ percent-encoding = "2"
 tracing = { workspace = true }
 rand = "0.8"
 maplit = "1"
-sqlparser = { version = "0.56.0" }
+sqlparser = { version = "0.57.0" }
 humantime = { version = "2.1.0" }
 validator = { version = "0.19", features = ["derive"] }
 
