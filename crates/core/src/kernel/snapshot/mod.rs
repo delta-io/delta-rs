@@ -21,6 +21,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
+use either::Either;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -342,8 +343,8 @@ pub struct EagerSnapshot {
     pub(crate) transactions: Option<HashMap<String, Transaction>>,
 
     // NOTE: this is a Vec of RecordBatch instead of a single RecordBatch because
-    //       we do not yet enforce a consistent schema across all batches we read from the log.
-    pub(crate) files: Vec<RecordBatch>,
+    //       we do not yet enforce a consistent schema across all batches we read from the log.  If `None`, that indicates this was created with `config.require_files` set to `false`.
+    pub(crate) files: Option<Vec<RecordBatch>>,
 }
 
 impl EagerSnapshot {
@@ -370,13 +371,13 @@ impl EagerSnapshot {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
 
         let files = match config.require_files {
-            true => {
+            true => Some(
                 snapshot
                     .files(log_store, &mut visitors)?
                     .try_collect()
-                    .await?
-            }
-            false => vec![],
+                    .await?,
+            ),
+            false => None,
         };
 
         let mut sn = Self {
@@ -424,7 +425,7 @@ impl EagerSnapshot {
             .collect::<DeltaResult<Vec<_>>>()?;
         Ok(Self {
             snapshot,
-            files,
+            files: Some(files),
             tracked_actions: Default::default(),
             transactions: None,
         })
@@ -458,12 +459,13 @@ impl EagerSnapshot {
 
         let mut schema_actions: HashSet<_> =
             visitors.iter().flat_map(|v| v.required_actions()).collect();
+        let require_files = self.files.is_some();
         let files = std::mem::take(&mut self.files);
 
         schema_actions.insert(ActionType::Add);
         let checkpoint_stream = if new_slice.checkpoint_files.is_empty() {
-            // NOTE: we don't need to add the visitor relevant data here, as it is repüresented in the state already
-            futures::stream::iter(files.into_iter().map(Ok)).boxed()
+            // NOTE: we don't need to add the visitor relevant data here, as it is represented in the state already
+            futures::stream::iter(files.unwrap_or_default().into_iter().map(Ok)).boxed()
         } else {
             let read_schema =
                 StructType::new(schema_actions.iter().map(|a| a.schema_field().clone()));
@@ -478,13 +480,19 @@ impl EagerSnapshot {
 
         let mapper = LogMapper::try_new(&self.snapshot, None)?;
 
-        let files =
-            ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, &mut visitors)?
-                .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
-                .try_collect()
-                .await?;
+        if require_files {
+            let files = ReplayStream::try_new(
+                log_stream,
+                checkpoint_stream,
+                &self.snapshot,
+                &mut visitors,
+            )?
+            .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
+            .try_collect()
+            .await?;
 
-        self.files = files;
+            self.files = Some(files);
+        }
         self.process_visitors(visitors)?;
 
         Ok(())
@@ -540,17 +548,31 @@ impl EagerSnapshot {
 
     /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
     pub fn log_data(&self) -> LogDataHandler<'_> {
-        LogDataHandler::new(&self.files, self.metadata(), self.schema())
+        static EMPTY: Vec<RecordBatch> = vec![];
+        LogDataHandler::new(
+            &self.files.as_ref().unwrap_or(&EMPTY),
+            self.metadata(),
+            self.schema(),
+        )
+    }
+
+    /// Iterate over tracked `&RecordBatch`, if any.
+    fn files_iter(&self) -> impl Iterator<Item = &RecordBatch> {
+        if let Some(ref files) = self.files {
+            Either::Left(files.iter())
+        } else {
+            Either::Right(std::iter::empty())
+        }
     }
 
     /// Get the number of files in the snapshot
     pub fn files_count(&self) -> usize {
-        self.files.iter().map(|f| f.num_rows()).sum()
+        self.files_iter().map(|f| f.num_rows()).sum()
     }
 
     /// Get the files in the snapshot
     pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self.files.iter().flat_map(|b| read_adds(b)).flatten())
+        Ok(self.files_iter().flat_map(|b| read_adds(b)).flatten())
     }
 
     /// Get a file action iterator for the given version
@@ -560,7 +582,7 @@ impl EagerSnapshot {
 
     /// Get an iterator for the CDC files added in this version
     pub fn cdc_files(&self) -> DeltaResult<impl Iterator<Item = AddCDCFile> + '_> {
-        Ok(self.files.iter().flat_map(|b| read_cdf_adds(b)).flatten())
+        Ok(self.files_iter().flat_map(|b| read_cdf_adds(b)).flatten())
     }
 
     /// Iterate over all latest app transactions
@@ -634,15 +656,18 @@ impl EagerSnapshot {
             LogMapper::try_new(&self.snapshot, None)?
         };
 
-        self.files = files
-            .into_iter()
-            .chain(
-                self.files
-                    .iter()
-                    .flat_map(|batch| scanner.process_files_batch(batch, false)),
-            )
-            .map(|b| mapper.map_batch(b))
-            .collect::<DeltaResult<Vec<_>>>()?;
+        if self.files.is_some() {
+            self.files = Some(
+                files
+                    .into_iter()
+                    .chain(
+                        self.files_iter()
+                            .flat_map(|batch| scanner.process_files_batch(batch, false)),
+                    )
+                    .map(|b| mapper.map_batch(b))
+                    .collect::<DeltaResult<Vec<_>>>()?,
+            );
+        }
 
         if let Some(metadata) = metadata {
             self.snapshot.metadata = metadata;

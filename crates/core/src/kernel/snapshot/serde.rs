@@ -128,7 +128,7 @@ impl Serialize for EagerSnapshot {
         seq.serialize_element(&self.snapshot)?;
         seq.serialize_element(&self.tracked_actions)?;
         seq.serialize_element(&self.transactions)?;
-        for batch in self.files.iter() {
+        for batch in self.files_iter() {
             let mut buffer = vec![];
             let mut writer = FileWriter::try_new(&mut buffer, batch.schema().as_ref())
                 .map_err(serde::ser::Error::custom)?;
@@ -176,7 +176,7 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
         }
         Ok(EagerSnapshot {
             snapshot,
-            files,
+            files: Some(files),
             tracked_actions,
             transactions,
         })
