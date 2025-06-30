@@ -144,21 +144,18 @@ impl DeltaTableState {
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let metadata = self.metadata();
         let column_mapping_mode = self.table_config().column_mapping_mode();
-        let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
+        let partition_column_types: Vec<DataType> = metadata
             .partition_columns
             .iter()
-            .map(
-                |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
-                    let schema = metadata.schema()?;
-                    let field =
-                        schema
-                            .field(name)
-                            .ok_or(DeltaTableError::MetadataError(format!(
-                                "Invalid partition column {name}"
-                            )))?;
-                    Ok(field.data_type().try_into_arrow()?)
-                },
-            )
+            .map(|name| -> Result<DataType, DeltaTableError> {
+                let schema = metadata.schema()?;
+                let field = schema
+                    .field(name)
+                    .ok_or(DeltaTableError::MetadataError(format!(
+                        "Invalid partition column {name}"
+                    )))?;
+                Ok(field.data_type().try_into_arrow()?)
+            })
             .collect::<Result<_, DeltaTableError>>()?;
 
         // Create builder for each
@@ -241,16 +238,19 @@ impl DeltaTableState {
             let fields = partition_column_types
                 .into_iter()
                 .zip(metadata.partition_columns.iter())
-                .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true))
+                .map(|(datatype, name)| Field::new(name, datatype, true))
                 .collect::<Vec<_>>();
+
+            let num_rows = partition_columns.first().map(|arr| arr.len()).unwrap_or(0);
 
             if fields.is_empty() {
                 vec![]
             } else {
-                let arr = Arc::new(arrow::array::StructArray::try_new(
+                let arr = Arc::new(StructArray::try_new_with_length(
                     Fields::from(fields),
                     partition_columns,
                     None,
+                    num_rows,
                 )?);
                 vec![(Cow::Borrowed("partition_values"), arr)]
             }

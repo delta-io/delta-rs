@@ -144,6 +144,7 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
             "No partitionValues column found in files batch. This is unexpected.",
         ),
     )?;
+    let num_rows = batch.num_rows();
 
     let mut values = partition_schema
         .fields()
@@ -311,7 +312,7 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
 
     insert_field(
         batch,
-        StructArray::try_new(
+        StructArray::try_new_with_length(
             Fields::from(
                 partition_schema
                     .fields()
@@ -320,6 +321,7 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
             ),
             columns,
             None,
+            num_rows,
         )?,
         "partitionValues_parsed",
     )
@@ -329,6 +331,7 @@ fn insert_field(batch: RecordBatch, array: StructArray, name: &str) -> DeltaResu
     let schema = batch.schema();
     let add_col = ex::extract_and_cast::<StructArray>(&batch, "add")?;
     let (add_idx, _) = schema.column_with_name("add").unwrap();
+    let num_rows = batch.num_rows();
 
     let add_type = add_col
         .fields()
@@ -340,7 +343,7 @@ fn insert_field(batch: RecordBatch, array: StructArray, name: &str) -> DeltaResu
             true,
         ))))
         .collect_vec();
-    let new_add = Arc::new(StructArray::try_new(
+    let new_add = Arc::new(StructArray::try_new_with_length(
         add_type.clone().into(),
         add_col
             .columns()
@@ -349,6 +352,7 @@ fn insert_field(batch: RecordBatch, array: StructArray, name: &str) -> DeltaResu
             .chain(std::iter::once(Arc::new(array) as ArrayRef))
             .collect(),
         add_col.nulls().cloned(),
+        num_rows,
     )?);
     let new_add_field = Arc::new(ArrowField::new(
         "add",
