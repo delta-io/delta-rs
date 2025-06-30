@@ -102,10 +102,10 @@ def test_python_optimize_sort_flag(tmp_path):
     expected_original = list(zip(df["objectId"], df["dateTime"]))
     assert rows == expected_original
 
-    # Write and optimize with sorting enabled
+    # Write and optimize with sorting enabled via sort_columns
     write_deltalake(tmp_path, df, mode="overwrite")
     dt2 = DeltaTable(tmp_path)
-    dt2.optimize.compact(sort_enabled=True)
+    dt2.optimize.compact(sort_columns=["objectId", "dateTime"])
     result2 = dt2.to_pandas()
     rows2 = list(zip(result2["objectId"], result2["dateTime"]))
     expected_sorted = [

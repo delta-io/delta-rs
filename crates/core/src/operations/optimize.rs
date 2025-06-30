@@ -125,25 +125,23 @@ fn build_global_sort_plan(
 mod builder_tests {
     use super::*;
     use crate::operations::DeltaOps;
+    use crate::operations::OptimizeType;
+    use crate::writer::WriterProperties;
 
     #[test]
     fn test_optimize_builder_defaults_and_methods() {
         // Initialize a builder from an in-memory DeltaOps
         let ops = DeltaOps::new_in_memory();
         let builder = ops.optimize();
-        // By default, sorting is disabled until explicitly enabled
-        assert!(!builder.sort_enabled);
         // No default sort columns; user must opt in
         assert!(builder.sort_columns.is_empty());
 
-        // Disabling sort should keep sorting disabled and leave columns unchanged (empty)
+        // Disabling sort should leave columns unchanged (empty)
         let builder2 = builder.disable_sort();
-        assert!(!builder2.sort_enabled);
         assert!(builder2.sort_columns.is_empty());
 
-        // Overriding sort columns should update both the columns and re-enable sorting
+        // Overriding sort columns should update the columns
         let builder3 = builder2.with_sort_columns(&["foo", "bar"]);
-        assert!(builder3.sort_enabled);
         assert_eq!(
             builder3.sort_columns,
             vec!["foo".to_string(), "bar".to_string()]
@@ -163,12 +161,12 @@ mod builder_tests {
             builder.filters,
             builder.target_size,
             writer_props,
-            builder.sort_enabled,
             builder.sort_columns.clone(),
+            builder.sort_ascending,
+            builder.nulls_first,
         )
         .unwrap();
-        // Plan should reflect sorting disabled with no sort columns
-        assert!(!plan.sort_enabled);
+        // Plan should reflect no sort columns
         assert!(plan.sort_columns.is_empty());
 
         // Create a fresh builder with custom sort columns
@@ -181,13 +179,64 @@ mod builder_tests {
             builder2.filters,
             builder2.target_size,
             WriterProperties::builder().build(),
-            builder2.sort_enabled,
             builder2.sort_columns.clone(),
+            builder2.sort_ascending,
+            builder2.nulls_first,
         )
         .unwrap();
         // Plan should reflect new sort columns
-        assert!(plan2.sort_enabled);
         assert_eq!(plan2.sort_columns, vec!["x".to_string()]);
+    }
+    
+    #[test]
+    fn test_sort_order_and_nulls_flags() {
+        let ops = DeltaOps::new_in_memory();
+        let builder = ops.optimize();
+        // Defaults
+        assert_eq!(builder.sort_ascending, true);
+        assert_eq!(builder.nulls_first, true);
+        // Enable sorting columns
+        let builder2 = builder.with_sort_columns(&["a"]);
+        assert_eq!(builder2.sort_ascending, true);
+        assert_eq!(builder2.nulls_first, true);
+        // Change sort order
+        let builder3 = builder2.with_sort_order(false);
+        assert_eq!(builder3.sort_ascending, false);
+        assert_eq!(builder3.nulls_first, true);
+        // Change nulls ordering
+        let builder4 = builder2.with_nulls_first(false);
+        assert_eq!(builder4.sort_ascending, true);
+        assert_eq!(builder4.nulls_first, false);
+
+        // Propagate into merge plan
+        let writer_props = WriterProperties::builder().build();
+        let plan3 = create_merge_plan(
+            builder3.optimize_type,
+            &builder3.snapshot,
+            builder3.filters,
+            builder3.target_size,
+            writer_props.clone(),
+            builder3.sort_columns.clone(),
+            builder3.sort_ascending,
+            builder3.nulls_first,
+        )
+        .unwrap();
+        assert_eq!(plan3.sort_ascending, false);
+        assert_eq!(plan3.nulls_first, true);
+
+        let plan4 = create_merge_plan(
+            builder4.optimize_type,
+            &builder4.snapshot,
+            builder4.filters,
+            builder4.target_size,
+            writer_props,
+            builder4.sort_columns.clone(),
+            builder4.sort_ascending,
+            builder4.nulls_first,
+        )
+        .unwrap();
+        assert_eq!(plan4.sort_ascending, true);
+        assert_eq!(plan4.nulls_first, false);
     }
 }
 
@@ -422,10 +471,12 @@ pub struct OptimizeBuilder<'a> {
     max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
-    /// Whether to enforce global sort on compaction output
-    sort_enabled: bool,
     /// Columns to sort by when sort_enabled is true
     sort_columns: Vec<String>,
+    /// Sort order: ascending if true, descending if false
+    sort_ascending: bool,
+    /// Null ordering: nulls first if true, nulls last if false
+    nulls_first: bool,
     /// Minimum time to wait between commits
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -454,8 +505,9 @@ impl<'a> OptimizeBuilder<'a> {
             max_concurrent_tasks: num_cpus::get(),
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
-            sort_enabled: false,
             sort_columns: Vec::new(),
+            sort_ascending: true,
+            nulls_first: true,
             min_commit_interval: None,
             custom_execute_handler: None,
         }
@@ -524,13 +576,22 @@ impl<'a> OptimizeBuilder<'a> {
     /// Enable global sort on compaction output with specified columns
     pub fn with_sort_columns<S: AsRef<str>>(mut self, columns: &[S]) -> Self {
         self.sort_columns = columns.iter().map(|s| s.as_ref().to_string()).collect();
-        self.sort_enabled = true;
         self
     }
 
-    /// Disable global sort on compaction output
+    /// Disable global sort on compaction output by clearing any sort columns
     pub fn disable_sort(mut self) -> Self {
-        self.sort_enabled = false;
+        self.sort_columns.clear();
+        self
+    }
+    /// Set sort order: ascending if true, descending if false
+    pub fn with_sort_order(mut self, ascending: bool) -> Self {
+        self.sort_ascending = ascending;
+        self
+    }
+    /// Set null ordering: nulls first if true, nulls last if false
+    pub fn with_nulls_first(mut self, nulls_first: bool) -> Self {
+        self.nulls_first = nulls_first;
         self
     }
 }
@@ -562,8 +623,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
-                this.sort_enabled,
                 this.sort_columns.clone(),
+                this.sort_ascending,
+                this.nulls_first,
             )?;
             let metrics = plan
                 .execute(
@@ -676,10 +738,12 @@ pub struct MergePlan {
     task_parameters: Arc<MergeTaskParameters>,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: i64,
-    /// Whether sorting is enabled for this merge plan
-    sort_enabled: bool,
     /// Columns to sort by when sort is enabled
     sort_columns: Vec<String>,
+    /// Sort order: ascending if true, descending if false
+    sort_ascending: bool,
+    /// Null ordering: nulls first if true, nulls last if false
+    nulls_first: bool,
 }
 
 /// Parameters passed to individual merge tasks
@@ -861,7 +925,7 @@ impl MergePlan {
                         debug!("  file {}", file.path);
                     }
                     let object_store_ref = store.object_store(Some(operation_id));
-                    if !self.sort_enabled {
+                    if self.sort_columns.is_empty() {
                         // Default compaction without sorting
                         let batch_stream = futures::stream::iter(files.clone())
                             .then(move |file| {
@@ -905,6 +969,8 @@ impl MergePlan {
                         let log_store_ref = store.clone();
                         let snapshot = snapshot.clone();
                         let sort_cols = self.sort_columns.clone();
+                        let sort_ascending = self.sort_ascending;
+                        let sort_nulls_first = self.nulls_first;
                         // Extract underlying file list from MergeBin
                         let files_for_provider = files.files.clone();
                         // Asynchronous DataFrame-based sorted reader
@@ -925,7 +991,7 @@ impl MergePlan {
                                 .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
                             let sort_exprs = sort_cols
                                 .iter()
-                                .map(|c| ident(c).sort(true, true))
+                                .map(|c| ident(c).sort(sort_ascending, sort_nulls_first))
                                 .collect::<Vec<_>>();
                             let df = df
                                 .sort(sort_exprs)
@@ -1097,15 +1163,16 @@ pub fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
-    sort_enabled: bool,
     sort_columns: Vec<String>,
+    sort_ascending: bool,
+    nulls_first: bool,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
     let partitions_keys = &snapshot.metadata().partition_columns;
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {
-            if sort_enabled {
+            if !sort_columns.is_empty() {
                 // Sorts all files per partition, regardless of bin size
                 build_global_sort_plan(snapshot, filters)?
             } else {
@@ -1140,8 +1207,9 @@ pub fn create_merge_plan(
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
         }),
         read_table_version: snapshot.version(),
-        sort_enabled,
         sort_columns,
+        sort_ascending,
+        nulls_first,
     })
 }
 
