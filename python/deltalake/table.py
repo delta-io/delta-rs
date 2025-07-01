@@ -964,6 +964,9 @@ class DeltaTable:
         self._table.update_incremental()
 
     def create_checkpoint(self) -> None:
+        """
+        Create a checkpoint at the current table version.
+        """
         self._table.create_checkpoint()
 
     def cleanup_metadata(self) -> None:
