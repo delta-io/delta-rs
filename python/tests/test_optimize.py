@@ -194,6 +194,43 @@ def test_optimize_schema_evolved_table(
         == data
     )
 
+def test_python_zorder_vs_global_sort_on_timestamps(tmp_path):
+    """
+    Demonstrate that z-order does not guarantee lexicographic ordering on timestamps,
+    whereas global sort via sort_columns does.
+    """
+    import pandas as pd
+    from datetime import datetime
+
+    # Create DataFrame with true timestamp dtype
+    df = pd.DataFrame({
+        "objectId": ["B", "A", "B", "A"],
+        "dateTime": [
+            datetime(2021, 2, 1),
+            datetime(2021, 1, 1),
+            datetime(2021, 4, 1),
+            datetime(2021, 3, 1),
+        ],
+    })
+    # Write and z-order-optimize
+    write_deltalake(tmp_path, df, mode="overwrite")
+    dt = DeltaTable(tmp_path)
+    dt.optimize.z_order(["objectId", "dateTime"] )
+    z_df = dt.to_pandas()
+    rows_z = list(zip(z_df["objectId"], z_df["dateTime"]))
+    lex = sorted(rows_z)
+    # z-order should not equal lexicographic ordering
+    assert rows_z != lex
+
+    # Reset and apply global sort
+    write_deltalake(tmp_path, df, mode="overwrite")
+    dt2 = DeltaTable(tmp_path)
+    dt2.optimize.compact(sort_columns=["objectId", "dateTime"] )
+    s_df = dt2.to_pandas()
+    rows_s = list(zip(s_df["objectId"], s_df["dateTime"]))
+    # sorted output should match lexicographic ordering
+    assert rows_s == lex
+
 
 @pytest.mark.pandas
 @pytest.mark.pyarrow
