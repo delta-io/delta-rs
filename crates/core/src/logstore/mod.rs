@@ -104,7 +104,7 @@ trait LogStoreFactoryExt {
     ///
     /// - `root_store`: and instance of [`ObjectStoreRef`] with no prefix o.a. applied.
     ///   I.e. pointing to the root of the onject store.
-    /// - `location`: The location of the the delta table (where the `_delta_log` directory is).
+    /// - `location`: The location of the delta table (where the `_delta_log` directory is).
     /// - `options`: The options for the log store.
     fn with_options_internal(
         &self,
@@ -398,7 +398,7 @@ pub trait LogStore: Send + Sync + AsAny {
 
 /// Extension trait for LogStore to handle some internal invariants.
 pub(crate) trait LogStoreExt: LogStore {
-    /// The the fully qualified table URL
+    /// The fully qualified table URL
     ///
     /// The paths is guaranteed to end with a slash,
     /// so that it can be used as a prefix for other paths.
@@ -410,7 +410,7 @@ pub(crate) trait LogStoreExt: LogStore {
         base
     }
 
-    /// The the fully qualified table log URL
+    /// The fully qualified table log URL
     ///
     /// The paths is guaranteed to end with a slash,
     /// so that it can be used as a prefix for other paths.
