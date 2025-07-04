@@ -97,7 +97,7 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
 #[serial]
 fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestResult {
     let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
-    // Removing the the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
+    // Removing the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
     std::env::remove_var("AZURE_STORAGE_USE_EMULATOR");
     std::env::remove_var("AZURE_STORAGE_ACCOUNT_NAME");
     std::env::remove_var("AZURE_STORAGE_TOKEN");
@@ -116,7 +116,7 @@ fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestR
 #[serial]
 async fn list_delta_tables_using_listing_provider_with_account_name() -> TestResult {
     let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
-    // Removing the the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
+    // Removing the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
     std::env::remove_var("AZURE_STORAGE_USE_EMULATOR");
     std::env::remove_var("AZURE_STORAGE_ACCOUNT_NAME");
     std::env::remove_var("AZURE_STORAGE_TOKEN");

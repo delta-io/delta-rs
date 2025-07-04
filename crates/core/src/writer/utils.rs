@@ -117,7 +117,7 @@ impl ShareableBuffer {
             .map(|lock| lock.into_inner())
     }
 
-    /// Returns a clone of the the underlying buffer as a `Vec`.
+    /// Returns a clone of the underlying buffer as a `Vec`.
     pub fn to_vec(&self) -> Vec<u8> {
         let inner = self.buffer.read();
         (*inner).to_vec()

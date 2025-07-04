@@ -125,7 +125,7 @@ fn map_batch(
 }
 
 /// parse the serialized stats in the  `add.stats` column in the files batch
-/// and add a new column `stats_parsed` containing the the parsed stats.
+/// and add a new column `stats_parsed` containing the parsed stats.
 fn parse_stats(
     batch: RecordBatch,
     stats_schema: ArrowSchemaRef,
