@@ -21,7 +21,7 @@
 //! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
+use crate::{DeltaTable, DeltaTableConfig};
 
 /// Errors that can occur during vacuum
 #[derive(thiserror::Error, Debug)]
@@ -99,6 +99,8 @@ pub struct VacuumBuilder {
     retention_period: Option<Duration>,
     /// Validate the retention period is not below the retention period configured in the table
     enforce_retention_duration: bool,
+    /// Keep files associated with particular versions
+    keep_versions: Option<Vec<i64>>,
     /// Don't delete the files. Just determine which files can be deleted
     dry_run: bool,
     /// Mode of vacuum that should be run
@@ -157,6 +159,7 @@ impl VacuumBuilder {
             log_store,
             retention_period: None,
             enforce_retention_duration: true,
+            keep_versions: None,
             dry_run: false,
             mode: VacuumMode::Lite,
             clock: None,
@@ -165,9 +168,16 @@ impl VacuumBuilder {
         }
     }
 
-    /// Override the default rention period for which files are deleted.
+    /// Override the default retention period for which files are deleted.
     pub fn with_retention_period(mut self, retention_period: Duration) -> Self {
         self.retention_period = Some(retention_period);
+        self
+    }
+
+    /// Specify table versions that we want to keep for time travel.
+    /// This will prevent deletion of files required by these versions.
+    pub fn with_keep_versions(mut self, versions: Vec<i64>) -> Self {
+        self.keep_versions = Some(versions);
         self
     }
 
@@ -235,6 +245,32 @@ impl VacuumBuilder {
             None => Utc::now().timestamp_millis(),
         };
 
+        let keep_files = match &self.keep_versions {
+            Some(versions) if !versions.is_empty() => {
+                let mut sorted_versions = versions.clone();
+                sorted_versions.sort();
+                let mut keep_files: HashSet<String> = HashSet::new();
+                let mut state = DeltaTableState::try_new(
+                    &self.log_store,
+                    DeltaTableConfig::default(),
+                    Some(versions[0]),
+                )
+                .await?;
+                for version in sorted_versions {
+                    state.update(&self.log_store, Some(version)).await?;
+                    let files: Vec<String> = state
+                        .file_paths_iter()
+                        .map(|path| path.to_string())
+                        .collect();
+                    debug!("keep version:{}\n, {:#?}", version, files);
+                    keep_files.extend(files);
+                }
+
+                keep_files
+            }
+            _ => HashSet::new(),
+        };
+
         let expired_tombstones = get_stale_files(
             &self.snapshot,
             retention_period,
@@ -255,6 +291,14 @@ impl VacuumBuilder {
             let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
             // file is still being tracked in table
             if valid_files.contains(&obj_meta.location) {
+                continue;
+            }
+            // file is associated with a version that we are keeping
+            if keep_files.contains(&obj_meta.location.to_string()) {
+                debug!(
+                    "The file {:?} is in a version specified to be kept by the user, skipping",
+                    &obj_meta.location
+                );
                 continue;
             }
             if is_hidden_directory(partition_columns, &obj_meta.location)? {
@@ -514,6 +558,105 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_keep_version() -> DeltaResult<()> {
+        use std::fs::read_to_string;
+        use std::path::{Path, PathBuf};
+        let table_loc = "../test/tests/data/simple_table";
+        let table = open_table(table_loc).await?;
+        let versions_to_keep = vec![2, 3];
+
+        // First, vacuum without keeping any particular versions
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            // .with_keep_versions(versions_to_keep)
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        let mut all_files_deleted = result.files_deleted.clone();
+        all_files_deleted.sort();
+
+        // Next, vacuum with specific versions retained
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_keep_versions(versions_to_keep.clone())
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        let mut non_version_files_deleted = result.files_deleted.clone();
+        non_version_files_deleted.sort();
+
+        // Compute the files that should be kept based on versions_to_keep
+        let keep_files = compute_files_to_keep(&table, &versions_to_keep).await?;
+
+        let mut expected_files_deleted: Vec<String> = all_files_deleted
+            .clone()
+            .into_iter()
+            .filter(|file| !keep_files.contains(file))
+            .collect();
+        expected_files_deleted.sort();
+
+        // manually check the difference in files deleted
+        if false {
+            let mut difference = vec![];
+            for file in all_files_deleted.iter() {
+                if !non_version_files_deleted.contains(file) {
+                    difference.push(file);
+                }
+            }
+            println!("difference in files deleted: {:#?}", difference);
+
+            println!("removal actions in the log files:");
+            for logfile in vec!["00000000000000000003.json", "00000000000000000004.json"] {
+                println!("logfile: {}", logfile);
+                let logpath: PathBuf = Path::new(table_loc).join("_delta_log").join(logfile);
+                let lines: Vec<_> = read_to_string(logpath)
+                    .unwrap()
+                    .lines()
+                    .map(String::from)
+                    .filter(|line| line.contains("remove"))
+                    .collect();
+                println!("lines: {:#?}", lines);
+            }
+        }
+
+        assert_eq!(non_version_files_deleted, expected_files_deleted,);
+
+        Ok(())
+    }
+
+    async fn compute_files_to_keep(
+        table: &DeltaTable,
+        versions_to_keep: &Vec<i64>,
+    ) -> Result<HashSet<String>, DeltaTableError> {
+        let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
+        let mut tv = table.clone();
+        let max_version = tv.snapshot()?.version();
+
+        // Find files for each version
+        for i in 0..=max_version {
+            tv.load_version(i).await?;
+            let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
+            // println!("version:{}\n, {:#?}", i, files);
+            files_by_version.insert(i, files);
+        }
+
+        // Collect complete set of files to keep
+        let keep_files = versions_to_keep
+            .iter()
+            .map(|v| {
+                files_by_version
+                    .get(v)
+                    .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
+        Ok(keep_files)
     }
 
     #[tokio::test]
