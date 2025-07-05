@@ -120,6 +120,9 @@ class RawDeltaTable:
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        sort_columns: list[str] | None = ...,  # if provided, triggers global sort
+        sort_ascending: bool = ...,          # ascending order if True
+        nulls_first: bool = ...,             # nulls first if True
     ) -> str: ...
     def z_order_optimize(
         self,

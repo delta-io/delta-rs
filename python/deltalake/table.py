@@ -566,8 +566,9 @@ class DeltaTable:
     def update(
         self,
         updates: dict[str, str] | None = None,
-        new_values: dict[str, int | float | str | datetime | bool | list[Any]]
-        | None = None,
+        new_values: (
+            dict[str, int | float | str | datetime | bool | list[Any]] | None
+        ) = None,
         predicate: str | None = None,
         writer_properties: WriterProperties | None = None,
         error_on_type_mismatch: bool = True,
@@ -1910,6 +1911,9 @@ class TableOptimizer:
         writer_properties: WriterProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
+        sort_columns: Iterable[str] | None = None,
+        sort_ascending: bool = True,
+        nulls_first: bool = True,
     ) -> dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -1965,6 +1969,9 @@ class TableOptimizer:
             writer_properties,
             commit_properties,
             post_commithook_properties,
+            list(sort_columns) if sort_columns is not None else None,
+            sort_ascending,
+            nulls_first,
         )
         self.table.update_incremental()
         return json.loads(metrics)
