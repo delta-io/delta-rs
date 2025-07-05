@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::operations::cast::cast_record_batch;
+use crate::kernel::schema::cast_record_batch;
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion::common::{not_impl_err, ColumnStatistics};

@@ -8,9 +8,8 @@ use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::schema::StructType;
-use super::StructTypeExt;
 use crate::kernel::{error::Error, DeltaResult};
+use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
 
 /// Defines a file format used in table
