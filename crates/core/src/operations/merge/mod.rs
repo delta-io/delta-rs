@@ -79,10 +79,10 @@ use crate::delta_datafusion::{
     register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
     DeltaSessionConfig, DeltaTableProvider,
 };
+use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Metadata, StructTypeExt};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schema};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::execution::write_execution_plan_v2;
