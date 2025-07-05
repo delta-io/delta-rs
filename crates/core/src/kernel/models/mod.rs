@@ -9,10 +9,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod actions;
 pub(crate) mod fields;
-mod schema;
 
 pub use actions::*;
-pub use schema::*;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 /// The type of action that was performed on the table

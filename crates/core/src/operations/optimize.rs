@@ -525,7 +525,7 @@ impl MergePlan {
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
 
-            batch = super::cast::cast_record_batch(
+            batch = crate::kernel::schema::cast::cast_record_batch(
                 &batch,
                 task_parameters.file_schema.clone(),
                 false,

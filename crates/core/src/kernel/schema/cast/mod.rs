@@ -9,7 +9,8 @@ use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef as ArrowSchemaRef};
 use std::sync::Arc;
 
-pub(crate) mod merge_schema;
+mod merge_schema;
+pub(crate) use merge_schema::*;
 
 use crate::DeltaResult;
 
@@ -203,7 +204,6 @@ mod tests {
     use std::ops::Deref;
     use std::sync::Arc;
 
-    use super::merge_schema::{merge_arrow_schema, merge_delta_struct};
     use arrow::array::types::Int32Type;
     use arrow::array::{
         new_empty_array, new_null_array, Array, ArrayData, ArrayRef, AsArray, Int32Array,
@@ -215,11 +215,12 @@ mod tests {
     use delta_kernel::schema::MetadataValue;
     use itertools::Itertools;
 
+    use super::merge_schema::{merge_arrow_schema, merge_delta_struct};
+    use super::{cast_record_batch, is_cast_required};
     use crate::kernel::{
         ArrayType as DeltaArrayType, DataType as DeltaDataType, StructField as DeltaStructField,
         StructType as DeltaStructType,
     };
-    use crate::operations::cast::{cast_record_batch, is_cast_required};
 
     #[test]
     fn test_merge_arrow_schema_with_dict() {
