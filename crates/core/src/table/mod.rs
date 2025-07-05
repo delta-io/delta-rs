@@ -71,9 +71,9 @@ pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<DeltaTableState>,
     /// the load options used during load
-    pub config: DeltaTableConfig,
+    config: DeltaTableConfig,
     /// log store
-    pub(crate) log_store: LogStoreRef,
+    log_store: LogStoreRef,
 }
 
 impl Serialize for DeltaTable {
@@ -167,6 +167,10 @@ impl DeltaTable {
     /// Check if the [`DeltaTable`] exists
     pub async fn verify_deltatable_existence(&self) -> DeltaResult<bool> {
         self.log_store.is_delta_table_location().await
+    }
+
+    pub fn config(&self) -> &DeltaTableConfig {
+        &self.config
     }
 
     /// The URI of the underlying data

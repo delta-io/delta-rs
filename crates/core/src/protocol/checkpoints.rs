@@ -109,7 +109,7 @@ pub async fn create_checkpoint(table: &DeltaTable, operation_id: Option<Uuid>) -
     let snapshot = table.snapshot()?;
     create_checkpoint_for(
         snapshot.version() as u64,
-        table.log_store.as_ref(),
+        table.log_store().as_ref(),
         operation_id,
     )
     .await?;
@@ -127,7 +127,7 @@ pub async fn cleanup_metadata(
         - snapshot.table_config().log_retention_duration().as_millis() as i64;
     cleanup_expired_logs_for(
         snapshot.version(),
-        table.log_store.as_ref(),
+        table.log_store().as_ref(),
         log_retention_timestamp,
         operation_id,
     )
@@ -145,7 +145,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 ) -> DeltaResult<()> {
     let table = open_table_with_version(table_uri, version).await?;
     let snapshot = table.snapshot()?;
-    create_checkpoint_for(version as u64, table.log_store.as_ref(), operation_id).await?;
+    create_checkpoint_for(version as u64, table.log_store().as_ref(), operation_id).await?;
 
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
@@ -274,7 +274,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        let res = create_checkpoint_for(0, table.log_store.as_ref(), None).await;
+        let res = create_checkpoint_for(0, table.log_store().as_ref(), None).await;
         assert!(res.is_ok());
 
         // Look at the "files" and verify that the _last_checkpoint has the right version
@@ -355,7 +355,7 @@ mod tests {
 
         let res = create_checkpoint_for(
             table.version().unwrap() as u64,
-            table.log_store.as_ref(),
+            table.log_store().as_ref(),
             None,
         )
         .await;
@@ -391,7 +391,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         assert_eq!(table.get_schema().unwrap(), &table_schema);
-        match create_checkpoint_for(1, table.log_store.as_ref(), None).await {
+        match create_checkpoint_for(1, table.log_store().as_ref(), None).await {
             Ok(_) => {
                 /*
                  * If a checkpoint is allowed to be created here, it will use the passed in
