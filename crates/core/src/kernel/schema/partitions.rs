@@ -3,11 +3,12 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{Expression, JunctionPredicateOp, Predicate, Scalar};
+use delta_kernel::schema::StructType;
 use serde::{Serialize, Serializer};
 
 use super::{DataType, PrimitiveType};
-use crate::errors::DeltaTableError;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::scalars::ScalarExt;
 
 /// A special value used in Hive to represent the null partition in partitioned tables
@@ -99,7 +100,11 @@ fn compare_typed_value(
 /// Partition filters methods for filtering the DeltaTable partitions.
 impl PartitionFilter {
     /// Indicates if a DeltaTable partition matches with the partition filter by key and value.
-    pub fn match_partition(&self, partition: &DeltaTablePartition, data_type: &DataType) -> bool {
+    pub(crate) fn match_partition(
+        &self,
+        partition: &DeltaTablePartition,
+        data_type: &DataType,
+    ) -> bool {
         if self.key != partition.key {
             return false;
         }
@@ -153,7 +158,7 @@ impl PartitionFilter {
 
     /// Indicates if one of the DeltaTable partition among the list
     /// matches with the partition filter.
-    pub fn match_partitions(
+    pub(crate) fn match_partitions(
         &self,
         partitions: &[DeltaTablePartition],
         partition_col_data_types: &HashMap<&String, &DataType>,
@@ -308,9 +313,65 @@ impl TryFrom<&str> for DeltaTablePartition {
     }
 }
 
+#[allow(unused)] // TODO: remove once we use this in kernel log replay
+pub(crate) fn to_kernel_predicate(
+    filters: &[PartitionFilter],
+    table_schema: &StructType,
+) -> DeltaResult<Predicate> {
+    let predicates = filters
+        .iter()
+        .map(|filter| filter_to_kernel_predicate(filter, table_schema))
+        .collect::<DeltaResult<Vec<_>>>()?;
+    Ok(Predicate::junction(JunctionPredicateOp::And, predicates))
+}
+
+fn filter_to_kernel_predicate(
+    filter: &PartitionFilter,
+    table_schema: &StructType,
+) -> DeltaResult<Predicate> {
+    let Some(field) = table_schema.field(&filter.key) else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: format!("Field '{}' is not a root table field.", filter.key),
+        });
+    };
+    let Some(dt) = field.data_type().as_primitive_opt() else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: format!("Field '{}' is not a primitive type", field.name()),
+        });
+    };
+
+    let column = Expression::column([field.name()]);
+    Ok(match &filter.value {
+        PartitionValue::Equal(raw) => column.eq(dt.parse_scalar(raw)?),
+        PartitionValue::NotEqual(raw) => column.ne(dt.parse_scalar(raw)?),
+        PartitionValue::LessThan(raw) => column.lt(dt.parse_scalar(raw)?),
+        PartitionValue::LessThanOrEqual(raw) => column.le(dt.parse_scalar(raw)?),
+        PartitionValue::GreaterThan(raw) => column.gt(dt.parse_scalar(raw)?),
+        PartitionValue::GreaterThanOrEqual(raw) => column.ge(dt.parse_scalar(raw)?),
+        op @ PartitionValue::In(raw_values) | op @ PartitionValue::NotIn(raw_values) => {
+            let values = raw_values
+                .iter()
+                .map(|v| dt.parse_scalar(v))
+                .collect::<Result<Vec<_>, _>>()?;
+            let (expr, operator): (Box<dyn Fn(Scalar) -> Predicate>, _) = match op {
+                PartitionValue::In(_) => {
+                    (Box::new(|v| column.clone().eq(v)), JunctionPredicateOp::Or)
+                }
+                PartitionValue::NotIn(_) => {
+                    (Box::new(|v| column.clone().ne(v)), JunctionPredicateOp::And)
+                }
+                _ => unreachable!(),
+            };
+            let predicates = values.into_iter().map(expr).collect::<Vec<_>>();
+            Predicate::junction(operator, predicates)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::StructField;
     use serde_json::json;
 
     fn check_json_serialize(filter: PartitionFilter, expected_json: &str) {
@@ -486,5 +547,254 @@ mod tests {
         assert!(valid_filters.match_partitions(&partitions, &partition_data_types),);
         assert!(valid_filter_month.match_partitions(&partitions, &partition_data_types),);
         assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_equal() {
+        let schema = StructType::new(vec![
+            StructField::new("name", DataType::Primitive(PrimitiveType::String), true),
+            StructField::new("age", DataType::Primitive(PrimitiveType::Integer), true),
+        ]);
+        let filter = PartitionFilter {
+            key: "name".to_string(),
+            value: PartitionValue::Equal("Alice".to_string()),
+        };
+
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+
+        let expected = Expression::column(["name"]).eq(Scalar::String("Alice".into()));
+        assert_eq!(predicate, expected);
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_not_equal() {
+        let schema = StructType::new(vec![StructField::new(
+            "status",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        )]);
+        let filter = PartitionFilter {
+            key: "status".to_string(),
+            value: PartitionValue::NotEqual("inactive".to_string()),
+        };
+
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+
+        let expected = Expression::column(["status"]).ne(Scalar::String("inactive".into()));
+        assert_eq!(predicate, expected);
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_comparisons() {
+        let schema = StructType::new(vec![
+            StructField::new("score", DataType::Primitive(PrimitiveType::Integer), true),
+            StructField::new("price", DataType::Primitive(PrimitiveType::Long), true),
+        ]);
+
+        // Test less than
+        let filter = PartitionFilter {
+            key: "score".to_string(),
+            value: PartitionValue::LessThan("100".to_string()),
+        };
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+        let expected = Expression::column(["score"]).lt(Scalar::Integer(100));
+        assert_eq!(predicate, expected);
+
+        // Test less than or equal
+        let filter = PartitionFilter {
+            key: "score".to_string(),
+            value: PartitionValue::LessThanOrEqual("100".to_string()),
+        };
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+        let expected = Expression::column(["score"]).le(Scalar::Integer(100));
+        assert_eq!(predicate, expected);
+
+        // Test greater than
+        let filter = PartitionFilter {
+            key: "price".to_string(),
+            value: PartitionValue::GreaterThan("50".to_string()),
+        };
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+        let expected = Expression::column(["price"]).gt(Scalar::Long(50));
+        assert_eq!(predicate, expected);
+
+        // Test greater than or equal
+        let filter = PartitionFilter {
+            key: "price".to_string(),
+            value: PartitionValue::GreaterThanOrEqual("50".to_string()),
+        };
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+        let expected = Expression::column(["price"]).ge(Scalar::Long(50));
+        assert_eq!(predicate, expected);
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_in_operations() {
+        let schema = StructType::new(vec![StructField::new(
+            "category",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        )]);
+
+        let column = Expression::column(["category"]);
+        let categories = [
+            Scalar::String("books".to_string()),
+            Scalar::String("electronics".to_string()),
+        ];
+
+        // Test In operation
+        let filter = PartitionFilter {
+            key: "category".to_string(),
+            value: PartitionValue::In(vec!["books".to_string(), "electronics".to_string()]),
+        };
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+        let expected_inner = categories
+            .clone()
+            .into_iter()
+            .map(|s| column.clone().eq(s))
+            .collect::<Vec<_>>();
+        let expected = Predicate::junction(JunctionPredicateOp::Or, expected_inner);
+        assert_eq!(predicate, expected);
+
+        // Test NotIn operation
+        let filter = PartitionFilter {
+            key: "category".to_string(),
+            value: PartitionValue::NotIn(vec!["books".to_string(), "electronics".to_string()]),
+        };
+        let predicate = filter_to_kernel_predicate(&filter, &schema).unwrap();
+        let expected_inner = categories
+            .into_iter()
+            .map(|s| column.clone().ne(s))
+            .collect::<Vec<_>>();
+        let expected = Predicate::junction(JunctionPredicateOp::And, expected_inner);
+        assert_eq!(predicate, expected);
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_empty_in_list() {
+        let schema = StructType::new(vec![StructField::new(
+            "tag",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        )]);
+
+        let filter = PartitionFilter {
+            key: "tag".to_string(),
+            value: PartitionValue::In(vec![]),
+        };
+        let result = filter_to_kernel_predicate(&filter, &schema);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_field_not_found() {
+        let schema = StructType::new(vec![StructField::new(
+            "existing_field",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        )]);
+
+        let filter = PartitionFilter {
+            key: "nonexistent_field".to_string(),
+            value: PartitionValue::Equal("value".to_string()),
+        };
+
+        let result = filter_to_kernel_predicate(&filter, &schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DeltaTableError::SchemaMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_non_primitive_field() {
+        let nested_struct = StructType::new(vec![StructField::new(
+            "inner",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        )]);
+        let schema = StructType::new(vec![StructField::new(
+            "nested",
+            DataType::Struct(Box::new(nested_struct)),
+            true,
+        )]);
+
+        let filter = PartitionFilter {
+            key: "nested".to_string(),
+            value: PartitionValue::Equal("value".to_string()),
+        };
+
+        let result = filter_to_kernel_predicate(&filter, &schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DeltaTableError::SchemaMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_different_data_types() {
+        let schema = StructType::new(vec![
+            StructField::new(
+                "bool_field",
+                DataType::Primitive(PrimitiveType::Boolean),
+                true,
+            ),
+            StructField::new("date_field", DataType::Primitive(PrimitiveType::Date), true),
+            StructField::new(
+                "timestamp_field",
+                DataType::Primitive(PrimitiveType::Timestamp),
+                true,
+            ),
+            StructField::new(
+                "double_field",
+                DataType::Primitive(PrimitiveType::Double),
+                true,
+            ),
+            StructField::new(
+                "float_field",
+                DataType::Primitive(PrimitiveType::Float),
+                true,
+            ),
+        ]);
+
+        // Test boolean field
+        let filter = PartitionFilter {
+            key: "bool_field".to_string(),
+            value: PartitionValue::Equal("true".to_string()),
+        };
+        assert!(filter_to_kernel_predicate(&filter, &schema).is_ok());
+
+        // Test date field
+        let filter = PartitionFilter {
+            key: "date_field".to_string(),
+            value: PartitionValue::GreaterThan("2023-01-01".to_string()),
+        };
+        assert!(filter_to_kernel_predicate(&filter, &schema).is_ok());
+
+        // Test float field
+        let filter = PartitionFilter {
+            key: "float_field".to_string(),
+            value: PartitionValue::LessThan("3.14".to_string()),
+        };
+        assert!(filter_to_kernel_predicate(&filter, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_filter_to_kernel_predicate_invalid_scalar_value() {
+        let schema = StructType::new(vec![StructField::new(
+            "number",
+            DataType::Primitive(PrimitiveType::Integer),
+            true,
+        )]);
+
+        let filter = PartitionFilter {
+            key: "number".to_string(),
+            value: PartitionValue::Equal("not_a_number".to_string()),
+        };
+
+        let result = filter_to_kernel_predicate(&filter, &schema);
+        assert!(result.is_err());
     }
 }
