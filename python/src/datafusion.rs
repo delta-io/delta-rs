@@ -268,7 +268,7 @@ mod tests {
 
         // The scan method should add a FilterExec to the plan
         // We can verify this by checking the plan's children
-        assert!(plan.children().len() > 0);
+        assert!(!plan.children().is_empty());
     }
 
     #[tokio::test]

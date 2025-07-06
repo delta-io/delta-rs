@@ -67,7 +67,7 @@ pub fn derive_delta_config(input: TokenStream) -> TokenStream {
 }
 
 fn generate_config_keys(name: &Ident, fields: &[&Field]) -> Result<proc_macro2::TokenStream> {
-    let enum_name = Ident::new(&format!("{}Key", name), Span::call_site());
+    let enum_name = Ident::new(&format!("{name}Key"), Span::call_site());
     let variants: Vec<_> = fields
         .iter()
         .map(|field| {

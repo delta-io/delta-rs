@@ -118,7 +118,7 @@ fn stats_schema(
     mut min_max_transform: MinMaxStatsTransform,
 ) -> DeltaResult<SchemaRef> {
     let min_max_schema =
-        if let Some(min_max_schema) = min_max_transform.transform_struct(&physical_schema) {
+        if let Some(min_max_schema) = min_max_transform.transform_struct(physical_schema) {
             min_max_schema.into_owned()
         } else {
             StructType::new(vec![])

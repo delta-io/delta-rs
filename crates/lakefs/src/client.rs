@@ -520,14 +520,12 @@ mod tests {
 
             assert!(
                 result.is_ok(),
-                "Test case '{}' failed: API call returned error",
-                test_name
+                "Test case '{test_name}' failed: API call returned error"
             );
             let has_changes = result.unwrap();
             assert_eq!(
                 has_changes, expected_has_changes,
-                "Test case '{}' failed: expected has_changes to be {}",
-                test_name, expected_has_changes
+                "Test case '{test_name}' failed: expected has_changes to be {expected_has_changes}"
             );
             mock.assert();
         }

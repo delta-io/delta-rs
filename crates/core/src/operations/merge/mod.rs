@@ -875,7 +875,7 @@ async fn execute(
         }
     };
 
-    debug!("Using target subset filter: {:?}", commit_predicate);
+    debug!("Using target subset filter: {commit_predicate:?}");
 
     let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
     // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS

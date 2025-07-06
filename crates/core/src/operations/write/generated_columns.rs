@@ -1,6 +1,6 @@
 use crate::table::state::DeltaTableState;
 use datafusion::common::ScalarValue;
-use datafusion::logical_expr::{col, when, Expr, ExprSchemable};
+use datafusion::logical_expr::{col, when, ExprSchemable};
 use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
