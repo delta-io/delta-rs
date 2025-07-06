@@ -73,7 +73,7 @@ impl<T: Error + 'static> Display for DisplaySourceChain<T> {
         }
         for (i, part) in out_parts.iter().enumerate() {
             if i == 0 {
-                writeln!(f, "{}", part)?;
+                writeln!(f, "{part}")?;
             } else {
                 writeln!(
                     f,
@@ -202,7 +202,7 @@ mod tests {
             error_name: "IOError".to_string(),
         };
 
-        let formatted_output = format!("{}", display_chain);
+        let formatted_output = format!("{display_chain}");
         assert!(formatted_output.eq("Generic error\n          \u{1b}[31m↳\u{1b}[0m Middle error\n           \u{1b}[31m↳\u{1b}[0m Root IO error\n"));
     }
 }

@@ -388,7 +388,7 @@ impl TableConfig<'_> {
             .and_then(|o| {
                 o.as_ref().and_then(|v| {
                     ColumnName::parse_column_name_list(v)
-                        .inspect_err(|e| println!("{:?}", e))
+                        .inspect_err(|e| println!("{e:?}"))
                         .ok()
                 })
             })
