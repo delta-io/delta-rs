@@ -81,7 +81,7 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Metadata, StructTypeExt};
+use crate::kernel::{new_metadata, Action, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -967,10 +967,10 @@ async fn execute(
         new_schema = Some(schema.clone());
         let schema_struct: StructType = schema.try_into_kernel()?;
         if &schema_struct != snapshot.schema() {
-            let action = Action::Metadata(Metadata::try_new(
-                schema_struct,
-                current_metadata.partition_columns.clone(),
-                snapshot.metadata().configuration.clone(),
+            let action = Action::Metadata(new_metadata(
+                &schema_struct,
+                current_metadata.partition_columns(),
+                snapshot.metadata().configuration(),
             )?);
             schema_action = Some(action);
         }
@@ -1372,7 +1372,7 @@ async fn execute(
     let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
     let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns.clone();
+    let table_partition_cols = current_metadata.partition_columns().clone();
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),

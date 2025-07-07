@@ -201,7 +201,7 @@ async fn execute_non_empty_expr(
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
     let mut actions: Vec<Action> = Vec::new();
-    let table_partition_cols = snapshot.metadata().partition_columns.clone();
+    let table_partition_cols = snapshot.metadata().partition_columns().clone();
 
     let delete_planner = DeltaPlanner::<DeleteMetricExtensionPlanner> {
         extension_planner: DeleteMetricExtensionPlanner {},

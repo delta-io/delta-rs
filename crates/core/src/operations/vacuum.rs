@@ -285,7 +285,7 @@ impl VacuumBuilder {
         let mut file_sizes = vec![];
         let object_store = self.log_store.object_store(None);
         let mut all_files = object_store.list(None);
-        let partition_columns = &self.snapshot.metadata().partition_columns;
+        let partition_columns = self.snapshot.metadata().partition_columns();
 
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list

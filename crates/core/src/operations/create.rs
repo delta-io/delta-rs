@@ -13,7 +13,9 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
-use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
+use crate::kernel::{
+    new_metadata, Action, DataType, MetadataExt, Protocol, StructField, StructType,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
@@ -276,7 +278,11 @@ impl CreateBuilder {
         let operation_id = self.get_operation_id();
         self.pre_execute(operation_id).await?;
 
-        let configuration = self.configuration;
+        let configuration = self
+            .configuration
+            .iter()
+            .filter_map(|(k, v)| Some((k.to_string(), v.as_ref()?.to_string())))
+            .collect();
 
         let current_protocol = Protocol {
             min_reader_version: PROTOCOL.default_reader_version(),
@@ -298,27 +304,20 @@ impl CreateBuilder {
         let schema = StructType::new(self.columns);
 
         let protocol = protocol
-            .apply_properties_to_protocol(
-                &configuration
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone().unwrap()))
-                    .collect::<HashMap<String, String>>(),
-                self.raise_if_key_not_exists,
-            )?
+            .apply_properties_to_protocol(&configuration, self.raise_if_key_not_exists)?
             .apply_column_metadata_to_protocol(&schema)?
             .move_table_properties_into_features(&configuration);
 
-        let mut metadata = Metadata::try_new(
-            schema,
+        let mut metadata = new_metadata(
+            &schema,
             self.partition_columns.unwrap_or_default(),
             configuration,
-        )?
-        .with_created_time(chrono::Utc::now().timestamp_millis());
+        )?;
         if let Some(name) = self.name {
-            metadata = metadata.with_name(name);
+            metadata = metadata.with_name(name)?;
         }
         if let Some(comment) = self.comment {
-            metadata = metadata.with_description(comment);
+            metadata = metadata.with_description(comment)?;
         }
 
         let operation = DeltaOperation::Create {
@@ -500,10 +499,8 @@ mod tests {
         let append = table
             .metadata()
             .unwrap()
-            .configuration
+            .configuration()
             .get(TableProperty::AppendOnly.as_ref())
-            .unwrap()
-            .as_ref()
             .unwrap()
             .clone();
         assert_eq!(String::from("true"), append)
@@ -521,7 +518,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let first_id = table.metadata().unwrap().id.clone();
+        let first_id = table.metadata().unwrap().id().to_string();
 
         let log_store = table.log_store;
 
@@ -540,7 +537,7 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.metadata().unwrap().id, first_id);
+        assert_eq!(table.metadata().unwrap().id(), first_id);
 
         // Check table is overwritten
         let table = CreateBuilder::new()
@@ -549,7 +546,7 @@ mod tests {
             .with_save_mode(SaveMode::Overwrite)
             .await
             .unwrap();
-        assert_ne!(table.metadata().unwrap().id, first_id)
+        assert_ne!(table.metadata().unwrap().id(), first_id)
     }
 
     #[cfg(feature = "datafusion")]
@@ -633,10 +630,8 @@ mod tests {
             .unwrap()
             .metadata()
             .unwrap()
-            .configuration
+            .configuration()
             .get("key")
-            .unwrap()
-            .as_ref()
             .unwrap()
             .clone();
         assert_eq!(String::from("value"), value);

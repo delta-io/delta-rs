@@ -332,7 +332,7 @@ pub(crate) async fn try_construct_early_filter(
     streaming_source: bool,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
-    let partition_columns = &table_metadata.partition_columns;
+    let partition_columns = table_metadata.partition_columns();
 
     let mut placeholders = Vec::default();
 

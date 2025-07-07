@@ -84,7 +84,7 @@ impl DeltaTableState {
 
         let metadata = self.metadata();
 
-        if !metadata.partition_columns.is_empty() {
+        if !metadata.partition_columns().is_empty() {
             let partition_cols_batch = self.partition_columns_as_batch(flatten, &files)?;
             arrays.extend(
                 partition_cols_batch
@@ -145,10 +145,10 @@ impl DeltaTableState {
         let metadata = self.metadata();
         let column_mapping_mode = self.table_config().column_mapping_mode();
         let partition_column_types: Vec<DataType> = metadata
-            .partition_columns
+            .partition_columns()
             .iter()
             .map(|name| -> Result<DataType, DeltaTableError> {
-                let schema = metadata.schema()?;
+                let schema = metadata.parse_schema()?;
                 let field = schema
                     .field(name)
                     .ok_or(DeltaTableError::MetadataError(format!(
@@ -160,7 +160,7 @@ impl DeltaTableState {
 
         // Create builder for each
         let mut builders = metadata
-            .partition_columns
+            .partition_columns()
             .iter()
             .map(|name| {
                 let builder = arrow::array::StringBuilder::new();
@@ -173,7 +173,7 @@ impl DeltaTableState {
         let physical_name_to_logical_name = match column_mapping_mode {
             ColumnMappingMode::None => HashMap::with_capacity(0), // No column mapping, no need for this HashMap
             ColumnMappingMode::Id | ColumnMappingMode::Name => metadata
-                .partition_columns
+                .partition_columns()
                 .iter()
                 .map(|name| -> Result<_, DeltaTableError> {
                     let physical_name = self
@@ -213,7 +213,7 @@ impl DeltaTableState {
 
         // Cast them to their appropriate types
         let partition_columns: Vec<ArrayRef> = metadata
-            .partition_columns
+            .partition_columns()
             .iter()
             // Get the builders in their original order
             .map(|name| builders.remove(name.as_str()).unwrap())
@@ -228,7 +228,7 @@ impl DeltaTableState {
         let partition_columns: Vec<(Cow<str>, ArrayRef)> = if flatten {
             partition_columns
                 .into_iter()
-                .zip(metadata.partition_columns.iter())
+                .zip(metadata.partition_columns().iter())
                 .map(|(array, name)| {
                     let name: Cow<str> = Cow::Owned(format!("partition.{name}"));
                     (name, array)
@@ -237,7 +237,7 @@ impl DeltaTableState {
         } else {
             let fields = partition_column_types
                 .into_iter()
-                .zip(metadata.partition_columns.iter())
+                .zip(metadata.partition_columns().iter())
                 .map(|(datatype, name)| Field::new(name, datatype, true))
                 .collect::<Vec<_>>();
 

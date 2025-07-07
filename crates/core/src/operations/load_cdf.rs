@@ -246,8 +246,7 @@ impl CdfLoadBuilder {
                     Action::Cdc(f) => cdc_actions.push(f.clone()),
                     Action::Metadata(md) => {
                         log::info!("Metadata: {md:?}");
-                        if let Some(Some(key)) = &md.configuration.get("delta.enableChangeDataFeed")
-                        {
+                        if let Some(key) = &md.configuration().get("delta.enableChangeDataFeed") {
                             let key = key.to_lowercase();
                             // Check here to ensure the CDC function is enabled for the first version of the read
                             // and check in subsequent versions only that it was not disabled.
@@ -332,7 +331,7 @@ impl CdfLoadBuilder {
         let (cdc, add, remove) = self.determine_files_to_read().await?;
         register_store(self.log_store.clone(), session_sate.runtime_env().clone());
 
-        let partition_values = self.snapshot.metadata().partition_columns.clone();
+        let partition_values = self.snapshot.metadata().partition_columns().clone();
         let schema = self.snapshot.input_schema()?;
         let schema_fields: Vec<Arc<Field>> = self
             .snapshot
