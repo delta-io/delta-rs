@@ -83,6 +83,7 @@ build-docs: ## Build documentation with mkdocs
 clean: ## Run clean
 	$(warning --- Clean virtualenv and target directory ---)
 	cargo clean
+	uv cache clean
 	# Remove uv's venv
 	rm -rf .venv
 	find . -type f -name '*.pyc' -delete

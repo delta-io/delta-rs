@@ -1,11 +1,11 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::kernel::schema::cast_record_batch;
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
+use datafusion::common::{not_impl_err, ColumnStatistics};
 use datafusion::datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
-
-use crate::operations::cast::cast_record_batch;
 
 /// A Schema Adapter Factory which provides casting record batches from parquet to meet
 /// delta lake conventions.
@@ -42,7 +42,7 @@ impl SchemaAdapter for DeltaSchemaAdapter {
     fn map_schema(
         &self,
         file_schema: &Schema,
-    ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+    ) -> datafusion::common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         let mut projection = Vec::with_capacity(file_schema.fields().len());
 
         for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
@@ -71,8 +71,15 @@ pub(crate) struct SchemaMapping {
 }
 
 impl SchemaMapper for SchemaMapping {
-    fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
+    fn map_batch(&self, batch: RecordBatch) -> datafusion::common::Result<RecordBatch> {
         let record_batch = cast_record_batch(&batch, self.projected_schema.clone(), false, true)?;
         Ok(record_batch)
+    }
+
+    fn map_column_statistics(
+        &self,
+        _file_col_statistics: &[ColumnStatistics],
+    ) -> datafusion::common::Result<Vec<ColumnStatistics>> {
+        not_impl_err!("Mapping column statistics is not implemented for DeltaSchemaAdapter")
     }
 }

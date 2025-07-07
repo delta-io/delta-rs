@@ -4,8 +4,8 @@ use chrono::prelude::*;
 use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
-use datafusion_common::DataFusionError;
 use futures::FutureExt;
 use moka::future::Cache;
 use moka::Expiry;
@@ -204,7 +204,10 @@ impl SchemaProvider for UnitySchemaProvider {
         self.table_names.clone()
     }
 
-    async fn table(&self, name: &str) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    async fn table(
+        &self,
+        name: &str,
+    ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
         let maybe_table = self
             .client
             .get_table(&self.catalog_name, &self.schema_name, name)

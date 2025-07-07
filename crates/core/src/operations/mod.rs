@@ -16,7 +16,7 @@ use add_feature::AddTableFeatureBuilder;
 #[cfg(feature = "datafusion")]
 use arrow_array::RecordBatch;
 #[cfg(feature = "datafusion")]
-pub use datafusion_physical_plan::common::collect as collect_sendable_stream;
+pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 
 use self::add_column::AddColumnBuilder;
 use self::create::CreateBuilder;
@@ -40,7 +40,6 @@ use crate::DeltaTable;
 
 pub mod add_column;
 pub mod add_feature;
-pub mod cast;
 pub mod convert_to_delta;
 pub mod create;
 pub mod drop_constraints;
@@ -375,9 +374,9 @@ pub(crate) fn get_target_file_size(
 
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
+    use datafusion::common::DFSchema;
     use datafusion::execution::context::SessionState;
-    use datafusion_common::DFSchema;
-    use datafusion_expr::Expr;
+    use datafusion::logical_expr::Expr;
 
     use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 

@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-license = { file = "licenses/deltalake_license.txt" }
+license = "MIT"
 requires-python = ">=3.9"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [

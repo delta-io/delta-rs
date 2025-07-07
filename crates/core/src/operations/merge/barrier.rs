@@ -18,10 +18,10 @@ use std::{
 
 use arrow_array::{builder::UInt64Builder, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
-use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use datafusion_physical_expr::{Distribution, PhysicalExpr};
-use datafusion_physical_plan::{
+use datafusion::common::{DataFusionError, Result as DataFusionResult};
+use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion::physical_expr::{Distribution, PhysicalExpr};
+use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
@@ -94,7 +94,7 @@ impl ExecutionPlan for MergeBarrierExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Plan(
                 "MergeBarrierExec wrong number of children".to_string(),
@@ -111,7 +111,7 @@ impl ExecutionPlan for MergeBarrierExec {
         &self,
         partition: usize,
         context: Arc<datafusion::execution::TaskContext>,
-    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
+    ) -> datafusion::common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         Ok(Box::pin(MergeBarrierStream::new(
             input,
@@ -407,15 +407,15 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
         "MergeBarrier"
     }
 
-    fn inputs(&self) -> Vec<&datafusion_expr::LogicalPlan> {
+    fn inputs(&self) -> Vec<&datafusion::logical_expr::LogicalPlan> {
         vec![&self.input]
     }
 
-    fn schema(&self) -> &datafusion_common::DFSchemaRef {
+    fn schema(&self) -> &datafusion::common::DFSchemaRef {
         self.input.schema()
     }
 
-    fn expressions(&self) -> Vec<datafusion_expr::Expr> {
+    fn expressions(&self) -> Vec<datafusion::logical_expr::Expr> {
         vec![self.expr.clone()]
     }
 
@@ -425,8 +425,8 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
 
     fn with_exprs_and_inputs(
         &self,
-        exprs: Vec<datafusion_expr::Expr>,
-        inputs: Vec<datafusion_expr::LogicalPlan>,
+        exprs: Vec<datafusion::logical_expr::Expr>,
+        inputs: Vec<datafusion::logical_expr::LogicalPlan>,
     ) -> DataFusionResult<Self> {
         Ok(MergeBarrier {
             input: inputs[0].clone(),
@@ -470,9 +470,9 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::execution::TaskContext;
+    use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::ExecutionPlan;
-    use datafusion_physical_expr::expressions::Column;
     use futures::StreamExt;
     use std::sync::Arc;
 

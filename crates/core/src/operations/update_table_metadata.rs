@@ -113,7 +113,7 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
             })?;
             update
                 .validate()
-                .map_err(|e| DeltaTableError::MetadataError(format!("{}", e)))?;
+                .map_err(|e| DeltaTableError::MetadataError(format!("{e}")))?;
 
             let mut metadata = this.snapshot.metadata().clone();
 

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use datafusion_common::{Result as DFResult, TableReference};
-use datafusion_expr::logical_plan::{Extension, LogicalPlan};
-use datafusion_sql::planner::{
+use datafusion::common::{Result as DFResult, TableReference};
+use datafusion::logical_expr::logical_plan::{Extension, LogicalPlan};
+use datafusion::sql::planner::{
     object_name_to_table_reference, ContextProvider, IdentNormalizer, ParserOptions, SqlToRel,
 };
-use datafusion_sql::sqlparser::ast::ObjectName;
+use datafusion::sql::sqlparser::ast::ObjectName;
 
 use crate::logical_plan::{DeltaStatement, DescribeFiles, Vacuum};
 use crate::parser::{DescribeStatement, Statement, VacuumStatement};
@@ -86,11 +86,11 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::DataFusionError;
-    use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
-    use datafusion_sql::TableReference;
+    use datafusion::common::config::ConfigOptions;
+    use datafusion::common::DataFusionError;
+    use datafusion::logical_expr::logical_plan::builder::LogicalTableSource;
+    use datafusion::logical_expr::{AggregateUDF, ScalarUDF, TableSource};
+    use datafusion::sql::TableReference;
 
     use crate::parser::DeltaParser;
 
@@ -145,7 +145,7 @@ mod tests {
             &self.options
         }
 
-        fn get_window_meta(&self, _name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+        fn get_window_meta(&self, _name: &str) -> Option<Arc<datafusion::logical_expr::WindowUDF>> {
             None
         }
 

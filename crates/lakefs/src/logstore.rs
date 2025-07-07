@@ -191,7 +191,7 @@ impl LakeFSLogStore {
             .client
             .has_changes(&repo, &target_branch, &transaction_branch)
             .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to check for changes: {}", e)))?;
+            .map_err(|e| DeltaTableError::generic(format!("Failed to check for changes: {e}")))?;
 
         // Only perform merge if there are changes
         if has_changes {

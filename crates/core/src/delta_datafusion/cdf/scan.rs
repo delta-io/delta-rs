@@ -5,15 +5,15 @@ use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableProvider;
+use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult};
 use datafusion::execution::SessionState;
-use datafusion_common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult};
-use datafusion_expr::utils::conjunction;
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::GlobalLimitExec;
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::ExecutionPlan;
 
 use crate::DeltaTableError;
 use crate::{

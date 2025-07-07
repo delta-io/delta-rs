@@ -411,7 +411,11 @@ impl DeltaTable {
                 break;
             }
         }
-        let mut max_version = match self.get_latest_version().await {
+        let mut max_version = match self
+            .log_store
+            .get_latest_version(self.version().unwrap_or(min_version))
+            .await
+        {
             Ok(version) => version,
             Err(DeltaTableError::InvalidVersion(_)) => {
                 return Err(DeltaTableError::NotATable(

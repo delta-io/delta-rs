@@ -9,7 +9,7 @@ use deltalake::arrow::error::Result as ArrowResult;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
-use deltalake::operations::cast::cast_record_batch;
+use deltalake::kernel::schema::cast_record_batch;
 use parking_lot::RwLock;
 
 use crate::datafusion::LazyTableProvider;

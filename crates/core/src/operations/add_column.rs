@@ -7,10 +7,10 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::merge_schema::merge_delta_struct;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};

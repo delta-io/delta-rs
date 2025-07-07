@@ -2,9 +2,9 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, TableReference};
-use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use datafusion::common::{DFSchema, DFSchemaRef, DataFusionError, TableReference};
+use datafusion::logical_expr::logical_plan::LogicalPlan;
+use datafusion::logical_expr::{Expr, UserDefinedLogicalNodeCore};
 
 /// Delta Lake specific operations
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd)]
@@ -94,7 +94,7 @@ impl UserDefinedLogicalNodeCore for DeltaStatement {
         &self,
         exprs: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
-    ) -> datafusion_common::Result<Self> {
+    ) -> datafusion::common::Result<Self> {
         match self {
             Self::Vacuum(_) | Self::DescribeHistory(_) => {
                 if !inputs.is_empty() {

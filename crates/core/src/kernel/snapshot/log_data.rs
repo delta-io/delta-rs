@@ -551,6 +551,10 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::{Arc, LazyLock};
 
+    use ::datafusion::common::scalar::ScalarValue;
+    use ::datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
+    use ::datafusion::common::Column;
+    use ::datafusion::common::DataFusionError;
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
@@ -558,9 +562,6 @@ mod datafusion {
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
-    use datafusion_common::scalar::ScalarValue;
-    use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
-    use datafusion_common::Column;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
     use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
@@ -656,7 +657,7 @@ mod datafusion {
                         let arrays = o
                             .into_iter()
                             .map(|sv| sv.to_array())
-                            .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                            .collect::<Result<Vec<_>, DataFusionError>>()
                             .unwrap();
                         let sa = StructArray::new(fields.clone(), arrays, None);
                         Precision::Exact(ScalarValue::Struct(Arc::new(sa)))

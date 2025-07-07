@@ -4,7 +4,7 @@ pub mod planner;
 
 #[cfg(test)]
 mod tests {
-    use datafusion_expr::logical_plan::LogicalPlan;
+    use datafusion::logical_expr::logical_plan::LogicalPlan;
 
     pub fn assert_plan_eq(plan: &LogicalPlan, expected_lines: &[&str]) {
         let formatted = plan.display_indent().to_string();

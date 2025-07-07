@@ -42,42 +42,42 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
+use datafusion::common::scalar::ScalarValue;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion::common::{
+    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
+    TableReference, ToDFSchema,
+};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
-    ParquetSource,
+    FileSource, ParquetSource,
 };
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion_common::scalar::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{
-    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
-    TableReference, ToDFSchema,
-};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::logical_plan::CreateExternalTable;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::logical_plan::CreateExternalTable;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction};
+use datafusion::logical_expr::{
     col, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
     Volatility,
 };
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::LocalLimitExec;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use datafusion_physical_plan::{
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use datafusion_sql::planner::ParserOptions;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 use futures::TryStreamExt;
@@ -735,39 +735,37 @@ impl<'a> DeltaScanBuilder<'a> {
             ..Default::default()
         };
 
-        let mut file_source = ParquetSource::new(parquet_options)
-            .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
+        let mut file_source = ParquetSource::new(parquet_options);
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
         // filter
         if let Some(predicate) = pushdown_filter {
             if config.enable_parquet_pushdown {
-                file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
+                file_source = file_source.with_predicate(predicate);
             }
         };
+        let file_source =
+            file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
 
-        let file_scan_config = FileScanConfigBuilder::new(
-            self.log_store.object_store_url(),
-            file_schema,
-            Arc::new(file_source),
-        )
-        .with_file_groups(
-            // If all files were filtered out, we still need to emit at least one partition to
-            // pass datafusion sanity checks.
-            //
-            // See https://github.com/apache/datafusion/issues/11322
-            if file_groups.is_empty() {
-                vec![FileGroup::from(vec![])]
-            } else {
-                file_groups.into_values().map(FileGroup::from).collect()
-            },
-        )
-        .with_statistics(stats)
-        .with_projection(self.projection.cloned())
-        .with_limit(self.limit)
-        .with_table_partition_cols(table_partition_cols)
-        .build();
+        let file_scan_config =
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), file_schema, file_source)
+                .with_file_groups(
+                    // If all files were filtered out, we still need to emit at least one partition to
+                    // pass datafusion sanity checks.
+                    //
+                    // See https://github.com/apache/datafusion/issues/11322
+                    if file_groups.is_empty() {
+                        vec![FileGroup::from(vec![])]
+                    } else {
+                        file_groups.into_values().map(FileGroup::from).collect()
+                    },
+                )
+                .with_statistics(stats)
+                .with_projection(self.projection.cloned())
+                .with_limit(self.limit)
+                .with_table_partition_cols(table_partition_cols)
+                .build();
 
         let metrics = ExecutionPlanMetricsSet::new();
         MetricBuilder::new(&metrics)
@@ -929,7 +927,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
                 Ok(TreeNodeRecursion::Stop)
             }
         }
-        Expr::Literal(_)
+        Expr::Literal(_, _)
         | Expr::Not(_)
         | Expr::IsNotNull(_)
         | Expr::IsNull(_)
@@ -1115,8 +1113,8 @@ impl ExecutionPlan for DeltaScan {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> DataFusionResult<Statistics> {
-        self.parquet_scan.statistics()
+    fn partition_statistics(&self, partition: Option<usize>) -> DataFusionResult<Statistics> {
+        self.parquet_scan.partition_statistics(partition)
     }
 
     fn repartitioned(
@@ -1664,7 +1662,7 @@ pub(crate) struct FindFilesExprProperties {
 impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: &Self::Node) -> datafusion_common::Result<TreeNodeRecursion> {
+    fn f_down(&mut self, expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
         // TODO: We can likely relax the volatility to STABLE. Would require further
         // research to confirm the same value is generated during the scan and
         // rewrite phases.
@@ -1676,7 +1674,7 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
                 }
             }
             Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::Alias(_)
             | Expr::BinaryExpr(_)
             | Expr::Like(_)
@@ -2049,9 +2047,9 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion_expr::lit;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
@@ -3060,8 +3058,8 @@ mod tests {
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
         let expected = vec![
-            ObjectStoreOperation::GetRange(LocationType::Data, 4920..4928),
-            ObjectStoreOperation::GetRange(LocationType::Data, 2399..4920),
+            ObjectStoreOperation::GetRange(LocationType::Data, 4952..4960),
+            ObjectStoreOperation::GetRange(LocationType::Data, 2399..4952),
             #[expect(clippy::single_range_in_vec_init)]
             ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..58]),
         ];

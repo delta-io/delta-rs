@@ -25,7 +25,11 @@ use std::{
 };
 
 use async_trait::async_trait;
+use datafusion::common::{Column, ScalarValue};
 use datafusion::error::Result as DataFusionResult;
+use datafusion::logical_expr::{
+    case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+};
 use datafusion::{
     dataframe::DataFrame,
     datasource::provider_as_source,
@@ -34,10 +38,6 @@ use datafusion::{
     physical_plan::{metrics::MetricBuilder, ExecutionPlan},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::SessionContext,
-};
-use datafusion_common::{Column, ScalarValue};
-use datafusion_expr::{
-    case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -313,7 +313,7 @@ async fn execute(
         return Ok((snapshot, metrics));
     }
 
-    let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
+    let predicate = predicate.unwrap_or(lit(true));
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)

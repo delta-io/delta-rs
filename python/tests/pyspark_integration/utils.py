@@ -17,6 +17,7 @@ def get_spark():
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
+        .config("spark.sql.ansi.enabled", "false")
     )
     return delta.pip_utils.configure_spark_with_delta_pip(builder).getOrCreate()
 

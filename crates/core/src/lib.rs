@@ -75,7 +75,7 @@ pub mod kernel;
 pub mod logstore;
 pub mod operations;
 pub mod protocol;
-pub mod schema;
+pub use kernel::schema;
 pub mod table;
 
 #[cfg(any(test, feature = "integration_test"))]

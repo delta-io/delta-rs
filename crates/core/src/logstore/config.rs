@@ -330,7 +330,7 @@ mod tests {
         };
 
         let result: ParseResult<RetryConfig> = options.into_iter().collect();
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         assert!(!result.errors.is_empty());
         assert!(!result.unparsed.is_empty());
         assert!(!result.is_default);
@@ -381,11 +381,11 @@ mod tests {
         let falsy_values = ["0", "false", "off", "NO", "n", "bork", "False", "OFF"];
 
         for value in truthy_values {
-            assert!(str_is_truthy(value), "{} should be truthy", value);
+            assert!(str_is_truthy(value), "{value} should be truthy");
         }
 
         for value in falsy_values {
-            assert!(!str_is_truthy(value), "{} should be falsy", value);
+            assert!(!str_is_truthy(value), "{value} should be falsy");
         }
     }
 

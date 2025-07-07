@@ -5,8 +5,8 @@
 use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 
+use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
-use datafusion_common::ScalarValue;
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
 

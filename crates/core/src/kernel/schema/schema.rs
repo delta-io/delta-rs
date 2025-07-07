@@ -10,7 +10,7 @@ pub use delta_kernel::schema::{
 use serde_json::Value;
 
 use crate::kernel::error::Error;
-use crate::kernel::DataCheck;
+use crate::schema::DataCheck;
 use crate::table::GeneratedColumn;
 
 /// Type alias for a top level schema

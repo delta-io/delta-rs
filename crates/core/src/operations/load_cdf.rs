@@ -16,18 +16,18 @@ use std::time::SystemTime;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
+use datafusion::common::config::TableParquetOptions;
+use datafusion::common::ScalarValue;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
 use datafusion::execution::SessionState;
+use datafusion::physical_expr::{expressions, PhysicalExpr};
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::config::TableParquetOptions;
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::{expressions, PhysicalExpr};
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::ExecutionPlan;
 use tracing::log;
 
 use crate::delta_datafusion::{register_store, DataFusionMixins};
@@ -381,8 +381,7 @@ impl CdfLoadBuilder {
         // Create the parquet scans for each associated type of file.
         let mut parquet_source = ParquetSource::new(TableParquetOptions::new());
         if let Some(filters) = filters {
-            parquet_source =
-                parquet_source.with_predicate(Arc::clone(&cdc_file_schema), Arc::clone(filters));
+            parquet_source = parquet_source.with_predicate(Arc::clone(filters));
         }
         let parquet_source: Arc<dyn FileSource> = Arc::new(parquet_source);
         let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
@@ -481,8 +480,8 @@ pub(crate) mod tests {
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::Schema;
     use chrono::NaiveDateTime;
+    use datafusion::common::assert_batches_sorted_eq;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::assert_batches_sorted_eq;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 
