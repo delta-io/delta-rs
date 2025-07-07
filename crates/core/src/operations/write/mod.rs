@@ -1520,7 +1520,7 @@ mod tests {
 
         // Take clones of these before an operation resulting in error, otherwise it will
         // be impossible to refer to an in-memory table
-        let table_logstore = table.log_store.clone();
+        let table_logstore = table.log_store();
         let table_state = table.state.clone().unwrap();
 
         // An attempt to write records non conforming to predicate should fail
@@ -1663,7 +1663,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         let snapshot_bytes = table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
@@ -1737,7 +1737,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         let snapshot_bytes = table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
@@ -1838,7 +1838,7 @@ mod tests {
         ], &batches }
 
         let snapshot_bytes = table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
@@ -1946,7 +1946,7 @@ mod tests {
                     .logical_plan()
                     .clone(),
             );
-            let writer = WriteBuilder::new(table.log_store.clone(), table.state)
+            let writer = WriteBuilder::new(table.log_store(), table.state)
                 .with_input_execution_plan(plan)
                 .with_save_mode(SaveMode::Overwrite);
 
@@ -1962,8 +1962,7 @@ mod tests {
                 .with_columns(table_schema.fields().cloned())
                 .await?;
             let batch = get_record_batch(None, false);
-            let writer =
-                WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![batch]);
+            let writer = WriteBuilder::new(table.log_store(), None).with_input_batches(vec![batch]);
 
             let actions = writer.check_preconditions().await?;
             assert_eq!(
@@ -1982,8 +1981,7 @@ mod tests {
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer =
-                WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![]);
+            let writer = WriteBuilder::new(table.log_store(), None).with_input_batches(vec![]);
 
             match writer.check_preconditions().await {
                 Ok(_) => panic!("Expected check_preconditions to fail!"),

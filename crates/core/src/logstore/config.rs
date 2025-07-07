@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use ::object_store::RetryConfig;
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
 
+#[cfg(feature = "delta-cache")]
+use super::storage::cache::LogCacheConfig;
 use super::storage::LimitConfig;
 use super::{storage::runtime::RuntimeConfig, IORuntime};
 use crate::{DeltaResult, DeltaTableError};
@@ -102,6 +104,10 @@ pub struct StorageConfig {
     /// Configuration to limit the number of concurrent requests to the object store.
     pub limit: Option<LimitConfig>,
 
+    #[cfg(feature = "delta-cache")]
+    /// Log cache configuration.
+    pub log_cache: Option<LogCacheConfig>,
+
     /// Properties that are not recognized by the storage configuration.
     ///
     /// These properties are ignored by the storage configuration and can be used for custom purposes.
@@ -140,6 +146,17 @@ impl StorageConfig {
             Box::new(store) as Box<dyn ObjectStore>
         })
     }
+
+    #[cfg(feature = "delta-cache")]
+    async fn decorate_log_cache<T: ObjectStore + Clone>(
+        &self,
+        store: T,
+        table_root: &url::Url,
+        config: &LogCacheConfig,
+    ) -> DeltaResult<Box<dyn ObjectStore>> {
+        let inner = config.try_decorate(store, table_root.clone(), None).await?;
+        Ok(Box::new(inner))
+    }
 }
 
 impl<K, V> FromIterator<(K, V)> for StorageConfig
@@ -164,11 +181,15 @@ where
         let result = ParseResult::<LimitConfig>::from_iter(result.unparsed);
         config.limit = (!result.is_default).then_some(result.config);
 
+        let result = ParseResult::<RetryConfig>::from_iter(result.unparsed);
+        config.retry = result.config;
+
         let remainder = result.unparsed;
 
+        #[cfg(feature = "delta-cache")]
         let remainder = {
-            let result = ParseResult::<RetryConfig>::from_iter(remainder);
-            config.retry = result.config;
+            let result = ParseResult::<LogCacheConfig>::from_iter(remainder);
+            config.log_cache = (!result.is_default).then_some(result.config);
             result.unparsed
         };
 
