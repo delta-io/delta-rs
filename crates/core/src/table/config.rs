@@ -207,7 +207,7 @@ macro_rules! table_config {
             pub fn $name(&self) -> $ret {
                 self.0
                     .get($key.as_ref())
-                    .and_then(|opt| opt.as_ref().and_then(|value| value.parse().ok()))
+                    .and_then(|value| value.parse().ok())
                     .unwrap_or($default)
             }
         )*
@@ -216,7 +216,7 @@ macro_rules! table_config {
 
 /// Well known delta table configuration
 #[derive(Debug)]
-pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, Option<String>>);
+pub struct TableConfig<'a>(pub(crate) &'a HashMap<String, String>);
 
 /// Default num index cols
 pub const DEFAULT_NUM_INDEX_COLS: i32 = 32;
@@ -314,7 +314,7 @@ impl TableConfig<'_> {
             LazyLock::new(|| parse_interval("interval 1 weeks").unwrap());
         self.0
             .get(TableProperty::DeletedFileRetentionDuration.as_ref())
-            .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
+            .and_then(|v| parse_interval(v).ok())
             .unwrap_or_else(|| DEFAULT_DURATION.to_owned())
     }
 
@@ -329,7 +329,7 @@ impl TableConfig<'_> {
             LazyLock::new(|| parse_interval("interval 30 days").unwrap());
         self.0
             .get(TableProperty::LogRetentionDuration.as_ref())
-            .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
+            .and_then(|v| parse_interval(v).ok())
             .unwrap_or_else(|| DEFAULT_DURATION.to_owned())
     }
 
@@ -339,7 +339,7 @@ impl TableConfig<'_> {
     pub fn isolation_level(&self) -> IsolationLevel {
         self.0
             .get(TableProperty::IsolationLevel.as_ref())
-            .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .and_then(|v| v.parse().ok())
             .unwrap_or_default()
     }
 
@@ -347,7 +347,7 @@ impl TableConfig<'_> {
     pub fn checkpoint_policy(&self) -> CheckpointPolicy {
         self.0
             .get(TableProperty::CheckpointPolicy.as_ref())
-            .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .and_then(|v| v.parse().ok())
             .unwrap_or_default()
     }
 
@@ -355,7 +355,7 @@ impl TableConfig<'_> {
     pub fn column_mapping_mode(&self) -> ColumnMappingMode {
         self.0
             .get(TableProperty::ColumnMappingMode.as_ref())
-            .and_then(|o| o.as_ref().and_then(|v| v.parse().ok()))
+            .and_then(|v| v.parse().ok())
             .unwrap_or(ColumnMappingMode::None)
     }
 
@@ -366,7 +366,7 @@ impl TableConfig<'_> {
             .filter_map(|(field, value)| {
                 if field.starts_with("delta.constraints") {
                     let constraint_name = field.replace("delta.constraints.", "");
-                    value.as_ref().map(|f| Constraint::new(&constraint_name, f))
+                    Some(Constraint::new(&constraint_name, value))
                 } else {
                     None
                 }
@@ -379,28 +379,23 @@ impl TableConfig<'_> {
     pub fn stats_columns(&self) -> Option<Vec<&str>> {
         self.0
             .get(TableProperty::DataSkippingStatsColumns.as_ref())
-            .and_then(|o| o.as_ref().map(|v| v.split(',').collect()))
+            .map(|v| v.split(',').collect())
     }
 
     pub fn stats_columns_kernel(&self) -> Option<Vec<ColumnName>> {
         self.0
             .get(TableProperty::DataSkippingStatsColumns.as_ref())
-            .and_then(|o| {
-                o.as_ref().and_then(|v| {
-                    ColumnName::parse_column_name_list(v)
-                        .inspect_err(|e| println!("{e:?}"))
-                        .ok()
-                })
+            .and_then(|v| {
+                ColumnName::parse_column_name_list(v)
+                    .inspect_err(|e| println!("{e:?}"))
+                    .ok()
             })
     }
 
     pub fn num_indexed_cols_kernel(&self) -> Option<DataSkippingNumIndexedCols> {
         self.0
             .get(TableProperty::DataSkippingNumIndexedCols.as_ref())
-            .and_then(|o| {
-                o.as_ref()
-                    .and_then(|v| DataSkippingNumIndexedCols::try_from(v.as_str()).ok())
-            })
+            .and_then(|v| DataSkippingNumIndexedCols::try_from(v.as_str()).ok())
     }
 }
 
@@ -551,18 +546,23 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::{Metadata, StructType};
+    use crate::kernel::{new_metadata, Metadata, StructType};
     use std::collections::HashMap;
 
     fn dummy_metadata() -> Metadata {
         let schema = StructType::new(Vec::new());
-        Metadata::try_new(schema, Vec::<String>::new(), HashMap::new()).unwrap()
+        new_metadata(
+            &schema,
+            Vec::<String>::new(),
+            std::iter::empty::<(&str, &str)>(),
+        )
+        .unwrap()
     }
 
     #[test]
     fn get_interval_from_metadata_test() {
         let md = dummy_metadata();
-        let config = TableConfig(&md.configuration);
+        let config = TableConfig(md.configuration());
 
         // default 1 week
         assert_eq!(
@@ -571,14 +571,13 @@ mod tests {
         );
 
         // change to 2 day
-        let mut md = dummy_metadata();
-        md.configuration.insert(
+        let raw = HashMap::from([(
             TableProperty::DeletedFileRetentionDuration
                 .as_ref()
                 .to_string(),
-            Some("interval 2 day".to_string()),
-        );
-        let config = TableConfig(&md.configuration);
+            "interval 2 day".to_string(),
+        )]);
+        let config = TableConfig(&raw);
 
         assert_eq!(
             config.deleted_file_retention_duration().as_secs(),
@@ -589,25 +588,24 @@ mod tests {
     #[test]
     fn get_long_from_metadata_test() {
         let md = dummy_metadata();
-        let config = TableConfig(&md.configuration);
+        let config = TableConfig(md.configuration());
         assert_eq!(config.checkpoint_interval(), 100,)
     }
 
     #[test]
     fn get_boolean_from_metadata_test() {
         let md = dummy_metadata();
-        let config = TableConfig(&md.configuration);
+        let config = TableConfig(md.configuration());
 
         // default value is true
         assert!(config.enable_expired_log_cleanup());
 
         // change to false
-        let mut md = dummy_metadata();
-        md.configuration.insert(
-            TableProperty::EnableExpiredLogCleanup.as_ref().into(),
-            Some("false".to_string()),
-        );
-        let config = TableConfig(&md.configuration);
+        let raw = HashMap::from([(
+            TableProperty::EnableExpiredLogCleanup.as_ref().to_string(),
+            "false".to_string(),
+        )]);
+        let config = TableConfig(&raw);
 
         assert!(!config.enable_expired_log_cleanup());
     }

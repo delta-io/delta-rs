@@ -211,7 +211,7 @@ impl JsonWriter {
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.metadata()?;
-        let partition_columns = metadata.partition_columns.clone();
+        let partition_columns = metadata.partition_columns().clone();
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()

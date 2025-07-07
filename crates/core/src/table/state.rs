@@ -218,7 +218,7 @@ impl DeltaTableState {
 
         let nonpartitioned_columns: Vec<String> = filters
             .iter()
-            .filter(|f| !current_metadata.partition_columns.contains(&f.key))
+            .filter(|f| !current_metadata.partition_columns().contains(&f.key))
             .map(|f| f.key.to_string())
             .collect();
 

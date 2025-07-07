@@ -48,7 +48,7 @@ pub(crate) fn get_partition_col_data_types<'a>(
         .fields()
         .filter_map(|f| {
             if metadata
-                .partition_columns
+                .partition_columns()
                 .iter()
                 .any(|s| s.as_str() == f.name())
             {
