@@ -481,7 +481,7 @@ impl<'a> ConflictChecker<'a> {
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .partition_columns;
+                        .partition_columns();
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {

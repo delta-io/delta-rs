@@ -209,15 +209,15 @@ impl DataFusionMixins for DeltaTableState {
 fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
     let meta = snapshot.metadata();
 
-    let schema = meta.schema()?;
+    let schema = meta.parse_schema()?;
     let fields = schema
         .fields()
-        .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
+        .filter(|f| !meta.partition_columns().contains(&f.name().to_string()))
         .map(|f| f.try_into_arrow())
         .chain(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
-            meta.partition_columns.iter().map(|partition_col| {
+            meta.partition_columns().iter().map(|partition_col| {
                 let f = schema.field(partition_col).unwrap();
                 let field: Field = f.try_into_arrow()?;
                 let corrected = if wrap_partitions {
@@ -314,7 +314,7 @@ pub(crate) fn df_logical_schema(
         Some(schema) => schema,
         None => snapshot.input_schema()?,
     };
-    let table_partition_cols = &snapshot.metadata().partition_columns;
+    let table_partition_cols = snapshot.metadata().partition_columns();
 
     let mut fields: Vec<Arc<Field>> = input_schema
         .fields()
@@ -577,7 +577,7 @@ impl<'a> DeltaScanBuilder<'a> {
                 let predicates = split_conjunction(&expr);
                 let pushdown_filters = get_pushdown_filters(
                     &predicates,
-                    self.snapshot.metadata().partition_columns.as_slice(),
+                    self.snapshot.metadata().partition_columns().as_slice(),
                 );
 
                 let filtered_predicates = predicates
@@ -669,7 +669,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
-        let table_partition_cols = &self.snapshot.metadata().partition_columns;
+        let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         for action in files.iter() {
             let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
@@ -866,7 +866,7 @@ impl TableProvider for DeltaTable {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot()?.metadata().partition_columns.as_slice();
+        let partition_cols = self.snapshot()?.metadata().partition_columns().as_slice();
         Ok(get_pushdown_filters(filter, partition_cols))
     }
 
@@ -1022,7 +1022,7 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot.metadata().partition_columns.as_slice();
+        let partition_cols = self.snapshot.metadata().partition_columns().as_slice();
         Ok(get_pushdown_filters(filter, partition_cols))
     }
 
@@ -1897,7 +1897,7 @@ pub async fn find_files(
             // Validate the Predicate and determine if it only contains partition columns
             let mut expr_properties = FindFilesExprProperties {
                 partition_only: true,
-                partition_columns: current_metadata.partition_columns.clone(),
+                partition_columns: current_metadata.partition_columns().clone(),
                 result: Ok(()),
             };
 

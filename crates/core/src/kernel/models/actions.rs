@@ -6,118 +6,132 @@ use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::kernel::{error::Error, DeltaResult};
 use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
 
-/// Defines a file format used in table
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct Format {
-    /// Name of the encoding for files in this table
-    pub provider: String,
-    /// A map containing configuration options for the format
-    pub options: HashMap<String, Option<String>>,
+pub use delta_kernel::actions::Metadata;
+
+pub fn new_metadata(
+    schema: &StructType,
+    partition_columns: impl IntoIterator<Item = impl ToString>,
+    configuration: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+) -> DeltaResult<Metadata> {
+    let value = serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "name": None::<String>,
+        "description": None::<String>,
+        "format": { "provider": "parquet", "options": {} },
+        "schemaString": serde_json::to_string(schema)?,
+        "partitionColumns": partition_columns.into_iter().map(|c| c.to_string()).collect::<Vec<_>>(),
+        "configuration": configuration.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
+        "createdTime": chrono::Utc::now().timestamp_millis(),
+    });
+    Ok(serde_json::from_value(value)?)
 }
 
-impl Format {
-    /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
-        let options = options.unwrap_or_default();
-        Self { provider, options }
-    }
+pub trait MetadataExt {
+    fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
-    /// Return the Format provider
-    pub fn get_provider(self) -> String {
-        self.provider
-    }
+    fn with_name(self, name: String) -> DeltaResult<Metadata>;
+
+    fn with_description(self, description: String) -> DeltaResult<Metadata>;
+
+    fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata>;
+
+    fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata>;
+
+    fn remove_config_key(self, key: &String) -> DeltaResult<Metadata>;
 }
 
-impl Default for Format {
-    fn default() -> Self {
-        Self {
-            provider: String::from("parquet"),
-            options: HashMap::new(),
-        }
-    }
-}
-
-/// Return a default empty schema to be used for edge-cases when a schema is missing
-fn default_schema() -> String {
-    warn!("A `metaData` action was missing a `schemaString` and has been given an empty schema");
-    r#"{"type":"struct",  "fields": []}"#.into()
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-/// Defines a metadata action
-pub struct Metadata {
-    /// Unique identifier for this table
-    pub id: String,
-    /// User-provided identifier for this table
-    pub name: Option<String>,
-    /// User-provided description for this table
-    pub description: Option<String>,
-    /// Specification of the encoding for the files stored in the table
-    pub format: Format,
-    /// Schema of the table
-    #[serde(default = "default_schema")]
-    pub schema_string: String,
-    /// Column names by which the data should be partitioned
-    pub partition_columns: Vec<String>,
-    /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<i64>,
-    /// Configuration options for the metadata action
-    pub configuration: HashMap<String, Option<String>>,
-}
-
-impl Metadata {
-    /// Create a new metadata action
-    pub fn try_new(
-        schema: StructType,
-        partition_columns: impl IntoIterator<Item = impl Into<String>>,
-        configuration: HashMap<String, Option<String>>,
-    ) -> DeltaResult<Self> {
-        Ok(Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            format: Default::default(),
-            schema_string: serde_json::to_string(&schema)?,
-            partition_columns: partition_columns.into_iter().map(|c| c.into()).collect(),
-            configuration,
-            name: None,
-            description: None,
-            created_time: Some(chrono::Utc::now().timestamp_millis()),
-        })
+impl MetadataExt for Metadata {
+    fn with_table_id(self, table_id: String) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": table_id,
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table name in the metadata action
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
+    fn with_name(self, name: String) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": name,
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table description in the metadata action
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
+    fn with_description(self, description: String) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": description,
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table creation time in the metadata action
-    pub fn with_created_time(mut self, created_time: i64) -> Self {
-        self.created_time = Some(created_time);
-        self
+    fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(schema)?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table ID in the metadata action
-    pub fn with_table_id(mut self, id: String) -> Self {
-        self.id = id;
-        self
+    fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata> {
+        let mut config = self.configuration().clone();
+        config.insert(key, value);
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": config,
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// get the table schema
-    pub fn schema(&self) -> DeltaResult<StructType> {
-        Ok(serde_json::from_str(&self.schema_string)?)
+    fn remove_config_key(self, key: &String) -> DeltaResult<Metadata> {
+        let mut config = self.configuration().clone();
+        config.remove(key);
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": config,
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 }
 
@@ -225,23 +239,17 @@ impl Protocol {
     /// only converts features that are "true"
     pub fn move_table_properties_into_features(
         mut self,
-        configuration: &HashMap<String, Option<String>>,
+        configuration: &HashMap<String, String>,
     ) -> Protocol {
-        fn parse_bool(value: &Option<String>) -> bool {
-            value
-                .as_ref()
-                .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
+        fn parse_bool(value: &String) -> bool {
+            value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
         }
 
         if self.min_writer_version >= 7 {
             // TODO: move this is in future to use delta_kernel::table_properties
             let mut converted_writer_features = configuration
                 .iter()
-                .filter(|(_, value)| {
-                    value
-                        .as_ref()
-                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
-                })
+                .filter(|(_, value)| value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableChangeDataFeed" if parse_bool(value) => {
                         Some(WriterFeature::ChangeDataFeed)
@@ -253,9 +261,7 @@ impl Protocol {
                     "delta.enableRowTracking" if parse_bool(value) => {
                         Some(WriterFeature::RowTracking)
                     }
-                    "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
-                        Some(WriterFeature::V2Checkpoint)
-                    }
+                    "delta.checkpointPolicy" if value == "v2" => Some(WriterFeature::V2Checkpoint),
                     _ => None,
                 })
                 .collect::<HashSet<WriterFeature>>();
@@ -282,9 +288,7 @@ impl Protocol {
                     "delta.enableDeletionVectors" if parse_bool(value) => {
                         Some(ReaderFeature::DeletionVectors)
                     }
-                    "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
-                        Some(ReaderFeature::V2Checkpoint)
-                    }
+                    "delta.checkpointPolicy" if value == "v2" => Some(ReaderFeature::V2Checkpoint),
                     _ => None,
                 })
                 .collect::<HashSet<ReaderFeature>>();

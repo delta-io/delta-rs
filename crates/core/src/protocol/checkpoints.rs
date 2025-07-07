@@ -258,7 +258,6 @@ mod tests {
     use crate::kernel::transaction::{CommitBuilder, TableReference};
     use crate::kernel::Action;
     use crate::operations::DeltaOps;
-    use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
     use crate::DeltaResult;
 
@@ -292,7 +291,7 @@ mod tests {
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_checkpoint_with_metadata() {
-        use std::collections::HashMap;
+        use crate::kernel::new_metadata;
 
         let table_schema = get_delta_schema();
 
@@ -306,7 +305,8 @@ mod tests {
         assert_eq!(table.get_schema().unwrap(), &table_schema);
 
         let part_cols: Vec<String> = vec![];
-        let metadata = Metadata::try_new(table_schema, part_cols, HashMap::new()).unwrap();
+        let metadata =
+            new_metadata(&table_schema, part_cols, std::iter::empty::<(&str, &str)>()).unwrap();
         let actions = vec![Action::Metadata(metadata)];
 
         let epoch_id = std::time::SystemTime::now()

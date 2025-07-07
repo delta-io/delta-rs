@@ -562,7 +562,7 @@ pub(super) mod tests {
     use crate::{
         checkpoints::create_checkpoint_from_table_uri_and_cleanup,
         kernel::transaction::{CommitBuilder, TableReference},
-        kernel::{Action, Add, Format, Remove},
+        kernel::{Action, Add, Remove},
         protocol::create_checkpoint_for,
         protocol::{DeltaOperation, SaveMode},
         test_utils::{TestResult, TestTables},
@@ -774,12 +774,17 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_stream_parquet_read() {
-        let metadata = Metadata {
-            id: "test".to_string(),
-            format: Format::new("parquet".to_string(), None),
-            schema_string: r#"{"type":"struct",  "fields": []}"#.to_string(),
-            ..Default::default()
-        };
+        let value = serde_json::json!({
+            "id": "test".to_string(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": r#"{"type":"struct",  "fields": []}"#.to_string(),
+            "partitionColumns": Vec::<String>::new(),
+            "createdTime": Some(Utc::now().timestamp_millis()),
+            "name": "test",
+            "description": "test",
+            "configuration": {}
+        });
+        let metadata: Metadata = serde_json::from_value(value).unwrap();
         let protocol = Protocol::default();
 
         let mut actions = vec![Action::Metadata(metadata), Action::Protocol(protocol)];

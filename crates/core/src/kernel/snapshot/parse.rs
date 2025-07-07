@@ -1,10 +1,12 @@
 //! Utilities for converting Arrow arrays into Delta data structures.
+use std::collections::HashMap;
 
 use arrow_array::{
     Array, BooleanArray, Int32Array, Int64Array, ListArray, MapArray, StringArray, StructArray,
 };
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use percent_encoding::percent_decode_str;
+use serde_json::json;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 use crate::kernel::{Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove};
@@ -28,19 +30,20 @@ pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
 
         for idx in 0..arr.len() {
             if arr.is_valid(idx) {
-                return Ok(Some(Metadata {
-                    id: ex::read_str(id, idx)?.to_string(),
-                    name: ex::read_str_opt(name, idx).map(|s| s.to_string()),
-                    description: ex::read_str_opt(description, idx).map(|s| s.to_string()),
-                    format: Default::default(),
-                    schema_string: ex::read_str(schema_string, idx)?.to_string(),
-                    partition_columns: collect_string_list(&partition_columns, idx)
+                let value = json!({
+                    "id": ex::read_str(id, idx)?.to_string(),
+                    "name": ex::read_str_opt(name, idx).map(|s| s.to_string()),
+                    "description": ex::read_str_opt(description, idx).map(|s| s.to_string()),
+                    "format": { "provider": "parquet", "options": {} },
+                    "schemaString": ex::read_str(schema_string, idx)?.to_string(),
+                    "partitionColumns": collect_string_list(&partition_columns, idx)
                         .unwrap_or_default(),
-                    configuration: configuration
-                        .and_then(|pv| collect_map(&pv.value(idx)).map(|m| m.collect()))
+                    "configuration": configuration
+                        .and_then(|pv| collect_map(&pv.value(idx)).map(|m| m.collect::<HashMap<String, Option<String>>>()))
                         .unwrap_or_default(),
-                    created_time: ex::read_primitive_opt(created_time, idx),
-                }));
+                    "createdTime": ex::read_primitive_opt(created_time, idx),
+                });
+                return Ok(Some(serde_json::from_value(value)?));
             }
         }
     }

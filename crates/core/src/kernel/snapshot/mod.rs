@@ -81,7 +81,7 @@ impl Snapshot {
             ));
         };
         let (metadata, protocol) = (metadata.unwrap(), protocol.unwrap());
-        let schema = serde_json::from_str(&metadata.schema_string)?;
+        let schema = metadata.parse_schema()?;
 
         PROTOCOL.can_read_from_protocol(&protocol)?;
 
@@ -106,7 +106,7 @@ impl Snapshot {
         let batch = concat_batches(&batch[0].schema(), &batch)?;
         let protocol = parse::read_protocol(&batch)?.unwrap();
         let metadata = parse::read_metadata(&batch)?.unwrap();
-        let schema = serde_json::from_str(&metadata.schema_string)?;
+        let schema = metadata.parse_schema()?;
         Ok((
             Self {
                 log_segment,
@@ -155,7 +155,7 @@ impl Snapshot {
         }
         if let Some(metadata) = metadata {
             self.metadata = metadata;
-            self.schema = serde_json::from_str(&self.metadata.schema_string)?;
+            self.schema = self.metadata.parse_schema()?;
         }
 
         if !log_segment.checkpoint_files.is_empty() {
@@ -204,7 +204,7 @@ impl Snapshot {
 
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
-        TableConfig(&self.metadata.configuration)
+        TableConfig(self.metadata.configuration())
     }
 
     /// Get the files in the snapshot
@@ -324,11 +324,11 @@ impl Snapshot {
         &self,
         table_schema: Option<&StructType>,
     ) -> DeltaResult<Option<StructType>> {
-        if self.metadata().partition_columns.is_empty() {
+        if self.metadata().partition_columns().is_empty() {
             return Ok(None);
         }
         let schema = table_schema.unwrap_or_else(|| self.schema());
-        partitions_schema(schema, &self.metadata().partition_columns)
+        partitions_schema(schema, &self.metadata().partition_columns())
     }
 }
 
@@ -628,7 +628,7 @@ impl EagerSnapshot {
         }
 
         let mapper = if let Some(metadata) = &metadata {
-            let new_schema: StructType = serde_json::from_str(&metadata.schema_string)?;
+            let new_schema: StructType = metadata.parse_schema()?;
             LogMapper::try_new(&self.snapshot, Some(&new_schema))?
         } else {
             LogMapper::try_new(&self.snapshot, None)?
@@ -646,7 +646,7 @@ impl EagerSnapshot {
 
         if let Some(metadata) = metadata {
             self.snapshot.metadata = metadata;
-            self.snapshot.schema = serde_json::from_str(&self.snapshot.metadata.schema_string)?;
+            self.snapshot.schema = self.snapshot.metadata.parse_schema()?;
         }
         if let Some(protocol) = protocol {
             self.snapshot.protocol = protocol;
