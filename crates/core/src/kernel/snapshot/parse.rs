@@ -9,7 +9,9 @@ use percent_encoding::percent_decode_str;
 use serde_json::json;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
-use crate::kernel::{Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, Remove};
+use crate::kernel::{
+    Add, AddCDCFile, DeletionVectorDescriptor, Metadata, Protocol, ProtocolInner, Remove,
+};
 use crate::{DeltaResult, DeltaTableError};
 
 pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Option<Metadata>> {
@@ -64,7 +66,7 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
 
         for idx in 0..arr.len() {
             if arr.is_valid(idx) {
-                let mut protocol = Protocol {
+                let mut protocol = ProtocolInner {
                     min_reader_version: ex::read_primitive(min_reader_version, idx)?,
                     min_writer_version: ex::read_primitive(min_writer_version, idx)?,
                     reader_features: collect_string_list(&maybe_reader_features, idx).map(|v| {
@@ -86,7 +88,7 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
                 if protocol.min_writer_version < 7 {
                     protocol.writer_features = None
                 }
-                return Ok(Some(protocol));
+                return Ok(Some(protocol.as_kernel()));
             }
         }
     }

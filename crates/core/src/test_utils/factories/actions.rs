@@ -11,8 +11,8 @@ use serde_json::json;
 
 use super::{get_parquet_bytes, DataFactory, FileStats};
 use crate::kernel::arrow::extract::{self as ex};
-use crate::kernel::partitions_schema;
 use crate::kernel::transaction::PROTOCOL;
+use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
 
 pub struct ActionFactory;
@@ -105,12 +105,13 @@ impl ActionFactory {
         reader_features: Option<impl IntoIterator<Item = ReaderFeature>>,
         writer_features: Option<impl IntoIterator<Item = WriterFeature>>,
     ) -> Protocol {
-        Protocol {
+        ProtocolInner {
             min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),
             min_writer_version: max_writer.unwrap_or(PROTOCOL.default_writer_version()),
             writer_features: writer_features.map(|i| i.into_iter().collect()),
             reader_features: reader_features.map(|i| i.into_iter().collect()),
         }
+        .as_kernel()
     }
 
     pub fn metadata(

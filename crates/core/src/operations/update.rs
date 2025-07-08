@@ -533,8 +533,8 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use super::*;
 
-    use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
+    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
@@ -1274,7 +1274,7 @@ mod tests {
         // Currently you cannot pass EnableChangeDataFeed through `with_configuration_property`
         // so the only way to create a truly CDC enabled table is by shoving the Protocol
         // directly into the actions list
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_column(
@@ -1351,7 +1351,7 @@ mod tests {
         // Currently you cannot pass EnableChangeDataFeed through `with_configuration_property`
         // so the only way to create a truly CDC enabled table is by shoving the Protocol
         // directly into the actions list
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_column(

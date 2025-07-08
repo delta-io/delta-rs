@@ -280,32 +280,26 @@ impl RawDeltaTable {
                 .map_err(PyErr::from)
         })?;
         Ok((
-            table_protocol.min_reader_version,
-            table_protocol.min_writer_version,
-            table_protocol
-                .writer_features
-                .as_ref()
-                .and_then(|features| {
-                    let empty_set = !features.is_empty();
-                    empty_set.then(|| {
-                        features
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    })
-                }),
-            table_protocol
-                .reader_features
-                .as_ref()
-                .and_then(|features| {
-                    let empty_set = !features.is_empty();
-                    empty_set.then(|| {
-                        features
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    })
-                }),
+            table_protocol.min_reader_version(),
+            table_protocol.min_writer_version(),
+            table_protocol.writer_features().and_then(|features| {
+                let empty_set = !features.is_empty();
+                empty_set.then(|| {
+                    features
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
+            }),
+            table_protocol.reader_features().and_then(|features| {
+                let empty_set = !features.is_empty();
+                empty_set.then(|| {
+                    features
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
+            }),
         ))
     }
 
