@@ -41,8 +41,8 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
         .await?;
 
     assert_eq!(table.version(), Some(4));
-    assert_eq!(table.protocol()?.min_writer_version, 2);
-    assert_eq!(table.protocol()?.min_reader_version, 1);
+    assert_eq!(table.protocol()?.min_writer_version(), 2);
+    assert_eq!(table.protocol()?.min_reader_version(), 1);
     assert_eq!(
         table.get_files_iter()?.collect::<Vec<_>>(),
         vec![
@@ -85,8 +85,8 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
         .await?;
 
     assert_eq!(table.version(), Some(3));
-    assert_eq!(table.protocol()?.min_writer_version, 2);
-    assert_eq!(table.protocol()?.min_reader_version, 1);
+    assert_eq!(table.protocol()?.min_writer_version(), 2);
+    assert_eq!(table.protocol()?.min_reader_version(), 1);
     assert_eq!(
         table.get_files_iter()?.collect::<Vec<_>>(),
         vec![
@@ -130,8 +130,8 @@ pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
         .unwrap();
 
     assert_eq!(table.version(), Some(0));
-    assert_eq!(table.protocol()?.min_writer_version, 2);
-    assert_eq!(table.protocol()?.min_reader_version, 1);
+    assert_eq!(table.protocol()?.min_writer_version(), 2);
+    assert_eq!(table.protocol()?.min_reader_version(), 1);
 
     Ok(())
 }

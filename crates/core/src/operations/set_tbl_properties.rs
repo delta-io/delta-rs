@@ -7,7 +7,7 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, MetadataExt};
+use crate::kernel::{Action, MetadataExt as _, ProtocolExt as _};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -98,8 +98,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                 .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
 
             for (key, value) in &properties {
-                metadata = metadata
-                    .add_config_key(format!("delta.properties.{key}"), value.to_string())?;
+                metadata = metadata.add_config_key(key.clone(), value.to_string())?;
             }
 
             let final_protocol =

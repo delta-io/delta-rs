@@ -561,10 +561,11 @@ pub(super) mod tests {
 
     use crate::{
         checkpoints::create_checkpoint_from_table_uri_and_cleanup,
-        kernel::transaction::{CommitBuilder, TableReference},
-        kernel::{Action, Add, Remove},
-        protocol::create_checkpoint_for,
-        protocol::{DeltaOperation, SaveMode},
+        kernel::{
+            transaction::{CommitBuilder, TableReference},
+            Action, Add, ProtocolInner, Remove,
+        },
+        protocol::{create_checkpoint_for, DeltaOperation, SaveMode},
         test_utils::{TestResult, TestTables},
         DeltaTableBuilder,
     };
@@ -659,12 +660,13 @@ pub(super) mod tests {
             .await?;
         let protocol = protocol.unwrap();
 
-        let expected = Protocol {
+        let expected = ProtocolInner {
             min_reader_version: 3,
             min_writer_version: 7,
             reader_features: Some(hashset! {ReaderFeature::DeletionVectors}),
             writer_features: Some(hashset! {WriterFeature::DeletionVectors}),
-        };
+        }
+        .as_kernel();
         assert_eq!(protocol, expected);
 
         Ok(())
@@ -785,7 +787,7 @@ pub(super) mod tests {
             "configuration": {}
         });
         let metadata: Metadata = serde_json::from_value(value).unwrap();
-        let protocol = Protocol::default();
+        let protocol = ProtocolInner::default().as_kernel();
 
         let mut actions = vec![Action::Metadata(metadata), Action::Protocol(protocol)];
         for i in 0..10 {

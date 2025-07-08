@@ -38,7 +38,7 @@ fn reader_test_eager(path: &Path) -> datatest_stable::Result<()> {
             let protocol = table.protocol().expect("Failed to load protocol");
             assert_eq!(snapshot.version() as u64, table_info.version);
             assert_eq!(
-                (protocol.min_reader_version, protocol.min_writer_version),
+                (protocol.min_reader_version(), protocol.min_writer_version()),
                 (table_info.min_reader_version, table_info.min_writer_version)
             );
         });

@@ -1577,10 +1577,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::Action;
-    use crate::kernel::DataType;
-    use crate::kernel::PrimitiveType;
-    use crate::kernel::StructField;
+    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
     use crate::operations::DeltaOps;
@@ -3984,12 +3981,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4077,12 +4074,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple_with_schema_merge() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4194,12 +4191,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_delete() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())

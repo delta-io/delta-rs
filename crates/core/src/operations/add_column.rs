@@ -9,7 +9,7 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{MetadataExt, StructField, StructTypeExt};
+use crate::kernel::{MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;

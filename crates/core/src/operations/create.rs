@@ -14,7 +14,8 @@ use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{
-    new_metadata, Action, DataType, MetadataExt, Protocol, StructField, StructType,
+    new_metadata, Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField,
+    StructType,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -284,12 +285,13 @@ impl CreateBuilder {
             .filter_map(|(k, v)| Some((k.to_string(), v.as_ref()?.to_string())))
             .collect();
 
-        let current_protocol = Protocol {
+        let current_protocol = ProtocolInner {
             min_reader_version: PROTOCOL.default_reader_version(),
             min_writer_version: PROTOCOL.default_writer_version(),
             reader_features: None,
             writer_features: None,
-        };
+        }
+        .as_kernel();
 
         let protocol = self
             .actions
@@ -465,30 +467,31 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         assert_eq!(
-            table.protocol().unwrap().min_reader_version,
+            table.protocol().unwrap().min_reader_version(),
             PROTOCOL.default_reader_version()
         );
         assert_eq!(
-            table.protocol().unwrap().min_writer_version,
+            table.protocol().unwrap().min_writer_version(),
             PROTOCOL.default_writer_version()
         );
         assert_eq!(table.get_schema().unwrap(), &schema);
 
         // check we can overwrite default settings via adding actions
-        let protocol = Protocol {
+        let protocol = ProtocolInner {
             min_reader_version: 0,
             min_writer_version: 0,
             writer_features: None,
             reader_features: None,
-        };
+        }
+        .as_kernel();
         let table = CreateBuilder::new()
             .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        assert_eq!(table.protocol().unwrap().min_reader_version, 0);
-        assert_eq!(table.protocol().unwrap().min_writer_version, 0);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 0);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 0);
 
         let table = CreateBuilder::new()
             .with_location("memory:///")

@@ -4,7 +4,9 @@ use std::sync::LazyLock;
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{contains_timestampntz, Action, EagerSnapshot, Protocol, Schema};
+use crate::kernel::{
+    contains_timestampntz, Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema,
+};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 
@@ -96,10 +98,10 @@ impl ProtocolChecker {
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         let contains_timestampntz = contains_timestampntz(schema.fields());
-        let required_features: Option<&HashSet<WriterFeature>> =
-            match snapshot.protocol().min_writer_version {
+        let required_features: Option<&[WriterFeature]> =
+            match snapshot.protocol().min_writer_version() {
                 0..=6 => None,
-                _ => snapshot.protocol().writer_features.as_ref(),
+                _ => snapshot.protocol().writer_features(),
             };
 
         if let Some(table_features) = required_features {
@@ -124,10 +126,11 @@ impl ProtocolChecker {
     }
 
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let required_features: Option<&HashSet<ReaderFeature>> = match protocol.min_reader_version {
+        let required_features: Option<HashSet<ReaderFeature>> = match protocol.min_reader_version()
+        {
             0 | 1 => None,
-            2 => Some(&READER_V2),
-            _ => protocol.reader_features.as_ref(),
+            2 => Some(READER_V2.clone()),
+            _ => protocol.reader_features_set(),
         };
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
@@ -144,16 +147,16 @@ impl ProtocolChecker {
     pub fn can_write_to(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from(snapshot)?;
-        let min_writer_version = snapshot.protocol().min_writer_version;
+        let min_writer_version = snapshot.protocol().min_writer_version();
 
-        let required_features: Option<&HashSet<WriterFeature>> = match min_writer_version {
+        let required_features: Option<HashSet<WriterFeature>> = match min_writer_version {
             0 | 1 => None,
-            2 => Some(&WRITER_V2),
-            3 => Some(&WRITER_V3),
-            4 => Some(&WRITER_V4),
-            5 => Some(&WRITER_V5),
-            6 => Some(&WRITER_V6),
-            _ => snapshot.protocol().writer_features.as_ref(),
+            2 => Some(WRITER_V2.clone()),
+            3 => Some(WRITER_V3.clone()),
+            4 => Some(WRITER_V4.clone()),
+            5 => Some(WRITER_V5.clone()),
+            6 => Some(WRITER_V6.clone()),
+            _ => snapshot.protocol().writer_features_set(),
         };
 
         if let Some(features) = required_features {
@@ -176,15 +179,14 @@ impl ProtocolChecker {
         self.can_write_to(snapshot)?;
 
         // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#append-only-tables
-        let append_only_enabled = if snapshot.protocol().min_writer_version < 2 {
+        let append_only_enabled = if snapshot.protocol().min_writer_version() < 2 {
             false
-        } else if snapshot.protocol().min_writer_version < 7 {
+        } else if snapshot.protocol().min_writer_version() < 7 {
             snapshot.config().append_only()
         } else {
             snapshot
                 .protocol()
-                .writer_features
-                .as_ref()
+                .writer_features()
                 .ok_or(TransactionError::WriterFeaturesRequired(
                     WriterFeature::AppendOnly,
                 ))?
@@ -245,7 +247,7 @@ mod tests {
 
     use super::*;
     use crate::kernel::DataType as DeltaDataType;
-    use crate::kernel::{Action, Add, Metadata, PrimitiveType, Protocol, Remove};
+    use crate::kernel::{Action, Add, Metadata, PrimitiveType, Protocol, ProtocolInner, Remove};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
@@ -298,12 +300,15 @@ mod tests {
 
         let create_actions = |writer: i32, append: &str, feat: Vec<WriterFeature>| {
             vec![
-                Action::Protocol(Protocol {
-                    min_reader_version: 1,
-                    min_writer_version: writer,
-                    writer_features: Some(feat.into_iter().collect()),
-                    ..Default::default()
-                }),
+                Action::Protocol(
+                    ProtocolInner {
+                        min_reader_version: 1,
+                        min_writer_version: writer,
+                        writer_features: Some(feat.into_iter().collect()),
+                        ..Default::default()
+                    }
+                    .as_kernel(),
+                ),
                 metadata_action(Some(HashMap::from([(
                     TableProperty::AppendOnly.as_ref().to_string(),
                     Some(append.to_string()),
@@ -397,11 +402,14 @@ mod tests {
     fn test_versions() {
         let checker_1 = ProtocolChecker::new(HashSet::new(), HashSet::new());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 1,
-                min_writer_version: 1,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 1,
+                    min_writer_version: 1,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_1 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -411,11 +419,14 @@ mod tests {
 
         let checker_2 = ProtocolChecker::new(READER_V2.clone(), HashSet::new());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 2,
-                min_writer_version: 1,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 2,
+                    min_writer_version: 1,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_2 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -428,11 +439,14 @@ mod tests {
 
         let checker_3 = ProtocolChecker::new(READER_V2.clone(), WRITER_V2.clone());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 2,
-                min_writer_version: 2,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 2,
+                    min_writer_version: 2,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_3 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -448,11 +462,14 @@ mod tests {
 
         let checker_4 = ProtocolChecker::new(READER_V2.clone(), WRITER_V3.clone());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 2,
-                min_writer_version: 3,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 2,
+                    min_writer_version: 3,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_4 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -471,11 +488,14 @@ mod tests {
 
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 2,
-                min_writer_version: 4,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 2,
+                    min_writer_version: 4,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_5 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -497,11 +517,14 @@ mod tests {
 
         let checker_6 = ProtocolChecker::new(READER_V2.clone(), WRITER_V5.clone());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 2,
-                min_writer_version: 5,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 2,
+                    min_writer_version: 5,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_6 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -526,11 +549,14 @@ mod tests {
 
         let checker_7 = ProtocolChecker::new(READER_V2.clone(), WRITER_V6.clone());
         let actions = vec![
-            Action::Protocol(Protocol {
-                min_reader_version: 2,
-                min_writer_version: 6,
-                ..Default::default()
-            }),
+            Action::Protocol(
+                ProtocolInner {
+                    min_reader_version: 2,
+                    min_writer_version: 6,
+                    ..Default::default()
+                }
+                .as_kernel(),
+            ),
             metadata_action(None).into(),
         ];
         let snapshot_7 = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
@@ -562,7 +588,9 @@ mod tests {
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
         let actions = vec![
             Action::Protocol(
-                Protocol::new(2, 4).append_writer_features(vec![WriterFeature::ChangeDataFeed]),
+                ProtocolInner::new(2, 4)
+                    .append_writer_features(vec![WriterFeature::ChangeDataFeed])
+                    .as_kernel(),
             ),
             metadata_action(None).into(),
         ];
@@ -579,7 +607,9 @@ mod tests {
         let checker_5 = ProtocolChecker::new(READER_V2.clone(), WRITER_V4.clone());
         let actions = vec![
             Action::Protocol(
-                Protocol::new(2, 4).append_writer_features([WriterFeature::GeneratedColumns]),
+                ProtocolInner::new(2, 4)
+                    .append_writer_features([WriterFeature::GeneratedColumns])
+                    .as_kernel(),
             ),
             metadata_action(None).into(),
         ];
@@ -591,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_minwriter_v4_with_generated_columns_and_expressions() {
         let checker_5 = ProtocolChecker::new(Default::default(), WRITER_V4.clone());
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
 
         let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
             .create()
