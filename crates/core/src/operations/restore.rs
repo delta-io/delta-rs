@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use crate::kernel::{Action, Add, Protocol, Remove};
+use crate::kernel::{Action, Add, ProtocolExt as _, ProtocolInner, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -246,32 +246,32 @@ async fn execute(
 
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
-        Protocol {
-            min_reader_version: table.protocol()?.min_reader_version,
-            min_writer_version: table.protocol()?.min_writer_version,
-            writer_features: if snapshot.protocol().min_writer_version < 7 {
+        ProtocolInner {
+            min_reader_version: table.protocol()?.min_reader_version(),
+            min_writer_version: table.protocol()?.min_writer_version(),
+            writer_features: if snapshot.protocol().min_writer_version() < 7 {
                 None
             } else {
-                table.protocol()?.writer_features.clone()
+                table.protocol()?.writer_features_set()
             },
-            reader_features: if snapshot.protocol().min_reader_version < 3 {
+            reader_features: if snapshot.protocol().min_reader_version() < 3 {
                 None
             } else {
-                table.protocol()?.reader_features.clone()
+                table.protocol()?.reader_features_set()
             },
         }
     } else {
-        Protocol {
+        ProtocolInner {
             min_reader_version: max(
-                table.protocol()?.min_reader_version,
-                snapshot.protocol().min_reader_version,
+                table.protocol()?.min_reader_version(),
+                snapshot.protocol().min_reader_version(),
             ),
             min_writer_version: max(
-                table.protocol()?.min_writer_version,
-                snapshot.protocol().min_writer_version,
+                table.protocol()?.min_writer_version(),
+                snapshot.protocol().min_writer_version(),
             ),
-            writer_features: snapshot.protocol().writer_features.clone(),
-            reader_features: snapshot.protocol().reader_features.clone(),
+            writer_features: snapshot.protocol().writer_features_set(),
+            reader_features: snapshot.protocol().reader_features_set(),
         }
     };
     commit_properties
@@ -282,7 +282,7 @@ async fn execute(
         serde_json::to_value(&metrics)?,
     );
 
-    actions.push(Action::Protocol(protocol));
+    actions.push(Action::Protocol(protocol.as_kernel()));
     actions.extend(files_to_add.into_iter().map(Action::Add));
     actions.extend(files_to_remove.into_iter().map(Action::Remove));
     // Add the metadata from the restored version to undo e.g. constraint or field metadata changes

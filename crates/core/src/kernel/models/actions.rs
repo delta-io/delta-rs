@@ -11,7 +11,7 @@ use crate::kernel::{error::Error, DeltaResult};
 use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
 
-pub use delta_kernel::actions::Metadata;
+pub use delta_kernel::actions::{Metadata, Protocol};
 
 pub fn new_metadata(
     schema: &StructType,
@@ -148,10 +148,72 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
     fields.any(|f| _check_type(f.data_type()))
 }
 
+pub(crate) trait ProtocolExt {
+    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>>;
+    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>>;
+    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol;
+    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol;
+    fn move_table_properties_into_features(
+        self,
+        configuration: &HashMap<String, String>,
+    ) -> Protocol;
+    fn apply_column_metadata_to_protocol(self, schema: &StructType) -> DeltaResult<Protocol>;
+    fn apply_properties_to_protocol(
+        self,
+        new_properties: &HashMap<String, String>,
+        raise_if_not_exists: bool,
+    ) -> DeltaResult<Protocol>;
+}
+
+impl ProtocolExt for Protocol {
+    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>> {
+        self.reader_features()
+            .map(|features| features.iter().cloned().collect())
+    }
+
+    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>> {
+        self.writer_features()
+            .map(|features| features.iter().cloned().collect())
+    }
+
+    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.append_reader_features(reader_features.iter().cloned());
+        inner.as_kernel()
+    }
+    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.append_writer_features(writer_features.iter().cloned());
+        inner.as_kernel()
+    }
+    fn move_table_properties_into_features(
+        self,
+        configuration: &HashMap<String, String>,
+    ) -> Protocol {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.move_table_properties_into_features(configuration);
+        inner.as_kernel()
+    }
+    fn apply_column_metadata_to_protocol(self, schema: &StructType) -> DeltaResult<Protocol> {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.apply_column_metadata_to_protocol(schema)?;
+        Ok(inner.as_kernel())
+    }
+    fn apply_properties_to_protocol(
+        self,
+        new_properties: &HashMap<String, String>,
+        raise_if_not_exists: bool,
+    ) -> DeltaResult<Protocol> {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.apply_properties_to_protocol(new_properties, raise_if_not_exists)?;
+        Ok(inner.as_kernel())
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 /// Defines a protocol action
-pub struct Protocol {
+pub(crate) struct ProtocolInner {
     /// The minimum version of the Delta read protocol that a client must implement
     /// in order to correctly read this table
     pub min_reader_version: i32,
@@ -168,7 +230,7 @@ pub struct Protocol {
     pub writer_features: Option<HashSet<WriterFeature>>,
 }
 
-impl Default for Protocol {
+impl Default for ProtocolInner {
     fn default() -> Self {
         Self {
             min_reader_version: 1,
@@ -179,7 +241,7 @@ impl Default for Protocol {
     }
 }
 
-impl Protocol {
+impl ProtocolInner {
     /// Create a new protocol action
     pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
@@ -188,6 +250,14 @@ impl Protocol {
             reader_features: None,
             writer_features: None,
         }
+    }
+
+    pub(crate) fn from_kernel(value: &Protocol) -> ProtocolInner {
+        serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
+    }
+
+    pub(crate) fn as_kernel(&self) -> Protocol {
+        serde_json::from_value(serde_json::to_value(self).unwrap()).unwrap()
     }
 
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
@@ -240,7 +310,7 @@ impl Protocol {
     pub fn move_table_properties_into_features(
         mut self,
         configuration: &HashMap<String, String>,
-    ) -> Protocol {
+    ) -> Self {
         fn parse_bool(value: &String) -> bool {
             value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
         }
@@ -305,10 +375,7 @@ impl Protocol {
 
     /// Will apply the column metadata to the protocol by either bumping the version or setting
     /// features
-    pub fn apply_column_metadata_to_protocol(
-        mut self,
-        schema: &StructType,
-    ) -> DeltaResult<Protocol> {
+    pub fn apply_column_metadata_to_protocol(mut self, schema: &StructType) -> DeltaResult<Self> {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
@@ -334,7 +401,7 @@ impl Protocol {
         mut self,
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
-    ) -> DeltaResult<Protocol> {
+    ) -> DeltaResult<Self> {
         let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
 
         for (key, value) in new_properties {
@@ -1080,19 +1147,22 @@ mod tests {
             }
         );
         let protocol: Protocol = serde_json::from_value(raw).unwrap();
-        assert_eq!(protocol.min_reader_version, 3);
-        assert_eq!(protocol.min_writer_version, 7);
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(
-            protocol.reader_features,
-            Some(hashset! {ReaderFeature::Unknown("catalogOwned".to_owned())})
+            protocol.reader_features(),
+            Some(vec![ReaderFeature::Unknown("catalogOwned".to_owned())].as_slice())
         );
         assert_eq!(
-            protocol.writer_features,
-            Some(hashset! {
-                WriterFeature::Unknown("catalogOwned".to_owned()),
-                WriterFeature::Invariants,
-                WriterFeature::AppendOnly
-            })
+            protocol.writer_features(),
+            Some(
+                vec![
+                    WriterFeature::Unknown("catalogOwned".to_owned()),
+                    WriterFeature::Invariants,
+                    WriterFeature::AppendOnly
+                ]
+                .as_slice()
+            )
         );
     }
 

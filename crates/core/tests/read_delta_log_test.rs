@@ -149,8 +149,8 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 #[ignore = "not implemented"]
 async fn test_read_table_features() -> DeltaResult<()> {
     let mut _table = deltalake_core::open_table("../test/tests/data/simple_table_features").await?;
-    let rf = _table.protocol()?.reader_features.clone();
-    let wf = _table.protocol()?.writer_features.clone();
+    let rf = _table.protocol()?.reader_features();
+    let wf = _table.protocol()?.writer_features();
 
     assert!(rf.is_some());
     assert!(wf.is_some());

@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::TableFeatures;
+use crate::kernel::{ProtocolExt as _, TableFeatures};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -113,18 +113,18 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             if !this.allow_protocol_versions_increase {
                 if !reader_features.is_empty()
                     && !writer_features.is_empty()
-                    && !(protocol.min_reader_version == 3 && protocol.min_writer_version == 7)
+                    && !(protocol.min_reader_version() == 3 && protocol.min_writer_version() == 7)
                 {
                     return Err(DeltaTableError::Generic("Table feature enables reader and writer feature, but reader is not v3, and writer not v7. Set allow_protocol_versions_increase or increase versions explicitly through set_tbl_properties".to_string()));
-                } else if !reader_features.is_empty() && protocol.min_reader_version < 3 {
+                } else if !reader_features.is_empty() && protocol.min_reader_version() < 3 {
                     return Err(DeltaTableError::Generic("Table feature enables reader feature, but min_reader is not v3. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties".to_string()));
-                } else if !writer_features.is_empty() && protocol.min_writer_version < 7 {
+                } else if !writer_features.is_empty() && protocol.min_writer_version() < 7 {
                     return Err(DeltaTableError::Generic("Table feature enables writer feature, but min_writer is not v7. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties".to_string()));
                 }
             }
 
-            protocol = protocol.append_reader_features(reader_features);
-            protocol = protocol.append_writer_features(writer_features);
+            protocol = protocol.append_reader_features(&reader_features);
+            protocol = protocol.append_writer_features(&writer_features);
 
             let operation = DeltaOperation::AddFeature {
                 name: name.to_vec(),
@@ -179,7 +179,7 @@ mod tests {
             .protocol()
             .cloned()
             .unwrap()
-            .writer_features
+            .writer_features()
             .unwrap_or_default()
             .contains(&WriterFeature::ChangeDataFeed));
 
@@ -192,12 +192,12 @@ mod tests {
 
         let current_protocol = &result.protocol().cloned().unwrap();
         assert!(&current_protocol
-            .writer_features
+            .writer_features()
             .clone()
             .unwrap_or_default()
             .contains(&WriterFeature::DeletionVectors));
         assert!(&current_protocol
-            .reader_features
+            .reader_features()
             .clone()
             .unwrap_or_default()
             .contains(&ReaderFeature::DeletionVectors));
