@@ -13,11 +13,12 @@ use crate::TableProperty;
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
-pub fn new_metadata(
+pub(crate) fn new_metadata(
     schema: &StructType,
     partition_columns: impl IntoIterator<Item = impl ToString>,
     configuration: impl IntoIterator<Item = (impl ToString, impl ToString)>,
 ) -> DeltaResult<Metadata> {
+    // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
     let value = serde_json::json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "name": None::<String>,
@@ -31,6 +32,12 @@ pub fn new_metadata(
     Ok(serde_json::from_value(value)?)
 }
 
+/// Extension trait for Metadata action
+///
+/// This trait is a stop-gap to adopt the Metadata action from delta-kernel-rs
+/// while the update / mutation APIs are being implemented. It allows us to implement
+/// additional APIs on the Metadata action and hide specifics of how we do the updates.
+#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub trait MetadataExt {
     fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
@@ -148,6 +155,11 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
     fields.any(|f| _check_type(f.data_type()))
 }
 
+/// Extension trait for delta-kernel Protocol action.
+///
+/// Allows us to extend the Protocol struct with additional methods
+/// to update the protocol actions.
+#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub(crate) trait ProtocolExt {
     fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>>;
     fn writer_features_set(&self) -> Option<HashSet<WriterFeature>>;
@@ -181,11 +193,13 @@ impl ProtocolExt for Protocol {
         inner = inner.append_reader_features(reader_features.iter().cloned());
         inner.as_kernel()
     }
+
     fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol {
         let mut inner = ProtocolInner::from_kernel(&self);
         inner = inner.append_writer_features(writer_features.iter().cloned());
         inner.as_kernel()
     }
+
     fn move_table_properties_into_features(
         self,
         configuration: &HashMap<String, String>,
@@ -194,11 +208,13 @@ impl ProtocolExt for Protocol {
         inner = inner.move_table_properties_into_features(configuration);
         inner.as_kernel()
     }
+
     fn apply_column_metadata_to_protocol(self, schema: &StructType) -> DeltaResult<Protocol> {
         let mut inner = ProtocolInner::from_kernel(&self);
         inner = inner.apply_column_metadata_to_protocol(schema)?;
         Ok(inner.as_kernel())
     }
+
     fn apply_properties_to_protocol(
         self,
         new_properties: &HashMap<String, String>,
@@ -212,7 +228,17 @@ impl ProtocolExt for Protocol {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-/// Defines a protocol action
+/// Temporary Shim to facilitate adoption of kernel protocol.
+///
+/// This is more or less our old local implementation of protocol. We keep it around
+/// to use the various update and translation methods defined in this struct and
+/// use it to proxy updates to the kernel protocol action.
+///
+// TODO: Remove once we can use kernel protocol update APIs.
+#[deprecated(
+    since = "0.27.0",
+    note = "Just an internal shim for adopting kernel actions"
+)]
 pub(crate) struct ProtocolInner {
     /// The minimum version of the Delta read protocol that a client must implement
     /// in order to correctly read this table
@@ -253,10 +279,12 @@ impl ProtocolInner {
     }
 
     pub(crate) fn from_kernel(value: &Protocol) -> ProtocolInner {
+        // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
         serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
     }
 
     pub(crate) fn as_kernel(&self) -> Protocol {
+        // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
         serde_json::from_value(serde_json::to_value(self).unwrap()).unwrap()
     }
 
