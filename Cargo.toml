@@ -29,6 +29,7 @@ debug = "line-tables-only"
 delta_kernel = { version = "0.12.1", features = [
     "arrow-55",
     "internal-api",
+    # https://github.com/delta-io/delta-kernel-rs/pull/1051
 ], git = "https://github.com/roeap/delta-kernel-rs", rev = "687e65920e2520524b8a99dc0ebfab971ba7f619" }
 
 # arrow
