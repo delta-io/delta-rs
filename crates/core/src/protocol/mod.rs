@@ -11,6 +11,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
 
@@ -459,6 +460,7 @@ impl DeltaOperation {
         CommitInfo {
             operation: Some(self.name().into()),
             operation_parameters: self.operation_parameters().ok(),
+            engine_info: Some(format!("delta-rs:{}", crate_version())),
             ..Default::default()
         }
     }
