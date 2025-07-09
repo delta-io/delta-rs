@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 mod fs_common;
 
+use deltalake_core::crate_version;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::Action;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
@@ -8,7 +9,7 @@ use serde_json::json;
 use std::error::Error;
 
 #[tokio::test]
-async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
+async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let path = tempfile::tempdir().unwrap();
     let mut table = fs_common::create_table(path.path().to_str().unwrap(), None).await;
 
@@ -32,6 +33,11 @@ async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
     assert_eq!(parameters["mode"], json!("Append"));
     assert_eq!(parameters["partitionBy"], json!("[\"some_partition\"]"));
     // assert_eq!(parameters["predicate"], None);
+
+    // check that we set the engine info
+    assert!(last_commit.engine_info.is_some());
+    let engine_info = last_commit.engine_info.as_ref().unwrap();
+    assert_eq!(engine_info, &format!("delta-rs:{}", crate_version()));
 
     Ok(())
 }
