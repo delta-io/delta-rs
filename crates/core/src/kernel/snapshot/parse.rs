@@ -32,6 +32,8 @@ pub(super) fn read_metadata(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
 
         for idx in 0..arr.len() {
             if arr.is_valid(idx) {
+                // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
+                // here we are hoping to completely remove `read_metadata` and use kernel log parsing.
                 let value = json!({
                     "id": ex::read_str(id, idx)?.to_string(),
                     "name": ex::read_str_opt(name, idx).map(|s| s.to_string()),
@@ -66,6 +68,8 @@ pub(super) fn read_protocol(batch: &dyn ProvidesColumnByName) -> DeltaResult<Opt
 
         for idx in 0..arr.len() {
             if arr.is_valid(idx) {
+                // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
+                // here we are hoping to completely remove `read_protocol` and use kernel log parsing.
                 let mut protocol = ProtocolInner {
                     min_reader_version: ex::read_primitive(min_reader_version, idx)?,
                     min_writer_version: ex::read_primitive(min_writer_version, idx)?,
