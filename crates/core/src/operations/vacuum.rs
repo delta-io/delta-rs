@@ -21,7 +21,7 @@
 //! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -176,8 +176,9 @@ impl VacuumBuilder {
 
     /// Specify table versions that we want to keep for time travel.
     /// This will prevent deletion of files required by these versions.
-    pub fn with_keep_versions(mut self, versions: Vec<i64>) -> Self {
-        self.keep_versions = Some(versions);
+    pub fn with_keep_versions(mut self, versions: &[i64]) -> Self {
+        warn!("Using experimental API VacuumBuilder::with_keep_versions");
+        self.keep_versions = Some(versions.to_vec());
         self
     }
 
@@ -519,9 +520,11 @@ async fn get_stale_files(
 
 #[cfg(test)]
 mod tests {
+    use object_store::{local::LocalFileSystem, memory::InMemory, GetResult, PutPayload};
+
     use super::*;
-    use crate::open_table;
-    use std::time::SystemTime;
+    use crate::{checkpoints::create_checkpoint, open_table};
+    use std::{io::Read, time::SystemTime};
 
     #[tokio::test]
     async fn test_vacuum_full() -> DeltaResult<()> {
@@ -560,10 +563,46 @@ mod tests {
         Ok(())
     }
 
+    /// This test simply ensures that with_keep_versions invocation of [VacuumBuilder] removes
+    /// fewer files than a full vacuum.
     #[tokio::test]
-    async fn test_vacuum_keep_version() -> DeltaResult<()> {
-        use std::fs::read_to_string;
-        use std::path::{Path, PathBuf};
+    async fn test_vacuum_keep_version_sanity_check() -> DeltaResult<()> {
+        let table_loc = "../test/tests/data/simple_table";
+        let table = open_table(table_loc).await?;
+        let versions_to_keep = vec![3];
+
+        // First, vacuum without keeping any particular versions
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+
+        // Our simple_table has 32 data files in it which could be vacuumed.
+        assert_eq!(32, result.files_deleted.len());
+
+        // Next, vacuum with specific versions retained
+        let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_keep_versions(&versions_to_keep)
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        assert_ne!(
+            32,
+            result.files_deleted.len(),
+            "with_keep_versions should have fewer files deleted than a full vacuum"
+        );
+
+        Ok(())
+    }
+
+    /// This test ensures that with_keep_versions invocations retain files which are removed within
+    /// the context of the kept ranges
+    #[tokio::test]
+    async fn test_vacuum_keep_version_add_removes() -> DeltaResult<()> {
         let table_loc = "../test/tests/data/simple_table";
         let table = open_table(table_loc).await?;
         let versions_to_keep = vec![2, 3];
@@ -571,92 +610,96 @@ mod tests {
         // First, vacuum without keeping any particular versions
         let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
             .with_retention_period(Duration::hours(0))
-            // .with_keep_versions(versions_to_keep)
             .with_dry_run(true)
             .with_mode(VacuumMode::Full)
             .with_enforce_retention_duration(false)
             .await?;
-        let mut all_files_deleted = result.files_deleted.clone();
-        all_files_deleted.sort();
+
+        // Our simple_table has 32 data files in it which could be vacuumed.
+        assert_eq!(32, result.files_deleted.len());
 
         // Next, vacuum with specific versions retained
         let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
             .with_retention_period(Duration::hours(0))
-            .with_keep_versions(versions_to_keep.clone())
+            .with_keep_versions(&versions_to_keep)
             .with_dry_run(true)
             .with_mode(VacuumMode::Full)
             .with_enforce_retention_duration(false)
             .await?;
-        let mut non_version_files_deleted = result.files_deleted.clone();
-        non_version_files_deleted.sort();
+        assert_ne!(
+            32,
+            result.files_deleted.len(),
+            "with_keep_versions should have fewer files deleted than a full vacuum"
+        );
 
-        // Compute the files that should be kept based on versions_to_keep
-        let keep_files = compute_files_to_keep(&table, &versions_to_keep).await?;
+        let kept_files = vec![
+            // Adds from v3
+            "part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet",
+            "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
+            // Removes from v3, these were add in v2
+            "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet",
+            "part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet",
+        ];
 
-        let mut expected_files_deleted: Vec<String> = all_files_deleted
-            .clone()
-            .into_iter()
-            .filter(|file| !keep_files.contains(file))
-            .collect();
-        expected_files_deleted.sort();
-
-        // manually check the difference in files deleted
-        if false {
-            let mut difference = vec![];
-            for file in all_files_deleted.iter() {
-                if !non_version_files_deleted.contains(file) {
-                    difference.push(file);
-                }
-            }
-            println!("difference in files deleted: {:#?}", difference);
-
-            println!("removal actions in the log files:");
-            for logfile in vec!["00000000000000000003.json", "00000000000000000004.json"] {
-                println!("logfile: {}", logfile);
-                let logpath: PathBuf = Path::new(table_loc).join("_delta_log").join(logfile);
-                let lines: Vec<_> = read_to_string(logpath)
-                    .unwrap()
-                    .lines()
-                    .map(String::from)
-                    .filter(|line| line.contains("remove"))
-                    .collect();
-                println!("lines: {:#?}", lines);
-            }
+        for kept in kept_files {
+            assert!(
+                !result.files_deleted.contains(&kept.to_string()),
+                "files_deleted contains something which should be kept!: {:#?} {kept}",
+                result.files_deleted
+            )
         }
-
-        assert_eq!(non_version_files_deleted, expected_files_deleted,);
-
         Ok(())
     }
 
-    async fn compute_files_to_keep(
-        table: &DeltaTable,
-        versions_to_keep: &Vec<i64>,
-    ) -> Result<HashSet<String>, DeltaTableError> {
-        let mut files_by_version: HashMap<i64, Vec<String>> = HashMap::new();
-        let mut tv = table.clone();
-        let max_version = tv.snapshot()?.version();
+    // This test will do some table operations after executing a vacuum with versions to ensure
+    // that the table is still functional, can be read, checkpointed, etc.
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_vacuum_keep_version_validity() -> DeltaResult<()> {
+        use datafusion::prelude::SessionContext;
+        use object_store::GetResultPayload;
+        let store = InMemory::new();
+        let source = LocalFileSystem::new_with_prefix("../test/tests/data/simple_table")?;
+        let mut stream = source.list(None);
 
-        // Find files for each version
-        for i in 0..=max_version {
-            tv.load_version(i).await?;
-            let files: Vec<String> = tv.get_files_iter()?.map(|path| path.to_string()).collect();
-            // println!("version:{}\n, {:#?}", i, files);
-            files_by_version.insert(i, files);
+        while let Some(Ok(entity)) = stream.next().await {
+            let mut contents = vec![];
+            match source.get(&entity.location).await?.payload {
+                GetResultPayload::File(mut fd, _path) => {
+                    fd.read_to_end(&mut contents)?;
+                }
+                _ => panic!("We should only be dealing in files!"),
+            }
+            let content = bytes::Bytes::from(contents);
+            store
+                .put(&entity.location, PutPayload::from_bytes(content))
+                .await?;
         }
 
-        // Collect complete set of files to keep
-        let keep_files = versions_to_keep
-            .iter()
-            .map(|v| {
-                files_by_version
-                    .get(v)
-                    .map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
-                    .unwrap_or_default()
-            })
-            .flatten()
-            .collect::<HashSet<_>>();
-        Ok(keep_files)
+        let mut table = crate::DeltaTableBuilder::from_valid_uri("memory:///")?
+            .with_storage_backend(Arc::new(store), url::Url::parse("memory:///").unwrap())
+            .build()?;
+        table.load().await?;
+
+        let (mut table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
+            .with_retention_period(Duration::hours(0))
+            .with_keep_versions(&[2, 3])
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .await?;
+        // Our simple_table has 32 data files in it, and we shouldn't have deleted them all!
+        assert_ne!(32, result.files_deleted.len());
+
+        // Can we checkpoint it?
+        create_checkpoint(&table, None).await?;
+        table.load().await?;
+        assert_eq!(Some(6), table.version());
+
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table))?;
+        let batches = ctx.sql("SELECT * FROM test").await?.collect().await?;
+
+        Ok(())
     }
 
     #[tokio::test]
