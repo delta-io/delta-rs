@@ -86,6 +86,266 @@ pub struct Metrics {
     /// The order of records from source files is preserved
     pub preserve_insertion_order: bool,
 }
+/// Build a plan to globally sort all files per partition (for sort-enabled compaction)
+fn build_global_sort_plan(
+    snapshot: &DeltaTableState,
+    filters: &[PartitionFilter],
+) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
+    let mut metrics = Metrics::default();
+    // Collect all active add actions by partition
+    let mut partition_map: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
+    for add_res in snapshot.get_active_add_actions_by_partitions(filters)? {
+        let add = add_res?;
+        metrics.total_considered_files += 1;
+        // Extract partition values and path
+        let part_vals = add.partition_values()?;
+        let partition_values = part_vals
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<IndexMap<_, _>>();
+        let part_path = part_vals.hive_partition_path();
+        // Insert or update the merge bin for this partition
+        let entry = partition_map
+            .entry(part_path)
+            .or_insert_with(|| (partition_values, MergeBin::new()));
+        entry.1.add(add.add_action());
+    }
+    // Build operations: one MergeBin per partition with all its files
+    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    for (path, (partition_values, bin)) in partition_map {
+        operations.insert(path, (partition_values, vec![bin]));
+    }
+    metrics.partitions_optimized = operations.len() as u64;
+    Ok((OptimizeOperations::Compact(operations), metrics))
+}
+
+// Unit tests for sorting flags in OptimizeBuilder and create_merge_plan
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+    use crate::operations::DeltaOps;
+    use crate::operations::OptimizeType;
+    use crate::writer::WriterProperties;
+
+    #[test]
+    fn test_optimize_builder_defaults_and_methods() {
+        // Initialize a builder from an in-memory DeltaOps
+        let ops = DeltaOps::new_in_memory();
+        let builder = ops.optimize();
+        // No default sort columns; user must opt in
+        assert!(builder.sort_columns.is_empty());
+
+        // Disabling sort should leave columns unchanged (empty)
+        let builder2 = builder.disable_sort();
+        assert!(builder2.sort_columns.is_empty());
+
+        // Overriding sort columns should update the columns
+        let builder3 = builder2.with_sort_columns(&["foo", "bar"]);
+        assert_eq!(
+            builder3.sort_columns,
+            vec!["foo".to_string(), "bar".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_create_merge_plan_respects_sort_flags() {
+        // Create a builder and disable sorting
+        let ops = DeltaOps::new_in_memory();
+        let builder = ops.optimize().disable_sort();
+        // Use default writer properties
+        let writer_props = WriterProperties::builder().build();
+        let plan = create_merge_plan(
+            builder.optimize_type,
+            &builder.snapshot,
+            builder.filters,
+            builder.target_size,
+            writer_props,
+            builder.sort_columns.clone(),
+            builder.sort_ascending,
+            builder.nulls_first,
+        )
+        .unwrap();
+        // Plan should reflect no sort columns
+        assert!(plan.sort_columns.is_empty());
+
+        // Create a fresh builder with custom sort columns
+        let builder2 = DeltaOps::new_in_memory()
+            .optimize()
+            .with_sort_columns(&["x"]);
+        let plan2 = create_merge_plan(
+            builder2.optimize_type,
+            &builder2.snapshot,
+            builder2.filters,
+            builder2.target_size,
+            WriterProperties::builder().build(),
+            builder2.sort_columns.clone(),
+            builder2.sort_ascending,
+            builder2.nulls_first,
+        )
+        .unwrap();
+        // Plan should reflect new sort columns
+        assert_eq!(plan2.sort_columns, vec!["x".to_string()]);
+    }
+    
+    #[test]
+    fn test_sort_order_and_nulls_flags() {
+        let ops = DeltaOps::new_in_memory();
+        let builder = ops.optimize();
+        // Defaults
+        assert_eq!(builder.sort_ascending, true);
+        assert_eq!(builder.nulls_first, true);
+        // Enable sorting columns
+        let builder2 = builder.with_sort_columns(&["a"]);
+        assert_eq!(builder2.sort_ascending, true);
+        assert_eq!(builder2.nulls_first, true);
+        // Change sort order
+        let builder3 = builder2.with_sort_order(false);
+        assert_eq!(builder3.sort_ascending, false);
+        assert_eq!(builder3.nulls_first, true);
+        // Change nulls ordering
+        let builder4 = builder2.with_nulls_first(false);
+        assert_eq!(builder4.sort_ascending, true);
+        assert_eq!(builder4.nulls_first, false);
+
+        // Propagate into merge plan
+        let writer_props = WriterProperties::builder().build();
+        let plan3 = create_merge_plan(
+            builder3.optimize_type,
+            &builder3.snapshot,
+            builder3.filters,
+            builder3.target_size,
+            writer_props.clone(),
+            builder3.sort_columns.clone(),
+            builder3.sort_ascending,
+            builder3.nulls_first,
+        )
+        .unwrap();
+        assert_eq!(plan3.sort_ascending, false);
+        assert_eq!(plan3.nulls_first, true);
+
+        let plan4 = create_merge_plan(
+            builder4.optimize_type,
+            &builder4.snapshot,
+            builder4.filters,
+            builder4.target_size,
+            writer_props,
+            builder4.sort_columns.clone(),
+            builder4.sort_ascending,
+            builder4.nulls_first,
+        )
+        .unwrap();
+        assert_eq!(plan4.sort_ascending, true);
+        assert_eq!(plan4.nulls_first, false);
+    }
+}
+
+// Integration tests validating global ordering after OPTIMIZE
+#[cfg(test)]
+#[cfg(feature = "datafusion")]
+mod integration_tests {
+    use super::*;
+    use crate::operations::DeltaOps;
+    use crate::writer::test_utils::create_initialized_table;
+    use crate::writer::test_utils::datafusion::get_data;
+    use arrow_array::{RecordBatch, StringArray};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_optimize_global_sort_enabled() {
+        // Initialize a partitioned table (by objectId) to validate cross-partition ordering
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().to_str().unwrap();
+        let table = create_initialized_table(path, &["objectId".to_string()]).await;
+
+        // Unordered batch
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("objectId", ArrowDataType::Utf8, false),
+            Field::new("dateTime", ArrowDataType::Utf8, false),
+        ]));
+        let col0 = Arc::new(StringArray::from(vec!["B", "A", "B", "A"])) as _;
+        let col1 = Arc::new(StringArray::from(vec![
+            "2021-02-02",
+            "2021-02-01",
+            "2021-01-01",
+            "2021-03-01",
+        ])) as _;
+        let batch = RecordBatch::try_new(schema.clone(), vec![col0, col1]).unwrap();
+
+        // Write and optimize
+        let table = DeltaOps(table).write(vec![batch]).await.unwrap();
+        // Enable global sort explicitly (default is now disabled)
+        let (table_opt, _) = DeltaOps(table)
+            .optimize()
+            .with_sort_columns(&["objectId", "dateTime"])
+            .await
+            .unwrap();
+
+        // Load and gather rows
+        let batches = get_data(&table_opt).await;
+        let mut rows = Vec::new();
+        for b in batches {
+            let a0 = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+            let a1 = b.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+            for i in 0..b.num_rows() {
+                rows.push((a0.value(i).to_string(), a1.value(i).to_string()));
+            }
+        }
+        let expected = vec![
+            ("A".to_string(), "2021-02-01".to_string()),
+            ("A".to_string(), "2021-03-01".to_string()),
+            ("B".to_string(), "2021-01-01".to_string()),
+            ("B".to_string(), "2021-02-02".to_string()),
+        ];
+        assert_eq!(rows, expected);
+    }
+
+    #[tokio::test]
+    async fn test_optimize_sort_disabled() {
+        // Initialize table
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().to_str().unwrap();
+        let table = create_initialized_table(path, &Vec::<String>::new()).await;
+
+        // Unordered batch
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("objectId", ArrowDataType::Utf8, false),
+            Field::new("dateTime", ArrowDataType::Utf8, false),
+        ]));
+        let col0 = Arc::new(StringArray::from(vec!["B", "A", "B", "A"])) as _;
+        let col1 = Arc::new(StringArray::from(vec![
+            "2021-02-02",
+            "2021-02-01",
+            "2021-01-01",
+            "2021-03-01",
+        ])) as _;
+        let batch = RecordBatch::try_new(schema.clone(), vec![col0, col1]).unwrap();
+
+        // Write and optimize without sorting
+        let table = DeltaOps(table).write(vec![batch]).await.unwrap();
+        let (table_opt, _) = DeltaOps(table).optimize().disable_sort().await.unwrap();
+
+        // Load and gather rows
+        let batches = get_data(&table_opt).await;
+        let mut rows = Vec::new();
+        for b in batches {
+            let a0 = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+            let a1 = b.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+            for i in 0..b.num_rows() {
+                rows.push((a0.value(i).to_string(), a1.value(i).to_string()));
+            }
+        }
+        let expected = vec![
+            ("B".to_string(), "2021-02-02".to_string()),
+            ("A".to_string(), "2021-02-01".to_string()),
+            ("B".to_string(), "2021-01-01".to_string()),
+            ("A".to_string(), "2021-03-01".to_string()),
+        ];
+        assert_eq!(rows, expected);
+    }
+}
 
 // Custom serialization function that serializes metric details as a string
 fn serialize_metric_details<S>(value: &MetricDetails, serializer: S) -> Result<S::Ok, S::Error>
@@ -211,6 +471,13 @@ pub struct OptimizeBuilder<'a> {
     max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
+    /// Columns to sort by when sort_enabled is true
+    sort_columns: Vec<String>,
+    /// Sort order: ascending if true, descending if false
+    sort_ascending: bool,
+    /// Null ordering: nulls first if true, nulls last if false
+    nulls_first: bool,
+    /// Minimum time to wait between commits
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -238,6 +505,9 @@ impl<'a> OptimizeBuilder<'a> {
             max_concurrent_tasks: num_cpus::get(),
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
+            sort_columns: Vec::new(),
+            sort_ascending: true,
+            nulls_first: true,
             min_commit_interval: None,
             custom_execute_handler: None,
         }
@@ -302,6 +572,28 @@ impl<'a> OptimizeBuilder<'a> {
         self.custom_execute_handler = Some(handler);
         self
     }
+
+    /// Enable global sort on compaction output with specified columns
+    pub fn with_sort_columns<S: AsRef<str>>(mut self, columns: &[S]) -> Self {
+        self.sort_columns = columns.iter().map(|s| s.as_ref().to_string()).collect();
+        self
+    }
+
+    /// Disable global sort on compaction output by clearing any sort columns
+    pub fn disable_sort(mut self) -> Self {
+        self.sort_columns.clear();
+        self
+    }
+    /// Set sort order: ascending if true, descending if false
+    pub fn with_sort_order(mut self, ascending: bool) -> Self {
+        self.sort_ascending = ascending;
+        self
+    }
+    /// Set null ordering: nulls first if true, nulls last if false
+    pub fn with_nulls_first(mut self, nulls_first: bool) -> Self {
+        self.nulls_first = nulls_first;
+        self
+    }
 }
 
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
@@ -331,6 +623,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
+                this.sort_columns.clone(),
+                this.sort_ascending,
+                this.nulls_first,
             )?;
             let metrics = plan
                 .execute(
@@ -443,6 +738,12 @@ pub struct MergePlan {
     task_parameters: Arc<MergeTaskParameters>,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: i64,
+    /// Columns to sort by when sort is enabled
+    sort_columns: Vec<String>,
+    /// Sort order: ascending if true, descending if false
+    sort_ascending: bool,
+    /// Null ordering: nulls first if true, nulls last if false
+    nulls_first: bool,
 }
 
 /// Parameters passed to individual merge tasks
@@ -606,12 +907,16 @@ impl MergePlan {
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
 
+        // Clone log_store to avoid moving the original into closures
+        let store = log_store.clone();
+        // Clone task parameters to avoid moving self.task_parameters into closures
+        let task_params = self.task_parameters.clone();
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
                 .flat_map(|(_, (partition, bins))| {
                     futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
                 })
-                .map(|(partition, files)| {
+                .map(move |(partition, files)| {
                     debug!(
                         "merging a group of {} files in partition {partition:?}",
                         files.len(),
@@ -619,31 +924,99 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.path);
                     }
-                    let object_store_ref = log_store.object_store(Some(operation_id));
-                    let batch_stream = futures::stream::iter(files.clone())
-                        .then(move |file| {
-                            let object_store_ref = object_store_ref.clone();
-                            let meta = ObjectMeta::try_from(file).unwrap();
-                            async move {
-                                let file_reader =
-                                    ParquetObjectReader::new(object_store_ref, meta.location)
-                                        .with_file_size(meta.size);
-                                ParquetRecordBatchStreamBuilder::new(file_reader)
-                                    .await?
-                                    .build()
-                            }
-                        })
-                        .try_flatten()
-                        .boxed();
+                    let object_store_ref = store.object_store(Some(operation_id));
+                    if self.sort_columns.is_empty() {
+                        // Default compaction without sorting
+                        let batch_stream = futures::stream::iter(files.clone())
+                            .then(move |file| {
+                                let object_store_ref = object_store_ref.clone();
+                                let meta = ObjectMeta::try_from(file).unwrap();
+                                async move {
+                                    let file_reader =
+                                        ParquetObjectReader::new(object_store_ref, meta.location)
+                                            .with_file_size(meta.size);
+                                    ParquetRecordBatchStreamBuilder::new(file_reader)
+                                        .await?
+                                        .build()
+                                }
+                            })
+                            .try_flatten()
+                            .boxed();
 
-                    let rewrite_result = tokio::task::spawn(Self::rewrite_files(
-                        self.task_parameters.clone(),
-                        partition,
-                        files,
-                        log_store.object_store(Some(operation_id)).clone(),
-                        futures::future::ready(Ok(batch_stream)),
-                    ));
-                    util::flatten_join_error(rewrite_result)
+                        let rewrite_result = tokio::task::spawn(Self::rewrite_files(
+                            task_params.clone(),
+                            partition,
+                            files,
+                            store.object_store(Some(operation_id)),
+                            futures::future::ready(Ok(batch_stream)),
+                        ));
+                        util::flatten_join_error(rewrite_result)
+                    } else {
+                        // === Compaction with global sort ===
+                        // Build a DataFusion plan over the files in this compaction batch,
+                        // apply a global sort on the user-specified `sort_columns`,
+                        // and rewrite only these files in sorted order. This ensures monotonic
+                        // ordering across the output of this batch (not the entire table).
+                        // Note: this is a standard DataFusion `sort(...)` operation, not Z-ordering
+                        // (see the ZOrder branch below).
+                        use crate::delta_datafusion::DataFusionMixins;
+                        use crate::delta_datafusion::DeltaScanConfigBuilder;
+                        use crate::delta_datafusion::DeltaTableProvider;
+                        use datafusion::execution::context::SessionContext;
+                        use datafusion::logical_expr::ident;
+
+                        // Use cloned store for DataFusion operations
+                        let log_store_ref = store.clone();
+                        let snapshot = snapshot.clone();
+                        let sort_cols = self.sort_columns.clone();
+                        let sort_ascending = self.sort_ascending;
+                        let sort_nulls_first = self.nulls_first;
+                        // Extract underlying file list from MergeBin
+                        let files_for_provider = files.files.clone();
+                        // Asynchronous DataFrame-based sorted reader
+                        let read_sorted = async move {
+                            let ctx = SessionContext::new();
+                            let scan_config = DeltaScanConfigBuilder::default()
+                                .with_file_column(false)
+                                .with_schema(snapshot.input_schema()?)
+                                .build(&snapshot)?;
+                            let provider = DeltaTableProvider::try_new(
+                                snapshot.clone(),
+                                log_store_ref.clone(),
+                                scan_config.clone(),
+                            )?
+                            .with_files(files_for_provider);
+                            let df = ctx
+                                .read_table(Arc::new(provider))
+                                .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+                            let sort_exprs = sort_cols
+                                .iter()
+                                .map(|c| ident(c).sort(sort_ascending, sort_nulls_first))
+                                .collect::<Vec<_>>();
+                            let df = df
+                                .sort(sort_exprs)
+                                .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+                            let stream = df
+                                .execute_stream()
+                                .await
+                                .map_err(|e| DeltaTableError::Generic(e.to_string()))?
+                                .map_err(|err| {
+                                    ParquetError::General(format!(
+                                        "Sort failed while scanning data: {err:?}"
+                                    ))
+                                })
+                                .boxed();
+                            Ok(stream)
+                        };
+                        let rewrite_result = tokio::task::spawn(Self::rewrite_files(
+                            task_params.clone(),
+                            partition,
+                            files,
+                            store.object_store(Some(operation_id)),
+                            read_sorted,
+                        ));
+                        util::flatten_join_error(rewrite_result)
+                    }
                 })
                 .boxed(),
             OptimizeOperations::ZOrder(zorder_columns, bins) => {
@@ -790,12 +1163,22 @@ pub fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
+    sort_columns: Vec<String>,
+    sort_ascending: bool,
+    nulls_first: bool,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
     let partitions_keys = &snapshot.metadata().partition_columns;
 
     let (operations, metrics) = match optimize_type {
-        OptimizeType::Compact => build_compaction_plan(snapshot, filters, target_size)?,
+        OptimizeType::Compact => {
+            if !sort_columns.is_empty() {
+                // Sorts all files per partition, regardless of bin size
+                build_global_sort_plan(snapshot, filters)?
+            } else {
+                build_compaction_plan(snapshot, filters, target_size)?
+            }
+        }
         OptimizeType::ZOrder(zorder_columns) => {
             build_zorder_plan(zorder_columns, snapshot, partitions_keys, filters)?
         }
@@ -824,6 +1207,9 @@ pub fn create_merge_plan(
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
         }),
         read_table_version: snapshot.version(),
+        sort_columns,
+        sort_ascending,
+        nulls_first,
     })
 }
 
