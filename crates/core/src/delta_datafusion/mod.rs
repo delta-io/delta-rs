@@ -721,7 +721,8 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
             let es = self.snapshot.snapshot();
-            let pruned_stats = prune_file_statistics(&es.files, mask);
+            let empty = vec![];
+            let pruned_stats = prune_file_statistics(es.files.as_ref().unwrap_or(&empty), mask);
             LogDataHandler::new(&pruned_stats, es.metadata(), es.schema()).statistics()
         } else {
             self.snapshot.datafusion_table_statistics()
