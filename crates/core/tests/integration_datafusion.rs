@@ -304,7 +304,7 @@ mod local {
         for pp in pruning_predicates {
             let pred = pp.sql;
             let sql = format!("SELECT CAST( day as int ) as my_day FROM demo WHERE {pred} ORDER BY CAST( day as int ) ASC");
-            println!("\nExecuting query: {}", sql);
+            println!("\nExecuting query: {sql}");
 
             let df = ctx.sql(sql.as_str()).await?;
 

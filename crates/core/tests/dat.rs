@@ -18,7 +18,7 @@ fn reader_test_eager(path: &Path) -> datatest_stable::Result<()> {
     );
     for skipped in SKIPPED_TESTS {
         if root_dir.ends_with(skipped) {
-            println!("Skipping test: {}", skipped);
+            println!("Skipping test: {skipped}");
             return Ok(());
         }
     }
