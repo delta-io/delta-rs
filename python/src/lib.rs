@@ -264,8 +264,8 @@ impl RawDeltaTable {
         })?;
         Ok(RawDeltaTableMetaData {
             id: metadata.id().to_string(),
-            name: metadata.name().cloned(),
-            description: metadata.description().cloned(),
+            name: metadata.name().map(String::from),
+            description: metadata.description().map(String::from),
             partition_columns: metadata.partition_columns().clone(),
             created_time: metadata.created_time(),
             configuration: metadata.configuration().clone(),
