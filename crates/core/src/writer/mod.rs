@@ -176,7 +176,7 @@ pub(crate) async fn flush_and_commit(
 
     let version = CommitBuilder::from(CommitProperties::default())
         .with_actions(adds)
-        .build(Some(snapshot), table.log_store.clone(), operation)
+        .build(Some(snapshot), table.log_store(), operation)
         .await?
         .version();
     table.update().await?;

@@ -124,7 +124,7 @@ pub async fn commit_actions(
         .with_actions(actions)
         .build(
             Some(table.snapshot().unwrap()),
-            table.log_store().clone(),
+            table.log_store(),
             operation,
         )
         .await

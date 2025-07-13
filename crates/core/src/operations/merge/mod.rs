@@ -1878,7 +1878,7 @@ mod tests {
         assert_eq!(table.schema(), after_table.schema());
 
         let snapshot_bytes = after_table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await
             .unwrap()
@@ -1954,7 +1954,7 @@ mod tests {
             .unwrap();
 
         let snapshot_bytes = table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await
             .unwrap()
@@ -2065,7 +2065,7 @@ mod tests {
             .unwrap();
 
         let snapshot_bytes = table
-            .log_store
+            .log_store()
             .read_commit_entry(2)
             .await
             .unwrap()
