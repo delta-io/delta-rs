@@ -183,6 +183,7 @@ pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult
         let (root_store, _prefix) = entry.value().parse_url_opts(
             &location,
             &storage_config.raw,
+            #[cfg(feature = "cloud")]
             &storage_config.retry,
             storage_config.runtime.clone().map(|rt| rt.get_handle()),
         )?;
