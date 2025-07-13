@@ -4,6 +4,7 @@ use std::{
 };
 
 use dashmap::DashMap;
+#[cfg(feature = "cloud")]
 use object_store::RetryConfig;
 use object_store::{path::Path, DynObjectStore};
 use tokio::runtime::Handle;
@@ -25,11 +26,20 @@ pub trait ObjectStoreFactory: Send + Sync {
     /// corresponding to the path segment of the URL.
     ///
     /// The store should __NOT__ apply the decorations via the passed `options`
+    #[cfg(feature = "cloud")]
     fn parse_url_opts(
         &self,
         url: &Url,
         options: &HashMap<String, String>,
         retry: &RetryConfig,
+        handle: Option<Handle>,
+    ) -> DeltaResult<(ObjectStoreRef, Path)>;
+
+    #[cfg(not(feature = "cloud"))]
+    fn parse_url_opts(
+        &self,
+        url: &Url,
+        options: &HashMap<String, String>,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
@@ -42,7 +52,7 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
         &self,
         url: &Url,
         options: &HashMap<String, String>,
-        _retry: &RetryConfig,
+        #[cfg(feature = "cloud")] _retry: &RetryConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (mut store, path) = default_parse_url_opts(url, options)?;
@@ -92,8 +102,11 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
+        #[cfg(feature = "cloud")]
         let (store, _prefix) =
             factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry, None)?;
+        #[cfg(not(feature = "cloud"))]
+        let (store, _prefix) = factory.parse_url_opts(url, &storage_config.raw, None)?;
         let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
