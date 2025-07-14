@@ -7,7 +7,6 @@ use deltalake_core::logstore::{
 use deltalake_core::logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, Path};
 use hdfs_native_object_store::HdfsObjectStore;
-use tokio::runtime::Handle;
 use url::Url;
 
 #[derive(Clone, Default, Debug)]
@@ -18,7 +17,6 @@ impl ObjectStoreFactory for HdfsFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let mut store: ObjectStoreRef = Arc::new(HdfsObjectStore::with_config(
             url.as_str(),
@@ -26,8 +24,8 @@ impl ObjectStoreFactory for HdfsFactory {
         )?);
 
         // HDFS doesn't have the spawnService, so we still wrap it in the old io storage backend (not as optimal though)
-        if let Some(handle) = handle {
-            store = Arc::new(DeltaIOStorageBackend::new(store, handle));
+        if let Some(runtime) = &config.runtime {
+            store = Arc::new(DeltaIOStorageBackend::new(store, runtime.clone()));
         };
         let prefix = Path::parse(url.path())?;
         Ok((store, prefix))
@@ -71,7 +69,6 @@ mod tests {
         let _ = factory.parse_url_opts(
             &Url::parse("hdfs://localhost:9000").expect("Failed to parse hdfs://"),
             &StorageConfig::default(),
-            None,
         )?;
         Ok(())
     }

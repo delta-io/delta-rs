@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::runtime::Handle;
 use tracing::log::*;
 use url::Url;
 
@@ -63,7 +62,6 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
@@ -74,6 +72,10 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         // All S3-likes should start their builder the same way
         let options = self.with_env_s3(&config.raw);
         builder = builder.with_retry(config.retry.clone());
+        if let Some(runtime) = &config.runtime {
+            builder =
+                builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
+        }
 
         let config = options
             .clone()
@@ -92,10 +94,6 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
                 source: Box::new(e),
             })?;
         let prefix = Path::parse(path)?;
-
-        if let Some(handle) = handle {
-            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
-        }
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());

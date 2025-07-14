@@ -21,7 +21,6 @@ use futures::stream::BoxStream;
 use futures::Future;
 use object_store::aws::AmazonS3;
 use object_store::client::SpawnedReqwestConnector;
-use tokio::runtime::Handle;
 use tracing::log::*;
 use url::Url;
 
@@ -41,7 +40,6 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(&config.raw);
 
@@ -50,8 +48,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
             .with_url(url.to_string())
             .with_retry(config.retry.clone());
 
-        if let Some(handle) = handle {
-            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
+        if let Some(runtime) = &config.runtime {
+            builder =
+                builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
         }
 
         for (key, value) in options.iter() {
