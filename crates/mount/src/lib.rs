@@ -10,7 +10,6 @@ use deltalake_core::logstore::{
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
 use object_store::DynObjectStore;
-use object_store::RetryConfig;
 use tokio::runtime::Handle;
 use url::Url;
 
@@ -42,11 +41,10 @@ impl ObjectStoreFactory for MountFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
+        config: &StorageConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let config = config::MountConfigHelper::try_new(options.as_mount_options())?.build()?;
+        let config = config::MountConfigHelper::try_new(config.raw.as_mount_options())?.build()?;
 
         let allow_unsafe_rename = str_is_truthy(
             config

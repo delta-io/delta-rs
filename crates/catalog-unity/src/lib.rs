@@ -839,24 +839,24 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
         &self,
         table_uri: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
+        config: &StorageConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),
         )??;
 
-        let mut storage_options = options.clone();
+        let mut storage_options = config.raw.clone();
         storage_options.extend(temp_creds);
 
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
         let mut builder = DeltaTableBuilder::from_uri(&table_path);
 
-        if let Some(handle) = handle {
-            builder = builder.with_io_runtime(IORuntime::RT(handle));
+        if let Some(runtime) = &config.runtime {
+            builder = builder.with_io_runtime(runtime.clone());
         }
+
         if !storage_options.is_empty() {
             builder = builder.with_storage_options(storage_options.clone());
         }

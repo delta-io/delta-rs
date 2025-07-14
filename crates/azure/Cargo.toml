@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-azure"
-version = "0.10.0"
+version = "0.11.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.27.0", path = "../core" }
+deltalake-core = { version = "0.28.0", path = "../core", features = ["cloud"] }
 
 # workspace depenndecies
 async-trait = { workspace = true }
@@ -26,7 +26,7 @@ regex = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-deltalake-core = { version = "0.27.0", path = "../core", features = [
+deltalake-core = { version = "0.28.0", path = "../core", features = [
     "datafusion",
 ] }
 chrono = { workspace = true }

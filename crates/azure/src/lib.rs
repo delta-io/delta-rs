@@ -9,7 +9,7 @@ use deltalake_core::logstore::{
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use object_store::client::SpawnedReqwestConnector;
-use object_store::{ObjectStoreScheme, RetryConfig};
+use object_store::ObjectStoreScheme;
 use tokio::runtime::Handle;
 use url::Url;
 
@@ -40,15 +40,13 @@ impl ObjectStoreFactory for AzureFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        retry: &RetryConfig,
+        config: &StorageConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
-
         let mut builder = MicrosoftAzureBuilder::new()
             .with_url(url.to_string())
-            .with_retry(retry.clone());
+            .with_retry(config.retry.clone());
+        let config = config::AzureConfigHelper::try_new(config.raw.as_azure_options())?.build()?;
 
         if let Some(handle) = handle {
             builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
@@ -93,5 +91,23 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
         let url = Url::parse(&format!("{scheme}://")).unwrap();
         object_store_factories().insert(url.clone(), factory.clone());
         logstore_factories().insert(url.clone(), factory.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_as_azure_options() {
+        use object_store::azure::AzureConfigKey;
+        let mut options = HashMap::default();
+        let key = "AZURE_STORAGE_ACCOUNT_KEY".to_string();
+        let value = "value".to_string();
+        options.insert(key, value.clone());
+
+        let converted = options.as_azure_options();
+        assert_eq!(converted.get(&AzureConfigKey::AccessKey), Some(&value));
     }
 }
