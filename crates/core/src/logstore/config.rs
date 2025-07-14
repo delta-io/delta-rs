@@ -345,6 +345,7 @@ mod tests {
     }
 
     // Test StorageConfig parsing
+    #[cfg(feature = "cloud")]
     #[test]
     fn test_storage_config_parsing() {
         let options = hashmap! {

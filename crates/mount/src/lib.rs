@@ -10,7 +10,6 @@ use deltalake_core::logstore::{
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
 use object_store::DynObjectStore;
-use tokio::runtime::Handle;
 use url::Url;
 
 mod config;
@@ -42,13 +41,13 @@ impl ObjectStoreFactory for MountFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let config = config::MountConfigHelper::try_new(config.raw.as_mount_options())?.build()?;
+        let moutn_config =
+            config::MountConfigHelper::try_new(config.raw.as_mount_options())?.build()?;
 
         let allow_unsafe_rename = str_is_truthy(
-            config
-                .get(&config::MountConfigKey::AllowUnsafeRename)
+            moutn_config
+                .get(&crate::config::MountConfigKey::AllowUnsafeRename)
                 .unwrap_or(&String::new()),
         );
 
@@ -78,8 +77,9 @@ impl ObjectStoreFactory for MountFactory {
             _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
         }?;
 
-        if let Some(handle) = handle {
-            store = Arc::new(DeltaIOStorageBackend::new(store, handle)) as Arc<DynObjectStore>;
+        if let Some(runtime) = &config.runtime {
+            store =
+                Arc::new(DeltaIOStorageBackend::new(store, runtime.clone())) as Arc<DynObjectStore>;
         }
         Ok((store, prefix))
     }

@@ -180,11 +180,7 @@ pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult
 
     if let Some(entry) = object_store_factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
-        let (root_store, _prefix) = entry.value().parse_url_opts(
-            &location,
-            &storage_config,
-            storage_config.runtime.clone().map(|rt| rt.get_handle()),
-        )?;
+        let (root_store, _prefix) = entry.value().parse_url_opts(&location, &storage_config)?;
         return logstore_with(root_store, location, storage_config);
     }
 
