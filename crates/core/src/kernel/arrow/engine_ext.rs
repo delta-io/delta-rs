@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_stats_schema_old() {
-        let raw = HashMap::from([("key".to_string(), Some("value".to_string()))]);
+        let raw = HashMap::from([("key".to_string(), "value".to_string())]);
         let config = TableConfig(&raw);
         let logical_schema = StructType::new([StructField::nullable("id", KernelDataType::LONG)]);
 
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_stats_schema_old_nested() {
-        let raw = HashMap::from([("key".to_string(), Some("value".to_string()))]);
+        let raw = HashMap::from([("key".to_string(), "value".to_string())]);
         let config = TableConfig(&raw);
 
         // Create a nested logical schema with:
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_stats_schema_old_with_nonskippable_field() {
-        let raw = HashMap::from([("key".to_string(), Some("value".to_string()))]);
+        let raw = HashMap::from([("key".to_string(), "value".to_string())]);
         let config = TableConfig(&raw);
 
         // Create a nested logical schema with:
@@ -504,7 +504,7 @@ mod tests {
     fn test_stats_schema_old_col_names() {
         let raw = HashMap::from([(
             "delta.dataSkippingStatsColumns".to_string(),
-            Some("`user.info`.name".to_string()),
+            "`user.info`.name".to_string(),
         )]);
         let config = TableConfig(&raw);
 
@@ -547,7 +547,7 @@ mod tests {
     fn test_stats_schema_old_n_cols() {
         let raw = HashMap::from([(
             "delta.dataSkippingNumIndexedCols".to_string(),
-            Some("1".to_string()),
+            "1".to_string(),
         )]);
         let config = TableConfig(&raw);
 

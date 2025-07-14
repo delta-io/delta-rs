@@ -81,7 +81,7 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Metadata, StructTypeExt};
+use crate::kernel::{new_metadata, Action, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -967,10 +967,10 @@ async fn execute(
         new_schema = Some(schema.clone());
         let schema_struct: StructType = schema.try_into_kernel()?;
         if &schema_struct != snapshot.schema() {
-            let action = Action::Metadata(Metadata::try_new(
-                schema_struct,
-                current_metadata.partition_columns.clone(),
-                snapshot.metadata().configuration.clone(),
+            let action = Action::Metadata(new_metadata(
+                &schema_struct,
+                current_metadata.partition_columns(),
+                snapshot.metadata().configuration(),
             )?);
             schema_action = Some(action);
         }
@@ -1372,7 +1372,7 @@ async fn execute(
     let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
     let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns.clone();
+    let table_partition_cols = current_metadata.partition_columns().clone();
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -1577,10 +1577,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::Action;
-    use crate::kernel::DataType;
-    use crate::kernel::PrimitiveType;
-    use crate::kernel::StructField;
+    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
     use crate::operations::DeltaOps;
@@ -3984,12 +3981,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4077,12 +4074,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple_with_schema_merge() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4194,12 +4191,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_delete() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())

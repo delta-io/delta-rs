@@ -18,7 +18,7 @@ use crate::delta_datafusion::{
     register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
 };
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::Protocol;
+use crate::kernel::{MetadataExt, ProtocolExt as _, ProtocolInner};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
@@ -125,7 +125,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{name}");
 
-            if metadata.configuration.contains_key(&configuration_key) {
+            if metadata.configuration().contains_key(&configuration_key) {
                 return Err(DeltaTableError::Generic(format!(
                     "Constraint with name: {name} already exists"
                 )));
@@ -177,28 +177,26 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             // We have validated the table passes it's constraints, now to add the constraint to
             // the table.
-
-            metadata
-                .configuration
-                .insert(format!("delta.constraints.{name}"), Some(expr_str.clone()));
+            metadata =
+                metadata.add_config_key(format!("delta.constraints.{name}"), expr_str.clone())?;
 
             let old_protocol = this.snapshot.protocol();
-            let protocol = Protocol {
-                min_reader_version: if old_protocol.min_reader_version > 1 {
-                    old_protocol.min_reader_version
+            let protocol = ProtocolInner {
+                min_reader_version: if old_protocol.min_reader_version() > 1 {
+                    old_protocol.min_reader_version()
                 } else {
                     1
                 },
-                min_writer_version: if old_protocol.min_writer_version > 3 {
-                    old_protocol.min_writer_version
+                min_writer_version: if old_protocol.min_writer_version() > 3 {
+                    old_protocol.min_writer_version()
                 } else {
                     3
                 },
-                reader_features: old_protocol.reader_features.clone(),
-                writer_features: if old_protocol.min_writer_version < 7 {
-                    old_protocol.writer_features.clone()
+                reader_features: old_protocol.reader_features_set(),
+                writer_features: if old_protocol.min_writer_version() < 7 {
+                    old_protocol.writer_features_set()
                 } else {
-                    let current_features = old_protocol.writer_features.clone();
+                    let current_features = old_protocol.writer_features_set();
                     if let Some(mut features) = current_features {
                         features.insert(WriterFeature::CheckConstraints);
                         Some(features)
@@ -206,7 +204,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
                         current_features
                     }
                 },
-            };
+            }
+            .as_kernel();
 
             let operation = DeltaOperation::AddConstraint {
                 name: name.clone(),
@@ -250,10 +249,9 @@ mod tests {
         table
             .metadata()
             .unwrap()
-            .configuration
+            .configuration()
             .get(name)
-            .unwrap()
-            .clone()
+            .cloned()
             .unwrap()
     }
 

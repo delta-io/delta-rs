@@ -9,7 +9,7 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{StructField, StructTypeExt};
+use crate::kernel::{MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -104,13 +104,13 @@ impl std::future::IntoFuture for AddColumnBuilder {
             let new_protocol = current_protocol
                 .clone()
                 .apply_column_metadata_to_protocol(&new_table_schema)?
-                .move_table_properties_into_features(&metadata.configuration);
+                .move_table_properties_into_features(metadata.configuration());
 
             let operation = DeltaOperation::AddColumn {
                 fields: fields.into_iter().collect_vec(),
             };
 
-            metadata.schema_string = serde_json::to_string(&new_table_schema)?;
+            metadata = metadata.with_schema(&new_table_schema)?;
 
             let mut actions = vec![metadata.into()];
 

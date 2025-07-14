@@ -37,7 +37,7 @@ async fn test_update_table_name_valid() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.name.as_ref().unwrap(), name);
+    assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 }
 
@@ -61,7 +61,7 @@ async fn test_update_table_description_valid() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.description.as_ref().unwrap(), description);
+    assert_eq!(metadata.description().unwrap(), description);
     assert_eq!(updated_table.version(), Some(1));
 }
 
@@ -85,7 +85,7 @@ async fn test_update_table_name_character_limit_valid() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.name.as_ref().unwrap(), &name_255_chars);
+    assert_eq!(metadata.name().unwrap(), &name_255_chars);
     assert_eq!(updated_table.version(), Some(1));
 }
 
@@ -132,10 +132,7 @@ async fn test_update_table_description_character_limit_valid() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(
-        metadata.description.as_ref().unwrap(),
-        &description_4000_chars
-    );
+    assert_eq!(metadata.description().unwrap(), &description_4000_chars);
     assert_eq!(updated_table.version(), Some(1));
 }
 
@@ -183,7 +180,7 @@ async fn test_update_existing_table_name() {
 
     assert_eq!(updated_table.version(), Some(1));
     assert_eq!(
-        updated_table.metadata().unwrap().name.as_ref().unwrap(),
+        updated_table.metadata().unwrap().name().unwrap(),
         initial_name
     );
 
@@ -199,10 +196,7 @@ async fn test_update_existing_table_name() {
         .unwrap();
 
     assert_eq!(final_table.version(), Some(2));
-    assert_eq!(
-        final_table.metadata().unwrap().name.as_ref().unwrap(),
-        new_name
-    );
+    assert_eq!(final_table.metadata().unwrap().name().unwrap(), new_name);
 }
 
 #[tokio::test]
@@ -226,12 +220,7 @@ async fn test_update_existing_table_description() {
 
     assert_eq!(updated_table.version(), Some(1));
     assert_eq!(
-        updated_table
-            .metadata()
-            .unwrap()
-            .description
-            .as_ref()
-            .unwrap(),
+        updated_table.metadata().unwrap().description().unwrap(),
         initial_description
     );
 
@@ -248,12 +237,7 @@ async fn test_update_existing_table_description() {
 
     assert_eq!(final_table.version(), Some(2));
     assert_eq!(
-        final_table
-            .metadata()
-            .unwrap()
-            .description
-            .as_ref()
-            .unwrap(),
+        final_table.metadata().unwrap().description().unwrap(),
         new_description
     );
 }
@@ -299,7 +283,7 @@ async fn test_empty_table_description() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.description.as_ref().unwrap(), "");
+    assert_eq!(metadata.description().unwrap(), "");
     assert_eq!(updated_table.version(), Some(1));
 }
 
@@ -344,7 +328,7 @@ async fn test_with_commit_properties() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.name.as_ref().unwrap(), name);
+    assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 }
 
@@ -427,7 +411,7 @@ async fn test_with_custom_execute_handler() {
         .unwrap();
 
     let metadata = updated_table.metadata().unwrap();
-    assert_eq!(metadata.name.as_ref().unwrap(), name);
+    assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 
     assert!(handler

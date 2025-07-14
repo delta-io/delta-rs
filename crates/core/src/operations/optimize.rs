@@ -1168,7 +1168,7 @@ pub fn create_merge_plan(
     nulls_first: bool,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
-    let partitions_keys = &snapshot.metadata().partition_columns;
+    let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {

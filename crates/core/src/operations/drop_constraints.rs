@@ -6,7 +6,7 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::Action;
+use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -95,14 +95,16 @@ impl std::future::IntoFuture for DropConstraintBuilder {
             let mut metadata = this.snapshot.metadata().clone();
             let configuration_key = format!("delta.constraints.{name}");
 
-            if metadata.configuration.remove(&configuration_key).is_none() {
+            if !metadata.configuration().contains_key(&configuration_key) {
                 if this.raise_if_not_exists {
                     return Err(DeltaTableError::Generic(format!(
-                        "Constraint with name: {name} doesn't exists"
+                        "Constraint with name '{name}' does not exist."
                     )));
                 }
                 return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
             }
+
+            metadata = metadata.remove_config_key(&configuration_key)?;
             let operation = DeltaOperation::DropConstraint { name: name.clone() };
 
             let actions = vec![Action::Metadata(metadata)];
@@ -165,7 +167,7 @@ mod tests {
 
         let expected_name = "id";
         assert_eq!(get_constraint_op_params(&mut table).await, expected_name);
-        assert_eq!(table.metadata().unwrap().configuration.get("id"), None);
+        assert_eq!(table.metadata().unwrap().configuration().get("id"), None);
         Ok(())
     }
 

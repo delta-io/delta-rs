@@ -402,12 +402,12 @@ impl<'a> ConflictChecker<'a> {
     fn check_protocol_compatibility(&self) -> Result<(), CommitConflictError> {
         for p in self.winning_commit_summary.protocol() {
             let (win_read, curr_read) = (
-                p.min_reader_version,
-                self.txn_info.read_snapshot.protocol().min_reader_version,
+                p.min_reader_version(),
+                self.txn_info.read_snapshot.protocol().min_reader_version(),
             );
             let (win_write, curr_write) = (
-                p.min_writer_version,
-                self.txn_info.read_snapshot.protocol().min_writer_version,
+                p.min_writer_version(),
+                self.txn_info.read_snapshot.protocol().min_writer_version(),
             );
             if curr_read < win_read || win_write < curr_write {
                 return Err(CommitConflictError::ProtocolChanged(
@@ -481,7 +481,7 @@ impl<'a> ConflictChecker<'a> {
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .partition_columns;
+                        .partition_columns();
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {

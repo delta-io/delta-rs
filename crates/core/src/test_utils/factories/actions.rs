@@ -3,15 +3,17 @@ use std::collections::HashMap;
 use arrow_array::*;
 use chrono::Utc;
 use delta_kernel::schema::{DataType, PrimitiveType};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use serde_json::json;
 
 use super::{get_parquet_bytes, DataFactory, FileStats};
 use crate::kernel::arrow::extract::{self as ex};
-use crate::kernel::partitions_schema;
 use crate::kernel::transaction::PROTOCOL;
+use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 
 pub struct ActionFactory;
 
@@ -103,12 +105,13 @@ impl ActionFactory {
         reader_features: Option<impl IntoIterator<Item = ReaderFeature>>,
         writer_features: Option<impl IntoIterator<Item = WriterFeature>>,
     ) -> Protocol {
-        Protocol {
+        ProtocolInner {
             min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),
             min_writer_version: max_writer.unwrap_or(PROTOCOL.default_writer_version()),
             writer_features: writer_features.map(|i| i.into_iter().collect()),
             reader_features: reader_features.map(|i| i.into_iter().collect()),
         }
+        .as_kernel()
     }
 
     pub fn metadata(
@@ -116,18 +119,19 @@ impl ActionFactory {
         partition_columns: Option<impl IntoIterator<Item = impl ToString>>,
         configuration: Option<HashMap<String, Option<String>>>,
     ) -> Metadata {
-        Metadata {
-            id: uuid::Uuid::new_v4().hyphenated().to_string(),
-            format: Default::default(),
-            schema_string: serde_json::to_string(schema).unwrap(),
-            partition_columns: partition_columns
-                .map(|i| i.into_iter().map(|c| c.to_string()).collect())
+        let value = json!({
+            "id": uuid::Uuid::new_v4().hyphenated().to_string(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(schema).unwrap(),
+            "partitionColumns": partition_columns
+                .map(|i| i.into_iter().map(|c| c.to_string()).collect_vec())
                 .unwrap_or_default(),
-            configuration: configuration.unwrap_or_default(),
-            name: None,
-            description: None,
-            created_time: Some(Utc::now().timestamp_millis()),
-        }
+            "configuration": configuration.unwrap_or_default(),
+            "name": None::<String>,
+            "description": None::<String>,
+            "createdTime": Some(Utc::now().timestamp_millis()),
+        });
+        serde_json::from_value(value).unwrap()
     }
 }
 

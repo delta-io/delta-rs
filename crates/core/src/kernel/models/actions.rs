@@ -6,118 +6,139 @@ use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::kernel::{error::Error, DeltaResult};
 use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
 
-/// Defines a file format used in table
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct Format {
-    /// Name of the encoding for files in this table
-    pub provider: String,
-    /// A map containing configuration options for the format
-    pub options: HashMap<String, Option<String>>,
+pub use delta_kernel::actions::{Metadata, Protocol};
+
+pub(crate) fn new_metadata(
+    schema: &StructType,
+    partition_columns: impl IntoIterator<Item = impl ToString>,
+    configuration: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+) -> DeltaResult<Metadata> {
+    // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
+    let value = serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "name": None::<String>,
+        "description": None::<String>,
+        "format": { "provider": "parquet", "options": {} },
+        "schemaString": serde_json::to_string(schema)?,
+        "partitionColumns": partition_columns.into_iter().map(|c| c.to_string()).collect::<Vec<_>>(),
+        "configuration": configuration.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
+        "createdTime": chrono::Utc::now().timestamp_millis(),
+    });
+    Ok(serde_json::from_value(value)?)
 }
 
-impl Format {
-    /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
-        let options = options.unwrap_or_default();
-        Self { provider, options }
-    }
+/// Extension trait for Metadata action
+///
+/// This trait is a stop-gap to adopt the Metadata action from delta-kernel-rs
+/// while the update / mutation APIs are being implemented. It allows us to implement
+/// additional APIs on the Metadata action and hide specifics of how we do the updates.
+#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
+pub trait MetadataExt {
+    fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
-    /// Return the Format provider
-    pub fn get_provider(self) -> String {
-        self.provider
-    }
+    fn with_name(self, name: String) -> DeltaResult<Metadata>;
+
+    fn with_description(self, description: String) -> DeltaResult<Metadata>;
+
+    fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata>;
+
+    fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata>;
+
+    fn remove_config_key(self, key: &String) -> DeltaResult<Metadata>;
 }
 
-impl Default for Format {
-    fn default() -> Self {
-        Self {
-            provider: String::from("parquet"),
-            options: HashMap::new(),
-        }
-    }
-}
-
-/// Return a default empty schema to be used for edge-cases when a schema is missing
-fn default_schema() -> String {
-    warn!("A `metaData` action was missing a `schemaString` and has been given an empty schema");
-    r#"{"type":"struct",  "fields": []}"#.into()
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-/// Defines a metadata action
-pub struct Metadata {
-    /// Unique identifier for this table
-    pub id: String,
-    /// User-provided identifier for this table
-    pub name: Option<String>,
-    /// User-provided description for this table
-    pub description: Option<String>,
-    /// Specification of the encoding for the files stored in the table
-    pub format: Format,
-    /// Schema of the table
-    #[serde(default = "default_schema")]
-    pub schema_string: String,
-    /// Column names by which the data should be partitioned
-    pub partition_columns: Vec<String>,
-    /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<i64>,
-    /// Configuration options for the metadata action
-    pub configuration: HashMap<String, Option<String>>,
-}
-
-impl Metadata {
-    /// Create a new metadata action
-    pub fn try_new(
-        schema: StructType,
-        partition_columns: impl IntoIterator<Item = impl Into<String>>,
-        configuration: HashMap<String, Option<String>>,
-    ) -> DeltaResult<Self> {
-        Ok(Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            format: Default::default(),
-            schema_string: serde_json::to_string(&schema)?,
-            partition_columns: partition_columns.into_iter().map(|c| c.into()).collect(),
-            configuration,
-            name: None,
-            description: None,
-            created_time: Some(chrono::Utc::now().timestamp_millis()),
-        })
+impl MetadataExt for Metadata {
+    fn with_table_id(self, table_id: String) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": table_id,
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table name in the metadata action
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
+    fn with_name(self, name: String) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": name,
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table description in the metadata action
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
+    fn with_description(self, description: String) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": description,
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table creation time in the metadata action
-    pub fn with_created_time(mut self, created_time: i64) -> Self {
-        self.created_time = Some(created_time);
-        self
+    fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(schema)?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// set the table ID in the metadata action
-    pub fn with_table_id(mut self, id: String) -> Self {
-        self.id = id;
-        self
+    fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata> {
+        let mut config = self.configuration().clone();
+        config.insert(key, value);
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": config,
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 
-    /// get the table schema
-    pub fn schema(&self) -> DeltaResult<StructType> {
-        Ok(serde_json::from_str(&self.schema_string)?)
+    fn remove_config_key(self, key: &String) -> DeltaResult<Metadata> {
+        let mut config = self.configuration().clone();
+        config.remove(key);
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": config,
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
     }
 }
 
@@ -134,10 +155,91 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
     fields.any(|f| _check_type(f.data_type()))
 }
 
+/// Extension trait for delta-kernel Protocol action.
+///
+/// Allows us to extend the Protocol struct with additional methods
+/// to update the protocol actions.
+#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
+pub(crate) trait ProtocolExt {
+    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>>;
+    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>>;
+    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol;
+    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol;
+    fn move_table_properties_into_features(
+        self,
+        configuration: &HashMap<String, String>,
+    ) -> Protocol;
+    fn apply_column_metadata_to_protocol(self, schema: &StructType) -> DeltaResult<Protocol>;
+    fn apply_properties_to_protocol(
+        self,
+        new_properties: &HashMap<String, String>,
+        raise_if_not_exists: bool,
+    ) -> DeltaResult<Protocol>;
+}
+
+impl ProtocolExt for Protocol {
+    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>> {
+        self.reader_features()
+            .map(|features| features.iter().cloned().collect())
+    }
+
+    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>> {
+        self.writer_features()
+            .map(|features| features.iter().cloned().collect())
+    }
+
+    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.append_reader_features(reader_features.iter().cloned());
+        inner.as_kernel()
+    }
+
+    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.append_writer_features(writer_features.iter().cloned());
+        inner.as_kernel()
+    }
+
+    fn move_table_properties_into_features(
+        self,
+        configuration: &HashMap<String, String>,
+    ) -> Protocol {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.move_table_properties_into_features(configuration);
+        inner.as_kernel()
+    }
+
+    fn apply_column_metadata_to_protocol(self, schema: &StructType) -> DeltaResult<Protocol> {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.apply_column_metadata_to_protocol(schema)?;
+        Ok(inner.as_kernel())
+    }
+
+    fn apply_properties_to_protocol(
+        self,
+        new_properties: &HashMap<String, String>,
+        raise_if_not_exists: bool,
+    ) -> DeltaResult<Protocol> {
+        let mut inner = ProtocolInner::from_kernel(&self);
+        inner = inner.apply_properties_to_protocol(new_properties, raise_if_not_exists)?;
+        Ok(inner.as_kernel())
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-/// Defines a protocol action
-pub struct Protocol {
+/// Temporary Shim to facilitate adoption of kernel protocol.
+///
+/// This is more or less our old local implementation of protocol. We keep it around
+/// to use the various update and translation methods defined in this struct and
+/// use it to proxy updates to the kernel protocol action.
+///
+// TODO: Remove once we can use kernel protocol update APIs.
+#[deprecated(
+    since = "0.27.0",
+    note = "Just an internal shim for adopting kernel actions"
+)]
+pub(crate) struct ProtocolInner {
     /// The minimum version of the Delta read protocol that a client must implement
     /// in order to correctly read this table
     pub min_reader_version: i32,
@@ -154,7 +256,7 @@ pub struct Protocol {
     pub writer_features: Option<HashSet<WriterFeature>>,
 }
 
-impl Default for Protocol {
+impl Default for ProtocolInner {
     fn default() -> Self {
         Self {
             min_reader_version: 1,
@@ -165,7 +267,7 @@ impl Default for Protocol {
     }
 }
 
-impl Protocol {
+impl ProtocolInner {
     /// Create a new protocol action
     pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
@@ -174,6 +276,16 @@ impl Protocol {
             reader_features: None,
             writer_features: None,
         }
+    }
+
+    pub(crate) fn from_kernel(value: &Protocol) -> ProtocolInner {
+        // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
+        serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
+    }
+
+    pub(crate) fn as_kernel(&self) -> Protocol {
+        // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
+        serde_json::from_value(serde_json::to_value(self).unwrap()).unwrap()
     }
 
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
@@ -225,23 +337,17 @@ impl Protocol {
     /// only converts features that are "true"
     pub fn move_table_properties_into_features(
         mut self,
-        configuration: &HashMap<String, Option<String>>,
-    ) -> Protocol {
-        fn parse_bool(value: &Option<String>) -> bool {
-            value
-                .as_ref()
-                .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
+        configuration: &HashMap<String, String>,
+    ) -> Self {
+        fn parse_bool(value: &String) -> bool {
+            value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
         }
 
         if self.min_writer_version >= 7 {
             // TODO: move this is in future to use delta_kernel::table_properties
             let mut converted_writer_features = configuration
                 .iter()
-                .filter(|(_, value)| {
-                    value
-                        .as_ref()
-                        .is_some_and(|v| v.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
-                })
+                .filter(|(_, value)| value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableChangeDataFeed" if parse_bool(value) => {
                         Some(WriterFeature::ChangeDataFeed)
@@ -253,9 +359,7 @@ impl Protocol {
                     "delta.enableRowTracking" if parse_bool(value) => {
                         Some(WriterFeature::RowTracking)
                     }
-                    "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
-                        Some(WriterFeature::V2Checkpoint)
-                    }
+                    "delta.checkpointPolicy" if value == "v2" => Some(WriterFeature::V2Checkpoint),
                     _ => None,
                 })
                 .collect::<HashSet<WriterFeature>>();
@@ -282,9 +386,7 @@ impl Protocol {
                     "delta.enableDeletionVectors" if parse_bool(value) => {
                         Some(ReaderFeature::DeletionVectors)
                     }
-                    "delta.checkpointPolicy" if value.clone().unwrap_or_default() == "v2" => {
-                        Some(ReaderFeature::V2Checkpoint)
-                    }
+                    "delta.checkpointPolicy" if value == "v2" => Some(ReaderFeature::V2Checkpoint),
                     _ => None,
                 })
                 .collect::<HashSet<ReaderFeature>>();
@@ -301,10 +403,7 @@ impl Protocol {
 
     /// Will apply the column metadata to the protocol by either bumping the version or setting
     /// features
-    pub fn apply_column_metadata_to_protocol(
-        mut self,
-        schema: &StructType,
-    ) -> DeltaResult<Protocol> {
+    pub fn apply_column_metadata_to_protocol(mut self, schema: &StructType) -> DeltaResult<Self> {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
@@ -330,7 +429,7 @@ impl Protocol {
         mut self,
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
-    ) -> DeltaResult<Protocol> {
+    ) -> DeltaResult<Self> {
         let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
 
         for (key, value) in new_properties {
@@ -1076,19 +1175,22 @@ mod tests {
             }
         );
         let protocol: Protocol = serde_json::from_value(raw).unwrap();
-        assert_eq!(protocol.min_reader_version, 3);
-        assert_eq!(protocol.min_writer_version, 7);
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(
-            protocol.reader_features,
-            Some(hashset! {ReaderFeature::Unknown("catalogOwned".to_owned())})
+            protocol.reader_features(),
+            Some(vec![ReaderFeature::Unknown("catalogOwned".to_owned())].as_slice())
         );
         assert_eq!(
-            protocol.writer_features,
-            Some(hashset! {
-                WriterFeature::Unknown("catalogOwned".to_owned()),
-                WriterFeature::Invariants,
-                WriterFeature::AppendOnly
-            })
+            protocol.writer_features(),
+            Some(
+                vec![
+                    WriterFeature::Unknown("catalogOwned".to_owned()),
+                    WriterFeature::Invariants,
+                    WriterFeature::AppendOnly
+                ]
+                .as_slice()
+            )
         );
     }
 
