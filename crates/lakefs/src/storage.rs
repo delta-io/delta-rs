@@ -1,11 +1,11 @@
 //! LakeFS storage backend (internally S3).
 
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
-use deltalake_core::logstore::{ObjectStoreFactory, ObjectStoreRef};
+use deltalake_core::logstore::{ObjectStoreFactory, ObjectStoreRef, StorageConfig};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::aws::AmazonS3Builder;
 use object_store::client::SpawnedReqwestConnector;
-use object_store::{ObjectStoreScheme, RetryConfig};
+use object_store::ObjectStoreScheme;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -62,17 +62,19 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        storage_config: &HashMap<String, String>,
-        retry: &RetryConfig,
+        config: &StorageConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
         let s3_url = Url::parse(&s3_url)
             .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
+        let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
 
         // All S3-likes should start their builder the same way
-        let options = self.with_env_s3(storage_config);
+        let options = self.with_env_s3(&config.raw);
+        builder = builder.with_retry(config.retry.clone());
+
         let config = options
             .clone()
             .into_iter()
@@ -91,8 +93,6 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
             })?;
         let prefix = Path::parse(path)?;
 
-        let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
-
         if let Some(handle) = handle {
             builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
         }
@@ -101,7 +101,7 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
             builder = builder.with_config(*key, value.clone());
         }
 
-        let store = builder.with_retry(retry.clone()).build()?;
+        let store = builder.build()?;
 
         debug!("Initialized the object store: {store:?}");
         Ok((Arc::new(store), prefix))

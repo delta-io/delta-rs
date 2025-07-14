@@ -4,8 +4,6 @@ use std::{
 };
 
 use dashmap::DashMap;
-#[cfg(feature = "cloud")]
-use object_store::RetryConfig;
 use object_store::{path::Path, DynObjectStore};
 use tokio::runtime::Handle;
 use url::Url;
@@ -26,20 +24,10 @@ pub trait ObjectStoreFactory: Send + Sync {
     /// corresponding to the path segment of the URL.
     ///
     /// The store should __NOT__ apply the decorations via the passed `options`
-    #[cfg(feature = "cloud")]
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        retry: &RetryConfig,
-        handle: Option<Handle>,
-    ) -> DeltaResult<(ObjectStoreRef, Path)>;
-
-    #[cfg(not(feature = "cloud"))]
-    fn parse_url_opts(
-        &self,
-        url: &Url,
-        options: &HashMap<String, String>,
+        config: &StorageConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
@@ -51,11 +39,10 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        #[cfg(feature = "cloud")] _retry: &RetryConfig,
+        config: &StorageConfig,
         handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let (mut store, path) = default_parse_url_opts(url, options)?;
+        let (mut store, path) = default_parse_url_opts(url, &config.raw)?;
 
         if let Some(handle) = handle {
             store = Arc::new(DeltaIOStorageBackend::new(store, handle)) as Arc<DynObjectStore>;
@@ -102,11 +89,7 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
-        #[cfg(feature = "cloud")]
-        let (store, _prefix) =
-            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry, None)?;
-        #[cfg(not(feature = "cloud"))]
-        let (store, _prefix) = factory.parse_url_opts(url, &storage_config.raw, None)?;
+        let (store, _prefix) = factory.parse_url_opts(url, &storage_config, None)?;
         let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
@@ -176,3 +159,6 @@ pub fn logstore_factories() -> LogStoreFactoryRegistry {
         })
         .clone()
 }
+
+#[cfg(test)]
+mod tests {}
