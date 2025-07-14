@@ -25,17 +25,14 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
-use tracing::warn;
 use url::Url;
 
 use self::log_segment::LogSegment;
 use self::parse::{read_adds, read_removes};
 use self::replay::{LogMapper, LogReplayScanner, ReplayStream};
 use self::visitors::*;
-use super::{
-    Action, Add, AddCDCFile, CommitInfo, DataType, Metadata, Protocol, Remove, StructField,
-    Transaction,
-};
+use super::arrow::engine_ext::stats_schema_from_config;
+use super::{Action, Add, AddCDCFile, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::parse::read_cdf_adds;
 use crate::kernel::transaction::{CommitData, PROTOCOL};
 use crate::kernel::{ActionType, StructType};
@@ -84,7 +81,7 @@ impl Snapshot {
             ));
         };
         let (metadata, protocol) = (metadata.unwrap(), protocol.unwrap());
-        let schema = serde_json::from_str(&metadata.schema_string)?;
+        let schema = metadata.parse_schema()?;
 
         PROTOCOL.can_read_from_protocol(&protocol)?;
 
@@ -109,7 +106,7 @@ impl Snapshot {
         let batch = concat_batches(&batch[0].schema(), &batch)?;
         let protocol = parse::read_protocol(&batch)?.unwrap();
         let metadata = parse::read_metadata(&batch)?.unwrap();
-        let schema = serde_json::from_str(&metadata.schema_string)?;
+        let schema = metadata.parse_schema()?;
         Ok((
             Self {
                 log_segment,
@@ -158,7 +155,7 @@ impl Snapshot {
         }
         if let Some(metadata) = metadata {
             self.metadata = metadata;
-            self.schema = serde_json::from_str(&self.metadata.schema_string)?;
+            self.schema = self.metadata.parse_schema()?;
         }
 
         if !log_segment.checkpoint_files.is_empty() {
@@ -207,7 +204,7 @@ impl Snapshot {
 
     /// Well known table configuration
     pub fn table_config(&self) -> TableConfig<'_> {
-        TableConfig(&self.metadata.configuration)
+        TableConfig(self.metadata.configuration())
     }
 
     /// Get the files in the snapshot
@@ -317,7 +314,9 @@ impl Snapshot {
     /// Get the statistics schema of the snapshot
     pub fn stats_schema(&self, table_schema: Option<&StructType>) -> DeltaResult<StructType> {
         let schema = table_schema.unwrap_or_else(|| self.schema());
-        stats_schema(schema, self.table_config())
+        Ok(stats_schema_from_config(schema, self.table_config())?
+            .as_ref()
+            .clone())
     }
 
     /// Get the partition values schema of the snapshot
@@ -325,11 +324,11 @@ impl Snapshot {
         &self,
         table_schema: Option<&StructType>,
     ) -> DeltaResult<Option<StructType>> {
-        if self.metadata().partition_columns.is_empty() {
+        if self.metadata().partition_columns().is_empty() {
             return Ok(None);
         }
         let schema = table_schema.unwrap_or_else(|| self.schema());
-        partitions_schema(schema, &self.metadata().partition_columns)
+        partitions_schema(schema, &self.metadata().partition_columns())
     }
 }
 
@@ -629,7 +628,7 @@ impl EagerSnapshot {
         }
 
         let mapper = if let Some(metadata) = &metadata {
-            let new_schema: StructType = serde_json::from_str(&metadata.schema_string)?;
+            let new_schema: StructType = metadata.parse_schema()?;
             LogMapper::try_new(&self.snapshot, Some(&new_schema))?
         } else {
             LogMapper::try_new(&self.snapshot, None)?
@@ -647,7 +646,7 @@ impl EagerSnapshot {
 
         if let Some(metadata) = metadata {
             self.snapshot.metadata = metadata;
-            self.snapshot.schema = serde_json::from_str(&self.snapshot.metadata.schema_string)?;
+            self.snapshot.schema = self.snapshot.metadata.parse_schema()?;
         }
         if let Some(protocol) = protocol {
             self.snapshot.protocol = protocol;
@@ -656,59 +655,6 @@ impl EagerSnapshot {
 
         Ok(self.snapshot.version())
     }
-}
-
-fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<StructType> {
-    let stats_fields = if let Some(stats_cols) = config.stats_columns() {
-        stats_cols
-            .iter()
-            .filter_map(|col| match get_stats_field(schema, col) {
-                Some(field) => {
-                    let is_binary_type = matches!(field.data_type(), &DataType::BINARY);
-                    if is_binary_type {
-                        warn!("Column {} is of binary type and excluded from loading in stats columns.", col);
-                        return None
-                    }
-                    Some(match field.data_type() {
-                        DataType::Map(_) | DataType::Array(_) => {
-                            Err(DeltaTableError::Generic(format!(
-                                "Stats column {col} has unsupported type {}",
-                                field.data_type()
-                            )))
-                        }
-                        _ => Ok(StructField::new(
-                            field.name(),
-                            field.data_type().clone(),
-                            true,
-                        )),
-                    })
-                }
-                _ => {
-                    Some(Err(DeltaTableError::Generic(format!(
-                        "Stats column {col} not found in schema"
-                    ))))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let num_indexed_cols = config.num_indexed_cols();
-        schema
-            .fields
-            .values()
-            .enumerate()
-            .filter_map(|(idx, f)| stats_field(idx, num_indexed_cols, f))
-            .collect()
-    };
-    Ok(StructType::new(vec![
-        StructField::new("numRecords", DataType::LONG, true),
-        StructField::new("minValues", StructType::new(stats_fields.clone()), true),
-        StructField::new("maxValues", StructType::new(stats_fields.clone()), true),
-        StructField::new(
-            "nullCount",
-            StructType::new(stats_fields.iter().filter_map(to_count_field)),
-            true,
-        ),
-    ]))
 }
 
 pub(crate) fn partitions_schema(
@@ -730,44 +676,9 @@ pub(crate) fn partitions_schema(
     )))
 }
 
-fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option<StructField> {
-    if !(num_indexed_cols < 0 || (idx as i32) < num_indexed_cols) {
-        return None;
-    }
-    match field.data_type() {
-        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-        DataType::Struct(dt_struct) => Some(StructField::new(
-            field.name(),
-            StructType::new(
-                dt_struct
-                    .fields()
-                    .flat_map(|f| stats_field(idx, num_indexed_cols, f)),
-            ),
-            true,
-        )),
-        DataType::Primitive(_) => Some(StructField::new(
-            field.name(),
-            field.data_type.clone(),
-            true,
-        )),
-    }
-}
-
-fn to_count_field(field: &StructField) -> Option<StructField> {
-    match field.data_type() {
-        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
-        DataType::Struct(s) => Some(StructField::new(
-            field.name(),
-            StructType::new(s.fields().filter_map(to_count_field)),
-            true,
-        )),
-        _ => Some(StructField::new(field.name(), DataType::LONG, true)),
-    }
-}
-
 #[cfg(feature = "datafusion")]
 mod datafusion {
-    use datafusion_common::stats::Statistics;
+    use ::datafusion::common::stats::Statistics;
 
     use super::*;
 
@@ -779,49 +690,11 @@ mod datafusion {
     }
 }
 
-/// Retrieves a specific field from the schema based on the provided field name.
-/// It handles cases where the field name is nested or enclosed in backticks.
-fn get_stats_field<'a>(schema: &'a StructType, stats_field_name: &str) -> Option<&'a StructField> {
-    let dialect = sqlparser::dialect::GenericDialect {};
-    match sqlparser::parser::Parser::new(&dialect).try_with_sql(stats_field_name) {
-        Ok(mut parser) => match parser.parse_multipart_identifier() {
-            Ok(parts) => find_nested_field(schema, &parts),
-            Err(_) => schema.field(stats_field_name),
-        },
-        Err(_) => schema.field(stats_field_name),
-    }
-}
-
-fn find_nested_field<'a>(
-    schema: &'a StructType,
-    parts: &[sqlparser::ast::Ident],
-) -> Option<&'a StructField> {
-    if parts.is_empty() {
-        return None;
-    }
-    let part_name = &parts[0].value;
-    match schema.field(part_name) {
-        Some(field) => {
-            if parts.len() == 1 {
-                Some(field)
-            } else {
-                match field.data_type() {
-                    DataType::Struct(struct_schema) => {
-                        find_nested_field(struct_schema, &parts[1..])
-                    }
-                    // Any part before the end must be a struct
-                    _ => None,
-                }
-            }
-        }
-        None => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
+    use delta_kernel::schema::{DataType, StructField};
     use futures::TryStreamExt;
     use itertools::Itertools;
 
@@ -884,11 +757,11 @@ mod tests {
             "+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
             "| add                                                                                                                                                                                                                                                                                                                                  |",
             "+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| {path: part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968626000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
-            "| {path: part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
-            "| {path: part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
-            "| {path: part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
-            "| {path: part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , minValues: , maxValues: , nullCount: }} |",
+            "| {path: part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968626000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , nullCount: , minValues: , maxValues: }} |",
+            "| {path: part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet, partitionValues: {}, size: 262, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , nullCount: , minValues: , maxValues: }} |",
+            "| {path: part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , nullCount: , minValues: , maxValues: }} |",
+            "| {path: part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , nullCount: , minValues: , maxValues: }} |",
+            "| {path: part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet, partitionValues: {}, size: 429, modificationTime: 1587968602000, dataChange: true, stats: , tags: , deletionVector: , baseRowId: , defaultRowCommitVersion: , clusteringProvider: , stats_parsed: {numRecords: , nullCount: , minValues: , maxValues: }} |",
             "+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
@@ -999,101 +872,5 @@ mod tests {
         };
 
         assert_eq!(snapshot.partitions_schema(None).unwrap(), None);
-    }
-
-    #[test]
-    fn test_field_with_name() {
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b", DataType::INTEGER, true),
-        ]);
-        let field = get_stats_field(&schema, "b").unwrap();
-        assert_eq!(*field, StructField::new("b", DataType::INTEGER, true));
-    }
-
-    #[test]
-    fn test_field_with_name_escaped() {
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b.b", DataType::INTEGER, true),
-        ]);
-        let field = get_stats_field(&schema, "`b.b`").unwrap();
-        assert_eq!(*field, StructField::new("b.b", DataType::INTEGER, true));
-    }
-
-    #[test]
-    fn test_field_does_not_exist() {
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b", DataType::INTEGER, true),
-        ]);
-        let field = get_stats_field(&schema, "c");
-        assert!(field.is_none());
-    }
-
-    #[test]
-    fn test_field_part_is_not_struct() {
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b", DataType::INTEGER, true),
-        ]);
-        let field = get_stats_field(&schema, "b.c");
-        assert!(field.is_none());
-    }
-
-    #[test]
-    fn test_field_name_does_not_parse() {
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b", DataType::INTEGER, true),
-        ]);
-        let field = get_stats_field(&schema, "b.");
-        assert!(field.is_none());
-    }
-
-    #[test]
-    fn test_field_with_name_nested() {
-        let nested = StructType::new(vec![StructField::new(
-            "nested_struct",
-            DataType::BOOLEAN,
-            true,
-        )]);
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b", DataType::Struct(Box::new(nested)), true),
-        ]);
-
-        let field = get_stats_field(&schema, "b.nested_struct").unwrap();
-
-        assert_eq!(
-            *field,
-            StructField::new("nested_struct", DataType::BOOLEAN, true)
-        );
-    }
-
-    #[test]
-    fn test_field_with_last_name_nested_backticks() {
-        let nested = StructType::new(vec![StructField::new("pr!me", DataType::BOOLEAN, true)]);
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b", DataType::Struct(Box::new(nested)), true),
-        ]);
-
-        let field = get_stats_field(&schema, "b.`pr!me`").unwrap();
-
-        assert_eq!(*field, StructField::new("pr!me", DataType::BOOLEAN, true));
-    }
-
-    #[test]
-    fn test_field_with_name_nested_backticks() {
-        let nested = StructType::new(vec![StructField::new("pr", DataType::BOOLEAN, true)]);
-        let schema = StructType::new(vec![
-            StructField::new("a", DataType::STRING, true),
-            StructField::new("b&b", DataType::Struct(Box::new(nested)), true),
-        ]);
-
-        let field = get_stats_field(&schema, "`b&b`.pr").unwrap();
-
-        assert_eq!(*field, StructField::new("pr", DataType::BOOLEAN, true));
     }
 }

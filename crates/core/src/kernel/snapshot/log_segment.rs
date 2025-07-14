@@ -561,10 +561,11 @@ pub(super) mod tests {
 
     use crate::{
         checkpoints::create_checkpoint_from_table_uri_and_cleanup,
-        kernel::transaction::{CommitBuilder, TableReference},
-        kernel::{Action, Add, Format, Remove},
-        protocol::create_checkpoint_for,
-        protocol::{DeltaOperation, SaveMode},
+        kernel::{
+            transaction::{CommitBuilder, TableReference},
+            Action, Add, ProtocolInner, Remove,
+        },
+        protocol::{create_checkpoint_for, DeltaOperation, SaveMode},
         test_utils::{TestResult, TestTables},
         DeltaTableBuilder,
     };
@@ -659,12 +660,13 @@ pub(super) mod tests {
             .await?;
         let protocol = protocol.unwrap();
 
-        let expected = Protocol {
+        let expected = ProtocolInner {
             min_reader_version: 3,
             min_writer_version: 7,
             reader_features: Some(hashset! {ReaderFeature::DeletionVectors}),
             writer_features: Some(hashset! {WriterFeature::DeletionVectors}),
-        };
+        }
+        .as_kernel();
         assert_eq!(protocol, expected);
 
         Ok(())
@@ -774,13 +776,18 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_stream_parquet_read() {
-        let metadata = Metadata {
-            id: "test".to_string(),
-            format: Format::new("parquet".to_string(), None),
-            schema_string: r#"{"type":"struct",  "fields": []}"#.to_string(),
-            ..Default::default()
-        };
-        let protocol = Protocol::default();
+        let value = serde_json::json!({
+            "id": "test".to_string(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": r#"{"type":"struct",  "fields": []}"#.to_string(),
+            "partitionColumns": Vec::<String>::new(),
+            "createdTime": Some(Utc::now().timestamp_millis()),
+            "name": "test",
+            "description": "test",
+            "configuration": {}
+        });
+        let metadata: Metadata = serde_json::from_value(value).unwrap();
+        let protocol = ProtocolInner::default().as_kernel();
 
         let mut actions = vec![Action::Metadata(metadata), Action::Protocol(protocol)];
         for i in 0..10 {

@@ -9,6 +9,7 @@ use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{MetadataExt as _, ProtocolExt as _};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -132,13 +133,13 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
             let new_protocol = current_protocol
                 .clone()
                 .apply_column_metadata_to_protocol(&updated_table_schema)?
-                .move_table_properties_into_features(&metadata.configuration);
+                .move_table_properties_into_features(metadata.configuration());
 
             let operation = DeltaOperation::UpdateFieldMetadata {
                 fields: updated_table_schema.fields().cloned().collect_vec(),
             };
 
-            metadata.schema_string = serde_json::to_string(&updated_table_schema)?;
+            metadata = metadata.with_schema(&updated_table_schema)?;
 
             let mut actions = vec![metadata.into()];
 

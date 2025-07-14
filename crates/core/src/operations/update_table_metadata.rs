@@ -7,7 +7,7 @@ use validator::Validate;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::Action;
+use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -113,15 +113,15 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
             })?;
             update
                 .validate()
-                .map_err(|e| DeltaTableError::MetadataError(format!("{}", e)))?;
+                .map_err(|e| DeltaTableError::MetadataError(format!("{e}")))?;
 
             let mut metadata = this.snapshot.metadata().clone();
 
             if let Some(name) = &update.name {
-                metadata.name = Some(name.clone());
+                metadata = metadata.with_name(name.clone())?;
             }
             if let Some(description) = &update.description {
-                metadata.description = Some(description.clone());
+                metadata = metadata.with_description(description.clone())?;
             }
 
             let operation = DeltaOperation::UpdateTableMetadata {

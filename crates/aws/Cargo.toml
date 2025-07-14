@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.9.1"
+version = "0.11.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 # path dependencies
-deltalake-core = { version = "0.26.0", path = "../core" }
+deltalake-core = { version = "0.28.0", path = "../core" , features = ["cloud"]}
 
 # workspace dependencies
 async-trait = { workspace = true }
@@ -38,11 +38,13 @@ aws-config = { version = "1.5", default-features = false, features = [
     "credentials-process",
     "sso",
 ] }
-aws-sdk-dynamodb = { version = "1.45", default-features = false, features = [
+aws-sdk-sso = { version = "=1.72.0"}
+aws-sdk-ssooidc = { version = "=1.73.0"}
+aws-sdk-dynamodb = { version = "=1.79.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "1.42", default-features = false, features = [
+aws-sdk-sts = { version = "=1.73.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }

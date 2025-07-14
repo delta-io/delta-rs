@@ -1,6 +1,6 @@
 //! Implementation for writing delta checkpoints.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use arrow::compute::filter_record_batch;
 use arrow_array::{BooleanArray, RecordBatch};
@@ -40,9 +40,12 @@ pub(crate) async fn create_checkpoint_for(
     let table = Table::try_from_uri(table_root)?;
 
     let task_engine = engine.clone();
-    let cp_writer = spawn_blocking(move || table.checkpoint(task_engine.as_ref(), Some(version)))
+    let snapshot = spawn_blocking(move || table.snapshot(task_engine.as_ref(), Some(version)))
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+    let snapshot = Arc::new(snapshot);
+
+    let cp_writer = snapshot.checkpoint()?;
 
     let cp_url = cp_writer.checkpoint_path()?;
     let cp_path = Path::from_url_path(cp_url.path())?;
@@ -255,7 +258,6 @@ mod tests {
     use crate::kernel::transaction::{CommitBuilder, TableReference};
     use crate::kernel::Action;
     use crate::operations::DeltaOps;
-    use crate::protocol::Metadata;
     use crate::writer::test_utils::get_delta_schema;
     use crate::DeltaResult;
 
@@ -289,7 +291,7 @@ mod tests {
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_create_checkpoint_with_metadata() {
-        use std::collections::HashMap;
+        use crate::kernel::new_metadata;
 
         let table_schema = get_delta_schema();
 
@@ -303,7 +305,8 @@ mod tests {
         assert_eq!(table.get_schema().unwrap(), &table_schema);
 
         let part_cols: Vec<String> = vec![];
-        let metadata = Metadata::try_new(table_schema, part_cols, HashMap::new()).unwrap();
+        let metadata =
+            new_metadata(&table_schema, part_cols, std::iter::empty::<(&str, &str)>()).unwrap();
         let actions = vec![Action::Metadata(metadata)];
 
         let epoch_id = std::time::SystemTime::now()

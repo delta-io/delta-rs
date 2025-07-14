@@ -1,6 +1,7 @@
 import pytest
 from arro3.core import DataType, Field, Schema
 
+from deltalake import DeltaTable, write_deltalake
 from deltalake.writer._conversion import _convert_arro3_schema_to_delta
 
 
@@ -385,3 +386,35 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
 )
 def test_schema_conversion(input_schema: Schema, expected_schema: Schema):
     assert expected_schema == _convert_arro3_schema_to_delta(input_schema)
+
+
+@pytest.mark.pandas
+def test_merge_casting_table_provider(tmp_path):
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "a": 1,
+            "ts": pd.date_range(
+                "2021-01-01", "2021-01-02", freq="h", tz="America/Chicago"
+            ),
+        }
+    )
+    write_deltalake(tmp_path, df, mode="overwrite")
+
+    df2 = pd.DataFrame(
+        {
+            "a": 2,
+            "ts": pd.date_range(
+                "2021-01-01", "2021-01-03", freq="h", tz="America/Chicago"
+            ),
+        }
+    )
+
+    dt = DeltaTable(tmp_path)
+    dt.merge(
+        df2,
+        predicate="source.ts = target.ts",
+        source_alias="source",
+        target_alias="target",
+    ).when_matched_update_all().when_not_matched_insert_all().execute()

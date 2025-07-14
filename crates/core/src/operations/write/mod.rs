@@ -45,11 +45,11 @@ use std::vec;
 
 use arrow_array::RecordBatch;
 use datafusion::catalog::TableProvider;
+use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::logical_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
 use datafusion::prelude::DataFrame;
-use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
 use execution::{prepare_predicate_actions, write_execution_plan_v2};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -68,10 +68,12 @@ use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::register_store;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
-use crate::kernel::{Action, ActionType, Metadata, StructType, StructTypeExt};
+use crate::kernel::{
+    new_metadata, Action, ActionType, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
+};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::merge_schema::merge_arrow_schema;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -330,7 +332,7 @@ impl WriteBuilder {
         let active_partitions = self
             .snapshot
             .as_ref()
-            .map(|s| s.metadata().partition_columns.clone());
+            .map(|s| s.metadata().partition_columns().clone());
 
         if let Some(active_part) = active_partitions {
             if let Some(ref partition_columns) = self.partition_columns {
@@ -561,21 +563,18 @@ impl std::future::IntoFuture for WriteBuilder {
                     // Verify if delta schema changed
                     if &schema_struct != snapshot.schema() {
                         let current_protocol = snapshot.protocol();
-                        let configuration = snapshot.metadata().configuration.clone();
+                        let configuration = snapshot.metadata().configuration().clone();
                         let new_protocol = current_protocol
                             .clone()
                             .apply_column_metadata_to_protocol(&schema_struct)?
                             .move_table_properties_into_features(&configuration);
 
-                        let mut metadata = Metadata::try_new(
-                            schema_struct,
-                            partition_columns.clone(),
-                            configuration,
-                        )?;
-                        let existing_metadata_id = snapshot.metadata().id.clone();
+                        let mut metadata =
+                            new_metadata(&schema_struct, &partition_columns, configuration)?;
+                        let existing_metadata_id = snapshot.metadata().id().to_string();
 
                         if !existing_metadata_id.is_empty() {
-                            metadata = metadata.with_table_id(existing_metadata_id);
+                            metadata = metadata.with_table_id(existing_metadata_id)?;
                         }
                         let schema_action = Action::Metadata(metadata);
                         actions.push(schema_action);
@@ -626,10 +625,10 @@ impl std::future::IntoFuture for WriteBuilder {
                     if &delta_schema != snapshot.schema() {
                         let mut metadata = snapshot.metadata().clone();
 
-                        metadata.schema_string = serde_json::to_string(&delta_schema)?;
+                        metadata = metadata.with_schema(&delta_schema)?;
                         actions.push(Action::Metadata(metadata));
 
-                        let configuration = snapshot.metadata().configuration.clone();
+                        let configuration = snapshot.metadata().configuration().clone();
                         let current_protocol = snapshot.protocol();
                         let new_protocol = current_protocol
                             .clone()
@@ -1119,7 +1118,7 @@ mod tests {
             .unwrap();
         table.load().await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.metadata().unwrap().schema().unwrap();
+        let new_schema = table.metadata().unwrap().parse_schema().unwrap();
         let fields = new_schema.fields();
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
@@ -1129,7 +1128,8 @@ mod tests {
             .metadata()
             .expect("Failed to retrieve updated metadata");
         assert_ne!(
-            None, metadata.created_time,
+            None,
+            metadata.created_time(),
             "Created time should be the milliseconds since epoch of when the action was created"
         );
 
@@ -1192,12 +1192,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.metadata().unwrap().schema().unwrap();
+        let new_schema = table.metadata().unwrap().parse_schema().unwrap();
         let fields = new_schema.fields();
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
-        let part_cols = table.metadata().unwrap().partition_columns.clone();
+        let part_cols = table.metadata().unwrap().partition_columns().clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;

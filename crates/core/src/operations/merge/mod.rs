@@ -35,11 +35,21 @@ use std::time::Instant;
 
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::{
+    col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType,
+};
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
+};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -47,14 +57,6 @@ use datafusion::{
     execution::context::SessionState,
     physical_plan::ExecutionPlan,
     prelude::{cast, DataFrame, SessionContext},
-};
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
-use datafusion_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
@@ -77,10 +79,10 @@ use crate::delta_datafusion::{
     register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
     DeltaSessionConfig, DeltaTableProvider,
 };
+use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Metadata, StructTypeExt};
+use crate::kernel::{new_metadata, Action, StructTypeExt};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schema};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::execution::write_execution_plan_v2;
@@ -726,7 +728,7 @@ async fn execute(
     mut source: DataFrame,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
-    _state: SessionState,
+    state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
@@ -756,8 +758,7 @@ async fn execute(
         extension_planner: MergeMetricExtensionPlanner {},
     };
 
-    let state = SessionStateBuilder::new()
-        .with_default_features()
+    let state = SessionStateBuilder::new_from_existing(state)
         .with_query_planner(Arc::new(merge_planner))
         .build();
 
@@ -874,7 +875,7 @@ async fn execute(
         }
     };
 
-    debug!("Using target subset filter: {:?}", commit_predicate);
+    debug!("Using target subset filter: {commit_predicate:?}");
 
     let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
     // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
@@ -966,10 +967,10 @@ async fn execute(
         new_schema = Some(schema.clone());
         let schema_struct: StructType = schema.try_into_kernel()?;
         if &schema_struct != snapshot.schema() {
-            let action = Action::Metadata(Metadata::try_new(
-                schema_struct,
-                current_metadata.partition_columns.clone(),
-                snapshot.metadata().configuration.clone(),
+            let action = Action::Metadata(new_metadata(
+                &schema_struct,
+                current_metadata.partition_columns(),
+                snapshot.metadata().configuration(),
             )?);
             schema_action = Some(action);
         }
@@ -1371,7 +1372,7 @@ async fn execute(
     let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
     let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns.clone();
+    let table_partition_cols = current_metadata.partition_columns().clone();
 
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_config().num_indexed_cols(),
@@ -1576,10 +1577,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::Action;
-    use crate::kernel::DataType;
-    use crate::kernel::PrimitiveType;
-    use crate::kernel::StructField;
+    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
     use crate::operations::DeltaOps;
@@ -1595,13 +1593,13 @@ mod tests {
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::common::Column;
+    use datafusion::common::TableReference;
+    use datafusion::logical_expr::col;
+    use datafusion::logical_expr::expr::Placeholder;
+    use datafusion::logical_expr::lit;
+    use datafusion::logical_expr::Expr;
     use datafusion::prelude::*;
-    use datafusion_common::Column;
-    use datafusion_common::TableReference;
-    use datafusion_expr::col;
-    use datafusion_expr::expr::Placeholder;
-    use datafusion_expr::lit;
-    use datafusion_expr::Expr;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
     use itertools::Itertools;
@@ -3983,12 +3981,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4076,12 +4074,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple_with_schema_merge() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4193,12 +4191,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_delete() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())

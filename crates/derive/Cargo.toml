@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-derive"
-version = "0.26.0"
+version = "0.28.0"
 description = "Dervice macros for use in delta ecosystem crates"
 authors.workspace = true
 rust-version.workspace = true

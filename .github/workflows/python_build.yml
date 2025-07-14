@@ -160,7 +160,7 @@ jobs:
       - uses: actions/setup-java@v2
         with:
           distribution: "zulu"
-          java-version: "11"
+          java-version: "21"
 
       - name: Build and install deltalake
         run: make develop-pyspark

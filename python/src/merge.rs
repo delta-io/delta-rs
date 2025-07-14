@@ -3,7 +3,6 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::LazyTableProvider;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
@@ -16,6 +15,7 @@ use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::sync::Arc;
 
+use crate::datafusion::LazyTableProvider;
 use crate::error::PythonError;
 use crate::utils::rt;
 use crate::writer::{maybe_lazy_cast_reader, ArrowStreamBatchGenerator};
@@ -55,15 +55,13 @@ impl PyMergeBuilder {
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
         let ctx = SessionContext::new();
-        let schema = source
-            .schema_ref()
-            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
         let source = source
             .into_reader()
             .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
         let source = maybe_lazy_cast_reader(source, batch_schema.into_inner());
+        let schema = source.schema();
 
         let source_df = if streamed_exec {
             let arrow_stream_batch_generator: Arc<RwLock<dyn LazyBatchGenerator>> =

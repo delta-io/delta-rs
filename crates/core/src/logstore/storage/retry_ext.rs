@@ -77,6 +77,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
     }
 }
 
+#[cfg(feature = "cloud")]
 impl config::TryUpdateKey for object_store::RetryConfig {
     fn try_update_key(&mut self, key: &str, v: &str) -> crate::DeltaResult<Option<()>> {
         match key {

@@ -2,12 +2,12 @@
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use std::collections::HashMap;
 
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{ScalarValue, TableReference};
-use datafusion_expr::expr::{InList, Placeholder};
-use datafusion_expr::{Aggregate, BinaryExpr, LogicalPlan, Operator};
-use datafusion_expr::{Between, Expr};
+use datafusion::logical_expr::expr::{InList, Placeholder};
+use datafusion::logical_expr::{lit, Aggregate, BinaryExpr, LogicalPlan, Operator};
+use datafusion::logical_expr::{Between, Expr};
 
 use either::{Left, Right};
 
@@ -54,7 +54,7 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
             }
         }
         Expr::IsNull(inner) => references_table(inner, table),
-        Expr::Literal(_) => ReferenceTableCheck::NoReference,
+        Expr::Literal(_, _) => ReferenceTableCheck::NoReference,
         _ => ReferenceTableCheck::Unknown,
     };
     res
@@ -140,7 +140,7 @@ fn replace_placeholders(expr: Expr, placeholders: &HashMap<String, ScalarValue>)
         Expr::Placeholder(Placeholder { id, .. }) => {
             let value = placeholders[&id].clone();
             // Replace the placeholder with the value
-            Ok(Transformed::yes(Expr::Literal(value)))
+            Ok(Transformed::yes(lit(value)))
         }
         _ => Ok(Transformed::no(expr)),
     })
@@ -270,7 +270,7 @@ pub(crate) fn generalize_filter(
             for item in in_list.list.into_iter() {
                 match item {
                     // If it's a literal just immediately push it in list_expr so we can avoid the unnecessary generalizing
-                    Expr::Literal(_) => list_expr.push(item),
+                    Expr::Literal(_, _) => list_expr.push(item),
                     _ => {
                         if let Some(item) = generalize_filter(
                             item.clone(),
@@ -332,7 +332,7 @@ pub(crate) async fn try_construct_early_filter(
     streaming_source: bool,
 ) -> DeltaResult<Option<Expr>> {
     let table_metadata = table_snapshot.metadata();
-    let partition_columns = &table_metadata.partition_columns;
+    let partition_columns = table_metadata.partition_columns();
 
     let mut placeholders = Vec::default();
 
@@ -405,15 +405,15 @@ mod tests {
 
     use datafusion::datasource::provider_as_source;
 
+    use datafusion::common::Column;
+    use datafusion::common::ScalarValue;
+    use datafusion::common::TableReference;
+    use datafusion::logical_expr::col;
     use datafusion::prelude::*;
-    use datafusion_common::Column;
-    use datafusion_common::ScalarValue;
-    use datafusion_common::TableReference;
-    use datafusion_expr::col;
 
-    use datafusion_expr::Expr;
-    use datafusion_expr::LogicalPlanBuilder;
-    use datafusion_expr::Operator;
+    use datafusion::logical_expr::Expr;
+    use datafusion::logical_expr::LogicalPlanBuilder;
+    use datafusion::logical_expr::Operator;
 
     use std::sync::Arc;
 
@@ -483,7 +483,7 @@ mod tests {
                         };
 
                         let value = match *ex.left {
-                            Expr::Literal(ScalarValue::Utf8(Some(value))) => value,
+                            Expr::Literal(ScalarValue::Utf8(Some(value)), _) => value,
                             ex => panic!("expected value in predicate, got {ex}!"),
                         };
 

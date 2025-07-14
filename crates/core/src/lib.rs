@@ -75,7 +75,7 @@ pub mod kernel;
 pub mod logstore;
 pub mod operations;
 pub mod protocol;
-pub mod schema;
+pub use kernel::schema;
 pub mod table;
 
 #[cfg(any(test, feature = "integration_test"))]
@@ -193,8 +193,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(3));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![
@@ -246,8 +246,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![
@@ -260,8 +260,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![
@@ -274,8 +274,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(3));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![
@@ -292,8 +292,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![
@@ -348,8 +348,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![
@@ -359,8 +359,8 @@ mod tests {
         );
         table.load_version(0).await.unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.protocol().unwrap().min_writer_version, 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version, 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
         assert_eq!(
             table.get_files_iter().unwrap().collect_vec(),
             vec![

@@ -1,3 +1,4 @@
+mod datafusion;
 mod error;
 mod features;
 mod filesystem;
@@ -23,6 +24,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use deltalake::kernel::MetadataExt;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, LogicalFile, Remove, StructType, Transaction,
 };
@@ -120,7 +122,7 @@ struct RawDeltaTableMetaData {
     #[pyo3(get)]
     created_time: Option<i64>,
     #[pyo3(get)]
-    configuration: HashMap<String, Option<String>>,
+    configuration: HashMap<String, String>,
 }
 
 type StringVec = Vec<String>;
@@ -246,6 +248,14 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.config.require_files))
     }
 
+    pub fn table_config(&self) -> PyResult<(bool, usize)> {
+        self.with_table(|t| {
+            let config = t.config.clone();
+            // Require_files inverted to reflect without_files
+            Ok((!config.require_files, config.log_buffer_size))
+        })
+    }
+
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
         let metadata = self.with_table(|t| {
             t.metadata()
@@ -254,12 +264,12 @@ impl RawDeltaTable {
                 .map_err(PyErr::from)
         })?;
         Ok(RawDeltaTableMetaData {
-            id: metadata.id.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            partition_columns: metadata.partition_columns.clone(),
-            created_time: metadata.created_time,
-            configuration: metadata.configuration.clone(),
+            id: metadata.id().to_string(),
+            name: metadata.name().map(String::from),
+            description: metadata.description().map(String::from),
+            partition_columns: metadata.partition_columns().clone(),
+            created_time: metadata.created_time(),
+            configuration: metadata.configuration().clone(),
         })
     }
 
@@ -271,32 +281,26 @@ impl RawDeltaTable {
                 .map_err(PyErr::from)
         })?;
         Ok((
-            table_protocol.min_reader_version,
-            table_protocol.min_writer_version,
-            table_protocol
-                .writer_features
-                .as_ref()
-                .and_then(|features| {
-                    let empty_set = !features.is_empty();
-                    empty_set.then(|| {
-                        features
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    })
-                }),
-            table_protocol
-                .reader_features
-                .as_ref()
-                .and_then(|features| {
-                    let empty_set = !features.is_empty();
-                    empty_set.then(|| {
-                        features
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    })
-                }),
+            table_protocol.min_reader_version(),
+            table_protocol.min_writer_version(),
+            table_protocol.writer_features().and_then(|features| {
+                let empty_set = !features.is_empty();
+                empty_set.then(|| {
+                    features
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
+            }),
+            table_protocol.reader_features().and_then(|features| {
+                let empty_set = !features.is_empty();
+                empty_set.then(|| {
+                    features
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
+            }),
         ))
     }
 
@@ -1102,7 +1106,7 @@ impl RawDeltaTable {
         let column_names: HashSet<&str> =
             schema.fields().map(|field| field.name().as_str()).collect();
         let partition_columns: HashSet<&str> = metadata
-            .partition_columns
+            .partition_columns()
             .iter()
             .map(|col| col.as_str())
             .collect();
@@ -1257,7 +1261,8 @@ impl RawDeltaTable {
                                 .map_err(PythonError::from)
                                 .map_err(PyErr::from)
                         })?;
-                        metadata.schema_string = serde_json::to_string(&schema)
+                        metadata = metadata
+                            .with_schema(&schema)
                             .map_err(DeltaTableError::from)
                             .map_err(PythonError::from)?;
                         actions.push(Action::Metadata(metadata));

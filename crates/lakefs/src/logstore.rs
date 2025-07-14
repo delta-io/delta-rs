@@ -92,23 +92,14 @@ impl LakeFSLogStore {
 
     /// Build a new object store for an URL using the existing storage options. After
     /// branch creation a new object store needs to be created for the branch uri
-    fn build_new_store(
-        &self,
-        url: &Url,
-        io_runtime: Option<IORuntime>,
-    ) -> DeltaResult<ObjectStoreRef> {
+    fn build_new_store(&self, url: &Url) -> DeltaResult<ObjectStoreRef> {
         // turn location into scheme
         let scheme = Url::parse(&format!("{}://", url.scheme()))
             .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
 
         if let Some(entry) = self.config().object_store_factory().get(&scheme) {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
-            let (store, _prefix) = entry.value().parse_url_opts(
-                url,
-                &self.config().options.raw,
-                &self.config().options.retry,
-                io_runtime.map(|rt| rt.get_handle()),
-            )?;
+            let (store, _prefix) = entry.value().parse_url_opts(url, &self.config().options)?;
             return Ok(store);
         }
         Err(DeltaTableError::InvalidTableLocation(url.to_string()))
@@ -152,8 +143,7 @@ impl LakeFSLogStore {
             .await?;
 
         // Build new object store store using the new lakefs url
-        let txn_root_store =
-            self.build_new_store(&lakefs_url, self.config().options.runtime.clone())?;
+        let txn_root_store = self.build_new_store(&lakefs_url)?;
         let txn_store = Arc::new(
             self.config
                 .decorate_store(txn_root_store.clone(), Some(&lakefs_url))?,
@@ -191,7 +181,7 @@ impl LakeFSLogStore {
             .client
             .has_changes(&repo, &target_branch, &transaction_branch)
             .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to check for changes: {}", e)))?;
+            .map_err(|e| DeltaTableError::generic(format!("Failed to check for changes: {e}")))?;
 
         // Only perform merge if there are changes
         if has_changes {

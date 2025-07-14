@@ -1,7 +1,8 @@
 use crate::table::state::DeltaTableState;
+use datafusion::common::ScalarValue;
+use datafusion::logical_expr::{col, when, ExprSchemable};
+use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
-use datafusion_common::ScalarValue;
-use datafusion_expr::{col, when, Expr, ExprSchemable};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
 
@@ -9,11 +10,11 @@ use crate::{kernel::DataCheck, table::GeneratedColumn, DeltaResult};
 
 /// check if the writer version is able to write generated columns
 pub fn able_to_gc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
-    if let Some(features) = &snapshot.protocol().writer_features {
-        if snapshot.protocol().min_writer_version < 4 {
+    if let Some(features) = &snapshot.protocol().writer_features() {
+        if snapshot.protocol().min_writer_version() < 4 {
             return Ok(false);
         }
-        if snapshot.protocol().min_writer_version == 7
+        if snapshot.protocol().min_writer_version() == 7
             && !features.contains(&delta_kernel::table_features::WriterFeature::GeneratedColumns)
         {
             return Ok(false);
@@ -43,9 +44,7 @@ pub fn add_missing_generated_columns(
             // all the merge is projected.
             // Other generated columns that were provided upon the start we only validate during write
             missing_cols.push(col_name.to_string());
-            df = df
-                .clone()
-                .with_column(col_name, Expr::Literal(ScalarValue::Null))?;
+            df = df.clone().with_column(col_name, lit(ScalarValue::Null))?;
         }
     }
     Ok((df, missing_cols))

@@ -11,16 +11,16 @@ use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion::assert_batches_sorted_eq;
+use datafusion::common::scalar::ScalarValue;
+use datafusion::common::ScalarValue::*;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::SessionStateBuilder;
+use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{common::collect, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
-use datafusion_common::scalar::ScalarValue;
-use datafusion_common::ScalarValue::*;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
@@ -49,15 +49,15 @@ pub fn context_with_delta_table_factory() -> SessionContext {
 
 mod local {
     use super::*;
+    use datafusion::common::assert_contains;
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion::logical_expr::{
+        lit, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
+    };
+    use datafusion::physical_plan::displayable;
     use datafusion::prelude::SessionConfig;
     use datafusion::{common::stats::Precision, datasource::provider_as_source};
-    use datafusion_common::assert_contains;
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-    use datafusion_expr::{
-        LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
-    };
-    use datafusion_physical_plan::displayable;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
@@ -304,7 +304,7 @@ mod local {
         for pp in pruning_predicates {
             let pred = pp.sql;
             let sql = format!("SELECT CAST( day as int ) as my_day FROM demo WHERE {pred} ORDER BY CAST( day as int ) ASC");
-            println!("\nExecuting query: {}", sql);
+            println!("\nExecuting query: {sql}");
 
             let df = ctx.sql(sql.as_str()).await?;
 
@@ -748,10 +748,10 @@ mod local {
 
     fn wrap_expression(e: Expr) -> Expr {
         let value = match e {
-            Expr::Literal(lit) => lit,
+            Expr::Literal(lit, _) => lit,
             _ => unreachable!(),
         };
-        Expr::Literal(ScalarValue::Dictionary(
+        lit(ScalarValue::Dictionary(
             Box::new(ArrowDataType::UInt16),
             Box::new(value),
         ))

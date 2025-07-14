@@ -5,8 +5,8 @@
 use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 
+use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
-use datafusion_common::ScalarValue;
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
 
@@ -65,11 +65,11 @@ impl CDCTracker {
 /// > the metadata of the table only if the feature changeDataFeed exists in the table protocol's
 /// > writerFeatures.
 pub(crate) fn should_write_cdc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
-    if let Some(features) = &snapshot.protocol().writer_features {
+    if let Some(features) = &snapshot.protocol().writer_features() {
         // Features should only exist at writer version 7 but to avoid cases where
         // the Option<HashSet<T>> can get filled with an empty set, checking for the value
         // explicitly
-        if snapshot.protocol().min_writer_version == 7
+        if snapshot.protocol().min_writer_version() == 7
             && !features.contains(&delta_kernel::table_features::WriterFeature::ChangeDataFeed)
         {
             // If the writer feature has not been set, then the table should not have CDC written
@@ -85,8 +85,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, PrimitiveType, Protocol};
+    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::DeltaOps;
     use crate::{DeltaTable, TableProperty};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
@@ -121,7 +121,7 @@ mod tests {
     ///
     #[tokio::test]
     async fn test_should_write_cdc_table_with_configuration() {
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let mut table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_column(
@@ -148,7 +148,7 @@ mod tests {
     /// determining whether CDC files should be written or not.
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_no_writer_feature() {
-        let actions = vec![Action::Protocol(Protocol::new(1, 7))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 7).as_kernel())];
         let mut table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_column(
@@ -174,8 +174,9 @@ mod tests {
     /// therefore should write CDC files
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_with_writer_feature() {
-        let protocol =
-            Protocol::new(1, 7).append_writer_features(vec![WriterFeature::ChangeDataFeed]);
+        let protocol = ProtocolInner::new(1, 7)
+            .append_writer_features(vec![WriterFeature::ChangeDataFeed])
+            .as_kernel();
         let actions = vec![Action::Protocol(protocol)];
         let mut table: DeltaTable = DeltaOps::new_in_memory()
             .create()

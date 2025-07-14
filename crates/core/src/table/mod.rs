@@ -48,7 +48,7 @@ pub(crate) fn get_partition_col_data_types<'a>(
         .fields()
         .filter_map(|f| {
             if metadata
-                .partition_columns
+                .partition_columns()
                 .iter()
                 .any(|s| s.as_str() == f.name())
             {
@@ -411,7 +411,11 @@ impl DeltaTable {
                 break;
             }
         }
-        let mut max_version = match self.get_latest_version().await {
+        let mut max_version = match self
+            .log_store
+            .get_latest_version(self.version().unwrap_or(min_version))
+            .await
+        {
             Ok(version) => version,
             Err(DeltaTableError::InvalidVersion(_)) => {
                 return Err(DeltaTableError::NotATable(

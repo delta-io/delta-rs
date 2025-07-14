@@ -104,7 +104,7 @@ trait LogStoreFactoryExt {
     ///
     /// - `root_store`: and instance of [`ObjectStoreRef`] with no prefix o.a. applied.
     ///   I.e. pointing to the root of the onject store.
-    /// - `location`: The location of the the delta table (where the `_delta_log` directory is).
+    /// - `location`: The location of the delta table (where the `_delta_log` directory is).
     /// - `options`: The options for the log store.
     fn with_options_internal(
         &self,
@@ -180,12 +180,7 @@ pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult
 
     if let Some(entry) = object_store_factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
-        let (root_store, _prefix) = entry.value().parse_url_opts(
-            &location,
-            &storage_config.raw,
-            &storage_config.retry,
-            storage_config.runtime.clone().map(|rt| rt.get_handle()),
-        )?;
+        let (root_store, _prefix) = entry.value().parse_url_opts(&location, &storage_config)?;
         return logstore_with(root_store, location, storage_config);
     }
 
@@ -398,7 +393,7 @@ pub trait LogStore: Send + Sync + AsAny {
 
 /// Extension trait for LogStore to handle some internal invariants.
 pub(crate) trait LogStoreExt: LogStore {
-    /// The the fully qualified table URL
+    /// The fully qualified table URL
     ///
     /// The paths is guaranteed to end with a slash,
     /// so that it can be used as a prefix for other paths.
@@ -410,7 +405,7 @@ pub(crate) trait LogStoreExt: LogStore {
         base
     }
 
-    /// The the fully qualified table log URL
+    /// The fully qualified table log URL
     ///
     /// The paths is guaranteed to end with a slash,
     /// so that it can be used as a prefix for other paths.
@@ -644,7 +639,7 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
 }
 
 static DELTA_LOG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
 
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
@@ -674,7 +669,7 @@ pub async fn get_latest_version(
     .map_err(|e| DeltaTableError::Generic(e.to_string()))?
     .map_err(|e| {
         if e.to_string()
-            .contains(&format!("to have version {}", current_version))
+            .contains(&format!("to have version {current_version}"))
         {
             DeltaTableError::InvalidVersion(current_version)
         } else {

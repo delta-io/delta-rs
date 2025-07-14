@@ -424,7 +424,7 @@ impl<'a> FileStatsAccessor<'a> {
         let partition_values = extract_and_cast::<MapArray>(data, "add.partitionValues")?;
         let partition_fields = Arc::new(
             metadata
-                .partition_columns
+                .partition_columns()
                 .iter()
                 .map(|c| {
                     Ok((
@@ -551,6 +551,10 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::{Arc, LazyLock};
 
+    use ::datafusion::common::scalar::ScalarValue;
+    use ::datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
+    use ::datafusion::common::Column;
+    use ::datafusion::common::DataFusionError;
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
@@ -558,15 +562,12 @@ mod datafusion {
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
-    use datafusion_common::scalar::ScalarValue;
-    use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
-    use datafusion_common::Column;
-    use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
     use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
 
     use super::*;
+    use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
     use crate::kernel::ARROW_HANDLER;
 
@@ -656,7 +657,7 @@ mod datafusion {
                         let arrays = o
                             .into_iter()
                             .map(|sv| sv.to_array())
-                            .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
+                            .collect::<Result<Vec<_>, DataFusionError>>()
                             .unwrap();
                         let sa = StructArray::new(fields.clone(), arrays, None);
                         Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
@@ -789,7 +790,7 @@ mod datafusion {
             if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {
                 return None;
             }
-            let expression = if self.metadata.partition_columns.contains(&column.name) {
+            let expression = if self.metadata.partition_columns().contains(&column.name) {
                 Expression::column(["add", "partitionValues_parsed", &column.name])
             } else {
                 Expression::column(["add", "stats_parsed", stats_field, &column.name])
@@ -801,16 +802,8 @@ mod datafusion {
             );
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
-                let engine = ArrowEngineData::new(batch.clone());
-                let result = evaluator.evaluate(&engine).ok()?;
-                let result = result
-                    .any_ref()
-                    .downcast_ref::<ArrowEngineData>()
-                    .ok_or(DeltaTableError::generic(
-                        "failed to downcast evaluator result to ArrowEngineData.",
-                    ))
-                    .ok()?;
-                results.push(result.record_batch().clone());
+                let result = evaluator.evaluate_arrow(batch.clone()).ok()?;
+                results.push(result);
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
             batch.column_by_name("output").cloned()
@@ -841,7 +834,7 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows.
         fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-            if !self.metadata.partition_columns.contains(&column.name) {
+            if !self.metadata.partition_columns().contains(&column.name) {
                 let counts = self.pick_stats(column, "nullCount")?;
                 return arrow_cast::cast(counts.as_ref(), &ArrowDataType::UInt64).ok();
             }
@@ -875,16 +868,8 @@ mod datafusion {
 
             let mut results = Vec::with_capacity(self.data.len());
             for batch in self.data.iter() {
-                let engine = ArrowEngineData::new(batch.clone());
-                let result = ROW_COUNTS_EVAL.evaluate(&engine).ok()?;
-                let result = result
-                    .any_ref()
-                    .downcast_ref::<ArrowEngineData>()
-                    .ok_or(DeltaTableError::generic(
-                        "failed to downcast evaluator result to ArrowEngineData.",
-                    ))
-                    .ok()?;
-                results.push(result.record_batch().clone());
+                let result = ROW_COUNTS_EVAL.evaluate_arrow(batch.clone()).ok()?;
+                results.push(result);
             }
             let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
             arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
@@ -892,7 +877,7 @@ mod datafusion {
 
         // This function is optional but will optimize partition column pruning
         fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-            if value.is_empty() || !self.metadata.partition_columns.contains(&column.name) {
+            if value.is_empty() || !self.metadata.partition_columns().contains(&column.name) {
                 return None;
             }
 

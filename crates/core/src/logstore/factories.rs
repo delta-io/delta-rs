@@ -4,7 +4,6 @@ use std::{
 };
 
 use dashmap::DashMap;
-use object_store::RetryConfig;
 use object_store::{path::Path, DynObjectStore};
 use tokio::runtime::Handle;
 use url::Url;
@@ -28,9 +27,7 @@ pub trait ObjectStoreFactory: Send + Sync {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        retry: &RetryConfig,
-        handle: Option<Handle>,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
@@ -41,14 +38,13 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
-        handle: Option<Handle>,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let (mut store, path) = default_parse_url_opts(url, options)?;
+        let (mut store, path) = default_parse_url_opts(url, &config.raw)?;
 
-        if let Some(handle) = handle {
-            store = Arc::new(DeltaIOStorageBackend::new(store, handle)) as Arc<DynObjectStore>;
+        if let Some(runtime) = &config.runtime {
+            store =
+                Arc::new(DeltaIOStorageBackend::new(store, runtime.clone())) as Arc<DynObjectStore>;
         }
         Ok((store, path))
     }
@@ -92,8 +88,7 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
-        let (store, _prefix) =
-            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry, None)?;
+        let (store, _prefix) = factory.parse_url_opts(url, &storage_config)?;
         let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
@@ -163,3 +158,6 @@ pub fn logstore_factories() -> LogStoreFactoryRegistry {
         })
         .clone()
 }
+
+#[cfg(test)]
+mod tests {}

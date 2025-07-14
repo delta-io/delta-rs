@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.26.2"
+version = "0.28.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -15,7 +15,7 @@ rust-version.workspace = true
 features = ["datafusion", "json"]
 
 [dependencies]
-deltalake-derive = { version = "0.26.0", path = "../derive" }
+deltalake-derive = { version = "0.28.0", path = "../derive" }
 
 delta_kernel.workspace = true
 
@@ -37,14 +37,7 @@ pin-project-lite = "^0.2.7"
 
 # datafusion
 datafusion = { workspace = true, optional = true }
-datafusion-expr = { workspace = true, optional = true }
-datafusion-common = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
-datafusion-sql = { workspace = true, optional = true }
-datafusion-physical-expr = { workspace = true, optional = true }
-datafusion-physical-plan = { workspace = true, optional = true }
-datafusion-functions = { workspace = true, optional = true }
-datafusion-functions-aggregate = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -115,14 +108,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 default = ["rustls"]
 datafusion = [
     "dep:datafusion",
-    "datafusion-expr",
-    "datafusion-common",
     "datafusion-proto",
-    "datafusion-physical-expr",
-    "datafusion-physical-plan",
-    "datafusion-sql",
-    "datafusion-functions",
-    "datafusion-functions-aggregate",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]

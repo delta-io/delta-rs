@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::runtime::Handle;
 
 use crate::credential::{
     AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, WorkspaceOAuthProvider,
@@ -35,7 +34,7 @@ use deltalake_core::{
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    config::str_is_truthy, object_store_factories, IORuntime, ObjectStoreFactory, ObjectStoreRef,
+    config::str_is_truthy, object_store_factories, ObjectStoreFactory, ObjectStoreRef,
 };
 pub mod client;
 pub mod credential;
@@ -109,7 +108,7 @@ pub enum UnityCatalogError {
 
     #[cfg(feature = "datafusion")]
     #[error("Datafusion error: {0}")]
-    DatafusionError(#[from] datafusion_common::DataFusionError),
+    DatafusionError(#[from] ::datafusion::common::DataFusionError),
 
     /// Cannot initialize DynamoDbConfiguration due to some sort of threading issue
     #[error("Unable to initialize Unity Catalog, potentially a threading issue")]
@@ -839,24 +838,23 @@ impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
         &self,
         table_uri: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
-        handle: Option<Handle>,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),
         )??;
 
-        let mut storage_options = options.clone();
+        let mut storage_options = config.raw.clone();
         storage_options.extend(temp_creds);
 
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
         let mut builder = DeltaTableBuilder::from_uri(&table_path);
 
-        if let Some(handle) = handle {
-            builder = builder.with_io_runtime(IORuntime::RT(handle));
+        if let Some(runtime) = &config.runtime {
+            builder = builder.with_io_runtime(runtime.clone());
         }
+
         if !storage_options.is_empty() {
             builder = builder.with_storage_options(storage_options.clone());
         }

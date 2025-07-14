@@ -13,14 +13,14 @@ use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::logstore::{config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef};
+use deltalake_core::logstore::{
+    config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+};
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
 use object_store::aws::AmazonS3;
 use object_store::client::SpawnedReqwestConnector;
-use object_store::RetryConfig;
-use tokio::runtime::Handle;
 use tracing::log::*;
 use url::Url;
 
@@ -39,19 +39,18 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        storage_options: &HashMap<String, String>,
-        retry: &RetryConfig,
-        handle: Option<Handle>,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let options = self.with_env_s3(storage_options);
+        let options = self.with_env_s3(&config.raw);
 
         // All S3-likes should start their builder the same way
         let mut builder = AmazonS3Builder::new()
             .with_url(url.to_string())
-            .with_retry(retry.clone());
+            .with_retry(config.retry.clone());
 
-        if let Some(handle) = handle {
-            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
+        if let Some(runtime) = &config.runtime {
+            builder =
+                builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
         }
 
         for (key, value) in options.iter() {
