@@ -10,7 +10,6 @@ use deltalake_core::logstore::{
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::client::SpawnedReqwestConnector;
-use tokio::runtime::Handle;
 use url::Url;
 
 mod config;
@@ -42,11 +41,14 @@ impl ObjectStoreFactory for GcpFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let mut builder = GoogleCloudStorageBuilder::new().with_url(url.to_string());
         builder = builder.with_retry(config.retry.clone());
 
+        if let Some(runtime) = &config.runtime {
+            builder =
+                builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
+        }
         let config = config::GcpConfigHelper::try_new(config.raw.as_gcp_options())?.build()?;
 
         let (_, path) =
@@ -54,10 +56,6 @@ impl ObjectStoreFactory for GcpFactory {
                 source: Box::new(e),
             })?;
         let prefix = Path::parse(path)?;
-
-        if let Some(handle) = handle {
-            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
-        }
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());

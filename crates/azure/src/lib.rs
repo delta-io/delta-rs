@@ -10,7 +10,6 @@ use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use object_store::client::SpawnedReqwestConnector;
 use object_store::ObjectStoreScheme;
-use tokio::runtime::Handle;
 use url::Url;
 
 mod config;
@@ -41,16 +40,16 @@ impl ObjectStoreFactory for AzureFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let mut builder = MicrosoftAzureBuilder::new()
             .with_url(url.to_string())
             .with_retry(config.retry.clone());
-        let config = config::AzureConfigHelper::try_new(config.raw.as_azure_options())?.build()?;
-
-        if let Some(handle) = handle {
-            builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
+        if let Some(runtime) = &config.runtime {
+            builder =
+                builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
         }
+
+        let config = config::AzureConfigHelper::try_new(config.raw.as_azure_options())?.build()?;
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());

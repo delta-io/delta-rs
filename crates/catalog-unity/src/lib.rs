@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::runtime::Handle;
 
 use crate::credential::{
     AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, WorkspaceOAuthProvider,
@@ -35,7 +34,7 @@ use deltalake_core::{
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    config::str_is_truthy, object_store_factories, IORuntime, ObjectStoreFactory, ObjectStoreRef,
+    config::str_is_truthy, object_store_factories, ObjectStoreFactory, ObjectStoreRef,
 };
 pub mod client;
 pub mod credential;
@@ -840,7 +839,6 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         &self,
         table_uri: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str()),

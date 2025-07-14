@@ -28,7 +28,6 @@ pub trait ObjectStoreFactory: Send + Sync {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
@@ -40,12 +39,12 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-        handle: Option<Handle>,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let (mut store, path) = default_parse_url_opts(url, &config.raw)?;
 
-        if let Some(handle) = handle {
-            store = Arc::new(DeltaIOStorageBackend::new(store, handle)) as Arc<DynObjectStore>;
+        if let Some(runtime) = &config.runtime {
+            store =
+                Arc::new(DeltaIOStorageBackend::new(store, runtime.clone())) as Arc<DynObjectStore>;
         }
         Ok((store, path))
     }
@@ -89,7 +88,7 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
-        let (store, _prefix) = factory.parse_url_opts(url, &storage_config, None)?;
+        let (store, _prefix) = factory.parse_url_opts(url, &storage_config)?;
         let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
