@@ -105,8 +105,7 @@ impl LakeFSLogStore {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
             let (store, _prefix) = entry.value().parse_url_opts(
                 url,
-                &self.config().options.raw,
-                &self.config().options.retry,
+                &self.config().options,
                 io_runtime.map(|rt| rt.get_handle()),
             )?;
             return Ok(store);

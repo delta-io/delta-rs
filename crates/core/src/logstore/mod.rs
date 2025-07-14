@@ -182,9 +182,7 @@ pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult
         debug!("Found a storage provider for {scheme} ({location})");
         let (root_store, _prefix) = entry.value().parse_url_opts(
             &location,
-            &storage_config.raw,
-            #[cfg(feature = "cloud")]
-            &storage_config.retry,
+            &storage_config,
             storage_config.runtime.clone().map(|rt| rt.get_handle()),
         )?;
         return logstore_with(root_store, location, storage_config);

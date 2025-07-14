@@ -300,12 +300,13 @@ pub fn str_is_truthy(val: &str) -> bool {
 mod tests {
     use super::*;
     use maplit::hashmap;
-    use object_store::RetryConfig;
     use std::time::Duration;
 
     // Test retry config parsing
+    #[cfg(feature = "cloud")]
     #[test]
     fn test_retry_config_from_options() {
+        use object_store::RetryConfig;
         let options = hashmap! {
             "max_retries".to_string() => "100".to_string() ,
             "retry_timeout".to_string()  => "300s".to_string() ,
@@ -324,8 +325,10 @@ mod tests {
     }
 
     // Test ParseResult functionality
+    #[cfg(feature = "cloud")]
     #[test]
     fn test_parse_result_handling() {
+        use object_store::RetryConfig;
         let options = hashmap! {
             "retry_timeout".to_string() => "300s".to_string(),
             "max_retries".to_string() => "not_a_number".to_string(),
