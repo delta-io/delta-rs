@@ -432,13 +432,18 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
+    ///
+    /// This will return a true value if the [LogStore] was read from. This can be helpful for
+    /// understanding whether the snapshot loaded data or not
     pub async fn update(
         &mut self,
         log_store: &dyn LogStore,
         target_version: Option<i64>,
-    ) -> DeltaResult<()> {
+    ) -> DeltaResult<bool> {
+        // Whether or not data has been read by this function
+        let mut read_data = false;
         if Some(self.version()) == target_version {
-            return Ok(());
+            return Ok(read_data);
         }
 
         let new_slice = self
@@ -447,7 +452,7 @@ impl EagerSnapshot {
             .await?;
 
         if new_slice.is_none() {
-            return Ok(());
+            return Ok(read_data);
         }
         let new_slice = new_slice.unwrap();
 
@@ -457,9 +462,15 @@ impl EagerSnapshot {
             .flat_map(get_visitor)
             .collect::<Vec<_>>();
 
+        // If files is `None` then this can exit early because the snapshot has intentionally been
+        // loaded _without_ files
+        if self.files.is_none() {
+            self.process_visitors(visitors)?;
+            return Ok(read_data);
+        }
+
         let mut schema_actions: HashSet<_> =
             visitors.iter().flat_map(|v| v.required_actions()).collect();
-        let require_files = self.files.is_some();
         let files = std::mem::take(&mut self.files);
 
         schema_actions.insert(ActionType::Add);
@@ -479,23 +490,17 @@ impl EagerSnapshot {
         let log_stream = new_slice.commit_stream(log_store, &read_schema, &self.snapshot.config)?;
 
         let mapper = LogMapper::try_new(&self.snapshot, None)?;
+        let files =
+            ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, &mut visitors)?
+                .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
+                .try_collect()
+                .await?;
 
-        if require_files {
-            let files = ReplayStream::try_new(
-                log_stream,
-                checkpoint_stream,
-                &self.snapshot,
-                &mut visitors,
-            )?
-            .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
-            .try_collect()
-            .await?;
-
-            self.files = Some(files);
-        }
+        self.files = Some(files);
+        read_data = true;
         self.process_visitors(visitors)?;
 
-        Ok(())
+        Ok(read_data)
     }
 
     /// Get the underlying snapshot
@@ -550,7 +555,7 @@ impl EagerSnapshot {
     pub fn log_data(&self) -> LogDataHandler<'_> {
         static EMPTY: Vec<RecordBatch> = vec![];
         LogDataHandler::new(
-            &self.files.as_ref().unwrap_or(&EMPTY),
+            self.files.as_ref().unwrap_or(&EMPTY),
             self.metadata(),
             self.schema(),
         )

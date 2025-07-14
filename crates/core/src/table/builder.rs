@@ -290,7 +290,7 @@ impl DeltaTableBuilder {
             DeltaVersion::Newest => table.load().await?,
             DeltaVersion::Version(v) => table.load_version(v).await?,
             DeltaVersion::Timestamp(ts) => table.load_with_datetime(ts).await?,
-        }
+        };
         Ok(table)
     }
 }
