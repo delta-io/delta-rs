@@ -13,7 +13,9 @@ use crate::TableProperty;
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
-pub(crate) fn new_metadata(
+/// Please don't use, this API will be leaving shortly!
+#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
+pub fn new_metadata(
     schema: &StructType,
     partition_columns: impl IntoIterator<Item = impl ToString>,
     configuration: impl IntoIterator<Item = (impl ToString, impl ToString)>,
