@@ -11,6 +11,8 @@ pub mod models;
 pub mod scalars;
 pub mod schema;
 mod snapshot;
+#[allow(unused)]
+mod snapshot_next;
 pub mod transaction;
 
 pub use error::*;

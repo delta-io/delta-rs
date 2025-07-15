@@ -21,6 +21,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use ::serde::{Deserialize, Serialize};
 use arrow_array::RecordBatch;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
+use delta_kernel::Version;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -238,7 +239,7 @@ impl Snapshot {
         &self,
         log_store: &dyn LogStore,
         limit: Option<usize>,
-    ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
+    ) -> DeltaResult<BoxStream<'static, DeltaResult<Option<(Version, CommitInfo)>>>> {
         let store = log_store.root_object_store(None);
 
         let log_root = self.table_root_path()?.child("_delta_log");
@@ -263,13 +264,13 @@ impl Snapshot {
             let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
             if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
                 if matches!(parsed_path.file_type, LogPathFileType::Commit) {
-                    commit_files.push(meta);
+                    commit_files.push((meta, parsed_path));
                 }
             }
         }
-        commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
+        commit_files.sort_unstable_by(|a, b| b.0.location.cmp(&a.0.location));
         Ok(futures::stream::iter(commit_files)
-            .map(move |meta| {
+            .map(move |(meta, parsed_path)| {
                 let store = store.clone();
                 async move {
                     let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
@@ -277,7 +278,10 @@ impl Snapshot {
                     for line in reader.lines() {
                         let action: Action = serde_json::from_str(line?.as_str())?;
                         if let Action::CommitInfo(commit_info) = action {
-                            return Ok::<_, DeltaTableError>(Some(commit_info));
+                            return Ok::<_, DeltaTableError>(Some((
+                                parsed_path.version,
+                                commit_info,
+                            )));
                         }
                     }
                     Ok(None)
@@ -335,7 +339,7 @@ impl Snapshot {
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
-    snapshot: Snapshot,
+    pub(crate) snapshot: Snapshot,
     // additional actions that should be tracked during log replay.
     tracked_actions: HashSet<ActionType>,
 

@@ -355,7 +355,7 @@ mod tests {
     async fn test_stats_schema() {
         let log_store = TestTables::Simple.table_builder().build_storage().unwrap();
         let table = Table::try_from_uri(log_store.table_root_url()).unwrap();
-        let engine = log_store.engine(None).await;
+        let engine = log_store.engine(None); //.await;
         let snapshot = table.snapshot(engine.as_ref(), None).unwrap();
         let stats_schema = snapshot.stats_schema().unwrap();
 
