@@ -116,13 +116,6 @@ jobs:
           source venv/bin/activate
           MATURIN_EXTRA_ARGS=--release make develop
 
-      # Download previous benchmark result from cache (if exists)
-      - name: Download previous benchmark data
-        uses: actions/cache@v2
-        with:
-          path: ./cache
-          key: ${{ runner.os }}-benchmark
-
       - name: Run benchmark
         run: |
           source venv/bin/activate
