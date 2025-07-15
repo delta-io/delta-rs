@@ -1737,6 +1737,10 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 5);
         assert_eq!(metrics.num_source_rows, 3);
+        assert_ne!(
+            metrics.scan_time_ms, 0,
+            "Expected the scan time to be non-zero"
+        );
 
         let expected = vec![
             "+----+-------+------------+",
