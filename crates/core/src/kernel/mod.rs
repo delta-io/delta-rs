@@ -13,6 +13,7 @@ pub mod schema;
 mod snapshot;
 pub mod transaction;
 
+pub use delta_kernel::engine;
 pub use error::*;
 pub use models::*;
 pub use schema::*;
