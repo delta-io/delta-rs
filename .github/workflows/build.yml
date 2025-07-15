@@ -43,13 +43,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Generate code coverage
         run: cargo llvm-cov --features ${DEFAULT_FEATURES} --workspace --codecov --output-path codecov.json -- --skip read_table_version_hdfs
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: codecov.json
-          fail_ci_if_error: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   build:
     strategy:
@@ -71,13 +64,13 @@ jobs:
           override: true
 
       - name: build and lint with clippy
-        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
+        run: cargo clippy --tests
 
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
 
       - name: Check docs
-        run: cargo doc --features ${{ env.DEFAULT_FEATURES }}
+        run: cargo doc
 
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
@@ -108,7 +101,7 @@ jobs:
           override: true
 
       - name: Run tests
-        run: cargo test --verbose --features ${{ env.DEFAULT_FEATURES }}
+        run: cargo test --verbose
 
   integration_test:
     name: Integration Tests
@@ -158,7 +151,7 @@ jobs:
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test --features integration_test,${{ env.DEFAULT_FEATURES }}
+          cargo test --features integration_test
 
       - name: Run tests with native-tls
         run: |
