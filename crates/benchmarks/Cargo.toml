@@ -10,7 +10,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4", features = [ "derive" ] }
-chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+chrono = { workspace = true, default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
 env_logger = "0"
 
