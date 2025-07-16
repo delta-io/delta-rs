@@ -43,8 +43,8 @@ reqwest = { version = "*", features = ["native-tls-vendored"] }
 deltalake-mount = { path = "../crates/mount" }
 
 [dependencies.pyo3]
-version = "0.21.1"
-features = ["extension-module", "abi3", "abi3-py38"]
+version = "0.22"
+features = ["extension-module", "abi3", "abi3-py39"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"
