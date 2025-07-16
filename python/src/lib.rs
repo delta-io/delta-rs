@@ -1361,6 +1361,10 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             }
             py_struct.to_object(py)
         }
+        Array(_) => {
+            // TODO: Implement array scalar conversion
+            unimplemented!("Array scalar conversion not yet implemented")
+        }
     };
 
     Ok(val.into_bound(py))

@@ -26,34 +26,38 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.3.0" }
+delta_kernel = { version = "0.3.1", features = ["default-engine"] }
 # delta_kernel = { path = "../delta-kernel-rs/kernel", version = "0.3.0" }
 
 # arrow
-arrow = { version = "52" }
-arrow-arith = { version = "52" }
-arrow-array = { version = "52", features = ["chrono-tz"] }
-arrow-buffer = { version = "52" }
-arrow-cast = { version = "52" }
-arrow-ipc = { version = "52" }
-arrow-json = { version = "52" }
-arrow-ord = { version = "52" }
-arrow-row = { version = "52" }
-arrow-schema = { version = "52" }
-arrow-select = { version = "52" }
-object_store = { version = "0.10.1" }
-parquet = { version = "52" }
+arrow = { version = "53" }
+arrow-arith = { version = "53" }
+arrow-array = { version = "53", features = ["chrono-tz"] }
+arrow-buffer = { version = "53" }
+arrow-cast = { version = "53" }
+arrow-ipc = { version = "53" }
+arrow-json = { version = "53" }
+arrow-ord = { version = "53" }
+arrow-row = { version = "53" }
+arrow-schema = { version = "53" }
+arrow-select = { version = "53" }
+object_store = { version = "0.11" }
+parquet = { version = "53" }
 
 # datafusion
-datafusion = { version = "41" }
-datafusion-expr = { version = "41" }
-datafusion-common = { version = "41" }
-datafusion-proto = { version = "41" }
-datafusion-sql = { version = "41" }
-datafusion-physical-expr = { version = "41" }
-datafusion-physical-plan = { version = "41" }
-datafusion-functions = { version = "41" }
-datafusion-functions-aggregate = { version = "41" }
+datafusion = { version = "42" }
+datafusion-expr = { version = "42" }
+datafusion-common = { version = "42" }
+datafusion-proto = { version = "42" }
+datafusion-sql = { version = "42" }
+datafusion-functions = { version = "42" }
+datafusion-functions-aggregate = { version = "42" }
+datafusion-physical-expr = { version = "42" }
+datafusion-physical-plan = { version = "42" }
+datafusion-optimizer = { version = "42" }
+datafusion-execution = { version = "42" }
+datafusion-physical-expr-common = { version = "42" }
+datafusion-proto-common = { version = "42" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -61,7 +65,7 @@ serde_json = "1"
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "=0.4.31", default-features = false, features = ["clock"] }
+chrono = { version = "=0.4.37", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "1" }

@@ -24,6 +24,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
+use std::borrow::Cow;
 
 use arrow_array::types::UInt16Type;
 use arrow_array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
@@ -702,7 +703,7 @@ impl TableProvider for DeltaTable {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
@@ -791,7 +792,7 @@ impl TableProvider for DeltaTableProvider {
         None
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 
