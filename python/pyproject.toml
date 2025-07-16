@@ -7,13 +7,11 @@ name = "deltalake"
 dynamic = ["version"]
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-license = "Apache-2.0"
-license-files = ["licenses/deltalake_license.txt"]
-requires-python = ">=3.8"
+
+requires-python = ">=3.9"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
