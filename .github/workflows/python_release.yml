@@ -1,118 +1,43 @@
-name: Release to PyPI and documentation
+name: Publish to GitHub Packages
 
 on:
-  push:
-    tags: ["python-v*"]
-
-defaults:
-  run:
-    working-directory: ./python
-
-env:
-  # For ease of development, we make rustls default. But for release we should
-  # use native TLS.
-  FEATURES_FLAG: --no-default-features --features native-tls
+  release:
+    types: [published]
 
 jobs:
-  validate-release-tag:
-    name: Validate git tag
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v3
-      - name: compare git tag with cargo metadata
-        run: |
-          PUSHED_TAG=${GITHUB_REF##*/}
-          CURR_VER=$( grep version Cargo.toml | head -n 1 | awk '{print $3}' | tr -d '"' )
-          if [[ "${PUSHED_TAG}" != "python-v${CURR_VER}" ]]; then
-            echo "Cargo metadata has version set to ${CURR_VER}, but got pushed tag ${PUSHED_TAG}."
-            exit 1
-          fi
-
-  release-pypi-mac:
-    needs: validate-release-tag
-    name: PyPI release on Mac
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64-apple-darwin, aarch64-apple-darwin]
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Publish to pypi (without sdist)
-        uses: messense/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        with:
-          target: ${{ matrix.target }}
-          command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
-
-  release-pypi-windows:
-    needs: validate-release-tag
-    name: PyPI release on Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Publish to pypi (without sdist)
-        uses: messense/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        with:
-          target: x86_64-pc-windows-msvc
-          command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
-
-  release-pypi-manylinux:
-    needs: validate-release-tag
-    name: PyPI release manylinux
+  build-and-publish:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Publish manylinux to pypi x86_64 (with sdist)
-        uses: messense/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        with:
-          maturin-version: v1.6.0 # https://github.com/PyO3/maturin/issues/2154
-          target: x86_64-unknown-linux-gnu
-          command: publish
-          args: --skip-existing -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
-          # for openssl build
-          before-script-linux: yum install -y perl-IPC-Cmd
-
-      - name: Publish manylinux to pypi aarch64 (without sdist)
-        uses: messense/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        with:
-          target: aarch64-unknown-linux-gnu
-          command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
-          before-script-linux: |
-            # We can remove this once we upgrade to 2_28.
-            # https://github.com/briansmith/ring/issues/1728
-            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
-
-  release-docs:
-    needs:
-      [
-        validate-release-tag,
-        release-pypi-manylinux,
-        release-pypi-mac,
-        release-pypi-windows,
-      ]
     permissions:
-      contents: write
-    runs-on: ubuntu-latest
+      contents: read
+      packages: write
+
     steps:
-      - name: Trigger the docs release event
-        uses: peter-evans/repository-dispatch@v2
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          event-type: release-docs
-          client-payload: >
-            {
-              "tag": "${{ github.ref_name }}"
-            }
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin twine
+
+      - name: Build with maturin
+        working-directory: ./python
+        run: |
+          maturin build --release -o dist
+
+      - name: Upload wheel to GitHub Release
+        working-directory: ./python
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} dist/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Upload source distribution to GitHub Release
+        working-directory: ./python
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} dist/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
