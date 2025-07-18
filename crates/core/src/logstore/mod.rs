@@ -945,7 +945,7 @@ pub(crate) mod tests {
     }
 
     /// Collect list stream
-    pub async fn flatten_list_stream(
+    pub(crate) async fn flatten_list_stream(
         storage: &object_store::DynObjectStore,
         prefix: Option<&Path>,
     ) -> object_store::Result<Vec<Path>> {
