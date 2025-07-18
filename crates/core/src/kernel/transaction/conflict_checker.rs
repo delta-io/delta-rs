@@ -691,7 +691,7 @@ mod tests {
     // - concurrentWrites
     // - actions
     #[cfg(feature = "datafusion")]
-    fn execute_test(
+    async fn execute_test(
         setup: Option<Vec<Action>>,
         reads: Option<Expr>,
         concurrent: Vec<Action>,
@@ -703,7 +703,7 @@ mod tests {
         use crate::table::state::DeltaTableState;
 
         let setup_actions = setup.unwrap_or_else(init_table_actions);
-        let state = DeltaTableState::from_actions(setup_actions, &Path::default()).unwrap();
+        let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
         let snapshot = state.snapshot();
         let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
@@ -723,7 +723,7 @@ mod tests {
         let file1 = simple_add(true, "1", "10").into();
         let file2 = simple_add(true, "1", "10").into();
 
-        let result = execute_test(None, None, vec![file1], vec![file2], false);
+        let result = execute_test(None, None, vec![file1], vec![file2], false).await;
         assert!(result.is_ok());
 
         // disjoint delete - read
@@ -739,7 +739,8 @@ mod tests {
             vec![ActionFactory::remove(&file_not_read, true).into()],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(result.is_ok());
 
         // disjoint add - read
@@ -754,7 +755,8 @@ mod tests {
             vec![file_added],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(result.is_ok());
 
         // TODO enable test once we have isolation level downcast
@@ -788,7 +790,8 @@ mod tests {
             vec![removed_file.clone()],
             vec![removed_file],
             false,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteDelete)
@@ -804,7 +807,8 @@ mod tests {
             vec![file_should_have_read],
             vec![file_added],
             false,
-        );
+        )
+        .await;
         assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
 
         // delete / read
@@ -818,7 +822,8 @@ mod tests {
             vec![ActionFactory::remove(&file_read, true).into()],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteRead)
@@ -832,7 +837,8 @@ mod tests {
             vec![ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into()],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(matches!(result, Err(CommitConflictError::MetadataChanged)));
 
         // upgrade / upgrade
@@ -843,7 +849,8 @@ mod tests {
             vec![ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into()],
             vec![ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into()],
             false,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ProtocolChanged(_))
@@ -864,7 +871,8 @@ mod tests {
             vec![file_part2],
             vec![file_part3],
             true,
-        );
+        )
+        .await;
         assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
 
         // taint whole table + concurrent remove
@@ -879,7 +887,8 @@ mod tests {
             vec![ActionFactory::remove(&file_part1, true).into()],
             vec![file_part2],
             true,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteRead)
