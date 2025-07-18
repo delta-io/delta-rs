@@ -3,10 +3,14 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use arrow_array::{Array, StructArray};
+use arrow_schema::{DataType as ArrowDataType, Field, Schema, SchemaRef as ArrowSchemaRef};
 use delta_kernel::arrow::array::BooleanArray;
 use delta_kernel::arrow::compute::filter_record_batch;
 use delta_kernel::arrow::record_batch::RecordBatch;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::ColumnName;
 use delta_kernel::scan::{Scan, ScanMetadata};
 use delta_kernel::schema::{
@@ -19,6 +23,9 @@ use delta_kernel::{
 };
 use itertools::Itertools;
 
+use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
+use crate::kernel::replay::parse_partitions;
+use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
 use crate::table::config::TableConfig;
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
@@ -90,23 +97,134 @@ impl ScanExt for Scan {
 
 pub(crate) trait SnapshotExt {
     /// Returns the expected file statistics schema for the snapshot.
-    fn stats_schema(&self) -> DeltaResult<SchemaRef>;
+    fn stats_schema(&self) -> DeltaResult<Option<SchemaRef>>;
+
+    fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>>;
+
+    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef>;
+
+    /// Parse stats column into a struct array.
+    fn parse_stats_column(&self, batch: &RecordBatch) -> DeltaResultLocal<RecordBatch>;
 }
 
 impl SnapshotExt for Snapshot {
-    fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let physical_schema =
-            StructType::new(self.schema().fields().map(|field| field.make_physical()));
+    fn stats_schema(&self) -> DeltaResult<Option<SchemaRef>> {
+        let partition_columns = self.metadata().partition_columns();
+        let physical_schema = StructType::new(
+            self.schema()
+                .fields()
+                .filter(|field| !partition_columns.contains(&field.name()))
+                .map(|field| field.make_physical()),
+        );
         let min_max_transform = MinMaxStatsTransform::new(self.table_properties());
         stats_schema(&physical_schema, min_max_transform)
     }
+
+    fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
+        Ok(
+            partitions_schema(self.schema().as_ref(), self.metadata().partition_columns())?
+                .map(Arc::new),
+        )
+    }
+
+    /// Arrow schema for a parsed (including stats_parsed and partitionValues_parsed)
+    /// scan row (file data).
+    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
+        let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
+
+        if let Some(stats_schema) = self.stats_schema()? {
+            let stats_schema: Schema = stats_schema.as_ref().try_into_arrow()?;
+            fields.push(Arc::new(Field::new(
+                "stats_parsed",
+                ArrowDataType::Struct(stats_schema.fields().to_owned()),
+                true,
+            )));
+        }
+
+        if let Some(partition_schema) = self.partitions_schema()? {
+            let partition_schema: Schema = partition_schema.as_ref().try_into_arrow()?;
+            fields.push(Arc::new(Field::new(
+                "partitionValues_parsed",
+                ArrowDataType::Struct(partition_schema.fields().to_owned()),
+                false,
+            )));
+        }
+
+        let schema = Arc::new(Schema::new(fields));
+        Ok(schema)
+    }
+
+    fn parse_stats_column(&self, batch: &RecordBatch) -> DeltaResultLocal<RecordBatch> {
+        let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
+            return Err(DeltaTableError::SchemaMismatch {
+                msg: "stats column not found".to_string(),
+            });
+        };
+
+        let mut columns = batch.columns().to_vec();
+        let mut fields = batch.schema().fields().to_vec();
+
+        if let Some(stats_schema) = self.stats_schema()? {
+            let stats_batch = batch.project(&[stats_idx])?;
+            let stats_data = Box::new(ArrowEngineData::new(stats_batch));
+
+            let parsed = parse_json(stats_data, stats_schema)?;
+            let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
+
+            let stats_array: Arc<StructArray> = Arc::new(parsed.into());
+            fields.push(Arc::new(Field::new(
+                "stats_parsed",
+                stats_array.data_type().to_owned(),
+                true,
+            )));
+            columns.push(stats_array.clone());
+        }
+
+        if let Some(partition_schema) = self.partitions_schema()? {
+            let partition_array = parse_partitions(
+                batch,
+                partition_schema.as_ref(),
+                "fileConstantValues.partitionValues",
+            )?;
+            fields.push(Arc::new(Field::new(
+                "partitionValues_parsed",
+                partition_array.data_type().to_owned(),
+                false,
+            )));
+            columns.push(Arc::new(partition_array));
+        }
+
+        Ok(RecordBatch::try_new(
+            Arc::new(Schema::new(fields)),
+            columns,
+        )?)
+    }
+}
+
+pub fn partitions_schema(
+    schema: &StructType,
+    partition_columns: &[String],
+) -> DeltaResultLocal<Option<StructType>> {
+    if partition_columns.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(StructType::new(
+        partition_columns
+            .iter()
+            .map(|col| {
+                schema.field(col).cloned().ok_or_else(|| {
+                    DeltaTableError::Generic(format!("Partition column {col} not found in schema"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )))
 }
 
 // create a stats schema from our internal representation of the table config.
 pub(crate) fn stats_schema_from_config(
     logical_schema: &StructType,
     table_conf: TableConfig<'_>,
-) -> DeltaResult<SchemaRef> {
+) -> DeltaResult<Option<SchemaRef>> {
     let physical_schema =
         StructType::new(logical_schema.fields().map(|field| field.make_physical()));
     let min_max_transform = MinMaxStatsTransform::new_from_config(table_conf);
@@ -116,25 +234,22 @@ pub(crate) fn stats_schema_from_config(
 fn stats_schema(
     physical_schema: &StructType,
     mut min_max_transform: MinMaxStatsTransform,
-) -> DeltaResult<SchemaRef> {
-    let min_max_schema =
-        if let Some(min_max_schema) = min_max_transform.transform_struct(physical_schema) {
-            min_max_schema.into_owned()
-        } else {
-            StructType::new(vec![])
-        };
-    let nullcount_schema =
+) -> DeltaResult<Option<SchemaRef>> {
+    let mut fields = vec![StructField::nullable("numRecords", DataType::LONG)];
+
+    if let Some(min_max_schema) = min_max_transform.transform_struct(physical_schema) {
+        let min_max_schema = min_max_schema.into_owned();
         if let Some(nullcount_schema) = NullCountStatsTransform.transform_struct(&min_max_schema) {
-            nullcount_schema.into_owned()
-        } else {
-            StructType::new(vec![])
-        };
-    Ok(Arc::new(StructType::new([
-        StructField::nullable("numRecords", DataType::LONG),
-        StructField::nullable("nullCount", nullcount_schema),
-        StructField::nullable("minValues", min_max_schema.clone()),
-        StructField::nullable("maxValues", min_max_schema),
-    ])))
+            fields.push(StructField::nullable(
+                "nullCount",
+                nullcount_schema.into_owned(),
+            ));
+        }
+        fields.push(StructField::nullable("minValues", min_max_schema.clone()));
+        fields.push(StructField::nullable("maxValues", min_max_schema.clone()));
+    }
+
+    Ok(Some(Arc::new(StructType::new(fields))))
 }
 
 struct MinMaxStatsTransform {
@@ -376,7 +491,9 @@ mod tests {
         let config = TableConfig(&raw);
         let logical_schema = StructType::new([StructField::nullable("id", KernelDataType::LONG)]);
 
-        let stats_schema = stats_schema_from_config(&logical_schema, config).unwrap();
+        let stats_schema = stats_schema_from_config(&logical_schema, config)
+            .unwrap()
+            .unwrap();
 
         let expected = Arc::new(StructType::new([
             StructField::nullable("numRecords", KernelDataType::LONG),
@@ -409,7 +526,9 @@ mod tests {
             ),
         ]);
 
-        let stats_schema = stats_schema_from_config(&logical_schema, config).unwrap();
+        let stats_schema = stats_schema_from_config(&logical_schema, config)
+            .unwrap()
+            .unwrap();
 
         // Expected result: The stats schema should maintain the nested structure
         // but make all fields nullable
@@ -467,7 +586,9 @@ mod tests {
             ),
         ]);
 
-        let stats_schema = stats_schema_from_config(&logical_schema, config).unwrap();
+        let stats_schema = stats_schema_from_config(&logical_schema, config)
+            .unwrap()
+            .unwrap();
 
         // Expected result: The stats schema should maintain the structure
         // but exclude fields not eligible for data skipping (array type)
@@ -520,7 +641,9 @@ mod tests {
             ),
         ]);
 
-        let stats_schema = stats_schema_from_config(&logical_schema, config).unwrap();
+        let stats_schema = stats_schema_from_config(&logical_schema, config)
+            .unwrap()
+            .unwrap();
 
         let expected_nested =
             StructType::new([StructField::nullable("name", KernelDataType::STRING)]);
@@ -556,7 +679,9 @@ mod tests {
             StructField::nullable("age", KernelDataType::INTEGER),
         ]);
 
-        let stats_schema = stats_schema_from_config(&logical_schema, config).unwrap();
+        let stats_schema = stats_schema_from_config(&logical_schema, config)
+            .unwrap()
+            .unwrap();
 
         let expected_fields =
             StructType::new([StructField::nullable("name", KernelDataType::STRING)]);

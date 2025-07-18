@@ -224,27 +224,27 @@ impl PruningStatistics for EagerSnapshot {
 
 impl PruningStatistics for DeltaTableState {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().min_values(column)
+        self.snapshot.min_values(column)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().max_values(column)
+        self.snapshot.max_values(column)
     }
 
     fn num_containers(&self) -> usize {
-        self.snapshot.log_data().num_containers()
+        self.snapshot.num_containers()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().null_counts(column)
+        self.snapshot.null_counts(column)
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().row_counts(column)
+        self.snapshot.row_counts(column)
     }
 
     fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        self.snapshot.log_data().contained(column, values)
+        self.snapshot.contained(column, values)
     }
 }
 
@@ -254,7 +254,6 @@ mod tests {
 
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
-    use object_store::path::Path;
 
     use super::*;
     use crate::delta_datafusion::{files_matching_predicate, DataFusionMixins};
@@ -268,10 +267,11 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn test_parse_predicate_expression() {
-        let snapshot =
-            DeltaTableState::from_actions(init_table_actions(), &Path::default()).unwrap();
+    #[tokio::test]
+    async fn test_parse_predicate_expression() {
+        let snapshot = DeltaTableState::from_actions(init_table_actions())
+            .await
+            .unwrap();
         let session = SessionContext::new();
         let state = session.state();
 
@@ -296,8 +296,8 @@ mod tests {
         assert_eq!(parsed, expected)
     }
 
-    #[test]
-    fn test_files_matching_predicate() {
+    #[tokio::test]
+    async fn test_files_matching_predicate() {
         let mut actions = init_table_actions();
 
         actions.push(Action::Add(ActionFactory::add(
@@ -319,7 +319,7 @@ mod tests {
             true,
         )));
 
-        let state = DeltaTableState::from_actions(actions, &Path::default()).unwrap();
+        let state = DeltaTableState::from_actions(actions).await.unwrap();
         let files = files_matching_predicate(&state.snapshot, &[])
             .unwrap()
             .collect::<Vec<_>>();
