@@ -1,18 +1,24 @@
 //! The module for delta table state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::expressions::column_expr;
+use delta_kernel::schema::StructField;
+use delta_kernel::{EvaluationHandler, Expression};
 use futures::TryStreamExt;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
-    Protocol, Remove, StructType,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
+    StructType, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
@@ -32,13 +38,8 @@ impl DeltaTableState {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
-        let snapshot = EagerSnapshot::try_new_with_visitor(
-            log_store,
-            config,
-            version,
-            HashSet::from([ActionType::Txn]),
-        )
-        .await?;
+        // TODO: pass through predictae
+        let snapshot = EagerSnapshot::try_new(log_store, config, version).await?;
         Ok(Self { snapshot })
     }
 
@@ -56,7 +57,7 @@ impl DeltaTableState {
 
     /// Construct a delta table state object from a list of actions
     #[cfg(test)]
-    pub fn from_actions(actions: Vec<Action>, table_root: &Path) -> DeltaResult<Self> {
+    pub async fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
         use crate::kernel::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -87,7 +88,8 @@ impl DeltaTableState {
             Vec::new(),
         )];
 
-        let snapshot = EagerSnapshot::new_test(&commit_data, table_root).unwrap();
+        let snapshot = EagerSnapshot::new_test(&commit_data).await.unwrap();
+
         Ok(Self { snapshot })
     }
 
@@ -104,11 +106,10 @@ impl DeltaTableState {
         Ok(self
             .snapshot
             .snapshot()
-            .tombstones(log_store)?
+            .tombstones(log_store)
             .try_collect::<Vec<_>>()
             .await?
-            .into_iter()
-            .flatten())
+            .into_iter())
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
@@ -145,11 +146,6 @@ impl DeltaTableState {
         self.snapshot.files_count()
     }
 
-    /// Full list of all of the CDC files added as part of the changeDataFeed feature
-    pub fn cdc_files(&self) -> DeltaResult<impl Iterator<Item = AddCDCFile> + '_> {
-        self.snapshot.cdc_files()
-    }
-
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
@@ -163,10 +159,10 @@ impl DeltaTableState {
     /// Returns `None` if the application ID is not found.
     pub async fn transaction_version(
         &self,
-        _log_store: &dyn LogStore,
+        log_store: &dyn LogStore,
         app_id: impl AsRef<str>,
     ) -> DeltaResult<Option<i64>> {
-        self.snapshot.transaction_version(app_id).await
+        self.snapshot.transaction_version(log_store, app_id).await
     }
 
     /// The most recent protocol of the table.
@@ -205,7 +201,9 @@ impl DeltaTableState {
         log_store: &dyn LogStore,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        self.snapshot.update(log_store, version).await?;
+        self.snapshot
+            .update(log_store, version.map(|v| v as u64))
+            .await?;
         Ok(())
     }
 
@@ -255,5 +253,94 @@ impl DeltaTableState {
                 None
             }
         }))
+    }
+
+    /// Get an [arrow::record_batch::RecordBatch] containing add action data.
+    ///
+    /// # Arguments
+    ///
+    /// * `flatten` - whether to flatten the schema. Partition values columns are
+    ///   given the prefix `partition.`, statistics (null_count, min, and max) are
+    ///   given the prefix `null_count.`, `min.`, and `max.`, and tags the
+    ///   prefix `tags.`. Nested field names are concatenated with `.`.
+    ///
+    /// # Data schema
+    ///
+    /// Each row represents a file that is a part of the selected tables state.
+    ///
+    /// * `path` (String): relative or absolute to a file.
+    /// * `size_bytes` (Int64): size of file in bytes.
+    /// * `modification_time` (Millisecond Timestamp): time the file was created.
+    /// * `null_count.{col_name}` (Int64): number of null values for column in
+    ///   this file.
+    /// * `num_records.{col_name}` (Int64): number of records for column in
+    ///   this file.
+    /// * `min.{col_name}` (matches column type): minimum value of column in file
+    ///   (if available).
+    /// * `max.{col_name}` (matches column type): maximum value of column in file
+    ///   (if available).
+    /// * `partition.{partition column name}` (matches column type): value of
+    ///   partition the file corresponds to.
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let mut expressions = vec![
+            column_expr!("path"),
+            column_expr!("size"),
+            column_expr!("modificationTime"),
+        ];
+        let mut fields = vec![
+            StructField::not_null("path", DataType::STRING),
+            StructField::not_null("size_bytes", DataType::LONG),
+            StructField::not_null("modification_time", DataType::LONG),
+        ];
+
+        if let Some(stats_schema) = self.snapshot.snapshot().inner.stats_schema()? {
+            let num_records_field = stats_schema
+                .field("numRecords")
+                .unwrap()
+                .with_name("num_records");
+            let null_count_field = stats_schema
+                .field("nullCount")
+                .unwrap()
+                .with_name("null_count");
+            let min_field = stats_schema.field("minValues").unwrap().with_name("min");
+            let max_field = stats_schema.field("maxValues").unwrap().with_name("max");
+
+            expressions.push(column_expr!("stats_parsed.numRecords"));
+            fields.push(num_records_field);
+            expressions.push(column_expr!("stats_parsed.nullCount"));
+            fields.push(null_count_field);
+            expressions.push(column_expr!("stats_parsed.minValues"));
+            fields.push(min_field);
+            expressions.push(column_expr!("stats_parsed.maxValues"));
+            fields.push(max_field);
+        }
+
+        if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
+            fields.push(StructField::nullable(
+                "partition",
+                DataType::struct_type(partition_schema.fields().cloned()),
+            ));
+            expressions.push(column_expr!("partitionValues_parsed"));
+        }
+
+        let expression = Expression::Struct(expressions);
+        let table_schema = DataType::struct_type(fields);
+
+        let input_schema = self.snapshot.files.schema();
+        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+        let actions = self.snapshot.files.clone();
+
+        let evaluator =
+            ARROW_HANDLER.new_expression_evaluator(input_schema, expression, table_schema);
+        let result = evaluator.evaluate_arrow(actions)?;
+
+        if flatten {
+            Ok(result.normalize(".", None)?)
+        } else {
+            Ok(result)
+        }
     }
 }
