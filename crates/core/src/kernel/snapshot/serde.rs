@@ -5,7 +5,7 @@ use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::log_segment::{ListedLogFiles, LogSegment};
-use delta_kernel::path::{AsUrl, ParsedLogPath};
+use delta_kernel::path::ParsedLogPath;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::FileMeta;
@@ -143,7 +143,7 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .into_iter()
             .filter_map(|meta| {
                 ParsedLogPath::try_from(meta.into_kernel())
-                    .map_err(|e| de::Error::custom(e))
+                    .map_err(de::Error::custom)
                     .transpose()
             })
             .collect::<Result<Vec<ParsedLogPath>, _>>()?;
@@ -152,7 +152,7 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .into_iter()
             .filter_map(|meta| {
                 ParsedLogPath::try_from(meta.into_kernel())
-                    .map_err(|e| de::Error::custom(e))
+                    .map_err(de::Error::custom)
                     .transpose()
             })
             .collect::<Result<Vec<ParsedLogPath>, _>>()?;
@@ -161,15 +161,13 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .into_iter()
             .filter_map(|meta| {
                 ParsedLogPath::try_from(meta.into_kernel())
-                    .map_err(|e| de::Error::custom(e))
+                    .map_err(de::Error::custom)
                     .transpose()
             })
             .collect::<Result<Vec<ParsedLogPath>, _>>()?;
 
         let latest_crc_file = latest_crc_file
-            .map(|meta| {
-                ParsedLogPath::try_from(meta.into_kernel()).map_err(|e| de::Error::custom(e))
-            })
+            .map(|meta| ParsedLogPath::try_from(meta.into_kernel()).map_err(de::Error::custom))
             .transpose()?
             .flatten();
 
@@ -189,17 +187,17 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
         };
 
         let log_segment = LogSegment::try_new(listed_log_files, log_root, Some(version as u64))
-            .map_err(|e| de::Error::custom(e))?;
+            .map_err(de::Error::custom)?;
 
         let table_configuration =
             TableConfiguration::try_new(metadata, protocol, table_url.clone(), version as u64)
-                .map_err(|e| de::Error::custom(e))?;
+                .map_err(de::Error::custom)?;
 
         let snapshot = KernelSnapshot::new(log_segment, table_configuration);
         let schema = snapshot
             .metadata()
             .parse_schema()
-            .map_err(|e| de::Error::custom(e))?;
+            .map_err(de::Error::custom)?;
 
         Ok(Snapshot {
             inner: Arc::new(snapshot),

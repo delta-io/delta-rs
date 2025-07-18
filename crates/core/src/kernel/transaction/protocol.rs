@@ -243,11 +243,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
 mod tests {
     use std::collections::HashMap;
 
-    use object_store::path::Path;
-
     use super::*;
     use crate::kernel::DataType as DeltaDataType;
-    use crate::kernel::{Action, Add, Metadata, PrimitiveType, Protocol, ProtocolInner, Remove};
+    use crate::kernel::{Action, Add, Metadata, PrimitiveType, ProtocolInner, Remove};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
