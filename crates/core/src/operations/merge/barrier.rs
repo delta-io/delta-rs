@@ -299,10 +299,11 @@ impl Stream for MergeBarrierStream {
                                             .columns()
                                             .iter()
                                             .map(|c| {
-                                                arrow::compute::take(c.as_ref(), &indices, None)
-                                                    .map_err(|err| {
-                                                        DataFusionError::ArrowError(err, None)
-                                                    })
+                                                Ok(arrow::compute::take(
+                                                    c.as_ref(),
+                                                    &indices,
+                                                    None,
+                                                )?)
                                             })
                                             .collect::<DataFusionResult<Vec<ArrayRef>>>()?;
 
