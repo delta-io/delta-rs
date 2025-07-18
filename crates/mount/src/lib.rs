@@ -42,11 +42,11 @@ impl ObjectStoreFactory for MountFactory {
         url: &Url,
         config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let moutn_config =
+        let mount_config =
             config::MountConfigHelper::try_new(config.raw.as_mount_options())?.build()?;
 
         let allow_unsafe_rename = str_is_truthy(
-            moutn_config
+            mount_config
                 .get(&crate::config::MountConfigKey::AllowUnsafeRename)
                 .unwrap_or(&String::new()),
         );
