@@ -193,12 +193,10 @@ mod tests {
         let current_protocol = &result.protocol().cloned().unwrap();
         assert!(&current_protocol
             .writer_features()
-            .clone()
             .unwrap_or_default()
             .contains(&WriterFeature::DeletionVectors));
         assert!(&current_protocol
             .reader_features()
-            .clone()
             .unwrap_or_default()
             .contains(&ReaderFeature::DeletionVectors));
         assert_eq!(result.version(), Some(2));

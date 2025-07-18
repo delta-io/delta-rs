@@ -31,7 +31,7 @@ delta_kernel = { version = "0.13.0", features = [
     "default-engine-rustls",
     "internal-api",
     # https://github.com/delta-io/delta-kernel-rs/pull/1076
-], git = "https://github.com/roeap/delta-kernel-rs", rev = "1a677ae4c65b839bf429f9883c5568111d9202c1" }
+], git = "https://github.com/delta-io/delta-kernel-rs", rev = "a15c01155c67017252a1b52b7b63ea9078caae87" }
 
 
 # arrow
