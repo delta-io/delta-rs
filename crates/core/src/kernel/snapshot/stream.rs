@@ -1,9 +1,6 @@
 //! the code in this file is hoisted from datafusion with only slight modifications
 //!
 use std::pin::Pin;
-use std::sync::Arc;
-use std::task::Context;
-use std::task::Poll;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::stream::BoxStream;
