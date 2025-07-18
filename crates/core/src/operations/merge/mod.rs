@@ -1603,6 +1603,7 @@ mod tests {
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
     use itertools::Itertools;
+    use pretty_assertions::assert_eq;
     use regex::Regex;
     use serde_json::json;
     use std::ops::Neg;
@@ -3314,7 +3315,7 @@ mod tests {
             "+----+-------+-------------+------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
+        let expected_schema_struct: StructType = schema.as_ref().try_into_kernel().unwrap();
         assert_eq!(&expected_schema_struct, table.schema().unwrap());
         assert_batches_sorted_eq!(&expected, &actual);
     }

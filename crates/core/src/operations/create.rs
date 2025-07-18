@@ -478,8 +478,8 @@ mod tests {
 
         // check we can overwrite default settings via adding actions
         let protocol = ProtocolInner {
-            min_reader_version: 0,
-            min_writer_version: 0,
+            min_reader_version: 1,
+            min_writer_version: 2,
             writer_features: None,
             reader_features: None,
         }
@@ -490,8 +490,8 @@ mod tests {
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 0);
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 0);
+        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
 
         let table = CreateBuilder::new()
             .with_location("memory:///")
