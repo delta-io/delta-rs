@@ -315,9 +315,9 @@ pub trait LogStore: Send + Sync + AsAny {
 
     fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
-    async fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
+    fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
         let store = self.root_object_store(operation_id);
-        get_engine(store).await
+        get_engine(store)
     }
 
     /// [Path] to Delta log
@@ -464,8 +464,8 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
         T::root_object_store(self, operation_id)
     }
 
-    async fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
-        T::engine(self, operation_id).await
+    fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
+        T::engine(self, operation_id)
     }
 
     fn to_uri(&self, location: &Path) -> String {
@@ -494,7 +494,7 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
     }
 }
 
-async fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
+pub(crate) fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
     let handle = tokio::runtime::Handle::current();
     match handle.runtime_flavor() {
         RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new(
@@ -659,7 +659,7 @@ pub async fn get_latest_version(
         current_version
     };
 
-    let storage = log_store.engine(None).await.storage_handler();
+    let storage = log_store.engine(None).storage_handler();
     let log_root = log_store.log_root_url();
 
     let segment = spawn_blocking(move || {

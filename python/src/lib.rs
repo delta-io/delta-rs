@@ -24,7 +24,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
-use deltalake::kernel::MetadataExt;
+use deltalake::kernel::MetadataExt as _;
 use deltalake::kernel::{
     scalars::ScalarExt, Action, Add, LogicalFile, Remove, StructType, Transaction,
 };
