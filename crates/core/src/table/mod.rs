@@ -1,7 +1,6 @@
 //! Delta Table read and write implementation
 
 use std::cmp::{min, Ordering};
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -14,9 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{
-    CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
-};
+use crate::kernel::{CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -30,7 +27,6 @@ pub use crate::logstore::PeekCommit;
 pub mod builder;
 pub mod config;
 pub mod state;
-pub mod state_arrow;
 
 mod columns;
 
@@ -346,18 +342,6 @@ impl DeltaTable {
     /// Returns the metadata associated with the loaded state.
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
         Ok(self.snapshot()?.metadata())
-    }
-
-    #[deprecated(
-        since = "0.27.0",
-        note = "Use `snapshot()?.transaction_version(app_id)` instead."
-    )]
-    /// Returns the current version of the DeltaTable based on the loaded metadata.
-    pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
-        self.state
-            .as_ref()
-            .and_then(|s| s.snapshot.transactions.clone())
-            .unwrap_or_default()
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
