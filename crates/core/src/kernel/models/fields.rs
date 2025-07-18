@@ -269,11 +269,6 @@ fn deletion_vector_field() -> StructField {
     )
 }
 
-#[cfg(test)]
-pub(crate) fn log_schema() -> &'static StructType {
-    &LOG_SCHEMA
-}
-
 pub(crate) fn log_schema_ref() -> &'static Arc<StructType> {
     static LOG_SCHEMA_REF: LazyLock<Arc<StructType>> =
         LazyLock::new(|| Arc::new(LOG_SCHEMA.clone()));

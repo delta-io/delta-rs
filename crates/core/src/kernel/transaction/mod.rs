@@ -686,7 +686,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     // Update snapshot to latest version after successful conflict check
                     read_snapshot
-                        .update(&this.log_store, Some(latest_version))
+                        .update(&this.log_store, Some(latest_version as u64))
                         .await?;
                 }
                 let version: i64 = latest_version + 1;
@@ -756,16 +756,12 @@ impl PostCommit {
         if let Some(table) = &self.table_data {
             let post_commit_operation_id = Uuid::new_v4();
             let mut snapshot = table.eager_snapshot().clone();
-            if self.version - snapshot.version() > 1 {
-                // This may only occur during concurrent write actions. We need to update the state first to - 1
-                // then we can advance.
+            if self.version != snapshot.version() {
                 snapshot
-                    .update(&self.log_store, Some(self.version - 1))
+                    .update(&self.log_store, Some(self.version as u64))
                     .await?;
-                snapshot.advance(vec![&self.data])?;
-            } else {
-                snapshot.advance(vec![&self.data])?;
             }
+
             let mut state = DeltaTableState { snapshot };
 
             let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
