@@ -469,7 +469,12 @@ impl EagerSnapshot {
 
     /// Get the timestamp of the given version
     pub fn version_timestamp(&self, version: i64) -> Option<i64> {
-        todo!()
+        for path in &self.snapshot.inner.log_segment().ascending_commit_files {
+            if path.version as i64 == version {
+                return Some(path.location.last_modified);
+            }
+        }
+        None
     }
 
     /// Get the table schema of the snapshot
