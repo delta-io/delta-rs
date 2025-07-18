@@ -106,12 +106,12 @@ def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path):
     assert get_value("null_count.foo") == 2
     assert get_value("min.foo") == "a"
     assert get_value("max.foo") == "b"
-    assert get_value("null_count.bar") is None
-    assert get_value("min.bar") is None
-    assert get_value("max.bar") is None
     assert get_value("null_count.baz") == 2
     assert get_value("min.baz") == 1
     assert get_value("max.baz") == 1
+
+    with pytest.raises(Exception):
+        get_value("null_count.bar")
 
     dt.delete("bar == 3")
 
@@ -127,9 +127,9 @@ def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path):
     assert get_value("null_count.foo") == 1
     assert get_value("min.foo") == "a"
     assert get_value("max.foo") == "b"
-    assert get_value("null_count.bar") is None
-    assert get_value("min.bar") is None
-    assert get_value("max.bar") is None
     assert get_value("null_count.baz") == 1
     assert get_value("min.baz") == 1
     assert get_value("max.baz") == 1
+
+    with pytest.raises(Exception):
+        get_value("null_count.bar")

@@ -184,17 +184,17 @@ impl Snapshot {
 
     /// Get the table schema of the snapshot
     pub fn schema(&self) -> &StructType {
-        &self.schema.as_ref()
+        self.schema.as_ref()
     }
 
     /// Get the table metadata of the snapshot
     pub fn metadata(&self) -> &Metadata {
-        &self.inner.metadata()
+        self.inner.metadata()
     }
 
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
-        &self.inner.protocol()
+        self.inner.protocol()
     }
 
     /// Get the table config which is loaded with of the snapshot
@@ -469,7 +469,12 @@ impl EagerSnapshot {
 
     /// Get the timestamp of the given version
     pub fn version_timestamp(&self, version: i64) -> Option<i64> {
-        todo!()
+        for path in &self.snapshot.inner.log_segment().ascending_commit_files {
+            if path.version as i64 == version {
+                return Some(path.location.last_modified);
+            }
+        }
+        None
     }
 
     /// Get the table schema of the snapshot
