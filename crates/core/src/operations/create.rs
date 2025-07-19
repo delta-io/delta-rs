@@ -566,7 +566,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let mut table = DeltaOps(table)
             .create()
@@ -577,7 +577,7 @@ mod tests {
         table.load().await.unwrap();
         assert_eq!(table.version(), Some(1));
         // Checks if files got removed after overwrite
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
     }
 
     #[tokio::test]
@@ -591,7 +591,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let mut table = DeltaOps(table)
             .create()
@@ -603,7 +603,7 @@ mod tests {
         table.load().await.unwrap();
         assert_eq!(table.version(), Some(1));
         // Checks if files got removed after overwrite
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
     }
 
     #[tokio::test]

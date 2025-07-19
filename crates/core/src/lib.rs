@@ -237,8 +237,16 @@ mod tests {
         table_to_update.update().await.unwrap();
 
         assert_eq!(
-            table_newest_version.get_files_iter().unwrap().collect_vec(),
-            table_to_update.get_files_iter().unwrap().collect_vec()
+            table_newest_version
+                .snapshot()
+                .unwrap()
+                .file_paths_iter()
+                .collect_vec(),
+            table_to_update
+                .snapshot()
+                .unwrap()
+                .file_paths_iter()
+                .collect_vec()
         );
     }
     #[tokio::test]
@@ -306,7 +314,7 @@ mod tests {
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
             ]
         );
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let stats = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
@@ -486,7 +494,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            table.snapshot().unwrap().file_paths_iter().collect_vec(),
             vec![
                 Path::parse(
                     "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
@@ -577,7 +585,7 @@ mod tests {
 
         if let PeekCommit::New(version, actions) = peek {
             assert_eq!(table.version(), Some(9));
-            assert!(!table.get_files_iter().unwrap().any(|f| f
+            assert!(!table.snapshot().unwrap().file_paths_iter().any(|f| f
                 == Path::from(
                     "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"
                 )));
@@ -588,7 +596,7 @@ mod tests {
             table.update_incremental(None).await.unwrap();
 
             assert_eq!(table.version(), Some(10));
-            assert!(table.get_files_iter().unwrap().any(|f| f
+            assert!(table.snapshot().unwrap().file_paths_iter().any(|f| f
                 == Path::from(
                     "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"
                 )));
@@ -661,7 +669,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            table.snapshot().unwrap().file_paths_iter().collect_vec(),
             vec![Path::from(
                 "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
             ),]

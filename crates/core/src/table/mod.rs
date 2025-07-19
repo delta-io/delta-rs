@@ -302,6 +302,7 @@ impl DeltaTable {
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
+    #[deprecated = "Use `snapshot()?.file_paths_iter()` instead"]
     pub fn get_files_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
         Ok(self
             .state
@@ -321,7 +322,7 @@ impl DeltaTable {
     }
 
     /// Get the number of files in the table - returns 0 if no metadata is loaded
-    #[cfg(test)]
+    #[deprecated = "Count any of the file-like iterators on `snapshot()` instead."]
     pub fn get_files_count(&self) -> usize {
         self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }

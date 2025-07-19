@@ -110,7 +110,7 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
         .restore()
         .with_version_to_restore(0)
         .await?;
-    assert_eq!(result.0.snapshot().unwrap().files_count(), 0);
+    assert_eq!(result.0.snapshot().unwrap().file_paths_iter().count(), 0);
     Ok(())
 }
 

@@ -169,7 +169,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version().unwrap();
-    assert_eq!(dt.snapshot().unwrap().files_count(), 5);
+    assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 5);
 
     let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000);
     let (dt, metrics) = optimize.await?;
@@ -179,7 +179,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(metrics.total_considered_files, 5);
     assert_eq!(metrics.partitions_optimized, 1);
-    assert_eq!(dt.snapshot().unwrap().files_count(), 2);
+    assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 2);
 
     let commit_info = dt.history(None).await?;
     let last_commit = &commit_info[0];
@@ -241,7 +241,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(version + 1, dt.version().unwrap());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(dt.snapshot().unwrap().files_count(), 3);
+    assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 3);
 
     let partition_adds = dt
         .get_active_add_actions_by_partitions(&filter)?
@@ -734,7 +734,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.total_considered_files, 2);
 
     // Check data
-    let files = dt.get_files_iter()?.collect::<Vec<_>>();
+    let files = dt.snapshot()?.file_paths_iter().collect::<Vec<_>>();
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;
