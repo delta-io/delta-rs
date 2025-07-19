@@ -633,8 +633,9 @@ mod tests {
         );
 
         let mut schema_fields = table
-            .get_schema()
-            .expect("Failed to get schema")
+            .snapshot()
+            .expect("Failed to get snapshot")
+            .schema()
             .fields()
             .cloned()
             .collect_vec();
