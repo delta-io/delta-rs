@@ -263,7 +263,7 @@ impl VacuumBuilder {
                         .file_paths_iter()
                         .map(|path| path.to_string())
                         .collect();
-                    debug!("keep version:{}\n, {:#?}", version, files);
+                    debug!("keep version:{version}\n, {files:#?}");
                     keep_files.extend(files);
                 }
 

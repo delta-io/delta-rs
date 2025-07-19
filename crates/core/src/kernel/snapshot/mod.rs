@@ -184,17 +184,17 @@ impl Snapshot {
 
     /// Get the table schema of the snapshot
     pub fn schema(&self) -> &StructType {
-        &self.schema.as_ref()
+        self.schema.as_ref()
     }
 
     /// Get the table metadata of the snapshot
     pub fn metadata(&self) -> &Metadata {
-        &self.inner.metadata()
+        self.inner.metadata()
     }
 
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
-        &self.inner.protocol()
+        self.inner.protocol()
     }
 
     /// Get the table config which is loaded with of the snapshot

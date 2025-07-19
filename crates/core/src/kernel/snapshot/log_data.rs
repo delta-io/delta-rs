@@ -537,11 +537,7 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
     type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(
-            FileStatsAccessor::try_new(self.data, self.metadata, self.schema)
-                .unwrap()
-                .into_iter(),
-        )
+        Box::new(FileStatsAccessor::try_new(self.data, self.metadata, self.schema).unwrap())
     }
 }
 

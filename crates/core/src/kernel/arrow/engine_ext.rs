@@ -113,7 +113,7 @@ impl SnapshotExt for Snapshot {
         let physical_schema = StructType::new(
             self.schema()
                 .fields()
-                .filter(|field| !partition_columns.contains(&field.name()))
+                .filter(|field| !partition_columns.contains(field.name()))
                 .map(|field| field.make_physical()),
         );
         let min_max_transform = MinMaxStatsTransform::new(self.table_properties());

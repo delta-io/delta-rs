@@ -226,6 +226,7 @@ static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 
+#[allow(unused)]
 static LOG_SCHEMA: LazyLock<StructType> = LazyLock::new(|| {
     StructType::new(vec![
         ADD_FIELD.clone(),
