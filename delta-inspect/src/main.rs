@@ -69,7 +69,10 @@ async fn main() -> anyhow::Result<()> {
             if files_matches.is_present("full_uri") {
                 table.get_file_uris()?.for_each(|f| println!("{f}"));
             } else {
-                table.get_files_iter()?.for_each(|f| println!("{f}"));
+                table
+                    .snapshot()?
+                    .file_paths_iter()
+                    .for_each(|f| println!("{f}"));
             };
         }
         Some(("info", info_matches)) => {

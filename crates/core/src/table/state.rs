@@ -143,6 +143,7 @@ impl DeltaTableState {
     }
 
     /// Get the number of files in the current table state
+    #[deprecated = "Count any of the file-like iterators instead."]
     pub fn files_count(&self) -> usize {
         self.snapshot.files_count()
     }

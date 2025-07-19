@@ -194,7 +194,6 @@ async fn benchmark_merge_tpcds(
     merge: fn(DataFrame, DeltaTable) -> Result<MergeBuilder, DeltaTableError>,
 ) -> Result<(core::time::Duration, MergeMetrics), DataFusionError> {
     let table = DeltaTableBuilder::from_uri(path).load().await?;
-    let file_count = table.snapshot()?.files_count();
 
     let provider = DeltaTableProvider::try_new(
         table.snapshot()?.clone(),
@@ -247,7 +246,6 @@ async fn benchmark_merge_tpcds(
 
     let duration = end.duration_since(start);
 
-    println!("Total File count: {file_count}");
     println!("File sample count: {file_sample_count}");
     println!("{metrics:?}");
     println!("Seconds: {}", duration.as_secs_f32());
@@ -596,7 +594,7 @@ async fn main() {
                 .sql(&format!(
                     "
                 select name as before_name,
-                 avg(cast(duration_ms as float)) as before_duration_avg 
+                 avg(cast(duration_ms as float)) as before_duration_avg
                 from before where group_id = {before_group_id}
                 group by name
             ",
@@ -608,7 +606,7 @@ async fn main() {
                 .sql(&format!(
                     "
                 select name as after_name,
-                 avg(cast(duration_ms as float)) as after_duration_avg 
+                 avg(cast(duration_ms as float)) as after_duration_avg
                 from after where group_id = {after_group_id}
                 group by name
             ",

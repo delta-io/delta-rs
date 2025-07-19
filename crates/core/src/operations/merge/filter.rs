@@ -423,7 +423,7 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -515,7 +515,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -570,7 +570,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -630,7 +630,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -696,7 +696,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -768,7 +768,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
