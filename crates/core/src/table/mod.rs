@@ -321,6 +321,7 @@ impl DeltaTable {
     }
 
     /// Get the number of files in the table - returns 0 if no metadata is loaded
+    #[cfg(test)]
     pub fn get_files_count(&self) -> usize {
         self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }
@@ -331,6 +332,7 @@ impl DeltaTable {
     }
 
     /// Returns current table protocol
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.protocol()` instead")]
     pub fn protocol(&self) -> DeltaResult<&Protocol> {
         Ok(self
             .state
@@ -340,18 +342,21 @@ impl DeltaTable {
     }
 
     /// Returns the metadata associated with the loaded state.
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.metadata()` instead")]
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
         Ok(self.snapshot()?.metadata())
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
     pub fn schema(&self) -> Option<&StructType> {
         Some(self.snapshot().ok()?.schema())
     }
 
     /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
     /// been loaded or no metadata was found in the log.
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
     pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
         Ok(self.snapshot()?.schema())
     }
