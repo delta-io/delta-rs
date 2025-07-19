@@ -210,7 +210,7 @@ impl JsonWriter {
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.metadata()?;
+        let metadata = table.snapshot()?.metadata();
         let partition_columns = metadata.partition_columns().clone();
 
         // Initialize writer properties for the underlying arrow writer
@@ -256,8 +256,9 @@ impl JsonWriter {
         }
         let schema = self
             .table
-            .schema()
-            .expect("Failed to unwrap schema for table");
+            .snapshot()
+            .expect("Failed to unwrap snapshot for table")
+            .schema();
         Arc::new(
             schema
                 .try_into_arrow()
@@ -488,7 +489,7 @@ mod tests {
     async fn test_partition_not_written_to_parquet() {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
-        let schema = table.schema().unwrap();
+        let schema = table.snapshot().unwrap().schema();
         let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
             table.table_uri(),
@@ -565,7 +566,8 @@ mod tests {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
 
-        let arrow_schema: ArrowSchema = table.schema().unwrap().try_into_arrow().unwrap();
+        let arrow_schema: ArrowSchema =
+            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
             table.table_uri(),
             Arc::new(arrow_schema),
@@ -602,7 +604,8 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let table = get_test_table(&table_dir).await;
 
-            let arrow_schema: ArrowSchema = table.schema().unwrap().try_into_arrow().unwrap();
+            let arrow_schema: ArrowSchema =
+                table.snapshot().unwrap().schema().try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 table.table_uri(),
                 Arc::new(arrow_schema),
@@ -642,7 +645,7 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let mut table = get_test_table(&table_dir).await;
 
-            let schema = table.schema().unwrap();
+            let schema = table.snapshot().unwrap().schema();
             let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 table.table_uri(),

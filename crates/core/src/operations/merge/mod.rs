@@ -1880,7 +1880,10 @@ mod tests {
             json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
         );
 
-        assert_eq!(table.schema(), after_table.schema());
+        assert_eq!(
+            table.snapshot().unwrap().schema(),
+            after_table.snapshot().unwrap().schema()
+        );
 
         let snapshot_bytes = after_table
             .log_store
@@ -2161,7 +2164,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -2229,7 +2232,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -3316,7 +3319,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = schema.as_ref().try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -4150,7 +4153,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = source_schema.try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
 
         let ctx = SessionContext::new();

@@ -82,6 +82,8 @@ impl Snapshot {
         let table_root = log_store.table_root_url();
         let version = version.map(|v| v as u64);
 
+        println!("Reading table from {}", table_root);
+
         let snapshot = match spawn_blocking(move || {
             KernelSnapshot::try_new(table_root, engine.as_ref(), version)
         })
@@ -212,7 +214,23 @@ impl Snapshot {
         TableConfig(self.inner.metadata().configuration())
     }
 
-    /// Get the files in the snapshot
+    /// Get the active files for the current snapshot.
+    ///
+    /// This method returns a stream of record batches where each row
+    /// represents an active file for the current snapshot.
+    ///
+    /// The files can be filtered using the provided predicate. This is a
+    /// best effort to skip files that are excluded by the predicate. Individual
+    /// files may still contain data that is not relevant to the predicate.
+    ///
+    /// ## Arguments
+    ///
+    /// * `log_store` - The log store to use for reading the snapshot.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of active files for the current snapshot.
     pub fn files(
         &self,
         log_store: &dyn LogStore,
@@ -421,7 +439,7 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
-    pub async fn update(
+    pub(crate) async fn update(
         &mut self,
         log_store: &dyn LogStore,
         target_version: Option<Version>,

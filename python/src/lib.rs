@@ -258,10 +258,11 @@ impl RawDeltaTable {
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
         let metadata = self.with_table(|t| {
-            t.metadata()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.metadata().clone())
         })?;
         Ok(RawDeltaTableMetaData {
             id: metadata.id().to_string(),
@@ -275,10 +276,11 @@ impl RawDeltaTable {
 
     pub fn protocol_versions(&self) -> PyResult<(i32, i32, Option<StringVec>, Option<StringVec>)> {
         let table_protocol = self.with_table(|t| {
-            t.protocol()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.protocol().clone())
         })?;
         Ok((
             table_protocol.min_reader_version(),
@@ -444,10 +446,11 @@ impl RawDeltaTable {
     #[getter]
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let schema: StructType = self.with_table(|t| {
-            t.get_schema()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
-                .map(|s| s.to_owned())
+                .map_err(PyErr::from)?;
+            Ok(snapshot.schema().clone())
         })?;
         schema_to_pyobject(schema, py)
     }
@@ -1098,16 +1101,18 @@ impl RawDeltaTable {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyFrozenSet>> {
         let schema = self.with_table(|t| {
-            t.get_schema()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.schema().clone())
         })?;
         let metadata = self.with_table(|t| {
-            t.metadata()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.metadata().clone())
         })?;
         let column_names: HashSet<&str> =
             schema.fields().map(|field| field.name().as_str()).collect();
@@ -1204,10 +1209,8 @@ impl RawDeltaTable {
             let mode = mode.parse().map_err(PythonError::from)?;
 
             let existing_schema = self.with_table(|t| {
-                t.get_schema()
-                    .cloned()
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from)
+                let snapshot = t.snapshot().map_err(PythonError::from)?;
+                Ok(snapshot.schema().clone())
             })?;
 
             let mut actions: Vec<Action> = add_actions
@@ -1262,10 +1265,11 @@ impl RawDeltaTable {
                     // Update metadata with new schema
                     if schema != existing_schema {
                         let mut metadata = self.with_table(|t| {
-                            t.metadata()
-                                .cloned()
+                            let snapshot = t
+                                .snapshot()
                                 .map_err(PythonError::from)
-                                .map_err(PyErr::from)
+                                .map_err(PyErr::from)?;
+                            Ok(snapshot.metadata().clone())
                         })?;
                         metadata = metadata
                             .with_schema(&schema)

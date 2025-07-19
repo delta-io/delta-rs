@@ -192,11 +192,12 @@ mod tests {
         let table = crate::open_table("../test/tests/data/delta-0.2.0")
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(3));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 3);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
@@ -245,11 +246,12 @@ mod tests {
         let mut table = crate::open_table_with_version("../test/tests/data/delta-0.2.0", 0)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(0));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 0);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet"),
                 Path::from("part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet"),
@@ -259,11 +261,12 @@ mod tests {
         table = crate::open_table_with_version("../test/tests/data/delta-0.2.0", 2)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(2));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 2);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
                 Path::from("part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet"),
@@ -273,11 +276,12 @@ mod tests {
         table = crate::open_table_with_version("../test/tests/data/delta-0.2.0", 3)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(3));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 3);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
@@ -291,11 +295,12 @@ mod tests {
         let table = crate::open_table("../test/tests/data/delta-0.8.0")
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 1);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"),
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
@@ -347,22 +352,24 @@ mod tests {
         let mut table = crate::open_table("../test/tests/data/delta-0.8.0")
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 1);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"),
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
             ]
         );
         table.load_version(0).await.unwrap();
-        assert_eq!(table.version(), Some(0));
-        assert_eq!(table.protocol().unwrap().min_writer_version(), 2);
-        assert_eq!(table.protocol().unwrap().min_reader_version(), 1);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 0);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            table.get_files_iter().unwrap().collect_vec(),
+            snapshot.file_paths_iter().collect_vec(),
             vec![
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
                 Path::from("part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"),

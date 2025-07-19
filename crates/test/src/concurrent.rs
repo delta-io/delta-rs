@@ -36,10 +36,10 @@ async fn prepare_table(
         .create()
         .with_columns(schema.fields().cloned())
         .await?;
-
-    assert_eq!(Some(0), table.version());
-    assert_eq!(1, table.protocol()?.min_reader_version());
-    assert_eq!(2, table.protocol()?.min_writer_version());
+    let snapshot = table.snapshot()?;
+    assert_eq!(snapshot.version(), 0);
+    assert_eq!(snapshot.protocol().min_reader_version(), 1);
+    assert_eq!(snapshot.protocol().min_writer_version(), 2);
     // assert_eq!(0, table.get_files_iter().count());
 
     Ok((table, table_uri))
