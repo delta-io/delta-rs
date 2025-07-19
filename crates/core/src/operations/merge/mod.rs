@@ -1382,8 +1382,7 @@ async fn execute(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let rewrite_start = Instant::now();
-    let mut actions: Vec<Action> = write_execution_plan_v2(
+    let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
         state.clone(),
         write,
@@ -1401,7 +1400,8 @@ async fn execute(
         actions.push(schema_metadata);
     }
 
-    metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
+    metrics.rewrite_time_ms = write_plan_metrics.write_time_ms;
+    metrics.scan_time_ms = write_plan_metrics.scan_time_ms;
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
@@ -1737,6 +1737,10 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 5);
         assert_eq!(metrics.num_source_rows, 3);
+        assert_ne!(
+            metrics.scan_time_ms, 0,
+            "Expected the scan time to be non-zero"
+        );
 
         let expected = vec![
             "+----+-------+------------+",
