@@ -625,7 +625,7 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.get_files_iter().unwrap().collect_vec();
+        let mut files = table.snapshot().unwrap().file_paths_iter().collect_vec();
         files.sort();
         assert_eq!(
             files, expected_paths,

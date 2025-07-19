@@ -82,8 +82,6 @@ impl Snapshot {
         let table_root = log_store.table_root_url();
         let version = version.map(|v| v as u64);
 
-        println!("Reading table from {}", table_root);
-
         let snapshot = match spawn_blocking(move || {
             KernelSnapshot::try_new(table_root, engine.as_ref(), version)
         })
@@ -526,6 +524,7 @@ impl EagerSnapshot {
     }
 
     /// Get the number of files in the snapshot
+    #[deprecated = "Count any of the file-like iterators instead."]
     pub fn files_count(&self) -> usize {
         self.files.num_rows()
     }
