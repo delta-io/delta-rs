@@ -1118,15 +1118,16 @@ mod tests {
             .unwrap();
         table.load().await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.metadata().unwrap().parse_schema().unwrap();
+        let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
         let fields = new_schema.fields();
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
 
         // <https://github.com/delta-io/delta-rs/issues/2925>
         let metadata = table
-            .metadata()
-            .expect("Failed to retrieve updated metadata");
+            .snapshot()
+            .expect("Failed to retrieve updated snapshot")
+            .metadata();
         assert_ne!(
             None,
             metadata.created_time(),
@@ -1192,12 +1193,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.metadata().unwrap().parse_schema().unwrap();
+        let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
         let fields = new_schema.fields();
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
-        let part_cols = table.metadata().unwrap().partition_columns().clone();
+        let part_cols = table
+            .snapshot()
+            .unwrap()
+            .metadata()
+            .partition_columns()
+            .clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;

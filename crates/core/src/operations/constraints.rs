@@ -247,8 +247,9 @@ mod tests {
 
     fn get_constraint(table: &DeltaTable, name: &str) -> String {
         table
-            .metadata()
+            .snapshot()
             .unwrap()
+            .metadata()
             .configuration()
             .get(name)
             .cloned()

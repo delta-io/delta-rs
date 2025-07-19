@@ -74,9 +74,9 @@ impl RecordBatchWriter {
             .build();
 
         // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
-        let configuration = delta_table.metadata().map_or_else(
+        let configuration = delta_table.snapshot().map_or_else(
             |_| HashMap::new(),
-            |metadata| metadata.configuration().clone(),
+            |snapshot| snapshot.metadata().configuration().clone(),
         );
 
         Ok(Self {
@@ -100,7 +100,7 @@ impl RecordBatchWriter {
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.metadata()?;
+        let metadata = table.snapshot()?.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns().clone();
@@ -110,7 +110,7 @@ impl RecordBatchWriter {
             // NOTE: Consider extracting config for writer properties and setting more than just compression
             .set_compression(Compression::SNAPPY)
             .build();
-        let configuration = table.metadata()?.configuration().clone();
+        let configuration = table.snapshot()?.metadata().configuration().clone();
 
         Ok(Self {
             storage: table.object_store(),
@@ -279,7 +279,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             // TODO: we are using the metadata from the passed table, but actually have no guarantee that this is
             // the same table that was used to create the writer instance. Previously we were erasing current config
             // assigning a new table ID, which we should not be doing when evolving the schema.
-            let current_meta = table.metadata()?.clone();
+            let current_meta = table.snapshot()?.metadata().clone();
             let metadata = current_meta.with_schema(&schema)?;
             adds.push(Action::Metadata(metadata));
         }
@@ -826,7 +826,7 @@ mod tests {
             table.load().await.expect("Failed to load table");
             assert_eq!(table.version(), Some(2));
 
-            let new_schema = table.metadata().unwrap().parse_schema().unwrap();
+            let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
             let expected_columns = vec!["id", "value", "modified", "vid", "name"];
             let found_columns: Vec<&String> = new_schema.fields().map(|f| f.name()).collect();
             assert_eq!(
