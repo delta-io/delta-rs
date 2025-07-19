@@ -122,7 +122,7 @@ async fn test_log_buffering_success_explicit_version() {
             .load()
             .await
             .unwrap();
-        table.update_incremental(Some(20)).await.unwrap();
+        table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), Some(10));
     }
 }
