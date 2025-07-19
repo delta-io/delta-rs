@@ -407,8 +407,9 @@ impl RawDeltaTable {
             } else {
                 match self._table.lock() {
                     Ok(table) => Ok(table
-                        .get_files_iter()
+                        .snapshot()
                         .map_err(PythonError::from)?
+                        .file_paths_iter()
                         .map(|f| f.to_string())
                         .collect()),
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
