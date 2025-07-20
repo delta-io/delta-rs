@@ -158,7 +158,7 @@ impl PartitionFilter {
 
     /// Indicates if one of the DeltaTable partition among the list
     /// matches with the partition filter.
-    pub(crate) fn match_partitions(
+    pub fn match_partitions(
         &self,
         partitions: &[DeltaTablePartition],
         partition_col_data_types: &HashMap<&String, &DataType>,
