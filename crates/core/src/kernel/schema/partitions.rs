@@ -158,6 +158,7 @@ impl PartitionFilter {
 
     /// Indicates if one of the DeltaTable partition among the list
     /// matches with the partition filter.
+    #[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
     pub fn match_partitions(
         &self,
         partitions: &[DeltaTablePartition],
