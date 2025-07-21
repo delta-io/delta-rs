@@ -54,6 +54,10 @@ unity-experimental = ["deltalake-catalog-unity"]
 lakefs = ["deltalake-lakefs"]
 native-tls = ["deltalake-core/native-tls"]
 rustls = ["deltalake-core/rustls"]
+# marker for enabling experimental features
+experimental = ["deltalake-core/experimental"]
+column-mapping = ["deltalake-core/column-mapping"]
+deletion-vectors = ["deltalake-core/deletion-vectors"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

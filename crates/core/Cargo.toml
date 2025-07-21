@@ -116,6 +116,10 @@ python = ["arrow/pyarrow"]
 native-tls = ["delta_kernel/default-engine"]
 rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud"]
+# marker for enabling experimental features
+experimental = []
+column-mapping = []
+deletion-vectors = []
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
