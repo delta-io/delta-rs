@@ -201,7 +201,7 @@ impl SnapshotExt for Snapshot {
     }
 }
 
-pub fn partitions_schema(
+fn partitions_schema(
     schema: &StructType,
     partition_columns: &[String],
 ) -> DeltaResultLocal<Option<StructType>> {
@@ -218,17 +218,6 @@ pub fn partitions_schema(
             })
             .collect::<Result<Vec<_>, _>>()?,
     )))
-}
-
-// create a stats schema from our internal representation of the table config.
-pub(crate) fn stats_schema_from_config(
-    logical_schema: &StructType,
-    table_conf: TableConfig<'_>,
-) -> DeltaResult<Option<SchemaRef>> {
-    let physical_schema =
-        StructType::new(logical_schema.fields().map(|field| field.make_physical()));
-    let min_max_transform = MinMaxStatsTransform::new_from_config(table_conf);
-    stats_schema(&physical_schema, min_max_transform)
 }
 
 fn stats_schema(
@@ -282,6 +271,7 @@ impl MinMaxStatsTransform {
         }
     }
 
+    #[cfg(test)]
     fn new_from_config(props: TableConfig<'_>) -> Self {
         if let Some(columns_names) = props.stats_columns_kernel() {
             Self {
@@ -434,6 +424,17 @@ mod tests {
     use delta_kernel::EvaluationHandler;
     use delta_kernel::{expressions::*, Snapshot};
     use pretty_assertions::assert_eq;
+
+    // create a stats schema from our internal representation of the table config.
+    fn stats_schema_from_config(
+        logical_schema: &StructType,
+        table_conf: TableConfig<'_>,
+    ) -> DeltaResult<Option<SchemaRef>> {
+        let physical_schema =
+            StructType::new(logical_schema.fields().map(|field| field.make_physical()));
+        let min_max_transform = MinMaxStatsTransform::new_from_config(table_conf);
+        stats_schema(&physical_schema, min_max_transform)
+    }
 
     #[test]
     fn test_evaluate_arrow() {
@@ -698,5 +699,17 @@ mod tests {
         ]));
 
         assert_eq!(&expected, &stats_schema);
+    }
+
+    #[test]
+    fn test_partitions_schema() -> DeltaResultLocal<()> {
+        let logical_schema = StructType::new([
+            StructField::nullable("name", KernelDataType::STRING),
+            StructField::nullable("age", KernelDataType::INTEGER),
+        ]);
+
+        let result = partitions_schema(&logical_schema, &[])?;
+        assert_eq!(None, result);
+        Ok(())
     }
 }
