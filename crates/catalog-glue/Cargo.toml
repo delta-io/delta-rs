@@ -14,7 +14,7 @@ rust-version.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 aws-config = "1"
-aws-sdk-glue = "=1.78.0"
+aws-sdk-glue = "=1.107.0"
 deltalake-core = { version = "0.28.0", path = "../core" }
 thiserror = { workspace = true }
 
