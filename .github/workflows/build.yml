@@ -18,7 +18,7 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
-  # run various build comnfigurations, fmt, and clippy.
+  # run various build configurations, fmt, and clippy.
   build:
     strategy:
       fail-fast: true
@@ -39,7 +39,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.82"
+          toolchain: "1.85"
           override: true
 
       - name: Format
@@ -81,7 +81,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.82"
+          toolchain: "1.85"
           override: true
 
       - name: Run tests
@@ -115,7 +115,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.82"
+          toolchain: "1.85"
           override: true
 
       - name: Install cargo-llvm-cov
@@ -170,7 +170,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.82"
+          toolchain: "1.85"
           override: true
 
       # Install Java and Hadoop for HDFS integration tests
@@ -210,7 +210,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.82"
+          toolchain: "1.85"
           override: true
 
       - name: Install cargo-llvm-cov
@@ -262,7 +262,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.82"
+          toolchain: "1.85"
           override: true
 
       - name: Install cargo-llvm-cov
