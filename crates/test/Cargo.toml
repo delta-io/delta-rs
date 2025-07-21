@@ -28,7 +28,7 @@ url = { workspace = true }
 dotenvy = "0"
 fs_extra = "1.3.0"
 futures = { version = "0.3" }
-rand = "0.8"
+rand = "0.9"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
