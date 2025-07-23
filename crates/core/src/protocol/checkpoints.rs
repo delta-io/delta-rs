@@ -7,8 +7,8 @@ use arrow_array::{BooleanArray, RecordBatch};
 use chrono::Utc;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
-use delta_kernel::snapshot::LastCheckpointHint;
-use delta_kernel::{FileMeta, Table};
+use delta_kernel::snapshot::{LastCheckpointHint, Snapshot};
+use delta_kernel::FileMeta;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{Error, ObjectStore};
@@ -37,12 +37,11 @@ pub(crate) async fn create_checkpoint_for(
     };
     let engine = log_store.engine(operation_id).await;
 
-    let table = Table::try_from_uri(table_root)?;
-
     let task_engine = engine.clone();
-    let snapshot = spawn_blocking(move || table.snapshot(task_engine.as_ref(), Some(version)))
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+    let snapshot =
+        spawn_blocking(move || Snapshot::try_new(table_root, task_engine.as_ref(), Some(version)))
+            .await
+            .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
     let snapshot = Arc::new(snapshot);
 
     let cp_writer = snapshot.checkpoint()?;
@@ -65,6 +64,13 @@ pub(crate) async fn create_checkpoint_for(
     let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)?;
     writer.write(&first_batch).await?;
 
+    // Hold onto the schema used for future batches.
+    // This ensures that each batch is consistent since the kernel will yeet back the data that it
+    // read from prior checkpoints regardless of whether they are identical in schema.
+    //
+    // See: <https://github.com/delta-io/delta-rs/issues/3527>!
+    let checkpoint_schema = first_batch.schema();
+
     let mut current_batch;
     loop {
         (current_batch, cp_data) = spawn_blocking(move || {
@@ -79,6 +85,17 @@ pub(crate) async fn create_checkpoint_for(
         let Some(batch) = current_batch else {
             break;
         };
+
+        // If the subsequently yielded batches do not match the first batch written for whatever
+        // reason, attempt to safely cast the batches to ensure a coherent checkpoint parquet file
+        //
+        // See also: <https://github.com/delta-io/delta-rs/issues/3527>
+        let batch = if batch.schema() != checkpoint_schema {
+            crate::cast_record_batch(&batch, checkpoint_schema.clone(), true, true)?
+        } else {
+            batch
+        };
+
         writer.write(&batch).await?;
     }
 
