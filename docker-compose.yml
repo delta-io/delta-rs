@@ -1,7 +1,7 @@
-version: "3.9"
+---
 services:
   localstack:
-    image: localstack/localstack:0.14
+    image: localstack/localstack:4
     ports:
       - 4566:4566
       - 8080:8080
@@ -25,6 +25,6 @@ services:
       - 4443:4443
 
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite
+    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
     ports:
       - 10000:10000
