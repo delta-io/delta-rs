@@ -56,7 +56,7 @@ impl StorageIntegration for MsftIntegration {
     }
 
     fn root_uri(&self) -> String {
-        format!("az://{}", self.bucket_name())
+        format!("abfs://{}", self.bucket_name())
     }
 
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
