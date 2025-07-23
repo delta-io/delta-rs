@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use tempfile::TempDir;
 use url::Url;
 use uuid::Uuid;
 
@@ -28,6 +29,23 @@ pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
             fs::remove_file(path).unwrap();
         }
     }
+}
+
+/// Clone an existing test table from the tests crate into a [TempDir] for use in an integration
+/// test
+pub fn clone_table(table_name: impl AsRef<str> + std::fmt::Display) -> TempDir {
+    // Create a temporary directory
+    let tmp_dir = TempDir::new().expect("Failed to make temp dir");
+
+    // Copy recursively from the test data directory to the temporary directory
+    let source_path = format!("../test/tests/data/{table_name}");
+    let options = fs_extra::dir::CopyOptions {
+        content_only: true,
+        ..Default::default()
+    };
+    println!("copying from {source_path}");
+    fs_extra::dir::copy(source_path, tmp_dir.path(), &options).unwrap();
+    tmp_dir
 }
 
 // TODO: should we drop this
