@@ -100,7 +100,7 @@ enum PartitionFilterValue {
     Multiple(Vec<PyBackedStr>),
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", frozen)]
 struct RawDeltaTable {
     /// The internal reference to the table is guarded by a Mutex to allow for re-using the same
     /// [DeltaTable] instance across multiple Python threads
@@ -109,7 +109,7 @@ struct RawDeltaTable {
     _config: FsConfig,
 }
 
-#[pyclass]
+#[pyclass(frozen)]
 struct RawDeltaTableMetaData {
     #[pyo3(get)]
     id: String,
@@ -1645,7 +1645,7 @@ impl RawDeltaTable {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
     fn write(
-        &mut self,
+        &self,
         py: Python,
         data: PyRecordBatchReader,
         batch_schema: PyArrowSchema,
