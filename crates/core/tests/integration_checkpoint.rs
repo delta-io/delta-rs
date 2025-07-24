@@ -10,6 +10,8 @@ use serial_test::serial;
 use std::time::Duration;
 use tokio::time::sleep;
 
+mod fs_common;
+
 #[tokio::test]
 #[serial]
 // This test requires refactoring and a revisit
@@ -182,5 +184,17 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         "checkpoint should exist"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+/// This test validates a checkpoint can be updated on a pre deltalake (python) 1.x table
+/// see also: <https://github.com/delta-io/delta-rs/issues/3527>
+async fn test_older_checkpoint_reads() -> DeltaResult<()> {
+    let temp_table = fs_common::clone_table("python-0.25.5-checkpoint");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table = deltalake_core::open_table(format!("file://{table_path}")).await?;
+    assert_eq!(table.version(), Some(1));
+    create_checkpoint(&table, None).await?;
     Ok(())
 }

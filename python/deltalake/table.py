@@ -880,6 +880,12 @@ class DeltaTable:
                 self.schema().to_arrow(as_large_types=as_large_types)
             )
 
+        if partitions:
+            partitions = [
+                (column, operator, encode_partition_value(value))
+                for column, operator, value in partitions
+            ]
+
         fragments = [
             format.make_fragment(
                 file,

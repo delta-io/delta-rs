@@ -262,6 +262,37 @@ def test_read_partitioned_table_with_partitions_filters_to_dict():
 
 
 @pytest.mark.pyarrow
+def test_read_partitioned_table_with_primitive_type_partition_filters():
+    table_path = "../crates/test/tests/data/partition-type-primitives"
+    dt = DeltaTable(table_path)
+
+    partitions_int = [("year", "=", 2020)]
+    result_int = dt.to_pyarrow_dataset(partitions_int).to_table().to_pydict()
+    assert len(result_int["id"]) == 8
+    assert all(year == "2020" for year in result_int["year"])
+
+    partitions_float = [("year", "=", 2021.0)]
+    result_float = dt.to_pyarrow_dataset(partitions_float).to_table().to_pydict()
+    assert len(result_float["id"]) == 8
+    assert all(year == "2021.0" for year in result_float["year"])
+
+    partitions_bool = [("is_active", "=", True)]
+    result_bool = dt.to_pyarrow_dataset(partitions_bool).to_table().to_pydict()
+    assert len(result_bool["id"]) == 8
+    assert all(is_active == "true" for is_active in result_bool["is_active"])
+
+    partitions_date = [("event_date", "=", date(2023, 1, 1))]
+    result_date = dt.to_pyarrow_dataset(partitions_date).to_table().to_pydict()
+    assert len(result_date["id"]) == 8
+    assert all(event_date == "2023-01-01" for event_date in result_date["event_date"])
+
+    partitions_string = [("category", "=", "A")]
+    result_string = dt.to_pyarrow_dataset(partitions_string).to_table().to_pydict()
+    assert len(result_string["id"]) == 8
+    assert all(category == "A" for category in result_string["category"])
+
+
+@pytest.mark.pyarrow
 def test_read_empty_delta_table_after_delete():
     table_path = "../crates/test/tests/data/delta-0.8-empty"
     dt = DeltaTable(table_path)
