@@ -2179,7 +2179,7 @@
 
 
 <h1 id="using-delta-lake-with-daft">Using Delta Lake with Daft</h1>
-<p><a href="https://www.getdaft.io">Daft</a> is a framework for ETL, analytics, and ML/AI at scale with a familiar Python dataframe API, implemented in Rust.</p>
+<p><a href="https://www.daft.ai">Daft</a> is a framework for ETL, analytics, and ML/AI at scale with a familiar Python dataframe API, implemented in Rust.</p>
 <p>Daft and Delta Lake work really well together. Daft provides unified compute for Delta Lake’s unified storage. Together, Delta Lake and Daft give you high-performance query optimization and distributed compute on massive datasets.</p>
 <p>Delta Lake is a great storage format for Daft workloads. Delta gives Daft users:</p>
 <ul>
@@ -2239,7 +2239,7 @@
 <p>You can use <code>write_deltalake</code> to write a Daft DataFrame to a Delta table:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>df.write_deltalake(&quot;tmp/daft-table&quot;, mode=&quot;overwrite&quot;)
 </span></code></pre></div>
-<p>Daft supports multiple write modes. See the <a href="https://www.getdaft.io/projects/docs/en/stable/api/dataframe/?h=write+delta#daft.DataFrame.write_deltalake">Daft documentation</a> for more information.</p>
+<p>Daft supports multiple write modes. See the <a href="https://docs.getdaft.io/en/stable/io/delta_lake/#write-to-delta-lake">Daft documentation</a> for more information.</p>
 <h2 id="what-can-i-do-with-a-daft-dataframe">What can I do with a Daft DataFrame?</h2>
 <p>Daft gives you full-featured DataFrame functionality, similar to what you might be used to from pandas, Dask or PySpark.</p>
 <p>On top of this, Daft also gives you:</p>
@@ -2248,7 +2248,7 @@
 <li><strong>Expressions API</strong> for easy column transformations</li>
 <li><strong>UDFs</strong> for multi-column transformation, incl. ML applications</li>
 </ul>
-<p>Check out the <a href="https://www.getdaft.io/projects/docs/en/stable/index.html">Daft User Guide</a> for a complete list of DataFrame operations.</p>
+<p>Check out the <a href="https://docs.getdaft.io/en/stable/">Daft User Guide</a> for a complete list of DataFrame operations.</p>
 <h2 id="data-skipping-optimizations">Data Skipping Optimizations</h2>
 <p>Delta Lake and Daft work together to give you highly-optimized query performance.</p>
 <p>Delta Lake stores your data in Parquet files. Parquet is a columnar row format that natively supports column pruning. If your query only needs to read data from a specific column or set of columns, you don't need to read in the entire file. This can save you lots of time and compute.</p>
@@ -2324,11 +2324,11 @@
 <p>Read <a href="https://delta.io/blog/daft-delta-lake-integration/">High-Performance Querying on Massive Delta Lake Tables with Daft</a> for an in-depth benchmarking of query optimization with Delta Lake and Daft using partitioning and Z-ordering.</p>
 <h2 id="daft-gives-you-multimodal-data-type-support">Daft gives you Multimodal Data Type Support</h2>
 <p>Daft has a rich multimodal type-system with support for Python objects, Images, URLs, Tensors and more.</p>
-<p>The <a href="https://www.getdaft.io/projects/docs/en/stable/api/expressions">Expressions API</a> provides useful tools to work with these data types. By combining multimodal data support with the <a href="https://www.getdaft.io/projects/docs/en/stable/api/udf">User-Defined Functions API</a> you can run ML workloads right within your DataFrame.</p>
+<p>The <a href="https://docs.getdaft.io/en/stable/api/expressions/#expressions">Expressions API</a> provides useful tools to work with these data types. By combining multimodal data support with the <a href="https://docs.getdaft.io/en/stable/api/udf/#daft.udf.UDF">User-Defined Functions API</a> you can run ML workloads right within your DataFrame.</p>
 <p>Take a look at the notebook in the <a href="https://github.com/delta-io/delta-examples"><code>delta-examples</code> Github repository</a> for a closer look at how Daft handles URLs, images and ML applications.</p>
 <h2 id="contribute-to-daft">Contribute to <code>daft</code></h2>
 <p>Excited about Daft and want to contribute? Join them on <a href="https://github.com/Eventual-Inc/Daft">Github</a> 🚀</p>
-<p>Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is strictly non-identifiable metadata. You can disable telemetry by setting the following environment variable: <code>DAFT_ANALYTICS_ENABLED=0</code>. Read more in the <a href="https://www.getdaft.io/projects/docs/en/stable/resources/telemetry/">Daft documentation</a>.</p>
+<p>Like many technologies, Daft collects some non-identifiable telemetry to improve the product. This is strictly non-identifiable metadata. You can disable telemetry by setting the following environment variable: <code>DAFT_ANALYTICS_ENABLED=0</code>. Read more in the <a href="https://docs.getdaft.io/en/stable/resources/telemetry/#telemetry">Daft documentation</a>.</p>
 
 
 
