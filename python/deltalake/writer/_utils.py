@@ -33,7 +33,7 @@ def try_get_table_and_table_uri(
         table_uri = str(table_or_uri)
     else:
         table = table_or_uri
-        table_uri = table._table.table_uri()
+        table_uri = table.table_uri
 
     return (table, table_uri)
 

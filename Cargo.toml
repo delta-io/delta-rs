@@ -28,7 +28,7 @@ debug = "line-tables-only"
 [workspace.dependencies]
 delta_kernel = { version = "0.13.0", features = [
     "arrow-55",
-    "default-engine",
+    "default-engine-rustls",
     "internal-api",
     # This is the current `main` as of 2025-07-23 before the next relaese of delta-kernel-rs
 ], git = "https://github.com/delta-io/delta-kernel-rs", rev = "e364a79874db8283fbe67905ed45fd5da9868085" }

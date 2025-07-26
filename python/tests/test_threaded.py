@@ -59,13 +59,16 @@ def test_multithreaded_write_using_table(tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
 
-    with pytest.raises(RuntimeError, match="borrowed"):
-        with ThreadPoolExecutor() as exe:
-            list(exe.map(lambda _: write_deltalake(dt, table, mode="append"), range(5)))
+    with ThreadPoolExecutor() as exe:
+        list(
+            exe.map(
+                lambda i: write_deltalake(dt, pl.DataFrame({"a": [i]}), mode="append"),
+                range(5),
+            )
+        )
 
 
 @pytest.mark.polars
-@pytest.mark.xfail(reason="Can fail because of already borrowed")
 def test_multithreaded_write_using_path(tmp_path: pathlib.Path):
     import polars as pl
 
