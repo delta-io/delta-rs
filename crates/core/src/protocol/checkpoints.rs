@@ -35,7 +35,7 @@ pub(crate) async fn create_checkpoint_for(
     } else {
         log_store.table_root_url()
     };
-    let engine = log_store.engine(operation_id).await;
+    let engine = log_store.engine(operation_id);
 
     let task_engine = engine.clone();
     let snapshot =

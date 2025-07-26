@@ -533,7 +533,7 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use super::*;
 
-    use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
+    use crate::kernel::{Action, PrimitiveType, StructField, StructType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;
@@ -1239,19 +1239,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-
-        // NOTE: This currently doesn't really assert anything because cdc_files() is not reading
-        // actions correct
-        if let Some(state) = table.state.clone() {
-            let cdc_files = state.cdc_files();
-            assert!(cdc_files.is_ok());
-            if let Ok(cdc_files) = cdc_files {
-                let cdc_files: Vec<_> = cdc_files.collect();
-                assert_eq!(cdc_files.len(), 0);
-            }
-        } else {
-            panic!("I shouldn't exist!");
-        }
 
         // Too close for missiles, switching to guns. Just checking that the data wasn't actually
         // written instead!
