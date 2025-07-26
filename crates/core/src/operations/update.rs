@@ -533,7 +533,7 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use super::*;
 
-    use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
+    use crate::kernel::{Action, PrimitiveType, StructField, StructType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;

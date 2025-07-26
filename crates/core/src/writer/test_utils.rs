@@ -1,6 +1,5 @@
 //! Utilities for writing unit tests
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};

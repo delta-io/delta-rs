@@ -520,7 +520,7 @@ async fn get_stale_files(
 
 #[cfg(test)]
 mod tests {
-    use object_store::{local::LocalFileSystem, memory::InMemory, GetResult, PutPayload};
+    use object_store::{local::LocalFileSystem, memory::InMemory, PutPayload};
 
     use super::*;
     use crate::{checkpoints::create_checkpoint, open_table};

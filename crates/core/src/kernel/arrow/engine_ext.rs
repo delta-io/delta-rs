@@ -26,6 +26,7 @@ use itertools::Itertools;
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use crate::kernel::replay::parse_partitions;
 use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
+#[cfg(test)]
 use crate::table::config::TableConfig;
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
