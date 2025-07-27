@@ -78,7 +78,8 @@ impl LazyBatchGenerator for ArrowStreamBatchGenerator {
         match stream_reader.next() {
             Some(Ok(record_batch)) => Ok(Some(record_batch)),
             Some(Err(err)) => Err(deltalake::datafusion::error::DataFusionError::ArrowError(
-                err, None,
+                Box::new(err),
+                None,
             )),
             None => Ok(None), // End of stream
         }
