@@ -95,10 +95,3 @@ Arro3 = "Arro3"
 AKS = "AKS"
 # to avoid using 'type' as a field name.
 tpe = "tpe"
-
-# temp patch to https://github.com/apache/datafusion/pull/16822
-# before merge to branch-49
-[patch.crates-io]
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "fb02f4ec1d17f268ca7be9757fac121213c9bdc9" }
-datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "fb02f4ec1d17f268ca7be9757fac121213c9bdc9" }
-datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "fb02f4ec1d17f268ca7be9757fac121213c9bdc9" }
