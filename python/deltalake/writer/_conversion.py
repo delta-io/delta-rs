@@ -60,6 +60,15 @@ def _convert_arro3_schema_to_delta(
         if DataType.is_large_list(dtype):
             return DataType.large_list(inner_field_casted)
         elif DataType.is_fixed_size_list(dtype):
+            # Fixed sized lists can come in from polars via their Array type.
+            # These may carry array field names of "item" rather than "element"
+            # which is expected everywhere else. Converting the field name and
+            # then passing the field through for further casting in Rust will
+            # accommodate this
+            #
+            # See also: <https://github.com/delta-io/delta-rs/issues/3566>
+            if inner_field_casted.name == "item":
+                inner_field_casted = inner_field_casted.with_name("element")
             return DataType.list(inner_field_casted, dtype.list_size)
         elif DataType.is_large_list_view(dtype):
             return DataType.large_list_view(inner_field_casted)
