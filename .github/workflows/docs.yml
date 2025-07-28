@@ -23,10 +23,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: gaurav-nelson/github-action-markdown-link-check@v1
+      - uses:  tcort/github-action-markdown-link-check@v1
         with:
-          config-file: docs/mlc-config.json
+          config-file: 'docs/mlc_config.json'
           folder-path: docs
+          base-branch: main
+          use-quiet-mode: yes
+          check-modified-files-only: yes
 
   lint:
     runs-on: ubuntu-latest
