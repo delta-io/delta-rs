@@ -88,11 +88,22 @@ use crate::writer::to_lazy_table;
 
 #[global_allocator]
 #[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+// static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[global_allocator]
 #[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
-static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+
+#[cfg(not(feature = "no-jemalloc"))]
+mod jemalloc_shim {
+    use jemallocator::Jemalloc;
+
+    #[global_allocator]
+    static ALLOC: Jemalloc = Jemalloc;
+}
+
+
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {

@@ -19,6 +19,8 @@ doc = false
 
 [dependencies]
 delta_kernel.workspace = true
+#jemallocator = { version = "0.5", optional = true }
+
 
 pyo3-arrow = { version = "0.9.0", default-features = false }
 
@@ -51,9 +53,6 @@ deltalake-mount = { path = "../crates/mount" }
 
 # catalog-unity
 deltalake-catalog-unity = { path = "../crates/catalog-unity", features = [
-    "aws",
-    "azure",
-    "gcp",
     "r2",
 ] }
 
@@ -63,14 +62,14 @@ mimalloc = { version = "0.1", default-features = false }
 
 # Unix (excluding macOS & emscripten) → jemalloc
 [target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten")))'.dependencies]
-jemallocator = { version = "0.5", features = [
-    "disable_initial_exec_tls",
-    "background_threads",
-] }
+#jemallocator = { version = "0.5", features = [
+#    "disable_initial_exec_tls",
+#    "background_threads",
+#] }
 
 # macOS → jemalloc (without background_threads) (https://github.com/jemalloc/jemalloc/issues/843)
 [target.'cfg(all(target_family = "unix", target_os = "macos"))'.dependencies]
-jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
+#jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
 version = "0.24.0"
@@ -78,21 +77,23 @@ features = ["extension-module", "abi3", "abi3-py39"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"
+default-features = false
 version = "0"
 features = [
-    "azure",
-    "gcs",
     "python",
     "datafusion",
     "unity-experimental",
-    "hdfs",
+    "rustls",
     "lakefs",
+    "s3",
+    "azure",
+    "gcs",
+    "hdfs",
 ]
 
 [features]
-default = ["rustls"]
-native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
-rustls = ["deltalake/s3", "deltalake/glue"]
+default = []
+no-jemalloc = []
 
 [profile.release]
 opt-level = 3
