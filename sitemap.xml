@@ -2,247 +2,247 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://github.com/delta-io/delta-rs/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/delta-lake-best-practices/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/delta-lake-big-data-small-data/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/why-use-delta-lake/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_writer/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/exceptions/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/query/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/schema/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/storage/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/transaction/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_table/delta_table_alterer/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_table/delta_table_merger/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_table/delta_table_optimizer/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/api/delta_table/metadata/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/how-delta-lake-works/architecture-of-delta-table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/how-delta-lake-works/delta-lake-acid-transactions/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/how-delta-lake-works/delta-lake-file-skipping/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-arrow/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-daft/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-dagster/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-dask/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-datafusion/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-pandas/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/delta-lake-polars/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/adls/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/gcs/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/hdfs/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/lakefs/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/s3-like/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/s3/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/integrations/object-storage/special_configuration/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/upgrade-guides/guide-1.0.0/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/appending-overwriting-delta-lake-table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/constraints/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/create-delta-lake-table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/deleting-rows-from-delta-lake-table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/examining-table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/installation/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/loading-table/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/managing-tables/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/merging-tables/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/overview/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/querying-delta-tables/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/read-cdf/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/optimize/delta-lake-z-order/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/optimize/small-file-compaction-with-optimize/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/writing/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://github.com/delta-io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/</loc>
-         <lastmod>2025-07-24</lastmod>
+         <lastmod>2025-07-28</lastmod>
          <changefreq>daily</changefreq>
     </url>
 </urlset>
