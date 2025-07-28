@@ -90,7 +90,7 @@ humantime = { version = "2.1.0" }
 validator = { version = "0.19", features = ["derive"] }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.7"
 ctor = "0"
 datatest-stable = "0.2"
 deltalake-test = { path = "../test" }
