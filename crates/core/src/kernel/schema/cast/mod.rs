@@ -2,8 +2,8 @@
 //!
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, RecordBatch,
-    RecordBatchOptions, StructArray,
+    new_null_array, Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray,
+    OffsetSizeTrait, RecordBatch, RecordBatchOptions, StructArray,
 };
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef as ArrowSchemaRef};
@@ -103,6 +103,24 @@ fn cast_field(
                 cast_options,
                 add_missing,
             )?) as ArrayRef)
+        }
+        (DataType::FixedSizeList(_, _), DataType::FixedSizeList(child_fields, _)) => {
+            let to_type =
+                DataType::new_list(child_fields.data_type().clone(), child_fields.is_nullable());
+            let col = arrow::compute::kernels::cast(
+                col.as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| {
+                        ArrowError::CastError(format!(
+                            "Failed to convert a FixedSizeList into a new list {} ({col_type})",
+                            field.name()
+                        ))
+                    })?,
+                &to_type,
+            )?;
+            // Once the FixedSizeList has been converted to a regular list, go through the usual
+            // list casting code
+            cast_field(&col, field, cast_options, add_missing)
         }
         (DataType::List(_), DataType::List(child_fields)) => Ok(Arc::new(cast_list(
             col.as_any()
