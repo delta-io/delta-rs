@@ -2478,3 +2478,28 @@ def test_write_binary_col_with_dssc(tmp_path: pathlib.Path):
     assert stats["null_count.z.z"].to_pylist() == [1]
     assert stats["min.z.z"].to_pylist() == [101]
     assert stats["max.z.z"].to_pylist() == [104]
+
+
+@pytest.mark.polars
+@pytest.mark.pyarrow
+def test_polars_write_array(tmp_path: pathlib.Path):
+    """
+    https://github.com/delta-io/delta-rs/issues/3566
+    """
+    import polars as pl
+
+    from deltalake import DeltaTable, write_deltalake
+
+    df = pl.DataFrame(
+        {"array": [[-5, -4], [0, 0], [5, 9]]}, schema={"array": pl.Array(pl.Int32, 2)}
+    )
+    DeltaTable.create(
+        tmp_path,
+        df.to_arrow().schema,
+        mode="overwrite",
+    )
+    write_deltalake(
+        tmp_path,
+        df,
+        mode="overwrite",
+    )
