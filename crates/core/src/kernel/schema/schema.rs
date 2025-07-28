@@ -74,35 +74,11 @@ impl StructTypeExt for StructType {
                 .metadata
                 .get(ColumnMetadataKey::GenerationExpression.as_ref())
             {
-                let json: Value = serde_json::from_str(generated_col_string).map_err(|e| {
-                    Error::InvalidGenerationExpressionJson {
-                        json_err: e,
-                        line: generated_col_string.to_string(),
-                    }
-                })?;
-                match json {
-                    Value::String(sql) => generated_cols.push(GeneratedColumn::new(
-                        &field_path,
-                        &sql,
-                        field.data_type(),
-                    )),
-                    Value::Number(sql) => generated_cols.push(GeneratedColumn::new(
-                        &field_path,
-                        &format!("{sql}"),
-                        field.data_type(),
-                    )),
-                    Value::Bool(sql) => generated_cols.push(GeneratedColumn::new(
-                        &field_path,
-                        &format!("{sql}"),
-                        field.data_type(),
-                    )),
-                    Value::Array(sql) => generated_cols.push(GeneratedColumn::new(
-                        &field_path,
-                        &format!("{sql:?}"),
-                        field.data_type(),
-                    )),
-                    _ => (), // Other types not sure what to do then
-                };
+                generated_cols.push(GeneratedColumn::new(
+                    &field_path,
+                    generated_col_string,
+                    field.data_type(),
+                ));
             }
         }
         Ok(generated_cols)
@@ -206,7 +182,7 @@ mod tests {
                 "type":"struct",
                 "fields":[
                     {"name":"id","type":"integer","nullable":true,"metadata":{}},
-                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"5\""}}]
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"5"}}]
             }
         )).unwrap();
         let cols = schema.get_generated_columns().unwrap();
@@ -219,8 +195,8 @@ mod tests {
                 "type":"struct",
                 "fields":[
                     {"name":"id","type":"integer","nullable":true,"metadata":{}},
-                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"5\""}},
-                    {"name":"id2","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"\"id * 10\""}},]
+                    {"name":"gc","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"5"}},
+                    {"name":"id2","type":"integer","nullable":true,"metadata":{"delta.generationExpression":"id * 10"}},]
             }
         )).unwrap();
         let cols = schema.get_generated_columns().unwrap();
