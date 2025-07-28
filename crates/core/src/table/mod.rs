@@ -195,13 +195,13 @@ impl DeltaTable {
     }
 
     /// Load DeltaTable with data from latest checkpoint
-    pub async fn load(&mut self) -> Result<(), DeltaTableError> {
+    pub async fn load(&mut self) -> Result<bool, DeltaTableError> {
         self.update_incremental(None).await
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
-    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+    pub async fn update(&mut self) -> Result<bool, DeltaTableError> {
         self.update_incremental(None).await
     }
 
@@ -210,7 +210,7 @@ impl DeltaTable {
     pub async fn update_incremental(
         &mut self,
         max_version: Option<i64>,
-    ) -> Result<(), DeltaTableError> {
+    ) -> Result<bool, DeltaTableError> {
         match self.state.as_mut() {
             Some(state) => state.update(&self.log_store, max_version).await,
             _ => {
@@ -218,13 +218,13 @@ impl DeltaTable {
                     DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
                         .await?;
                 self.state = Some(state);
-                Ok(())
+                Ok(true)
             }
         }
     }
 
     /// Loads the DeltaTable state for the given version.
-    pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
+    pub async fn load_version(&mut self, version: i64) -> Result<bool, DeltaTableError> {
         if let Some(snapshot) = &self.state {
             if snapshot.version() > version {
                 self.state = None;
@@ -379,7 +379,7 @@ impl DeltaTable {
     pub async fn load_with_datetime(
         &mut self,
         datetime: DateTime<Utc>,
-    ) -> Result<(), DeltaTableError> {
+    ) -> Result<bool, DeltaTableError> {
         let mut min_version: i64 = -1;
         let log_store = self.log_store();
         let prefix = log_store.log_path();

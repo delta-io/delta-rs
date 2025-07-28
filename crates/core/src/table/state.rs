@@ -204,9 +204,8 @@ impl DeltaTableState {
         &mut self,
         log_store: &dyn LogStore,
         version: Option<i64>,
-    ) -> Result<(), DeltaTableError> {
-        self.snapshot.update(log_store, version).await?;
-        Ok(())
+    ) -> Result<bool, DeltaTableError> {
+        self.snapshot.update(log_store, version).await
     }
 
     /// Obtain Add actions for files that match the filter
