@@ -40,7 +40,7 @@ aws-config = { version = "1.5", default-features = false, features = [
 ] }
 aws-sdk-sso = { version = "=1.72.0"}
 aws-sdk-ssooidc = { version = "=1.73.0"}
-aws-sdk-dynamodb = { version = "=1.79.0", default-features = false, features = [
+aws-sdk-dynamodb = { version = "=1.86.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
