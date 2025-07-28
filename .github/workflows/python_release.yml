@@ -75,8 +75,6 @@ jobs:
           target: x86_64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml
-          # for openssl build
-          before-script-linux: yum install -y perl-IPC-Cmd
 
   release-pypi-manylinux-217-aarch64:
     needs: validate-release-tag
@@ -114,6 +112,23 @@ jobs:
           command: publish
           args: --skip-existing -m python/Cargo.toml --no-sdist
           manylinux: "2_28"
+
+  release-pypi-musl-x86-64:
+    needs: validate-release-tag
+    name: PyPI release musl-2_17 x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish manylinux to pypi x86_64 (with sdist)
+        uses: messense/maturin-action@v1
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          maturin-version: v1.6.0 # https://github.com/PyO3/maturin/issues/2154
+          target: x86_64-unknown-linux-musl
+          command: publish
+          args: --skip-existing -m python/Cargo.toml --zig
 
   release-docs:
     needs:
