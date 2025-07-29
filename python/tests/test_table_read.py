@@ -52,9 +52,9 @@ def test_read_table_with_edge_timestamps():
 def test_read_simple_table_to_dict():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
-        "id"
-    ].to_pylist() == [5, 7, 9]
+    assert QueryBuilder().register("tbl", dt).execute(
+        "select * from tbl ORDER BY id"
+    ).read_all()["id"].to_pylist() == [5, 7, 9]
 
 
 class _SerializableException(BaseException):

@@ -77,5 +77,10 @@ def test_multithreaded_write_using_path(tmp_path: pathlib.Path):
 
     with ThreadPoolExecutor() as exe:
         list(
-            exe.map(lambda _: write_deltalake(tmp_path, table, mode="append"), range(5))
+            exe.map(
+                lambda _: write_deltalake(
+                    tmp_path, pl.DataFrame({"a": [1, 2, 3]}), mode="append"
+                ),
+                range(5),
+            )
         )
