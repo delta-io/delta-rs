@@ -315,9 +315,9 @@ mod tests {
     use delta_kernel::arrow::record_batch::RecordBatch;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
+    use delta_kernel::expressions::*;
     use delta_kernel::schema::{ArrayType, DataType as KernelDataType};
     use delta_kernel::EvaluationHandler;
-    use delta_kernel::{expressions::*, Table};
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -354,9 +354,9 @@ mod tests {
     #[tokio::test]
     async fn test_stats_schema() {
         let log_store = TestTables::Simple.table_builder().build_storage().unwrap();
-        let table = Table::try_from_uri(log_store.table_root_url()).unwrap();
         let engine = log_store.engine(None).await;
-        let snapshot = table.snapshot(engine.as_ref(), None).unwrap();
+        let snapshot =
+            Snapshot::try_new(log_store.table_root_url(), engine.as_ref(), None).unwrap();
         let stats_schema = snapshot.stats_schema().unwrap();
 
         let id_field = StructType::new([StructField::nullable("id", KernelDataType::LONG)]);
