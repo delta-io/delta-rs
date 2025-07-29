@@ -454,7 +454,8 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, commit_properties=None, post_commithook_properties=None, full = false))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true,
+    commit_properties=None, post_commithook_properties=None, full = false, keep_versions = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn vacuum(
         &self,
@@ -465,6 +466,7 @@ impl RawDeltaTable {
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         full: bool,
+        keep_versions: Option<Vec<i64>>,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
             let snapshot = match self._table.lock() {
@@ -491,6 +493,10 @@ impl RawDeltaTable {
                 maybe_create_commit_properties(commit_properties, post_commithook_properties)
             {
                 cmd = cmd.with_commit_properties(commit_properties);
+            }
+
+            if let Some(keep_versions_vec) = keep_versions {
+                cmd = cmd.with_keep_versions(keep_versions_vec.as_slice());
             }
 
             if self.log_store()?.name() == "LakeFSLogStore" {
