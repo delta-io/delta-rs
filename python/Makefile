@@ -58,7 +58,7 @@ check-python: ## Run check on Python
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	uv run --no-sync pytest --doctest-modules
+	uv run --no-sync pytest -q -n auto --doctest-modules
 
 .PHONY: test-cov
 test-cov: ## Create coverage report
