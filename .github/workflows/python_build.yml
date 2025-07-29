@@ -70,17 +70,17 @@ jobs:
         run: make develop
 
       - name: Run tests
-        run: uv run --no-sync pytest -m '((s3 or azure) and integration) or not integration and not benchmark and not no_pyarrow' --doctest-modules
+        run: uv run --no-sync pytest -n auto -m '((s3 or azure) and integration) or not integration and not benchmark and not no_pyarrow' --doctest-modules
 
       - name: Test without pandas
         run: |
           uv pip uninstall pandas
-          uv run --no-sync pytest -m "not pandas and not integration and not benchmark and not no_pyarrow"
+          uv run --no-sync pytest -n auto -m "not pandas and not integration and not benchmark and not no_pyarrow"
 
       - name: Test without pyarrow and without pandas
         run: |
           uv pip uninstall pyarrow
-          uv run --no-sync pytest -m "not pyarrow and not pandas and not integration and not benchmark"
+          uv run --no-sync pytest -n auto -m "not pyarrow and not pandas and not integration and not benchmark"
 
   test-lakefs:
     name: Python Build (Python 3.10 LakeFS Integration tests)

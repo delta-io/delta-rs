@@ -93,10 +93,11 @@ source = ["deltalake"]
 [dependency-groups]
 dev = [
     "pytest",
-    "pytest-mock",
-    "pytest-cov",
-    "pytest-timeout",
     "pytest-benchmark",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-timeout",
+    "pytest-xdist",
     "mypy==1.10.1",
     "ruff>=0.11.2,<0.11.12",
     "types-deprecated>=1.2.15.20250304",
