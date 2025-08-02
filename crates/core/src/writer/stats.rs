@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::basic::Type;
@@ -28,7 +29,7 @@ pub fn create_add(
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
@@ -80,7 +81,7 @@ pub fn create_add(
 pub(crate) fn stats_from_parquet_metadata(
     partition_values: &IndexMap<String, Scalar>,
     parquet_metadata: &ParquetMetaData,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
@@ -100,7 +101,7 @@ pub(crate) fn stats_from_parquet_metadata(
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
@@ -127,7 +128,7 @@ fn stats_from_metadata(
     schema_descriptor: Arc<SchemaDescriptor>,
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -166,10 +167,10 @@ fn stats_from_metadata(
                 }
             })
             .collect()
-    } else if num_indexed_cols == -1 {
+    } else if num_indexed_cols == DataSkippingNumIndexedCols::AllColumns {
         (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
-    } else if num_indexed_cols >= 0 {
-        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
+    } else if let DataSkippingNumIndexedCols::NumColumns(n_cols) = num_indexed_cols {
+        (0..min(n_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
     } else {
         return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
             "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
