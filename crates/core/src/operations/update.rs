@@ -51,12 +51,6 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use crate::delta_datafusion::{
-    expr::fmt_expr_to_sql,
-    logical::MetricObserver,
-    physical::{find_metric_node, get_metric, MetricObserverExec},
-    DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
-};
 use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Remove};
@@ -64,6 +58,16 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::{
+    delta_datafusion::{
+        expr::fmt_expr_to_sql,
+        logical::MetricObserver,
+        physical::{find_metric_node, get_metric, MetricObserverExec},
+        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext,
+        DeltaTableProvider,
+    },
+    table::config::TablePropertiesExt,
+};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -379,7 +383,8 @@ async fn execute(
         snapshot.table_config().num_indexed_cols(),
         snapshot
             .table_config()
-            .stats_columns()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
@@ -391,7 +396,7 @@ async fn execute(
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
-        Some(snapshot.table_config().target_file_size() as usize),
+        Some(snapshot.table_config().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -453,7 +458,7 @@ async fn execute(
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
-                    Some(snapshot.table_config().target_file_size() as usize),
+                    Some(snapshot.table_config().target_file_size().get() as usize),
                     None,
                     writer_properties,
                     writer_stats_config,

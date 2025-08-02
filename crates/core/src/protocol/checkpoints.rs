@@ -20,6 +20,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::logstore::{LogStore, LogStoreExt};
+use crate::table::config::TablePropertiesExt as _;
 use crate::{open_table_with_version, DeltaTable};
 use crate::{DeltaResult, DeltaTableError};
 
