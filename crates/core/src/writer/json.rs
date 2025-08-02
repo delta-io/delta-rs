@@ -8,6 +8,7 @@ use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use object_store::path::Path;
 use parquet::{
     arrow::ArrowWriter, basic::Compression, errors::ParquetError,
@@ -27,6 +28,7 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
+use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
 
@@ -394,7 +396,10 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 file_size,
                 &metadata,
                 table_config.num_indexed_cols(),
-                &table_config.stats_columns(),
+                &table_config
+                    .data_skipping_stats_columns
+                    .as_ref()
+                    .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
             )?);
         }
         Ok(actions)
