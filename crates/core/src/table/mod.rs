@@ -270,7 +270,7 @@ impl DeltaTable {
     ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
         self.state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .get_active_add_actions_by_partitions(filters)
     }
 
@@ -307,7 +307,7 @@ impl DeltaTable {
         Ok(self
             .state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .file_paths_iter())
     }
 
@@ -316,7 +316,7 @@ impl DeltaTable {
         Ok(self
             .state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .file_paths_iter()
             .map(|path| self.log_store.to_uri(&path)))
     }
@@ -328,6 +328,16 @@ impl DeltaTable {
     }
 
     /// Returns the currently loaded state snapshot.
+    ///
+    /// This method provides access to the currently loaded state of the Delta table.
+    ///
+    /// ## Returns
+    ///
+    /// A reference to the current state of the Delta table.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`NotInitialized`](DeltaTableError::NotInitialized) if the table has not been initialized.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
     }
@@ -338,7 +348,7 @@ impl DeltaTable {
         Ok(self
             .state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .protocol())
     }
 

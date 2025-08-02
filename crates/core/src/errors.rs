@@ -97,10 +97,6 @@ pub enum DeltaTableError {
     #[error("Not a Delta table: {0}")]
     NotATable(String),
 
-    /// Error returned when no metadata was found in the DeltaTable.
-    #[error("No metadata found, please make sure table is loaded.")]
-    NoMetadata,
-
     /// Error returned when no schema was found in the DeltaTable.
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
