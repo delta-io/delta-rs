@@ -15,6 +15,7 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
@@ -55,6 +56,7 @@ use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
+use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -345,10 +347,15 @@ impl RawDeltaTable {
 
     fn get_num_index_cols(&self) -> PyResult<i32> {
         self.with_table(|t| {
-            Ok(t.snapshot()
+            let n_cols = t
+                .snapshot()
                 .map_err(PythonError::from)?
                 .config()
-                .num_indexed_cols())
+                .num_indexed_cols();
+            Ok(match n_cols {
+                DataSkippingNumIndexedCols::NumColumns(n_cols) => n_cols as i32,
+                DataSkippingNumIndexedCols::AllColumns => -1,
+            })
         })
     }
 
@@ -357,7 +364,8 @@ impl RawDeltaTable {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
                 .config()
-                .stats_columns()
+                .data_skipping_stats_columns
+                .as_ref()
                 .map(|v| v.iter().map(|s| s.to_string()).collect::<Vec<String>>()))
         })
     }
@@ -580,7 +588,7 @@ impl RawDeltaTable {
         &self,
         py: Python,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
-        target_size: Option<i64>,
+        target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
@@ -642,7 +650,7 @@ impl RawDeltaTable {
         py: Python,
         z_order_columns: Vec<String>,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
-        target_size: Option<i64>,
+        target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
@@ -2511,24 +2519,6 @@ fn convert_to_deltalake(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (table=None, configuration=None))]
-fn get_num_idx_cols_and_stats_columns(
-    table: Option<&RawDeltaTable>,
-    configuration: Option<HashMap<String, Option<String>>>,
-) -> PyResult<(i32, Option<Vec<String>>)> {
-    match table.as_ref() {
-        Some(table) => Ok(deltalake::operations::get_num_idx_cols_and_stats_columns(
-            Some(table.cloned_state()?.table_config()),
-            configuration.unwrap_or_default(),
-        )),
-        None => Ok(deltalake::operations::get_num_idx_cols_and_stats_columns(
-            None,
-            configuration.unwrap_or_default(),
-        )),
-    }
-}
-
 #[pymodule]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2557,10 +2547,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(
-        get_num_idx_cols_and_stats_columns,
-        m
-    )?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<PyQueryBuilder>()?;

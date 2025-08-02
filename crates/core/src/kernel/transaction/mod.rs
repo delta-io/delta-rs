@@ -79,6 +79,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
+use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
@@ -97,7 +98,7 @@ use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
-use crate::table::config::TableConfig;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
 
@@ -235,7 +236,7 @@ impl From<CommitBuilderError> for DeltaTableError {
 /// Reference to some structure that contains mandatory attributes for performing a commit.
 pub trait TableReference: Send + Sync {
     /// Well known table configuration
-    fn config(&self) -> TableConfig;
+    fn config(&self) -> &TableProperties;
 
     /// Get the table protocol of the snapshot
     fn protocol(&self) -> &Protocol;
@@ -256,7 +257,7 @@ impl TableReference for EagerSnapshot {
         EagerSnapshot::metadata(self)
     }
 
-    fn config(&self) -> TableConfig {
+    fn config(&self) -> &TableProperties {
         self.table_config()
     }
 
@@ -266,7 +267,7 @@ impl TableReference for EagerSnapshot {
 }
 
 impl TableReference for DeltaTableState {
-    fn config(&self) -> TableConfig {
+    fn config(&self) -> &TableProperties {
         self.snapshot.config()
     }
 
@@ -857,7 +858,7 @@ impl PostCommit {
             return Ok(false);
         }
 
-        let checkpoint_interval = table_state.config().checkpoint_interval() as i64;
+        let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
             create_checkpoint_for(version as u64, log_store.as_ref(), Some(operation_id)).await?;
             Ok(true)
