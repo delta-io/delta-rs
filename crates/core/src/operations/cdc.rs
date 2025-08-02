@@ -85,7 +85,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::kernel::{Action, PrimitiveType, Protocol};
+    use crate::kernel::{Action, PrimitiveType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::DeltaOps;
     use crate::{DeltaTable, TableProperty};

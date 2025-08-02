@@ -19,5 +19,5 @@ pub use models::*;
 pub use schema::*;
 pub use snapshot::*;
 
-static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
+pub(crate) static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
     LazyLock::new(|| ArrowEvaluationHandler {});

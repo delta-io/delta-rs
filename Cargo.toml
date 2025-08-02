@@ -30,7 +30,9 @@ delta_kernel = { version = "0.13.0", features = [
     "arrow-55",
     "default-engine-rustls",
     "internal-api",
-]}
+    # https://github.com/delta-io/delta-kernel-rs/pull/1076
+], git = "https://github.com/delta-io/delta-kernel-rs", rev = "a15c01155c67017252a1b52b7b63ea9078caae87" }
+
 
 # arrow
 arrow = { version = "55.2.0" }
@@ -74,9 +76,7 @@ tokio = { version = "1" }
 num_cpus = { version = "1" }
 
 [workspace.metadata.typos]
-files.extend-exclude = [
-        "CHANGELOG.md",
-]
+files.extend-exclude = ["CHANGELOG.md"]
 default.extend-ignore-re = [
     # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
     "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",

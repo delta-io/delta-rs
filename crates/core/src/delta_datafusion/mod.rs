@@ -290,7 +290,7 @@ pub(crate) fn get_path_column<'a>(
 impl DeltaTableState {
     /// Provide table level statistics to Datafusion
     pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-        self.snapshot.datafusion_table_statistics()
+        self.snapshot.log_data().statistics()
     }
 }
 
@@ -721,7 +721,8 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
             let es = self.snapshot.snapshot();
-            let pruned_stats = prune_file_statistics(&es.files, mask);
+            let pruned_stats = prune_file_statistics(&vec![es.files.clone()], mask);
+            let pruned_stats = concat_batches(pruned_stats[0].schema_ref(), &pruned_stats)?;
             LogDataHandler::new(&pruned_stats, es.metadata(), es.schema()).statistics()
         } else {
             self.snapshot.datafusion_table_statistics()

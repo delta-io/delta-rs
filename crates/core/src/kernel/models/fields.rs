@@ -226,6 +226,7 @@ static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 
+#[allow(unused)]
 static LOG_SCHEMA: LazyLock<StructType> = LazyLock::new(|| {
     StructType::new(vec![
         ADD_FIELD.clone(),
@@ -267,11 +268,6 @@ fn deletion_vector_field() -> StructField {
         ]))),
         true,
     )
-}
-
-#[cfg(test)]
-pub(crate) fn log_schema() -> &'static StructType {
-    &LOG_SCHEMA
 }
 
 pub(crate) fn log_schema_ref() -> &'static Arc<StructType> {
