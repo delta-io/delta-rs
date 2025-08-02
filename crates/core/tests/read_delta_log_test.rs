@@ -122,7 +122,7 @@ async fn test_log_buffering_success_explicit_version() {
             .load()
             .await
             .unwrap();
-        table.update_incremental(Some(20)).await.unwrap();
+        table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), Some(10));
     }
 }
@@ -149,8 +149,8 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 #[ignore = "not implemented"]
 async fn test_read_table_features() -> DeltaResult<()> {
     let mut _table = deltalake_core::open_table("../test/tests/data/simple_table_features").await?;
-    let rf = _table.protocol()?.reader_features();
-    let wf = _table.protocol()?.writer_features();
+    let rf = _table.snapshot()?.protocol().reader_features();
+    let wf = _table.snapshot()?.protocol().writer_features();
 
     assert!(rf.is_some());
     assert!(wf.is_some());
@@ -167,7 +167,7 @@ async fn read_delta_table_from_dlt() {
         .await
         .unwrap();
     assert_eq!(table.version(), Some(1));
-    assert!(table.get_schema().is_ok());
+    assert!(table.snapshot().is_ok());
 }
 
 #[tokio::test]
@@ -177,7 +177,7 @@ async fn read_delta_table_with_null_stats_in_notnull_struct() {
             .await
             .unwrap();
     assert_eq!(table.version(), Some(1));
-    assert!(table.get_schema().is_ok());
+    assert!(table.snapshot().is_ok());
 }
 
 #[tokio::test]
@@ -187,5 +187,5 @@ async fn read_delta_table_with_renamed_partitioning_column() {
         .await
         .unwrap();
     assert_eq!(table.version(), Some(4));
-    assert!(table.get_schema().is_ok());
+    assert!(table.snapshot().is_ok());
 }

@@ -8,6 +8,7 @@ use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use object_store::path::Path;
 use parquet::{
     arrow::ArrowWriter, basic::Compression, errors::ParquetError,
@@ -27,6 +28,7 @@ use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
+use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
 
@@ -210,7 +212,7 @@ impl JsonWriter {
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.metadata()?;
+        let metadata = table.snapshot()?.metadata();
         let partition_columns = metadata.partition_columns().clone();
 
         // Initialize writer properties for the underlying arrow writer
@@ -256,8 +258,9 @@ impl JsonWriter {
         }
         let schema = self
             .table
-            .schema()
-            .expect("Failed to unwrap schema for table");
+            .snapshot()
+            .expect("Failed to unwrap snapshot for table")
+            .schema();
         Arc::new(
             schema
                 .try_into_arrow()
@@ -393,7 +396,10 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 file_size,
                 &metadata,
                 table_config.num_indexed_cols(),
-                &table_config.stats_columns(),
+                &table_config
+                    .data_skipping_stats_columns
+                    .as_ref()
+                    .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
             )?);
         }
         Ok(actions)
@@ -488,7 +494,7 @@ mod tests {
     async fn test_partition_not_written_to_parquet() {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
-        let schema = table.schema().unwrap();
+        let schema = table.snapshot().unwrap().schema();
         let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
             table.table_uri(),
@@ -565,7 +571,8 @@ mod tests {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
 
-        let arrow_schema: ArrowSchema = table.schema().unwrap().try_into_arrow().unwrap();
+        let arrow_schema: ArrowSchema =
+            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
             table.table_uri(),
             Arc::new(arrow_schema),
@@ -602,7 +609,8 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let table = get_test_table(&table_dir).await;
 
-            let arrow_schema: ArrowSchema = table.schema().unwrap().try_into_arrow().unwrap();
+            let arrow_schema: ArrowSchema =
+                table.snapshot().unwrap().schema().try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 table.table_uri(),
                 Arc::new(arrow_schema),
@@ -642,7 +650,7 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let mut table = get_test_table(&table_dir).await;
 
-            let schema = table.schema().unwrap();
+            let schema = table.snapshot().unwrap().schema();
             let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 table.table_uri(),
