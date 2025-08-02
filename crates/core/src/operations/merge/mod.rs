@@ -91,6 +91,7 @@ use crate::operations::write::generated_columns::{
 };
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -1378,7 +1379,8 @@ async fn execute(
         snapshot.table_config().num_indexed_cols(),
         snapshot
             .table_config()
-            .stats_columns()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
@@ -1388,7 +1390,7 @@ async fn execute(
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
-        Some(snapshot.table_config().target_file_size() as usize),
+        Some(snapshot.table_config().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),

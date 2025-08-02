@@ -95,6 +95,7 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{open_table, open_table_with_storage_options, DeltaTable};

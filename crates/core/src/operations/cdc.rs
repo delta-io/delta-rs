@@ -2,6 +2,7 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 

@@ -1,6 +1,8 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
 
+use delta_kernel::table_properties::IsolationLevel;
+
 use super::CommitInfo;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
@@ -10,7 +12,7 @@ use crate::kernel::Transaction;
 use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
 use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
-use crate::table::config::IsolationLevel;
+use crate::table::config::TablePropertiesExt as _;
 use crate::DeltaTableError;
 
 #[cfg(feature = "datafusion")]

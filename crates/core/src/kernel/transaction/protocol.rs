@@ -8,6 +8,7 @@ use crate::kernel::{
     contains_timestampntz, Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema,
 };
 use crate::protocol::DeltaOperation;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
 static READER_V2: LazyLock<HashSet<ReaderFeature>> =

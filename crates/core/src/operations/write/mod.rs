@@ -599,13 +599,13 @@ impl std::future::IntoFuture for WriteBuilder {
                 _ => (None, None),
             };
 
-            let config: Option<crate::table::config::TableConfig<'_>> = this
+            let config = this
                 .snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.table_config());
 
             let target_file_size = this.target_file_size.or_else(|| {
-                Some(super::get_target_file_size(&config, &this.configuration) as usize)
+                Some(super::get_target_file_size(config, &this.configuration) as usize)
             });
             let (num_indexed_cols, stats_columns) =
                 super::get_num_idx_cols_and_stats_columns(config, this.configuration);

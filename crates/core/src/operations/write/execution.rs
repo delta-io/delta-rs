@@ -22,6 +22,7 @@ use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::should_write_cdc;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::DeltaTableError;
@@ -168,7 +169,7 @@ pub(crate) async fn execute_non_empty_expr(
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size() as usize),
+            Some(snapshot.table_config().target_file_size().get() as usize),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),

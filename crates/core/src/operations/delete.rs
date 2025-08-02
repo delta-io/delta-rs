@@ -59,6 +59,7 @@ use crate::operations::write::execution::{write_execution_plan, write_execution_
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
 
@@ -237,7 +238,8 @@ async fn execute_non_empty_expr(
         snapshot.table_config().num_indexed_cols(),
         snapshot
             .table_config()
-            .stats_columns()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
@@ -257,7 +259,7 @@ async fn execute_non_empty_expr(
             filter.clone(),
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size() as usize),
+            Some(snapshot.table_config().target_file_size().get() as usize),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -293,7 +295,7 @@ async fn execute_non_empty_expr(
             cdc_filter,
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size() as usize),
+            Some(snapshot.table_config().target_file_size().get() as usize),
             None,
             writer_properties,
             writer_stats_config,

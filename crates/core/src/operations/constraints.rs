@@ -242,6 +242,7 @@ mod tests {
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::logical_expr::{col, lit};
 
+    use crate::table::config::TablePropertiesExt as _;
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 

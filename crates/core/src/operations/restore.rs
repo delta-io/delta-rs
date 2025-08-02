@@ -382,6 +382,8 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "datafusion")]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
+        use crate::table::config::TablePropertiesExt as _;
+
         let batch = get_record_batch(None, false);
         let table = DeltaOps(create_bare_table())
             .write(vec![batch.clone()])

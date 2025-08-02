@@ -15,6 +15,7 @@ use arrow_select::take::take;
 use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
@@ -30,7 +31,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::merge_arrow_schema;
-use crate::kernel::MetadataExt;
+use crate::kernel::MetadataExt as _;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
@@ -46,7 +47,7 @@ pub struct RecordBatchWriter {
     should_evolve: bool,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, PartitionWriter>,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: Option<Vec<String>>,
 }
 
@@ -89,8 +90,14 @@ impl RecordBatchWriter {
             arrow_writers: HashMap::new(),
             num_indexed_cols: configuration
                 .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| v.parse::<i32>().ok())
-                .unwrap_or(DEFAULT_NUM_INDEX_COLS),
+                .and_then(|v| {
+                    v.parse::<u64>()
+                        .ok()
+                        .map(DataSkippingNumIndexedCols::NumColumns)
+                })
+                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
+                    DEFAULT_NUM_INDEX_COLS,
+                )),
             stats_columns: configuration
                 .get("delta.dataSkippingStatsColumns")
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
@@ -122,8 +129,14 @@ impl RecordBatchWriter {
             arrow_writers: HashMap::new(),
             num_indexed_cols: configuration
                 .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| v.parse::<i32>().ok())
-                .unwrap_or(DEFAULT_NUM_INDEX_COLS),
+                .and_then(|v| {
+                    v.parse::<u64>()
+                        .ok()
+                        .map(DataSkippingNumIndexedCols::NumColumns)
+                })
+                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
+                    DEFAULT_NUM_INDEX_COLS,
+                )),
             stats_columns: configuration
                 .get("delta.dataSkippingStatsColumns")
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
