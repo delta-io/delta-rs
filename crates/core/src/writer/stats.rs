@@ -1,5 +1,5 @@
 use std::cmp::min;
-use std::ops::Not;
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
@@ -7,7 +7,7 @@ use std::{collections::HashMap, ops::AddAssign};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use parquet::basic::Type;
+
 use parquet::file::metadata::ParquetMetaData;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -16,7 +16,6 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     format::TimeUnit,
 };
-use tracing::warn;
 
 use super::*;
 use crate::kernel::{scalars::ScalarExt, Add};
@@ -190,19 +189,10 @@ fn stats_from_metadata(
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
             .flat_map(|g| {
-                g.column(idx).statistics().into_iter().filter_map(|s| {
-                    let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
-                    if is_binary {
-                        warn!(
-                            "Skipping column {} because it's a binary field.",
-                            &column_descr.name().to_string()
-                        );
-                        None
-                    } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
-                    }
-                })
+                g.column(idx)
+                    .statistics()
+                    .into_iter()
+                    .map(|s| AggregatedStats::from((s, &column_descr.logical_type())))
             })
             .reduce(|mut left, right| {
                 left += right;
@@ -316,7 +306,6 @@ impl StatsScalar {
                 }
                 .unwrap_or_default();
                 match logical_type {
-                    None => Ok(Self::Bytes(bytes.to_vec())),
                     Some(LogicalType::String) => {
                         Ok(Self::String(String::from_utf8(bytes.to_vec()).map_err(
                             |_| DeltaWriterError::StatsParsingFailed {
@@ -325,10 +314,7 @@ impl StatsScalar {
                             },
                         )?))
                     }
-                    _ => Err(DeltaWriterError::StatsParsingFailed {
-                        debug_value: format!("{bytes:?}"),
-                        logical_type: logical_type.clone(),
-                    }),
+                    _ => Ok(Self::Bytes(bytes.to_vec())),
                 }
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal { scale, precision })) => {
@@ -384,6 +370,17 @@ impl StatsScalar {
                 let val = uuid::Uuid::from_bytes(bytes);
                 Ok(Self::Uuid(val))
             }
+            (Statistics::FixedLenByteArray(v), None) => {
+                let bytes = if use_min {
+                    v.min_bytes_opt()
+                } else {
+                    v.max_bytes_opt()
+                }
+                .unwrap_or_default();
+
+                Ok(Self::Bytes(bytes.to_vec()))
+            }
+            // TODO other fixed binary column types
             (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
                 debug_value: format!("{stats:?}"),
                 logical_type: logical_type.clone(),
@@ -798,6 +795,22 @@ mod tests {
                 Some(LogicalType::Uuid),
                 Value::from("c2e8c7f7-d1f9-4b49-a5d9-4bfe75c317e2"),
             ),
+            (
+                simple_parquet_stat!(
+                    Statistics::ByteArray,
+                    ByteArray::from(b"\x00\x00\x01\x02".to_vec())
+                ),
+                None,
+                Value::from("\\x00\\x00\\x01\\x02"),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(b"\x00\x00\x01\x02".to_vec())
+                ),
+                None,
+                Value::from("\\x00\\x00\\x01\\x02"),
+            ),
         ];
 
         for (stats, logical_type, expected) in cases {
@@ -880,6 +893,12 @@ mod tests {
                 ("uuid", ColumnValueStat::Value(v)) => {
                     assert_eq!("176c770d-92af-4a21-bf76-5d8c5261d659", v.as_str().unwrap())
                 }
+                ("binary", ColumnValueStat::Value(v)) => {
+                    assert_eq!("\\x00\\x00\\x01\\x02\\x03\\x04", v.as_str().unwrap())
+                }
+                ("fixed_binary", ColumnValueStat::Value(v)) => {
+                    assert_eq!("\\x00\\x00\\x01\\x02\\x03", v.as_str().unwrap())
+                }
                 k => panic!("Key {k:?} should not be present in min_values"),
             }
         }
@@ -911,6 +930,12 @@ mod tests {
                 ("uuid", ColumnValueStat::Value(v)) => {
                     assert_eq!("a98bea04-d119-4f21-8edc-eb218b5849af", v.as_str().unwrap())
                 }
+                ("binary", ColumnValueStat::Value(v)) => {
+                    assert_eq!("\\x00\\x00\\x01\\x02\\x03\\x05", v.as_str().unwrap())
+                }
+                ("fixed_binary", ColumnValueStat::Value(v)) => {
+                    assert_eq!("\\x00\\x00\\x01\\x02\\x04", v.as_str().unwrap())
+                }
                 k => panic!("Key {k:?} should not be present in max_values"),
             }
         }
@@ -938,6 +963,8 @@ mod tests {
                 ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 ("uuid", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
+                ("binary", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
+                ("fixed_binary", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 k => panic!("Key {k:?} should not be present in null_count"),
             }
         }
@@ -1089,6 +1116,8 @@ mod tests {
                 "some_nested_list": [[42], [84]],
                 "date": "2021-06-22",
                 "uuid": "176c770d-92af-4a21-bf76-5d8c5261d659",
+                "binary": "\\x00\\x00\\x01\\x02\\x03\\x04",
+                "fixed_binary": "\\x00\\x00\\x01\\x02\\x03",
             }),
             100,
         )
@@ -1111,6 +1140,8 @@ mod tests {
                 "some_nested_list": [[42], [84]],
                 "date": "2021-06-22",
                 "uuid": "54f3e867-3f7b-4122-a452-9d74fb4fe1ba",
+                "binary": "\\x00\\x00\\x01\\x02\\x03\\x05",
+                "fixed_binary": "\\x00\\x00\\x01\\x02\\x04",
             }),
             100,
         ))
