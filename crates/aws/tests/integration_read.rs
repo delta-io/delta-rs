@@ -18,8 +18,8 @@ async fn test_read_tables_aws() -> TestResult {
 
     test_read_tables(&context).await?;
 
-    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
-        read_table_paths(&context, prefix, prefix_encoded).await?;
+    for (prefix, _prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+        read_table_paths(&context, prefix, prefix).await?;
     }
 
     Ok(())

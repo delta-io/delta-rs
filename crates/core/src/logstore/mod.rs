@@ -525,7 +525,6 @@ fn object_store_url(location: &Url) -> ObjectStoreUrl {
 // TODO: find out why this is necessary
 pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
     Ok(match ObjectStoreScheme::parse(table_root) {
-        Ok((ObjectStoreScheme::AmazonS3, _)) => Path::parse(table_root.path())?,
         Ok((_, path)) => path,
         _ => Path::parse(table_root.path())?,
     })
