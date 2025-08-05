@@ -291,6 +291,29 @@ def test_read_partitioned_table_with_primitive_type_partition_filters():
     assert len(result_string["id"]) == 8
     assert all(category == "A" for category in result_string["category"])
 
+    partitions_bool_in = [("is_active", "in", [True, False])]
+    result_bool_in = dt.to_pyarrow_dataset(partitions_bool_in).to_table().to_pydict()
+    total_rows = len(dt.to_pyarrow_dataset().to_table().to_pydict()["id"])
+    assert len(result_bool_in["id"]) == total_rows
+
+    partitions_year_in = [("year", "in", [2020, 2022.0])]
+    result_year_in = dt.to_pyarrow_dataset(partitions_year_in).to_table().to_pydict()
+    assert len(result_year_in["id"]) == 8
+    assert all(year == "2020" for year in result_year_in["year"])
+
+    partitions_bool_true_only = [("is_active", "in", [True])]
+    result_bool_true_only = dt.to_pyarrow_dataset(partitions_bool_true_only).to_table().to_pydict()
+    assert len(result_bool_true_only["id"]) == 8
+    assert all(is_active == "true" for is_active in result_bool_true_only["is_active"])
+
+    with pytest.raises(ValueError, match="Could not encode partition value for type"):
+        partitions_invalid = [("category", "=", {"invalid": "dict"})]
+        dt.to_pyarrow_dataset(partitions_invalid)
+
+    with pytest.raises(ValueError, match="Could not encode partition value for type"):
+        partitions_invalid_list = [("category", "in", [{"invalid": "dict"}, "A"])]
+        dt.to_pyarrow_dataset(partitions_invalid_list)
+
 
 @pytest.mark.pyarrow
 def test_read_empty_delta_table_after_delete():
