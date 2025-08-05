@@ -307,7 +307,7 @@ impl RawDeltaTable {
     /// Load the internal [RawDeltaTable] with the table state from the specified `version`
     ///
     /// This will acquire the internal lock since it is a mutating operation!
-    pub fn load_version(&self, py: Python, version: i64) -> PyResult<()> {
+    pub fn load_version(&self, py: Python, version: i64) -> PyResult<bool> {
         py.allow_threads(|| {
             #[allow(clippy::await_holding_lock)]
             rt().block_on(async {
@@ -360,7 +360,7 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn load_with_datetime(&self, py: Python, ds: &str) -> PyResult<()> {
+    pub fn load_with_datetime(&self, py: Python, ds: &str) -> PyResult<bool> {
         py.allow_threads(|| {
             let datetime =
                 DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(
@@ -1021,7 +1021,7 @@ impl RawDeltaTable {
             .collect())
     }
 
-    pub fn update_incremental(&self) -> PyResult<()> {
+    pub fn update_incremental(&self) -> PyResult<bool> {
         #[allow(clippy::await_holding_lock)]
         #[allow(deprecated)]
         Ok(rt()

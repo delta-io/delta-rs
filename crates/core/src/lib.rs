@@ -231,9 +231,11 @@ mod tests {
         let table_newest_version = crate::open_table(path).await.unwrap();
         let mut table_to_update = crate::open_table_with_version(path, 0).await.unwrap();
         // calling update several times should not produce any duplicates
-        table_to_update.update().await.unwrap();
-        table_to_update.update().await.unwrap();
-        table_to_update.update().await.unwrap();
+        // The first call should have read some data
+        assert_eq!(true, table_to_update.update().await.unwrap());
+        // Subsequent calls should not
+        assert_eq!(false, table_to_update.update().await.unwrap());
+        assert_eq!(false, table_to_update.update().await.unwrap());
 
         assert_eq!(
             table_newest_version.get_files_iter().unwrap().collect_vec(),
