@@ -38,6 +38,7 @@ impl DeltaTableState {
         config: DeltaTableConfig,
         version: Option<i64>,
     ) -> DeltaResult<Self> {
+        log_store.refresh().await?;
         // TODO: pass through predictae
         let snapshot = EagerSnapshot::try_new(log_store, config, version).await?;
         Ok(Self { snapshot })
@@ -201,6 +202,7 @@ impl DeltaTableState {
         log_store: &dyn LogStore,
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
+        log_store.refresh().await?;
         self.snapshot
             .update(log_store, version.map(|v| v as u64))
             .await?;
