@@ -302,7 +302,9 @@ def test_read_partitioned_table_with_primitive_type_partition_filters():
     assert all(year == "2020" for year in result_year_in["year"])
 
     partitions_bool_true_only = [("is_active", "in", [True])]
-    result_bool_true_only = dt.to_pyarrow_dataset(partitions_bool_true_only).to_table().to_pydict()
+    result_bool_true_only = (
+        dt.to_pyarrow_dataset(partitions_bool_true_only).to_table().to_pydict()
+    )
     assert len(result_bool_true_only["id"]) == 8
     assert all(is_active == "true" for is_active in result_bool_true_only["is_active"])
 
