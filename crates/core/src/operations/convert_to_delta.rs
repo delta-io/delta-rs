@@ -37,27 +37,17 @@ use crate::{
 };
 
 fn convert_timestamps_to_microseconds(schema: ArrowSchema) -> Result<ArrowSchema, ArrowError> {
-    let mut any_changed = false;
     let mut converted_fields = Vec::with_capacity(schema.fields().len());
 
     for field in schema.fields() {
-        if let Some(converted_field) = convert_field_timestamps(field)? {
-            any_changed = true;
-            converted_fields.push(converted_field);
-        } else {
-            converted_fields.push(field.as_ref().clone());
-        }
+        converted_fields.push(convert_field_timestamps(field)?);
     }
 
-    if any_changed {
-        Ok(ArrowSchema::new(converted_fields))
-    } else {
-        Ok(schema)
-    }
+    Ok(ArrowSchema::new(converted_fields))
 }
 
 /// Recursively convert timestamp fields to microseconds
-fn convert_field_timestamps(field: &ArrowField) -> Result<Option<ArrowField>, ArrowError> {
+fn convert_field_timestamps(field: &ArrowField) -> Result<ArrowField, ArrowError> {
     let converted_data_type = match field.data_type() {
         ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz)
         | ArrowDataType::Timestamp(TimeUnit::Millisecond, tz)
@@ -66,42 +56,25 @@ fn convert_field_timestamps(field: &ArrowField) -> Result<Option<ArrowField>, Ar
         }
         // Recursively handle nested structures
         ArrowDataType::Struct(fields) => {
-            let mut any_changed = false;
-            let mut converted_fields = Vec::with_capacity(fields.len());
-
-            for field in fields {
-                if let Some(converted_field) = convert_field_timestamps(field)? {
-                    any_changed = true;
-                    converted_fields.push(converted_field);
-                } else {
-                    converted_fields.push(field.as_ref().clone());
-                }
-            }
-
-            if any_changed {
-                Some(ArrowDataType::Struct(Fields::from(converted_fields)))
-            } else {
-                None
-            }
+            let converted_fields = fields
+                .iter()
+                .map(|field| convert_field_timestamps(field))
+                .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
+            Some(ArrowDataType::Struct(Fields::from(converted_fields)))
         }
         // Handle lists that might contain timestamps
         ArrowDataType::List(field_ref) => {
-            if let Some(converted_field) = convert_field_timestamps(field_ref)? {
-                Some(ArrowDataType::List(Arc::new(converted_field)))
-            } else {
-                None
-            }
+            let converted_field = convert_field_timestamps(field_ref)?;
+            Some(ArrowDataType::List(Arc::new(converted_field)))
         }
         _ => None,
     };
 
     if let Some(data_type) = converted_data_type {
-        Ok(Some(
-            ArrowField::new(field.name(), data_type, field.is_nullable())
-                .with_metadata(field.metadata().clone()),
-        ))
+        Ok(ArrowField::new(field.name(), data_type, field.is_nullable())
+            .with_metadata(field.metadata().clone()))
     } else {
-        Ok(None)
+        Ok(field.clone())
     }
 }
 
@@ -1158,9 +1131,10 @@ mod tests {
     fn test_convert_field_timestamps_no_conversion() {
         let field = ArrowField::new("test", ArrowDataType::Int32, false);
         let result = convert_field_timestamps(&field).unwrap();
-        assert!(
-            result.is_none(),
-            "Should return None for non-timestamp fields"
+        assert_eq!(
+            result.data_type(),
+            &ArrowDataType::Int32,
+            "Should return original field for non-timestamp fields"
         );
 
         let micro_field = ArrowField::new(
@@ -1169,9 +1143,10 @@ mod tests {
             true,
         );
         let result = convert_field_timestamps(&micro_field).unwrap();
-        assert!(
-            result.is_none(),
-            "Should return None for already-microsecond timestamps"
+        assert_eq!(
+            result.data_type(),
+            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+            "Should return original field for already-microsecond timestamps"
         );
     }
 
@@ -1184,14 +1159,12 @@ mod tests {
         );
         let result = convert_field_timestamps(&field).unwrap();
 
-        assert!(result.is_some(), "Should return Some for converted field");
-        let converted = result.unwrap();
-        assert_eq!(converted.name(), "test");
+        assert_eq!(result.name(), "test");
         assert_eq!(
-            converted.data_type(),
+            result.data_type(),
             &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
-        assert_eq!(converted.is_nullable(), true);
+        assert_eq!(result.is_nullable(), true);
     }
 
     #[tokio::test]
