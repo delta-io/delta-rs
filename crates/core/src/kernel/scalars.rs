@@ -13,7 +13,8 @@ use percent_encoding_rfc3986::{utf8_percent_encode, AsciiSet, CONTROLS};
 #[cfg(any(test, feature = "integration_test"))]
 use serde_json::Value;
 
-// ASCII set that needs to be encoded
+// ASCII set that needs to be encoded, derived from
+// PROTOCOL DOCS: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#how-to-url-encode-keys-and-string-values
 const RFC3986_PART: &AsciiSet = &CONTROLS
     .add(b' ') // space
     .add(b'!')
