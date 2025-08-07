@@ -71,8 +71,10 @@ fn convert_field_timestamps(field: &ArrowField) -> Result<ArrowField, ArrowError
     };
 
     if let Some(data_type) = converted_data_type {
-        Ok(ArrowField::new(field.name(), data_type, field.is_nullable())
-            .with_metadata(field.metadata().clone()))
+        Ok(
+            ArrowField::new(field.name(), data_type, field.is_nullable())
+                .with_metadata(field.metadata().clone()),
+        )
     } else {
         Ok(field.clone())
     }
