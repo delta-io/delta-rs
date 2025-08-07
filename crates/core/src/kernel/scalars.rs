@@ -9,7 +9,6 @@ use delta_kernel::{
     expressions::{Scalar, StructData},
     schema::StructField,
 };
-
 use percent_encoding_rfc3986::{utf8_percent_encode, AsciiSet, CONTROLS};
 #[cfg(any(test, feature = "integration_test"))]
 use serde_json::Value;
