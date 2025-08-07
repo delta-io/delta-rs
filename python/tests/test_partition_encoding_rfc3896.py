@@ -8,7 +8,7 @@ def test_partition_encoding_rfc3896(tmp_path):
     import polars as pl
     from polars.testing import assert_frame_equal
 
-    (start, stop) = (32, 127)
+    (start, stop) = (32, 255)
     df = pl.DataFrame(
         {
             "a": list(i for i in range(start, stop)),
