@@ -23,7 +23,6 @@ def test_partition_encoding_rfc3896(tmp_path):
     # read:
     partitioned_tbl = DeltaTable(tmp_path)
     pl_df_partitioned = pl.read_delta(partitioned_tbl).sort("a")
-    print(f"pl_df_partitioned:\n{pl_df_partitioned}")
 
     assert_frame_equal(
         df,
