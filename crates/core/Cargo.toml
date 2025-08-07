@@ -51,7 +51,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true, features = ["serde"] }
-urlencoding = { workspace = true }
+percent-encoding-rfc3986 = {workspace = true}
 
 # runtime
 async-trait = { workspace = true }
