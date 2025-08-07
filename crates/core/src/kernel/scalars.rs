@@ -121,7 +121,7 @@ impl ScalarExt for Scalar {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        encode_partition_value(self.serialize().as_str()).to_string()
+        encode_partition_value(self.serialize().as_str())
     }
 
     /// Create a [`Scalar`] from a row in an arrow array.
