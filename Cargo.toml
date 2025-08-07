@@ -26,12 +26,11 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.13.0", features = [
+delta_kernel = { version = "0.14.0", features = [
     "arrow-55",
     "default-engine-rustls",
     "internal-api",
-    # https://github.com/delta-io/delta-kernel-rs/pull/1076
-], git = "https://github.com/delta-io/delta-kernel-rs", rev = "a15c01155c67017252a1b52b7b63ea9078caae87" }
+] }
 
 
 # arrow

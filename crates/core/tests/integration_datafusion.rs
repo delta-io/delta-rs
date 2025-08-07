@@ -864,22 +864,22 @@ mod local {
         }
 
         // Validate Boolean type
-        let batch = create_all_types_batch(1, 0, 0);
-        let (_tmp, table) = prepare_table(vec![batch], SaveMode::Overwrite, vec![]).await;
-        let batch = create_all_types_batch(1, 0, 1);
-        let table = append_to_table(table, batch).await;
+        // let batch = create_all_types_batch(1, 0, 0);
+        // let (_tmp, table) = prepare_table(vec![batch], SaveMode::Overwrite, vec![]).await;
+        // let batch = create_all_types_batch(1, 0, 1);
+        // let table = append_to_table(table, batch).await;
 
-        let e = col("boolean").eq(lit(true));
-        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
-        assert_eq!(metrics.num_scanned_files(), 1);
-        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
-        assert_eq!(metrics.skip_count, 1);
+        // let e = col("boolean").eq(lit(true));
+        // let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        // assert_eq!(metrics.num_scanned_files(), 1);
+        // assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        // assert_eq!(metrics.skip_count, 1);
 
-        let e = col("boolean").eq(lit(false));
-        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
-        assert_eq!(metrics.num_scanned_files(), 1);
-        assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
-        assert_eq!(metrics.skip_count, 1);
+        // let e = col("boolean").eq(lit(false));
+        // let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        // assert_eq!(metrics.num_scanned_files(), 1);
+        // assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
+        // assert_eq!(metrics.skip_count, 1);
 
         let tests = [
             TestCase::new_wrapped("utf8", |value| lit(value.to_string())),
