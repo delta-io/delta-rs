@@ -9,10 +9,46 @@ use delta_kernel::{
     expressions::{Scalar, StructData},
     schema::StructField,
 };
-use object_store::path::Path;
+
+use percent_encoding_rfc3986::{utf8_percent_encode, AsciiSet, CONTROLS};
 #[cfg(any(test, feature = "integration_test"))]
 use serde_json::Value;
-use urlencoding::encode;
+
+// ASCII set that needs to be encoded
+const RFC3986_PART: &AsciiSet = &CONTROLS
+    .add(b' ') // space
+    .add(b'!')
+    .add(b'"')
+    .add(b'#')
+    .add(b'$')
+    .add(b'%')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
+
+fn encode_partition_value(value: &str) -> String {
+    utf8_percent_encode(value, RFC3986_PART).to_string()
+}
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
 
@@ -86,7 +122,7 @@ impl ScalarExt for Scalar {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        encode(Path::from(self.serialize()).as_ref()).to_string()
+        encode_partition_value(self.serialize().as_str()).to_string()
     }
 
     /// Create a [`Scalar`] from a row in an arrow array.
