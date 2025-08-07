@@ -298,26 +298,33 @@ impl DeltaTableState {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        if let Some(stats_schema) = self.snapshot.snapshot().inner.stats_schema()? {
-            let num_records_field = stats_schema
-                .field("numRecords")
-                .unwrap()
-                .with_name("num_records");
-            let null_count_field = stats_schema
-                .field("nullCount")
-                .unwrap()
-                .with_name("null_count");
-            let min_field = stats_schema.field("minValues").unwrap().with_name("min");
-            let max_field = stats_schema.field("maxValues").unwrap().with_name("max");
+        let stats_schema = self.snapshot.snapshot().inner.stats_schema()?;
+        let num_records_field = stats_schema
+            .field("numRecords")
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: "numRecords field not found".to_string(),
+            })?
+            .with_name("num_records");
 
-            expressions.push(column_expr!("stats_parsed.numRecords"));
-            fields.push(num_records_field);
+        expressions.push(column_expr!("stats_parsed.numRecords"));
+        fields.push(num_records_field);
+
+        if let Some(null_count_field) = stats_schema.field("nullCount") {
+            let null_count_field = null_count_field.with_name("null_count");
             expressions.push(column_expr!("stats_parsed.nullCount"));
             fields.push(null_count_field);
+        }
+
+        if let Some(min_values_field) = stats_schema.field("minValues") {
+            let min_values_field = min_values_field.with_name("min");
             expressions.push(column_expr!("stats_parsed.minValues"));
-            fields.push(min_field);
+            fields.push(min_values_field);
+        }
+
+        if let Some(max_values_field) = stats_schema.field("maxValues") {
+            let max_values_field = max_values_field.with_name("max");
             expressions.push(column_expr!("stats_parsed.maxValues"));
-            fields.push(max_field);
+            fields.push(max_values_field);
         }
 
         if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
