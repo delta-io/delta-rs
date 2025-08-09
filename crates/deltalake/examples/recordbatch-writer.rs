@@ -160,8 +160,9 @@ fn fetch_readings() -> Vec<WeatherRecord> {
  */
 fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordBatch {
     let metadata = table
-        .metadata()
-        .expect("Failed to get metadata for the table");
+        .snapshot()
+        .expect("Failed to get snapshot for the table")
+        .metadata();
     let arrow_schema: deltalake::arrow::datatypes::Schema =
         (&(metadata.parse_schema().expect("failed to get schema")))
             .try_into_arrow()

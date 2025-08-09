@@ -2,6 +2,7 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 
@@ -85,7 +86,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::kernel::{Action, PrimitiveType, Protocol};
+    use crate::kernel::{Action, PrimitiveType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::DeltaOps;
     use crate::{DeltaTable, TableProperty};

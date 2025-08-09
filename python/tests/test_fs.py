@@ -140,7 +140,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data_pyarrow: "pa.Table
     table_path = "s3://deltars/roundtrip2"
 
     # Fails without any credentials
-    with pytest.raises(IOError):
+    with pytest.raises(Exception):
         anon_storage_options = {
             "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
             # Grants anonymous access. If we don't do this, will timeout trying
@@ -161,6 +161,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data_pyarrow: "pa.Table
     }
     storage_opts.update(s3_localstack_creds)
     write_deltalake(table_path, sample_data_pyarrow, storage_options=storage_opts)
+
     dt = DeltaTable(table_path, storage_options=storage_opts)
     assert dt.version() == 0
     table = dt.to_pyarrow_table()

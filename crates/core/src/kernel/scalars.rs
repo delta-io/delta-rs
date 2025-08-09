@@ -10,7 +10,6 @@ use delta_kernel::{
     schema::StructField,
 };
 use percent_encoding_rfc3986::{utf8_percent_encode, AsciiSet, CONTROLS};
-#[cfg(any(test, feature = "integration_test"))]
 use serde_json::Value;
 
 // ASCII set that needs to be encoded, derived from
@@ -61,8 +60,7 @@ pub trait ScalarExt: Sized {
     /// Create a [`Scalar`] from an arrow array row
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
     /// Serialize as serde_json::Value
-    #[cfg(any(test, feature = "integration_test"))]
-    fn to_json(&self) -> serde_json::Value;
+    fn to_json(&self) -> Value;
 }
 
 impl ScalarExt for Scalar {
@@ -273,7 +271,6 @@ impl ScalarExt for Scalar {
     }
 
     /// Serializes this scalar as a serde_json::Value.
-    #[cfg(any(test, feature = "integration_test"))]
     fn to_json(&self) -> serde_json::Value {
         match self {
             Self::String(s) => Value::String(s.to_owned()),
@@ -318,9 +315,29 @@ impl ScalarExt for Scalar {
             },
             Self::Binary(val) => Value::String(create_escaped_binary_string(val.as_slice())),
             Self::Null(_) => Value::Null,
-            Self::Struct(_) => unimplemented!(),
-            Self::Array(_) => unimplemented!(),
-            Self::Map(_) => unimplemented!(),
+            Self::Struct(struct_data) => {
+                let mut result = serde_json::Map::new();
+                for (field, value) in struct_data.fields().iter().zip(struct_data.values().iter()) {
+                    result.insert(field.name.clone(), value.to_json());
+                }
+                Value::Object(result)
+            }
+            Self::Array(array_data) => {
+                let mut result = Vec::new();
+                #[allow(deprecated)] // array elements are deprecated b/c kernel wants to replace it
+                // with a more efficient implementation. However currently no alternatiove API is available.
+                for value in array_data.array_elements() {
+                    result.push(value.to_json());
+                }
+                Value::Array(result)
+            }
+            Self::Map(map_data) => {
+                let mut result = serde_json::Map::new();
+                for (key, value) in map_data.pairs() {
+                    result.insert(key.to_string(), value.to_json());
+                }
+                Value::Object(result)
+            }
         }
     }
 }

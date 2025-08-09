@@ -31,11 +31,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
-        let app_txns = table.get_app_transaction_version();
-        assert_eq!(app_txns.len(), 1);
-        assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(1));
+        let app_txn = table
+            .snapshot()
+            .unwrap()
+            .transaction_version(&table.log_store(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(app_txn, Some(1));
 
         let log_store = table.log_store();
         let txn_version = table
@@ -52,10 +56,14 @@ mod tests {
             .load()
             .await
             .unwrap();
-        let app_txns2 = table2.get_app_transaction_version();
+        let app_txn2 = table2
+            .snapshot()
+            .unwrap()
+            .transaction_version(&table2.log_store(), "my-app")
+            .await
+            .unwrap();
 
-        assert_eq!(app_txns2.len(), 1);
-        assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(1));
+        assert_eq!(app_txn2, Some(1));
         let txn_version = table2
             .snapshot()
             .unwrap()
@@ -76,9 +84,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        let app_txns = table.get_app_transaction_version();
-        assert_eq!(app_txns.len(), 1);
-        assert_eq!(app_txns.get("my-app").map(|t| t.version), Some(3));
+        let app_txn = table
+            .snapshot()
+            .unwrap()
+            .transaction_version(&table.log_store(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(app_txn, Some(3));
         let txn_version = table
             .snapshot()
             .unwrap()
@@ -89,9 +101,13 @@ mod tests {
 
         table2.update_incremental(None).await.unwrap();
         assert_eq!(table2.version(), Some(1));
-        let app_txns2 = table2.get_app_transaction_version();
-        assert_eq!(app_txns2.len(), 1);
-        assert_eq!(app_txns2.get("my-app").map(|t| t.version), Some(3));
+        let app_txn2 = table2
+            .snapshot()
+            .unwrap()
+            .transaction_version(&table2.log_store(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(app_txn2, Some(3));
         let txn_version = table2
             .snapshot()
             .unwrap()
@@ -106,9 +122,13 @@ mod tests {
             .load()
             .await
             .unwrap();
-        let app_txns3 = table3.get_app_transaction_version();
-        assert_eq!(app_txns3.len(), 1);
-        assert_eq!(app_txns3.get("my-app").map(|t| t.version), Some(3));
+        let app_txn3 = table3
+            .snapshot()
+            .unwrap()
+            .transaction_version(&table3.log_store(), "my-app")
+            .await
+            .unwrap();
+        assert_eq!(app_txn3, Some(3));
         assert_eq!(table3.version(), Some(1));
         let txn_version = table3
             .snapshot()

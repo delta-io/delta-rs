@@ -625,7 +625,7 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.get_files_iter().unwrap().collect_vec();
+        let mut files = table.snapshot().unwrap().file_paths_iter().collect_vec();
         files.sort();
         assert_eq!(
             files, expected_paths,
@@ -633,8 +633,9 @@ mod tests {
         );
 
         let mut schema_fields = table
-            .get_schema()
-            .expect("Failed to get schema")
+            .snapshot()
+            .expect("Failed to get snapshot")
+            .schema()
             .fields()
             .cloned()
             .collect_vec();

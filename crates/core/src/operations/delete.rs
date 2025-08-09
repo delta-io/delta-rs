@@ -59,6 +59,7 @@ use crate::operations::write::execution::{write_execution_plan, write_execution_
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
 
@@ -237,7 +238,8 @@ async fn execute_non_empty_expr(
         snapshot.table_config().num_indexed_cols(),
         snapshot
             .table_config()
-            .stats_columns()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
@@ -257,7 +259,7 @@ async fn execute_non_empty_expr(
             filter.clone(),
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size() as usize),
+            Some(snapshot.table_config().target_file_size().get() as usize),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -293,7 +295,7 @@ async fn execute_non_empty_expr(
             cdc_filter,
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size() as usize),
+            Some(snapshot.table_config().target_file_size().get() as usize),
             None,
             writer_properties,
             writer_stats_config,
@@ -536,12 +538,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, 0);
@@ -595,7 +597,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -619,7 +621,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -627,7 +629,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(3));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
@@ -775,7 +777,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -783,7 +785,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
@@ -832,7 +834,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 3);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 3);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -844,7 +846,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);

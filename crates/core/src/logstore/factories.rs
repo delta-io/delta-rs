@@ -5,7 +5,6 @@ use std::{
 
 use dashmap::DashMap;
 use object_store::{path::Path, DynObjectStore};
-use tokio::runtime::Handle;
 use url::Url;
 
 use super::{default_logstore, DeltaIOStorageBackend, LogStore, ObjectStoreRef, StorageConfig};
