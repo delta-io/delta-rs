@@ -42,7 +42,11 @@ async fn test_action_reconciliation() {
     let a = fs_common::add(3 * 60 * 1000);
     assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
     assert_eq!(
-        table.get_files_iter().unwrap().collect::<Vec<_>>(),
+        table
+            .snapshot()
+            .unwrap()
+            .file_paths_iter()
+            .collect::<Vec<_>>(),
         vec![Path::from(a.path.clone())]
     );
 
@@ -61,7 +65,7 @@ async fn test_action_reconciliation() {
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files_iter().unwrap().count(), 0);
+    assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
     assert_eq!(
         table
             .snapshot()

@@ -26,6 +26,7 @@ use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -42,7 +43,6 @@ use crate::kernel::parse::read_removes;
 use crate::kernel::transaction::CommitData;
 use crate::kernel::{ActionType, Add, StructType};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
@@ -208,11 +208,27 @@ impl Snapshot {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> TableConfig<'_> {
-        TableConfig(self.inner.metadata().configuration())
+    pub fn table_config(&self) -> &TableProperties {
+        self.inner.table_properties()
     }
 
-    /// Get the files in the snapshot
+    /// Get the active files for the current snapshot.
+    ///
+    /// This method returns a stream of record batches where each row
+    /// represents an active file for the current snapshot.
+    ///
+    /// The files can be filtered using the provided predicate. This is a
+    /// best effort to skip files that are excluded by the predicate. Individual
+    /// files may still contain data that is not relevant to the predicate.
+    ///
+    /// ## Arguments
+    ///
+    /// * `log_store` - The log store to use for reading the snapshot.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of active files for the current snapshot.
     pub fn files(
         &self,
         log_store: &dyn LogStore,
@@ -421,7 +437,7 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
-    pub async fn update(
+    pub(crate) async fn update(
         &mut self,
         log_store: &dyn LogStore,
         target_version: Option<Version>,
@@ -498,7 +514,7 @@ impl EagerSnapshot {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> TableConfig<'_> {
+    pub fn table_config(&self) -> &TableProperties {
         self.snapshot.table_config()
     }
 
@@ -508,6 +524,7 @@ impl EagerSnapshot {
     }
 
     /// Get the number of files in the snapshot
+    #[deprecated = "Count any of the file-like iterators instead."]
     pub fn files_count(&self) -> usize {
         self.files.num_rows()
     }

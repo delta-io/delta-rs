@@ -7,12 +7,13 @@ use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr;
 use delta_kernel::schema::StructField;
+use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::TryStreamExt;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
-use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
+use super::{get_partition_col_data_types, DeltaTableConfig};
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
@@ -22,6 +23,7 @@ use crate::kernel::{
 };
 use crate::logstore::LogStore;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::table::config::TablePropertiesExt;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -143,6 +145,7 @@ impl DeltaTableState {
     }
 
     /// Get the number of files in the current table state
+    #[deprecated = "Count any of the file-like iterators instead."]
     pub fn files_count(&self) -> usize {
         self.snapshot.files_count()
     }
@@ -187,7 +190,7 @@ impl DeltaTableState {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> TableConfig<'_> {
+    pub fn table_config(&self) -> &TableProperties {
         self.snapshot.table_config()
     }
 

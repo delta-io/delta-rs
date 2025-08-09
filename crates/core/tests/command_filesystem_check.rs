@@ -23,20 +23,20 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
 
     let table = context.table_builder(TestTables::Simple).load().await?;
     let version = table.snapshot()?.version();
-    let active = table.snapshot()?.files_count();
+    let active = table.snapshot()?.file_paths_iter().count();
 
     // Validate a Dry run does not mutate the table log and identifies orphaned add actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().with_dry_run(true).await?;
     assert_eq!(version, table.snapshot()?.version());
-    assert_eq!(active, table.snapshot()?.files_count());
+    assert_eq!(active, table.snapshot()?.file_paths_iter().count());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.files_count());
+    assert_eq!(active - 1, table.snapshot()?.file_paths_iter().count());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
@@ -51,7 +51,7 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.files_count());
+    assert_eq!(active - 1, table.snapshot()?.file_paths_iter().count());
     assert!(metrics.files_removed.is_empty());
 
     Ok(())
@@ -77,13 +77,13 @@ async fn test_filesystem_check_partitioned() -> TestResult {
         .await?;
 
     let version = table.snapshot()?.version();
-    let active = table.snapshot()?.files_count();
+    let active = table.snapshot()?.file_paths_iter().count();
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.files_count());
+    assert_eq!(active - 1, table.snapshot()?.file_paths_iter().count());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table

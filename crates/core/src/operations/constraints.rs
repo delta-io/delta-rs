@@ -242,13 +242,15 @@ mod tests {
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::logical_expr::{col, lit};
 
+    use crate::table::config::TablePropertiesExt as _;
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 
     fn get_constraint(table: &DeltaTable, name: &str) -> String {
         table
-            .metadata()
+            .snapshot()
             .unwrap()
+            .metadata()
             .configuration()
             .get(name)
             .cloned()
