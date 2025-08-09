@@ -46,8 +46,10 @@ use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
+pub use iterators::*;
 pub use stream::*;
 
+mod iterators;
 mod log_data;
 pub(crate) mod parse;
 pub(crate) mod replay;
@@ -535,8 +537,10 @@ impl EagerSnapshot {
     }
 
     /// Get a file action iterator for the given version
-    pub fn files(&self) -> impl Iterator<Item = LogicalFile<'_>> {
-        self.log_data().into_iter()
+    pub fn files(&self) -> impl Iterator<Item = LogicalFileView> + '_ {
+        (0..self.files.num_rows())
+            .into_iter()
+            .map(|i| LogicalFileView::new(self.files.clone(), i))
     }
 
     /// Iterate over all latest app transactions

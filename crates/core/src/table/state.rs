@@ -18,7 +18,7 @@ use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, Remove,
     StructType, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
@@ -216,7 +216,7 @@ impl DeltaTableState {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFileView>> + 'a, DeltaTableError> {
         let current_metadata = self.metadata();
 
         let nonpartitioned_columns: Vec<String> = filters
@@ -238,24 +238,24 @@ impl DeltaTableState {
 
         Ok(self.log_data().into_iter().filter_map(move |add| {
             let partitions = add.partition_values();
-            if partitions.is_err() {
-                return Some(Err(DeltaTableError::Generic(
-                    "Failed to parse partition values".to_string(),
-                )));
-            }
-            let partitions = partitions
-                .unwrap()
-                .iter()
-                .map(|(k, v)| DeltaTablePartition::from_partition_value((*k, v)))
-                .collect::<Vec<_>>();
-            let is_valid = filters
-                .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
 
-            if is_valid {
-                Some(Ok(add))
+            if let Some(partitions) = partitions {
+                let partitions = partitions
+                    .fields()
+                    .iter()
+                    .zip(partitions.values().iter())
+                    .map(|(k, v)| DeltaTablePartition::from_partition_value((k.name(), v)))
+                    .collect::<Vec<_>>();
+                let is_valid = filters
+                    .iter()
+                    .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
+                if is_valid {
+                    Some(Ok(add))
+                } else {
+                    None
+                }
             } else {
-                None
+                Some(Ok(add))
             }
         }))
     }

@@ -651,10 +651,13 @@ mod tests {
             .log_data()
             .into_iter()
             .flat_map(|add| {
-                add.partition_values()
-                    .unwrap()
+                let Some(vals) = add.partition_values() else {
+                    return Vec::new();
+                };
+                vals.fields()
                     .iter()
-                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .zip(vals.values().iter())
+                    .map(|(k, v)| (k.name().to_string(), v.clone()))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();

@@ -881,25 +881,30 @@ fn build_compaction_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let add = add?;
+    for file in snapshot.get_active_add_actions_by_partitions(filters)? {
+        let file = file?;
         metrics.total_considered_files += 1;
-        let object_meta = ObjectMeta::try_from(&add)?;
+        let object_meta = ObjectMeta::try_from(&file)?;
         if object_meta.size > target_size {
             metrics.total_files_skipped += 1;
             continue;
         }
-        let partition_values = add
-            .partition_values()?
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<IndexMap<_, _>>();
+        let partition_values = file
+            .partition_values()
+            .map(|v| {
+                v.fields()
+                    .iter()
+                    .zip(v.values().iter())
+                    .map(|(k, v)| (k.name().to_string(), v.clone()))
+                    .collect::<IndexMap<_, _>>()
+            })
+            .unwrap_or_default();
 
         partition_files
-            .entry(add.partition_values()?.hive_partition_path())
+            .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, vec![]))
             .1
-            .push(add.add_action());
+            .push(file.add_action());
     }
 
     for (_, file) in partition_files.values_mut() {
@@ -985,19 +990,24 @@ fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let add = add?;
-        let partition_values = add
-            .partition_values()?
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<IndexMap<_, _>>();
+    for file in snapshot.get_active_add_actions_by_partitions(filters)? {
+        let file = file?;
+        let partition_values = file
+            .partition_values()
+            .map(|v| {
+                v.fields()
+                    .iter()
+                    .zip(v.values().iter())
+                    .map(|(k, v)| (k.name().to_string(), v.clone()))
+                    .collect::<IndexMap<_, _>>()
+            })
+            .unwrap_or_default();
         metrics.total_considered_files += 1;
         partition_files
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
-            .add(add.add_action());
+            .add(file.add_action());
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
