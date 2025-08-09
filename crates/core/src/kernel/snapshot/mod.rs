@@ -26,6 +26,7 @@ use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -42,7 +43,6 @@ use crate::kernel::parse::read_removes;
 use crate::kernel::transaction::CommitData;
 use crate::kernel::{ActionType, Add, StructType};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::table::config::TableConfig;
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
@@ -208,8 +208,8 @@ impl Snapshot {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> TableConfig<'_> {
-        TableConfig(self.inner.metadata().configuration())
+    pub fn table_config(&self) -> &TableProperties {
+        self.inner.table_properties()
     }
 
     /// Get the active files for the current snapshot.
@@ -514,7 +514,7 @@ impl EagerSnapshot {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> TableConfig<'_> {
+    pub fn table_config(&self) -> &TableProperties {
         self.snapshot.table_config()
     }
 
