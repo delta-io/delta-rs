@@ -25,10 +25,10 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
-use deltalake::kernel::MetadataExt as _;
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, LogicalFile, Remove, StructType, Transaction,
+    scalars::ScalarExt, Action, Add, StructDataExt as _, StructType, Transaction,
 };
+use deltalake::kernel::{LogicalFileView, MetadataExt as _, StructDataExt};
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
 use deltalake::logstore::{IORuntime, ObjectStoreRef};
@@ -1179,14 +1179,15 @@ impl RawDeltaTable {
                 Ok::<_, PythonError>(
                     partition_columns
                         .iter()
-                        .flat_map(|col| {
-                            Ok::<_, PythonError>((
+                        .map(|col| {
+                            (
                                 *col,
                                 add.partition_values()
-                                    .map_err(PythonError::from)?
-                                    .get(*col)
+                                    .and_then(|v| {
+                                        v.index_of(*col).and_then(|idx| v.value(idx).cloned())
+                                    })
                                     .map(|v| v.serialize()),
-                            ))
+                            )
                         })
                         .collect(),
                 )
@@ -1240,34 +1241,7 @@ impl RawDeltaTable {
 
                     for old_add in add_actions {
                         let old_add = old_add.map_err(PythonError::from)?;
-                        let remove_action = Action::Remove(Remove {
-                            path: old_add.path().to_string(),
-                            deletion_timestamp: Some(current_timestamp()),
-                            data_change: true,
-                            extended_file_metadata: Some(true),
-                            partition_values: Some(
-                                old_add
-                                    .partition_values()
-                                    .map_err(PythonError::from)?
-                                    .iter()
-                                    .map(|(k, v)| {
-                                        (
-                                            k.to_string(),
-                                            if v.is_null() {
-                                                None
-                                            } else {
-                                                Some(v.serialize())
-                                            },
-                                        )
-                                    })
-                                    .collect(),
-                            ),
-                            size: Some(old_add.size()),
-                            deletion_vector: None,
-                            tags: None,
-                            base_row_id: None,
-                            default_row_commit_version: None,
-                        });
+                        let remove_action = Action::Remove(old_add.remove_action(true));
                         actions.push(remove_action);
                     }
 
@@ -2012,7 +1986,7 @@ fn filestats_to_expression_next<'py>(
     py: Python<'py>,
     schema: &SchemaRef,
     stats_columns: &[String],
-    file_info: LogicalFile<'_>,
+    file_info: LogicalFileView,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let ds = PyModule::import(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
@@ -2033,9 +2007,13 @@ fn filestats_to_expression_next<'py>(
             .call_method1("cast", (column_type,))
     };
 
-    if let Ok(partitions_values) = file_info.partition_values() {
-        for (column, value) in partitions_values.iter() {
-            let column = column.to_string();
+    if let Some(partitions_values) = file_info.partition_values() {
+        for (column, value) in partitions_values
+            .fields()
+            .iter()
+            .zip(partitions_values.values().iter())
+        {
+            let column = column.name().to_string();
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =

@@ -247,9 +247,13 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
         .get_active_add_actions_by_partitions(&filter)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(partition_adds.len(), 1);
-    let partition_values = partition_adds[0].partition_values()?;
+    let partition_values = partition_adds[0].partition_values().unwrap();
+    let data_idx = partition_values
+        .fields()
+        .iter()
+        .position(|field| field.name() == "date");
     assert_eq!(
-        partition_values.get("date"),
+        data_idx.map(|idx| &partition_values.values()[idx]),
         Some(&delta_kernel::expressions::Scalar::String(
             "2022-05-22".to_string()
         ))

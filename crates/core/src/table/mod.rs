@@ -13,7 +13,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType};
+use crate::kernel::{
+    CommitInfo, DataCheck, DataType, LogicalFileView, Metadata, Protocol, StructType,
+};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -267,7 +269,7 @@ impl DeltaTable {
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFileView>> + 'a, DeltaTableError> {
         self.state
             .as_ref()
             .ok_or(DeltaTableError::NotInitialized)?
