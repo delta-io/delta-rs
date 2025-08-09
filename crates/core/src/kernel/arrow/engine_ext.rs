@@ -13,7 +13,7 @@ use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
-use delta_kernel::expressions::ColumnName;
+use delta_kernel::expressions::{ColumnName, Scalar, StructData};
 use delta_kernel::scan::{Scan, ScanMetadata};
 use delta_kernel::schema::{
     ArrayType, DataType, MapType, PrimitiveType, Schema, SchemaRef, SchemaTransform, StructField,
@@ -501,6 +501,28 @@ impl<T: ExpressionEvaluator + ?Sized> ExpressionEvaluatorExt for T {
     fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch> {
         let engine_data = ArrowEngineData::new(batch);
         Ok(ArrowEngineData::try_from_engine_data(T::evaluate(self, &engine_data)?)?.into())
+    }
+}
+
+pub trait StructDataExt {
+    fn field(&self, name: &str) -> Option<&StructField>;
+
+    fn index_of(&self, name: &str) -> Option<usize>;
+
+    fn value(&self, index: usize) -> Option<&Scalar>;
+}
+
+impl StructDataExt for StructData {
+    fn field(&self, name: &str) -> Option<&StructField> {
+        self.fields().iter().find(|f| f.name() == name)
+    }
+
+    fn index_of(&self, name: &str) -> Option<usize> {
+        self.fields().iter().position(|f| f.name() == name)
+    }
+
+    fn value(&self, index: usize) -> Option<&Scalar> {
+        self.values().get(index)
     }
 }
 
