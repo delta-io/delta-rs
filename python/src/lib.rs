@@ -1649,7 +1649,7 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None, flush_per_batch=false))]
     fn write(
         &self,
         py: Python,
@@ -1666,6 +1666,7 @@ impl RawDeltaTable {
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
+        flush_per_batch: bool,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
             let save_mode = mode.parse().map_err(PythonError::from)?;
@@ -1690,6 +1691,8 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)?;
 
             builder = builder.with_input_execution_plan(Arc::new(plan));
+
+            builder = builder.with_flush_per_batch(flush_per_batch);
 
             if let Some(schema_mode) = schema_mode {
                 builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
@@ -2262,7 +2265,7 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (table_uri, data, batch_schema, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None, flush_per_batch=false))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
@@ -2280,6 +2283,7 @@ fn write_to_deltalake(
     writer_properties: Option<PyWriterProperties>,
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
+    flush_per_batch: bool,
 ) -> PyResult<()> {
     let raw_table: DeltaResult<RawDeltaTable> = py.allow_threads(|| {
         let options = storage_options.clone().unwrap_or_default();
@@ -2315,6 +2319,7 @@ fn write_to_deltalake(
         writer_properties,
         commit_properties,
         post_commithook_properties,
+        flush_per_batch,
     )
 }
 

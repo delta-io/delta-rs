@@ -110,6 +110,8 @@ pub struct WriterConfig {
     num_indexed_cols: i32,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    /// Write in-memory buffer to disk after each batch if true
+    flush_per_batch: bool,
 }
 
 impl WriterConfig {
@@ -122,6 +124,7 @@ impl WriterConfig {
         write_batch_size: Option<usize>,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        flush_per_batch: bool,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
@@ -139,6 +142,7 @@ impl WriterConfig {
             write_batch_size,
             num_indexed_cols,
             stats_columns,
+            flush_per_batch,
         }
     }
 
@@ -210,6 +214,7 @@ impl DeltaWriter {
                     Some(self.config.writer_properties.clone()),
                     Some(self.config.target_file_size),
                     Some(self.config.write_batch_size),
+                    self.config.flush_per_batch,
                 )?;
                 let mut writer = PartitionWriter::try_with_config(
                     self.object_store.clone(),
@@ -275,6 +280,8 @@ pub struct PartitionWriterConfig {
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
+    /// Write in-memory buffer to disk after each batch if true
+    flush_per_batch: bool,
 }
 
 impl PartitionWriterConfig {
@@ -285,6 +292,7 @@ impl PartitionWriterConfig {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        flush_per_batch: bool,
     ) -> DeltaResult<Self> {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
@@ -303,6 +311,7 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            flush_per_batch,
         })
     }
 }
@@ -448,7 +457,8 @@ impl PartitionWriter {
     }
 
     /// Buffers record batches in-memory up to appx. `target_file_size`.
-    /// Flushes data to storage once a full file can be written.
+    /// Flushes data to storage once a full file can be written or after
+    /// each batch if flush_per_batch is true.
     ///
     /// The `close` method has to be invoked to write all data still buffered
     /// and get the list of all written files.
@@ -465,11 +475,17 @@ impl PartitionWriter {
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length)).await?;
-            // flush currently buffered data to disk once we meet or exceed the target file size.
-            let estimated_size = self.buffer.len().await + self.arrow_writer.in_progress_size();
-            if estimated_size >= self.config.target_file_size {
-                debug!("Writing file with estimated size {estimated_size:?} to disk.");
+
+            if self.config.flush_per_batch {
+                // flush currently buffered data to disk after writing each batch
                 self.flush_arrow_writer().await?;
+            } else {
+                // flush currently buffered data to disk once we meet or exceed the target file size.
+                let estimated_size = self.buffer.len().await + self.arrow_writer.in_progress_size();
+                if estimated_size >= self.config.target_file_size {
+                    debug!("Writing file with estimated size {estimated_size:?} to disk.");
+                    self.flush_arrow_writer().await?;
+                }
             }
         }
 
@@ -500,6 +516,7 @@ mod tests {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        flush_per_batch: bool,
     ) -> DeltaWriter {
         let config = WriterConfig::new(
             batch.schema(),
@@ -509,6 +526,7 @@ mod tests {
             write_batch_size,
             DEFAULT_NUM_INDEX_COLS,
             None,
+            flush_per_batch,
         );
         DeltaWriter::new(object_store, config)
     }
@@ -519,6 +537,7 @@ mod tests {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        flush_per_batch: bool,
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
@@ -526,6 +545,7 @@ mod tests {
             writer_properties,
             target_file_size,
             write_batch_size,
+            flush_per_batch,
         )
         .unwrap();
         PartitionWriter::try_with_config(object_store, config, DEFAULT_NUM_INDEX_COLS, None)

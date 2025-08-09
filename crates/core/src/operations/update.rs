@@ -395,6 +395,7 @@ async fn execute(
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
+        false,
     )
     .await?;
 
@@ -457,6 +458,7 @@ async fn execute(
                     None,
                     writer_properties,
                     writer_stats_config,
+                    false,
                 )
                 .await?;
                 actions.extend(cdc_actions);
