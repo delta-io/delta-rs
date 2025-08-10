@@ -59,6 +59,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
+use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
@@ -405,9 +406,12 @@ impl RawDeltaTable {
                 let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
                 Ok(self
                     .with_table(|t| {
-                        t.get_files_by_partitions(&filters)
-                            .map_err(PythonError::from)
-                            .map_err(PyErr::from)
+                        rt().block_on(async {
+                            t.get_files_by_partitions(&filters)
+                                .await
+                                .map_err(PythonError::from)
+                                .map_err(PyErr::from)
+                        })
                     })?
                     .into_iter()
                     .map(|p| p.to_string())
@@ -438,9 +442,12 @@ impl RawDeltaTable {
         if let Some(filters) = partition_filters {
             let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
             self.with_table(|t| {
-                t.get_file_uris_by_partitions(&filters)
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from)
+                rt().block_on(async {
+                    t.get_file_uris_by_partitions(&filters)
+                        .await
+                        .map_err(PythonError::from)
+                        .map_err(PyErr::from)
+                })
             })
         } else {
             self.with_table(|t| {
@@ -1169,10 +1176,13 @@ impl RawDeltaTable {
 
         let state = self.cloned_state()?;
         let log_store = self.log_store()?;
-        let adds = state
-            .get_active_add_actions_by_partitions(&log_store, &converted_filters)
-            .map_err(PythonError::from)?
-            .collect::<Result<Vec<_>, _>>()
+        let adds: Vec<_> = rt()
+            .block_on(async {
+                state
+                    .get_active_add_actions_by_partitions(&log_store, &converted_filters)
+                    .try_collect()
+                    .await
+            })
             .map_err(PythonError::from)?;
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
@@ -1237,12 +1247,19 @@ impl RawDeltaTable {
 
                     let state = self.cloned_state()?;
                     let log_store = self.log_store()?;
-                    let add_actions = state
-                        .get_active_add_actions_by_partitions(&log_store, &converted_filters)
+                    let add_actions: Vec<_> = rt()
+                        .block_on(async {
+                            state
+                                .get_active_add_actions_by_partitions(
+                                    &log_store,
+                                    &converted_filters,
+                                )
+                                .try_collect()
+                                .await
+                        })
                         .map_err(PythonError::from)?;
 
                     for old_add in add_actions {
-                        let old_add = old_add.map_err(PythonError::from)?;
                         let remove_action = Action::Remove(old_add.remove_action(true));
                         actions.push(remove_action);
                     }
@@ -1431,12 +1448,17 @@ impl RawDeltaTable {
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
         self.with_table(|t| {
             let log_store = t.log_store();
-            Ok(t.snapshot()
-                .map_err(PythonError::from)?
-                .snapshot()
-                .files(&log_store, None)
-                .map(|f| (f.path().to_string(), f.size()))
-                .collect::<HashMap<String, i64>>())
+            let sizes: HashMap<String, i64> = rt()
+                .block_on(async {
+                    t.snapshot()?
+                        .snapshot()
+                        .files(&log_store, None)
+                        .map_ok(|f| (f.path().to_string(), f.size()))
+                        .try_collect()
+                        .await
+                })
+                .map_err(PythonError::from)?;
+            Ok(sizes)
         })
     }
 

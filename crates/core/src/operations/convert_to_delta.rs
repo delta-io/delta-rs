@@ -522,6 +522,7 @@ mod tests {
     use arrow::array::{Int32Array, TimestampMicrosecondArray, TimestampMillisecondArray};
     use arrow::record_batch::RecordBatch;
     use delta_kernel::expressions::Scalar;
+    use futures::StreamExt;
     use itertools::Itertools;
     use parquet::arrow::ArrowWriter;
     use pretty_assertions::assert_eq;
@@ -684,8 +685,8 @@ mod tests {
         let table = create_delta_table(path, Vec::new(), false).await;
         let action = table
             .get_active_add_actions_by_partitions(&[])
-            .expect("Failed to get Add actions")
             .next()
+            .await
             .expect("Iterator index overflows")
             .unwrap();
         assert_eq!(

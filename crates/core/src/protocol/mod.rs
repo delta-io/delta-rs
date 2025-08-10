@@ -1109,6 +1109,7 @@ mod tests {
                     .snapshot()
                     .unwrap()
                     .file_actions(&table.log_store)
+                    .await
                     .unwrap()
                     .len()
             );

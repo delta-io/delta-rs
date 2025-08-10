@@ -5,6 +5,7 @@ use std::fmt;
 use std::fmt::Formatter;
 
 use chrono::{DateTime, Utc};
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
@@ -240,37 +241,40 @@ impl DeltaTable {
         Ok(infos.into_iter().flatten().collect())
     }
 
-    /// Obtain Add actions for files that match the filter
-    pub fn get_active_add_actions_by_partitions<'a>(
-        &'a self,
-        filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFileView>> + 'a, DeltaTableError> {
-        self.state
-            .as_ref()
-            .ok_or(DeltaTableError::NotInitialized)?
-            .get_active_add_actions_by_partitions(&self.log_store, filters)
+    /// Stream all logical files matching the provided `PartitionFilter`s.
+    pub fn get_active_add_actions_by_partitions(
+        &self,
+        filters: &[PartitionFilter],
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        let Some(state) = self.state.as_ref() else {
+            return Box::pin(futures::stream::once(async {
+                Err(DeltaTableError::NotInitialized)
+            }));
+        };
+        state.get_active_add_actions_by_partitions(&self.log_store, filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided
     /// `PartitionFilter`s.
-    pub fn get_files_by_partitions(
+    pub async fn get_files_by_partitions(
         &self,
         filters: &[PartitionFilter],
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
-            .get_active_add_actions_by_partitions(filters)?
-            .collect::<Result<Vec<_>, _>>()?
+            .get_active_add_actions_by_partitions(filters)
+            .try_collect::<Vec<_>>()
+            .await?
             .into_iter()
             .map(|add| add.object_store_path())
             .collect())
     }
 
     /// Return the file uris as strings for the partition(s)
-    pub fn get_file_uris_by_partitions(
+    pub async fn get_file_uris_by_partitions(
         &self,
         filters: &[PartitionFilter],
     ) -> Result<Vec<String>, DeltaTableError> {
-        let files = self.get_files_by_partitions(filters)?;
+        let files = self.get_files_by_partitions(filters).await?;
         Ok(files
             .iter()
             .map(|fname| self.log_store.to_uri(fname))

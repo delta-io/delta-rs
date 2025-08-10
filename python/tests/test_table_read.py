@@ -601,7 +601,7 @@ def test_get_files_partitioned_table():
         dt.files(partition_filters)
     assert (
         str(exception.value)
-        == 'Tried to filter partitions on non-partitioned columns: [\n    "unknown",\n]'
+        == "Data does not match the schema or partitions of the table: Field 'unknown' is not a root table field."
     )
 
 

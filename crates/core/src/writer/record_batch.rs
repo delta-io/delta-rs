@@ -1077,7 +1077,12 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table.state.unwrap().file_actions(&table.log_store).unwrap();
+        let add_actions = table
+            .state
+            .unwrap()
+            .file_actions(&table.log_store)
+            .await
+            .unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
         assert_eq!(
@@ -1126,7 +1131,12 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table.state.unwrap().file_actions(&table.log_store).unwrap();
+        let add_actions = table
+            .state
+            .unwrap()
+            .file_actions(&table.log_store)
+            .await
+            .unwrap();
         assert_eq!(add_actions.len(), 1);
         let expected_stats = "{\"numRecords\":11,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"B\"},\"nullCount\":{\"id\":0}}";
         assert_eq!(

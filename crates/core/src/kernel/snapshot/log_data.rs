@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray, StructArray};
 use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::table_configuration::TableConfiguration;
 use indexmap::IndexMap;
 
 use super::super::scalars::ScalarExt;
 use super::iterators::LogicalFileView;
 use crate::kernel::arrow::extract::extract_and_cast;
-use crate::kernel::{Metadata, StructType};
 use crate::{DeltaResult, DeltaTableError};
 
 const COL_NUM_RECORDS: &str = "numRecords";
@@ -72,21 +72,16 @@ impl<T: PartitionsExt> PartitionsExt for Arc<T> {
 /// to avid the necessiity of knowing the exact layout of the underlying log data.
 pub struct LogDataHandler<'a> {
     data: &'a RecordBatch,
-    metadata: &'a Metadata,
-    schema: &'a StructType,
+    config: &'a TableConfiguration,
 }
 
 impl<'a> LogDataHandler<'a> {
-    pub(crate) fn new(
-        data: &'a RecordBatch,
-        metadata: &'a Metadata,
-        schema: &'a StructType,
-    ) -> Self {
-        Self {
-            data,
-            metadata,
-            schema,
-        }
+    pub(crate) fn new(data: &'a RecordBatch, config: &'a TableConfiguration) -> Self {
+        Self { data, config }
+    }
+
+    pub(crate) fn table_configuration(&self) -> &TableConfiguration {
+        self.config
     }
 }
 
@@ -331,7 +326,8 @@ mod datafusion {
             let num_rows = self.num_records();
             let total_byte_size = self.total_size_files();
             let column_statistics = self
-                .schema
+                .config
+                .schema()
                 .fields()
                 .map(|f| self.column_stats(f.name()))
                 .collect::<Option<Vec<_>>>()?;
@@ -343,12 +339,18 @@ mod datafusion {
         }
 
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
-            let field = self.schema.field(&column.name)?;
+            let schema = self.config.schema();
+            let field = schema.field(&column.name)?;
             // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
             if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {
                 return None;
             }
-            let expression = if self.metadata.partition_columns().contains(&column.name) {
+            let expression = if self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&column.name)
+            {
                 Expression::column(["partitionValues_parsed", &column.name])
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
@@ -388,7 +390,12 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows.
         fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-            if !self.metadata.partition_columns().contains(&column.name) {
+            if !self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&column.name)
+            {
                 let counts = self.pick_stats(column, "nullCount")?;
                 return arrow_cast::cast(counts.as_ref(), &ArrowDataType::UInt64).ok();
             }
@@ -426,7 +433,13 @@ mod datafusion {
 
         // This function is optional but will optimize partition column pruning
         fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-            if value.is_empty() || !self.metadata.partition_columns().contains(&column.name) {
+            if value.is_empty()
+                || !self
+                    .config
+                    .metadata()
+                    .partition_columns()
+                    .contains(&column.name)
+            {
                 return None;
             }
 
@@ -477,6 +490,7 @@ mod datafusion {
 
 #[cfg(all(test, feature = "datafusion"))]
 mod tests {
+    use futures::TryStreamExt;
 
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {
@@ -485,11 +499,16 @@ mod tests {
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
         let log_store = table_from_struct_stats.log_store();
 
-        let json_action = table_from_json_stats
+        let json_adds: Vec<_> = table_from_json_stats
             .snapshot()
             .unwrap()
             .snapshot
             .files(&log_store, None)
+            .try_collect()
+            .await
+            .unwrap();
+        let json_action = json_adds
+            .iter()
             .find(|f| {
                 f.path().ends_with(
                     "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
@@ -497,11 +516,16 @@ mod tests {
             })
             .unwrap();
 
-        let struct_action = table_from_struct_stats
+        let struct_adds: Vec<_> = table_from_struct_stats
             .snapshot()
             .unwrap()
             .snapshot
             .files(&log_store, None)
+            .try_collect()
+            .await
+            .unwrap();
+        let struct_action = struct_adds
+            .iter()
             .find(|f| {
                 f.path().ends_with(
                     "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
