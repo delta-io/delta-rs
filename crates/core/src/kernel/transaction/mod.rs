@@ -666,6 +666,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         )
                         .await?;
                         let transaction_info = TransactionInfo::try_new(
+                            this.log_store.clone(),
                             &read_snapshot,
                             this.data.operation.read_predicate(),
                             &this.data.actions,

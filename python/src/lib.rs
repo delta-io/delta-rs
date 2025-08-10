@@ -24,11 +24,11 @@ use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaCdfTableProvider;
 use deltalake::errors::DeltaTableError;
+use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, StructDataExt as _, StructType, Transaction,
+    Action, Add, LogicalFileView, MetadataExt as _, StructDataExt as _, StructType, Transaction,
 };
-use deltalake::kernel::{LogicalFileView, MetadataExt as _, StructDataExt};
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
 use deltalake::logstore::{IORuntime, ObjectStoreRef};
@@ -1168,8 +1168,9 @@ impl RawDeltaTable {
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
 
         let state = self.cloned_state()?;
+        let log_store = self.log_store()?;
         let adds = state
-            .get_active_add_actions_by_partitions(&converted_filters)
+            .get_active_add_actions_by_partitions(&log_store, &converted_filters)
             .map_err(PythonError::from)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(PythonError::from)?;
@@ -1235,8 +1236,9 @@ impl RawDeltaTable {
                             .map_err(PythonError::from)?;
 
                     let state = self.cloned_state()?;
+                    let log_store = self.log_store()?;
                     let add_actions = state
-                        .get_active_add_actions_by_partitions(&converted_filters)
+                        .get_active_add_actions_by_partitions(&log_store, &converted_filters)
                         .map_err(PythonError::from)?;
 
                     for old_add in add_actions {
@@ -1428,10 +1430,11 @@ impl RawDeltaTable {
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
         self.with_table(|t| {
+            let log_store = t.log_store();
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
                 .snapshot()
-                .files()
+                .files(&log_store, None)
                 .map(|f| (f.path().to_string(), f.size()))
                 .collect::<HashMap<String, i64>>())
         })

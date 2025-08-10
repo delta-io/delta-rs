@@ -532,15 +532,51 @@ impl EagerSnapshot {
     }
 
     /// Get the files in the snapshot
-    pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self.files().map(|v| v.add_action()))
+    pub fn file_actions(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+        Ok(self.files(log_store, None).map(|v| v.add_action()))
     }
 
     /// Get a file action iterator for the given version
-    pub fn files(&self) -> impl Iterator<Item = LogicalFileView> + '_ {
-        (0..self.files.num_rows())
+    pub fn files(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+    ) -> impl Iterator<Item = LogicalFileView> + '_ {
+        let data = if let Some(predicate) = predicate {
+            let scan = self
+                .snapshot
+                .inner
+                .clone()
+                .scan_builder()
+                .with_predicate(predicate)
+                .build()
+                .unwrap();
+            let engine = log_store.engine(None);
+            let current_files = self.files.clone();
+            let current_version = self.version() as u64;
+            let files: Vec<_> = scan
+                .scan_metadata_from_arrow(
+                    engine.as_ref(),
+                    current_version,
+                    Box::new(std::iter::once(current_files)),
+                    None,
+                )
+                .unwrap()
+                .map_ok(|s| s.scan_files)
+                .try_collect()
+                .unwrap();
+            let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files).unwrap();
+            let files = self.snapshot.inner.parse_stats_column(&files).unwrap();
+            files
+        } else {
+            self.files.clone()
+        };
+        (0..data.num_rows())
             .into_iter()
-            .map(|i| LogicalFileView::new(self.files.clone(), i))
+            .map(move |i| LogicalFileView::new(data.clone(), i))
     }
 
     /// Iterate over all latest app transactions
@@ -682,7 +718,7 @@ mod tests {
         for version in 0..=12 {
             let snapshot =
                 EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
-            let batches = snapshot.file_actions()?.collect::<Vec<_>>();
+            let batches = snapshot.file_actions(&log_store)?.collect::<Vec<_>>();
             assert_eq!(batches.len(), version as usize);
         }
 

@@ -9,7 +9,7 @@ use serde_json::json;
 use std::error::Error;
 
 #[tokio::test]
-async fn test_commit_info() -> Result<(), Box<dyn Error>> {
+async fn test_commit_info_engine_info() -> Result<(), Box<dyn Error>> {
     let path = tempfile::tempdir().unwrap();
     let mut table = fs_common::create_table(path.path().to_str().unwrap(), None).await;
 
