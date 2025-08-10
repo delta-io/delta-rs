@@ -598,10 +598,8 @@ impl<'a> DeltaScanBuilder<'a> {
             .filter
             .and_then(|expr| {
                 let predicates = split_conjunction(&expr);
-                let pushdown_filters = get_pushdown_filters(
-                    &predicates,
-                    self.snapshot.metadata().partition_columns().as_slice(),
-                );
+                let pushdown_filters =
+                    get_pushdown_filters(&predicates, self.snapshot.metadata().partition_columns());
 
                 let filtered_predicates = predicates
                     .into_iter()
@@ -748,8 +746,7 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
             let es = self.snapshot.snapshot();
-            let pruned_stats = prune_file_statistics(&vec![es.files.clone()], mask);
-            let pruned_stats = concat_batches(pruned_stats[0].schema_ref(), &pruned_stats)?;
+            let pruned_stats = filter_record_batch(&es.files, &BooleanArray::from(mask))?;
             LogDataHandler::new(&pruned_stats, es.table_configuration()).statistics()
         } else {
             self.snapshot.datafusion_table_statistics()
@@ -824,27 +821,6 @@ fn simplify_expr(
     let simplified = simplifier.simplify(expr).unwrap();
 
     context.create_physical_expr(simplified, df_schema).unwrap()
-}
-
-fn prune_file_statistics(
-    record_batches: &Vec<RecordBatch>,
-    pruning_mask: Vec<bool>,
-) -> Vec<RecordBatch> {
-    let mut filtered_batches = Vec::new();
-    let mut mask_offset = 0;
-
-    for batch in record_batches {
-        let num_rows = batch.num_rows();
-        let batch_mask = &pruning_mask[mask_offset..mask_offset + num_rows];
-        mask_offset += num_rows;
-
-        let boolean_mask = BooleanArray::from(batch_mask.to_vec());
-        let filtered_batch =
-            filter_record_batch(batch, &boolean_mask).expect("Failed to filter RecordBatch");
-        filtered_batches.push(filtered_batch);
-    }
-
-    filtered_batches
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable
@@ -1050,8 +1026,10 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot.metadata().partition_columns().as_slice();
-        Ok(get_pushdown_filters(filter, partition_cols))
+        Ok(get_pushdown_filters(
+            filter,
+            self.snapshot.metadata().partition_columns(),
+        ))
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -1202,7 +1180,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         }
         ArrowDataType::Dictionary(k, v) => Ok(ScalarValue::Dictionary(
             k.clone(),
-            Box::new(get_null_of_arrow_type(v).unwrap()),
+            Box::new(get_null_of_arrow_type(v)?),
         )),
         //Unsupported types...
         ArrowDataType::Float16

@@ -1238,10 +1238,11 @@ mod tests {
             .with_location(temp_dir.path().to_str().unwrap())
             .await
             .expect("Failed to convert to Delta table");
+        let state = table.snapshot().unwrap();
 
-        assert_eq!(table.version(), Some(0));
+        assert_eq!(state.version(), 0);
 
-        let delta_schema = table.get_schema().expect("Failed to get schema");
+        let delta_schema = state.schema();
         let fields: Vec<_> = delta_schema.fields().collect();
         let timestamp_fields: Vec<_> = fields
             .iter()
@@ -1267,7 +1268,7 @@ mod tests {
         assert_eq!(files.len(), 1, "Should have one data file");
 
         // Verify can get file metadata
-        let snapshot = table.snapshot().unwrap();
-        assert_eq!(snapshot.files_count(), 1);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.log_data().num_files(), 1);
     }
 }
