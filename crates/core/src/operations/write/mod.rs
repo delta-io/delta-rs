@@ -2003,5 +2003,25 @@ mod tests {
 
             Ok(())
         }
+
+        #[test]
+        fn test_write_builder_flush_per_batch() {
+            let ops = DeltaOps::new_in_memory();
+            let log_store = ops.write(vec![]).log_store().clone();
+            
+            // Default
+            let builder = WriteBuilder::new(log_store.clone(), None);
+            assert!(!builder.flush_per_batch);
+            
+            // True
+            let builder = WriteBuilder::new(log_store.clone(), None)
+                .with_flush_per_batch(true);
+            assert!(builder.flush_per_batch);
+            
+            // False
+            let builder = WriteBuilder::new(log_store.clone(), None)
+                .with_flush_per_batch(false);
+            assert!(!builder.flush_per_batch);
+        }
     }
 }

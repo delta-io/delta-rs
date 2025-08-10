@@ -2503,3 +2503,43 @@ def test_polars_write_array(tmp_path: pathlib.Path):
         df,
         mode="overwrite",
     )
+
+
+def test_write_flush_per_batch_parameter(tmp_path: pathlib.Path):
+    """Test that flush_per_batch parameter affects file creation behavior"""
+    from deltalake import WriterProperties
+
+    test_data = Table({
+        "id": Array(list(range(100)), ArrowField("id", type=DataType.int32(), nullable=False)),
+        "value": Array([f"val_{i}" for i in range(100)], ArrowField("value", type=DataType.string(), nullable=False))
+    })
+
+    # Create multiple internal batches
+    writer_props = WriterProperties(write_batch_size=20)
+
+    write_deltalake(
+        tmp_path / "flush_false",
+        test_data,
+        mode="overwrite",
+        flush_per_batch=False,
+        writer_properties=writer_props
+    )
+
+    table_false = DeltaTable(tmp_path / "flush_false")
+    files_false = table_false.file_uris()
+
+    write_deltalake(
+        tmp_path / "flush_true",
+        test_data,
+        mode="overwrite",
+        flush_per_batch=True,
+        writer_properties=writer_props
+    )
+
+    table_true = DeltaTable(tmp_path / "flush_true")
+    files_true = table_true.file_uris()
+
+    assert len(files_true) > len(files_false), f"flush_per_batch=True should create more files. Got {len(files_true)} vs {len(files_false)}"
+
+    assert table_false.to_pyarrow_table() == table_true.to_pyarrow_table()
+

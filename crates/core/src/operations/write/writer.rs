@@ -561,7 +561,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None, false);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -595,7 +595,7 @@ mod tests {
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
         let mut writer =
-            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None);
+            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None, false);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -622,7 +622,7 @@ mod tests {
             .unwrap()
             .object_store(None);
         // configure small target file size so we can observe multiple files written
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None, false);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -650,7 +650,7 @@ mod tests {
             .object_store(None);
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000), false);
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();
@@ -666,7 +666,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_delta_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer = get_delta_writer(object_store.clone(), &batch, None, None, None, false);
         writer.write(&batch).await.unwrap();
         // Ensure the write hasn't been flushed
         let files = list(object_store.as_ref(), None).await.unwrap();
@@ -704,5 +704,109 @@ mod tests {
                 }
             }
         };
+    }
+
+    #[test]
+    fn test_writer_config_flush_per_batch() {
+        let config = WriterConfig::new(
+            Arc::new(ArrowSchema::empty()),
+            vec![],
+            None,
+            None,
+            None,
+            DEFAULT_NUM_INDEX_COLS,
+            None,
+            true, // flush_per_batch
+        );
+        assert!(config.flush_per_batch);
+
+        let config = WriterConfig::new(
+            Arc::new(ArrowSchema::empty()),
+            vec![],
+            None,
+            None,
+            None,
+            DEFAULT_NUM_INDEX_COLS,
+            None,
+            false, // flush_per_batch
+        );
+        assert!(!config.flush_per_batch);
+    }
+
+    #[tokio::test]
+    async fn test_partition_writer_flush_per_batch() {
+        let base_int = Arc::new(Int32Array::from((0..100).collect::<Vec<i32>>()));
+        let base_str = Arc::new(StringArray::from(vec!["test"; 100]));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![base_int, base_str]).unwrap();
+
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
+            .build_storage()
+            .unwrap()
+            .object_store(None);
+
+        // flush_per_batch = true
+        let mut writer_true = get_partition_writer(
+            object_store.clone(),
+            &batch,
+            None,
+            None,
+            Some(20), // Small batch size
+            true,     // flush_per_batch
+        );
+        writer_true.write(&batch).await.unwrap();
+        let adds_true = writer_true.close().await.unwrap();
+
+        // flush_per_batch = false  
+        let object_store2 = DeltaTableBuilder::from_uri("memory:///test2")
+            .build_storage()
+            .unwrap()
+            .object_store(None);
+        let mut writer_false = get_partition_writer(
+            object_store2,
+            &batch,
+            None,
+            None,
+            Some(20), // Small batch size
+            false,    // flush_per_batch
+        );
+        writer_false.write(&batch).await.unwrap();
+        let adds_false = writer_false.close().await.unwrap();
+
+        // Verify the flush behavior: flush_per_batch=true should create more files
+        // because it flushes (and creates a new file) after each batch
+        assert!(adds_true.len() > adds_false.len(), 
+            "flush_per_batch=true should create more files than flush_per_batch=false. Got {} vs {}", 
+            adds_true.len(), adds_false.len());
+        
+        // Verify both wrote the same total number of records
+        let total_records_true: i64 = adds_true.iter().map(|add| {
+            if let Some(stats) = &add.stats {
+                serde_json::from_str::<serde_json::Value>(stats)
+                    .unwrap()["numRecords"]
+                    .as_i64()
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        }).sum();
+        
+        let total_records_false: i64 = adds_false.iter().map(|add| {
+            if let Some(stats) = &add.stats {
+                serde_json::from_str::<serde_json::Value>(stats)
+                    .unwrap()["numRecords"]
+                    .as_i64()
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        }).sum();
+        
+        assert_eq!(total_records_true, total_records_false, 
+            "Both flush modes should write same total number of records");
+        assert_eq!(total_records_true, 100, "Should have written all 100 records");
     }
 }
