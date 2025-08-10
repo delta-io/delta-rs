@@ -141,7 +141,7 @@ impl FileSystemCheckBuilder {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
 
-        for active in self.snapshot.file_actions_iter()? {
+        for active in self.snapshot.file_actions_iter(&self.log_store)? {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),

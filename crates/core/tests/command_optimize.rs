@@ -288,6 +288,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
+        &dt.log_store(),
         OptimizeType::Compact,
         dt.snapshot()?,
         &filter,
@@ -350,6 +351,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
+        &dt.log_store(),
         OptimizeType::Compact,
         dt.snapshot()?,
         &filter,
@@ -409,6 +411,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let version = dt.version().unwrap();
 
     let plan = create_merge_plan(
+        &dt.log_store(),
         OptimizeType::Compact,
         dt.snapshot()?,
         &[],

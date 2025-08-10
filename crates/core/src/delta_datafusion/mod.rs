@@ -93,7 +93,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{
     Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
 };
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -245,6 +245,7 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
 }
 
 pub(crate) fn files_matching_predicate<'a>(
+    log_store: &dyn LogStore,
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
 ) -> DeltaResult<impl Iterator<Item = Add> + 'a> {
@@ -256,7 +257,7 @@ pub(crate) fn files_matching_predicate<'a>(
         let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
         Ok(Either::Left(
             snapshot
-                .file_actions()?
+                .file_actions(log_store)?
                 .zip(pruning_predicate.prune(snapshot)?)
                 .filter_map(
                     |(action, keep_file)| {
@@ -269,7 +270,7 @@ pub(crate) fn files_matching_predicate<'a>(
                 ),
         ))
     } else {
-        Ok(Either::Right(snapshot.file_actions()?))
+        Ok(Either::Right(snapshot.file_actions(log_store)?))
     }
 }
 
@@ -605,7 +606,7 @@ impl<'a> DeltaScanBuilder<'a> {
             None => {
                 // early return in case we have no push down filters or limit
                 if logical_filter.is_none() && self.limit.is_none() {
-                    let files = self.snapshot.file_actions()?;
+                    let files = self.snapshot.file_actions(&self.log_store)?;
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
                 } else {
@@ -627,7 +628,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     for (action, keep) in self
                         .snapshot
-                        .file_actions_iter()?
+                        .file_actions_iter(&self.log_store)?
                         .zip(files_to_prune.iter().cloned())
                     {
                         // prune file based on predicate pushdown
@@ -1780,7 +1781,7 @@ pub(crate) async fn find_files_scan(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
+        .file_actions_iter(&log_store)?
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
 
@@ -1832,10 +1833,11 @@ pub(crate) async fn find_files_scan(
 }
 
 pub(crate) async fn scan_memory_table(
+    log_store: &dyn LogStore,
     snapshot: &DeltaTableState,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.file_actions()?;
+    let actions = snapshot.file_actions(log_store)?;
 
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
@@ -1907,7 +1909,7 @@ pub async fn find_files(
             expr_properties.result?;
 
             if expr_properties.partition_only {
-                let candidates = scan_memory_table(snapshot, predicate).await?;
+                let candidates = scan_memory_table(&log_store, snapshot, predicate).await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
@@ -1923,7 +1925,7 @@ pub async fn find_files(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions()?,
+            candidates: snapshot.file_actions(&log_store)?,
             partition_scan: true,
         }),
     }

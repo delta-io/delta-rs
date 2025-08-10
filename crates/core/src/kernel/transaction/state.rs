@@ -258,6 +258,7 @@ mod tests {
     use super::*;
     use crate::delta_datafusion::{files_matching_predicate, DataFusionMixins};
     use crate::kernel::Action;
+    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::test_utils::{ActionFactory, TestSchemas};
 
     fn init_table_actions() -> Vec<Action> {
@@ -319,8 +320,10 @@ mod tests {
             true,
         )));
 
+        let log_store = DefaultLogStore::new_memory();
+
         let state = DeltaTableState::from_actions(actions).await.unwrap();
-        let files = files_matching_predicate(&state.snapshot, &[])
+        let files = files_matching_predicate(&log_store, &state.snapshot, &[])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 3);
@@ -329,7 +332,7 @@ mod tests {
             .gt(lit::<i32>(10))
             .or(col("value").lt_eq(lit::<i32>(0)));
 
-        let files = files_matching_predicate(&state.snapshot, &[predictate])
+        let files = files_matching_predicate(&log_store, &state.snapshot, &[predictate])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);

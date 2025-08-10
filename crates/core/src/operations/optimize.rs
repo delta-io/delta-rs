@@ -50,7 +50,7 @@ use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
-use crate::logstore::{LogStoreRef, ObjectStoreRef};
+use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -328,12 +328,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     .build()
             });
             let plan = create_merge_plan(
+                &this.log_store,
                 this.optimize_type,
                 &this.snapshot,
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
             )?;
+
             let metrics = plan
                 .execute(
                     this.log_store.clone(),
@@ -787,6 +789,7 @@ impl MergePlan {
 
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
 pub fn create_merge_plan(
+    log_store: &dyn LogStore,
     optimize_type: OptimizeType,
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter],
@@ -798,10 +801,14 @@ pub fn create_merge_plan(
     let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics) = match optimize_type {
-        OptimizeType::Compact => build_compaction_plan(snapshot, filters, target_size)?,
-        OptimizeType::ZOrder(zorder_columns) => {
-            build_zorder_plan(zorder_columns, snapshot, partitions_keys, filters)?
-        }
+        OptimizeType::Compact => build_compaction_plan(log_store, snapshot, filters, target_size)?,
+        OptimizeType::ZOrder(zorder_columns) => build_zorder_plan(
+            log_store,
+            zorder_columns,
+            snapshot,
+            partitions_keys,
+            filters,
+        )?,
     };
 
     let input_parameters = OptimizeInput {
@@ -874,6 +881,7 @@ impl IntoIterator for MergeBin {
 }
 
 fn build_compaction_plan(
+    log_store: &dyn LogStore,
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter],
     target_size: u64,
@@ -881,7 +889,7 @@ fn build_compaction_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    for file in snapshot.get_active_add_actions_by_partitions(filters)? {
+    for file in snapshot.get_active_add_actions_by_partitions(log_store, filters)? {
         let file = file?;
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&file)?;
@@ -952,6 +960,7 @@ fn build_compaction_plan(
 }
 
 fn build_zorder_plan(
+    log_store: &dyn LogStore,
     zorder_columns: Vec<String>,
     snapshot: &DeltaTableState,
     partition_keys: &[String],
@@ -990,7 +999,7 @@ fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    for file in snapshot.get_active_add_actions_by_partitions(filters)? {
+    for file in snapshot.get_active_add_actions_by_partitions(log_store, filters)? {
         let file = file?;
         let partition_values = file
             .partition_values()

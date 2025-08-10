@@ -480,11 +480,11 @@ mod tests {
             value: crate::PartitionValue::Equal("".to_string()),
         }];
         assert_eq!(
-        table.get_files_by_partitions(&filters).unwrap(),
-        vec![
-            Path::from("k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet")
-        ]
-    );
+            table.get_files_by_partitions(&filters).unwrap(),
+            vec![
+                Path::from("k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet")
+            ]
+        );
     }
 
     #[tokio::test]

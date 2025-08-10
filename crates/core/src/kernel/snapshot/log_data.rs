@@ -483,12 +483,13 @@ mod tests {
         let table_uri = "../test/tests/data/delta-1.2.1-only-struct-stats";
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
+        let log_store = table_from_struct_stats.log_store();
 
         let json_action = table_from_json_stats
             .snapshot()
             .unwrap()
             .snapshot
-            .files()
+            .files(&log_store, None)
             .find(|f| {
                 f.path().ends_with(
                     "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
@@ -500,7 +501,7 @@ mod tests {
             .snapshot()
             .unwrap()
             .snapshot
-            .files()
+            .files(&log_store, None)
             .find(|f| {
                 f.path().ends_with(
                     "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
