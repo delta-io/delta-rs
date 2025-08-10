@@ -198,8 +198,8 @@ async fn execute(
     let snapshot_restored = table.snapshot()?;
     let metadata_restored_version = snapshot_restored.metadata();
 
-    let state_to_restore_files = snapshot_restored.file_actions(&log_store)?;
-    let latest_state_files = snapshot.file_actions(&log_store)?;
+    let state_to_restore_files = snapshot_restored.file_actions(&log_store).await?;
+    let latest_state_files = snapshot.file_actions(&log_store).await?;
     let state_to_restore_files_set =
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
     let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());
