@@ -86,7 +86,7 @@ impl ProtocolChecker {
 
     /// Check append-only at the high level (operation level)
     pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
-        if snapshot.table_config().append_only() {
+        if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
         }
         Ok(())

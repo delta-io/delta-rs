@@ -65,7 +65,7 @@ async fn test_action_reconciliation() {
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+    assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
     assert_eq!(
         table
             .snapshot()
