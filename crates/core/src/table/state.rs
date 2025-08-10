@@ -1,6 +1,5 @@
 //! The module for delta table state.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -13,7 +12,7 @@ use futures::TryStreamExt;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
-use super::{get_partition_col_data_types, DeltaTableConfig};
+use super::DeltaTableConfig;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
@@ -22,9 +21,9 @@ use crate::kernel::{
     StructType, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
-use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{to_kernel_predicate, DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +62,7 @@ impl DeltaTableState {
     pub async fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
         use crate::kernel::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
+        use std::collections::HashMap;
 
         let metadata = actions
             .iter()
@@ -134,14 +134,17 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions(&self) -> DeltaResult<Vec<Add>> {
-        Ok(self.snapshot.file_actions()?.collect())
+    pub fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
+        Ok(self.snapshot.file_actions(log_store)?.collect())
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions_iter(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        self.snapshot.file_actions()
+    pub fn file_actions_iter(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+        self.snapshot.file_actions(log_store)
     }
 
     /// Get the number of files in the current table state
@@ -215,49 +218,14 @@ impl DeltaTableState {
     /// Obtain Add actions for files that match the filter
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
+        log_store: &dyn LogStore,
         filters: &'a [PartitionFilter],
     ) -> Result<impl Iterator<Item = DeltaResult<LogicalFileView>> + 'a, DeltaTableError> {
-        let current_metadata = self.metadata();
-
-        let nonpartitioned_columns: Vec<String> = filters
-            .iter()
-            .filter(|f| !current_metadata.partition_columns().contains(&f.key))
-            .map(|f| f.key.to_string())
-            .collect();
-
-        if !nonpartitioned_columns.is_empty() {
-            return Err(DeltaTableError::ColumnsNotPartitioned {
-                nonpartitioned_columns: { nonpartitioned_columns },
-            });
+        if filters.is_empty() {
+            return Ok(self.snapshot().files(log_store, None).map(Ok));
         }
-
-        let partition_col_data_types: HashMap<&String, &DataType> =
-            get_partition_col_data_types(self.schema(), current_metadata)
-                .into_iter()
-                .collect();
-
-        Ok(self.log_data().into_iter().filter_map(move |add| {
-            let partitions = add.partition_values();
-
-            if let Some(partitions) = partitions {
-                let partitions = partitions
-                    .fields()
-                    .iter()
-                    .zip(partitions.values().iter())
-                    .map(|(k, v)| DeltaTablePartition::from_partition_value((k.name(), v)))
-                    .collect::<Vec<_>>();
-                let is_valid = filters
-                    .iter()
-                    .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
-                if is_valid {
-                    Some(Ok(add))
-                } else {
-                    None
-                }
-            } else {
-                Some(Ok(add))
-            }
-        }))
+        let predicate = Arc::new(to_kernel_predicate(filters, self.snapshot.schema())?);
+        Ok(self.snapshot().files(log_store, Some(predicate)).map(Ok))
     }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.

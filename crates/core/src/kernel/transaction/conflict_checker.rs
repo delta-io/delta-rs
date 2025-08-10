@@ -10,6 +10,7 @@ use crate::errors::DeltaResult;
 use crate::kernel::EagerSnapshot;
 use crate::kernel::Transaction;
 use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
+use crate::logstore::LogStoreRef;
 use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -108,11 +109,14 @@ pub(crate) struct TransactionInfo<'a> {
     pub(crate) read_snapshot: &'a EagerSnapshot,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
+    /// log store used for the transaction
+    log_store: LogStoreRef,
 }
 
 impl<'a> TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     pub fn try_new(
+        log_store: LogStoreRef,
         read_snapshot: &'a EagerSnapshot,
         read_predicates: Option<String>,
         actions: &'a [Action],
@@ -139,12 +143,14 @@ impl<'a> TransactionInfo<'a> {
             actions,
             read_snapshot,
             read_whole_table,
+            log_store,
         })
     }
 
     #[cfg(feature = "datafusion")]
     #[allow(unused)]
     pub fn new(
+        log_store: LogStoreRef,
         read_snapshot: &'a EagerSnapshot,
         read_predicates: Option<Expr>,
         actions: &'a Vec<Action>,
@@ -163,11 +169,13 @@ impl<'a> TransactionInfo<'a> {
             actions,
             read_snapshot,
             read_whole_table,
+            log_store,
         }
     }
 
     #[cfg(not(feature = "datafusion"))]
     pub fn try_new(
+        log_store: LogStoreRef,
         read_snapshot: &'a EagerSnapshot,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
@@ -186,6 +194,7 @@ impl<'a> TransactionInfo<'a> {
             actions,
             read_snapshot,
             read_whole_table,
+            log_store,
         })
     }
 
@@ -203,11 +212,10 @@ impl<'a> TransactionInfo<'a> {
 
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
-                files_matching_predicate(self.read_snapshot, &[predicate.clone()]).map_err(
-                    |err| CommitConflictError::Predicate {
+                files_matching_predicate(&self.log_store, self.read_snapshot, &[predicate.clone()])
+                    .map_err(|err| CommitConflictError::Predicate {
                         source: Box::new(err),
-                    },
-                )?,
+                    })?,
             ))
         } else {
             Ok(Either::Right(std::iter::empty()))
@@ -700,14 +708,18 @@ mod tests {
         actions: Vec<Action>,
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
+        use std::sync::Arc;
+
         use object_store::path::Path;
 
-        use crate::table::state::DeltaTableState;
+        use crate::{logstore::default_logstore::DefaultLogStore, table::state::DeltaTableState};
 
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
         let snapshot = state.snapshot();
-        let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
+        let log_store = Arc::new(DefaultLogStore::new_memory());
+        let transaction_info =
+            TransactionInfo::new(log_store, snapshot, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,

@@ -329,19 +329,6 @@ struct DeletionVectorView<'a> {
 }
 
 impl DeletionVectorView<'_> {
-    /// get a unique idenitfier for the deletion vector
-    // pub(crate) fn unique_id(&self) -> String {
-    //     if let Some(offset) = self.offset() {
-    //         format!(
-    //             "{}{}@{offset}",
-    //             self.storage_type(),
-    //             self.path_or_inline_dv()
-    //         )
-    //     } else {
-    //         format!("{}{}", self.storage_type(), self.path_or_inline_dv())
-    //     }
-    // }
-
     fn descriptor(&self) -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {
             storage_type: self.storage_type().parse().unwrap(),
