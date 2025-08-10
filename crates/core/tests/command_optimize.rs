@@ -244,8 +244,9 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 3);
 
     let partition_adds = dt
-        .get_active_add_actions_by_partitions(&filter)?
-        .collect::<Result<Vec<_>, _>>()?;
+        .get_active_add_actions_by_partitions(&filter)
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(partition_adds.len(), 1);
     let partition_values = partition_adds[0].partition_values().unwrap();
     let data_idx = partition_values
@@ -294,7 +295,8 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-    )?;
+    )
+    .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
@@ -357,7 +359,8 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-    )?;
+    )
+    .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut other_dt = deltalake_core::open_table(uri).await?;
@@ -417,7 +420,8 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
-    )?;
+    )
+    .await?;
 
     let metrics = plan
         .execute(
@@ -809,7 +813,7 @@ async fn test_zorder_partitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 2);
 
     // Check data
-    let files = dt.get_files_by_partitions(&filter)?;
+    let files = dt.get_files_by_partitions(&filter).await?;
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;

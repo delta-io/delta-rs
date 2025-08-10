@@ -8,6 +8,7 @@ use delta_kernel::expressions::column_expr;
 use delta_kernel::schema::StructField;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
+use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
@@ -134,16 +135,13 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
-        Ok(self.snapshot.file_actions(log_store)?.collect())
+    pub async fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
+        self.snapshot.file_actions(log_store).try_collect().await
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions_iter(
-        &self,
-        log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Add> + '_> {
+    pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
         self.snapshot.file_actions(log_store)
     }
 
@@ -215,17 +213,29 @@ impl DeltaTableState {
         Ok(())
     }
 
-    /// Obtain Add actions for files that match the filter
-    pub fn get_active_add_actions_by_partitions<'a>(
-        &'a self,
+    /// Obtain a stream of logical file views that match the partition filters
+    ///
+    /// ## Arguments
+    ///
+    /// * `log_store` - The log store to use for reading the table's log.
+    /// * `filters` - The partition filters to apply to the file views.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of logical file views that match the partition filters.
+    pub fn get_active_add_actions_by_partitions(
+        &self,
         log_store: &dyn LogStore,
-        filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFileView>> + 'a, DeltaTableError> {
+        filters: &[PartitionFilter],
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
         if filters.is_empty() {
-            return Ok(self.snapshot().files(log_store, None).map(Ok));
+            return self.snapshot().files(log_store, None);
         }
-        let predicate = Arc::new(to_kernel_predicate(filters, self.snapshot.schema())?);
-        Ok(self.snapshot().files(log_store, Some(predicate)).map(Ok))
+        let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
+            Ok(predicate) => Arc::new(predicate),
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+        };
+        self.snapshot().files(log_store, Some(predicate))
     }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
