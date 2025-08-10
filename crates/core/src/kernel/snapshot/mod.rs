@@ -26,6 +26,7 @@ use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
 use futures::stream::BoxStream;
@@ -214,6 +215,10 @@ impl Snapshot {
         self.inner.table_properties()
     }
 
+    pub fn table_configuration(&self) -> &TableConfiguration {
+        self.inner.table_configuration()
+    }
+
     /// Get the active files for the current snapshot.
     ///
     /// This method returns a stream of record batches where each row
@@ -274,6 +279,16 @@ impl Snapshot {
     }
 
     /// Get the commit infos in the snapshot
+    ///
+    /// ## Parameters
+    ///
+    /// * `log_store`: The log store to use.
+    /// * `limit`: The maximum number of commit infos to return (optional).
+    ///
+    /// ## Returns
+    ///
+    /// A stream of commit infos.
+    // TODO: move outer error into stream.
     pub(crate) async fn commit_infos(
         &self,
         log_store: &dyn LogStore,
@@ -520,9 +535,13 @@ impl EagerSnapshot {
         self.snapshot.table_config()
     }
 
+    pub fn table_configuration(&self) -> &TableConfiguration {
+        self.snapshot.table_configuration()
+    }
+
     /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
     pub fn log_data(&self) -> LogDataHandler<'_> {
-        LogDataHandler::new(&self.files, self.metadata(), self.schema())
+        LogDataHandler::new(&self.files, self.snapshot.table_configuration())
     }
 
     /// Get the number of files in the snapshot
@@ -532,51 +551,96 @@ impl EagerSnapshot {
     }
 
     /// Get the files in the snapshot
-    pub fn file_actions(
-        &self,
-        log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self.files(log_store, None).map(|v| v.add_action()))
+    pub fn file_actions(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
+        self.files(log_store, None)
+            .map_ok(|v| v.add_action())
+            .boxed()
     }
 
-    /// Get a file action iterator for the given version
+    /// Stream the active files in the snapshot
+    ///
+    /// This function returns a stream of [`LogicalFileView`] objects,
+    /// which represent the active files in the snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `log_store` - A reference to a [`LogStore`] implementation.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// # Returns
+    ///
+    /// A stream of [`LogicalFileView`] objects.
     pub fn files(
         &self,
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
-    ) -> impl Iterator<Item = LogicalFileView> + '_ {
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        // TODO: the logic in this function would be more suitable as an async fn rather than
+        // a stream. However as we are moving from an eager to a cached snapshot, this should be
+        // a stream just like on the Snapshot. So we swallow the awkward error handling for now
+        // knowing that we will be able to clean this up soon (TM).
         let data = if let Some(predicate) = predicate {
-            let scan = self
+            let scan = match self
                 .snapshot
                 .inner
                 .clone()
                 .scan_builder()
                 .with_predicate(predicate)
                 .build()
-                .unwrap();
+            {
+                Ok(scan) => scan,
+                Err(err) => {
+                    return Box::pin(futures::stream::once(async {
+                        Err(DeltaTableError::KernelError(err))
+                    }))
+                }
+            };
             let engine = log_store.engine(None);
             let current_files = self.files.clone();
             let current_version = self.version() as u64;
-            let files: Vec<_> = scan
-                .scan_metadata_from_arrow(
-                    engine.as_ref(),
-                    current_version,
-                    Box::new(std::iter::once(current_files)),
-                    None,
-                )
-                .unwrap()
-                .map_ok(|s| s.scan_files)
-                .try_collect()
-                .unwrap();
-            let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files).unwrap();
-            let files = self.snapshot.inner.parse_stats_column(&files).unwrap();
+
+            // TODO: while we are always re-processing the cached files, we are confident that no IO
+            // is performed when processing, so for now we are not spawning this on a blocking thread.
+            // As we continue refactoring, we need to move this onto an actual stream.
+            let files_iter = match scan.scan_metadata_from_arrow(
+                engine.as_ref(),
+                current_version,
+                Box::new(std::iter::once(current_files)),
+                None,
+            ) {
+                Ok(files_iter) => files_iter,
+                Err(err) => {
+                    return Box::pin(futures::stream::once(async {
+                        Err(DeltaTableError::KernelError(err))
+                    }))
+                }
+            };
+
+            let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
+                Ok(files) => files,
+                Err(err) => {
+                    return Box::pin(futures::stream::once(async {
+                        Err(DeltaTableError::KernelError(err))
+                    }))
+                }
+            };
+
+            let files = match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
+                .map_err(DeltaTableError::from)
+                .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
+            {
+                Ok(files) => files,
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+            };
+
             files
         } else {
             self.files.clone()
         };
-        (0..data.num_rows())
+        let iter = (0..data.num_rows())
             .into_iter()
-            .map(move |i| LogicalFileView::new(data.clone(), i))
+            .map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
+        futures::stream::iter(iter).boxed()
     }
 
     /// Iterate over all latest app transactions
@@ -718,7 +782,7 @@ mod tests {
         for version in 0..=12 {
             let snapshot =
                 EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
-            let batches = snapshot.file_actions(&log_store)?.collect::<Vec<_>>();
+            let batches: Vec<_> = snapshot.file_actions(&log_store).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
 

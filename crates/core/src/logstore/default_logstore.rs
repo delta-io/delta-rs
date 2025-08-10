@@ -50,20 +50,6 @@ impl DefaultLogStore {
             config,
         }
     }
-
-    #[cfg(test)]
-    pub fn new_memory() -> Self {
-        use object_store::memory::InMemory;
-        let store = Arc::new(InMemory::new());
-        Self::new(
-            store.clone(),
-            store,
-            LogStoreConfig {
-                location: url::Url::parse("memory:///").unwrap(),
-                options: Default::default(),
-            },
-        )
-    }
 }
 
 #[async_trait::async_trait]
