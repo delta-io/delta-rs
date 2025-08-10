@@ -30,8 +30,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 0);
+        assert_eq!(state.log_data().num_files(), 2);
 
         let app_txn = table
             .snapshot()

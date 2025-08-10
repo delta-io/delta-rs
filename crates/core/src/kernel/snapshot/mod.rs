@@ -42,7 +42,7 @@ use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
 use crate::kernel::parse::read_removes;
 #[cfg(test)]
 use crate::kernel::transaction::CommitData;
-use crate::kernel::{ActionType, Add, StructType};
+use crate::kernel::{ActionType, StructType};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
@@ -82,9 +82,15 @@ impl Snapshot {
     ) -> DeltaResult<Self> {
         // TODO: bundle operation_id with logstore ...
         let engine = log_store.engine(None);
-        let table_root = log_store.table_root_url();
+        let mut table_root = log_store.table_root_url();
         let version = version.map(|v| v as u64);
 
+        // NB: kernel engine uses Url::join to construct paths,
+        // if the path does not end with a slash, the would override the ebtire path.
+        // So we need to be extra sure its ends with a slash.
+        if !table_root.path().ends_with('/') {
+            table_root.set_path(&format!("{}/", table_root.path()));
+        }
         let snapshot = match spawn_blocking(move || {
             KernelSnapshot::try_new(table_root, engine.as_ref(), version)
         })
@@ -210,8 +216,8 @@ impl Snapshot {
         Ok(Path::from_url_path(self.table_url.path())?)
     }
 
-    /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
+    /// Well known properties of the table
+    pub fn table_properties(&self) -> &TableProperties {
         self.inner.table_properties()
     }
 
@@ -395,6 +401,9 @@ impl Snapshot {
             .boxed()
     }
 
+    /// Fetch the latest version of the provided application_id for this snapshot.
+    ///
+    /// Filters the txn based on the SetTransactionRetentionDuration property and lastUpdated
     async fn application_transaction_version(
         &self,
         log_store: &dyn LogStore,
@@ -531,8 +540,8 @@ impl EagerSnapshot {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
-        self.snapshot.table_config()
+    pub fn table_properties(&self) -> &TableProperties {
+        self.snapshot.table_properties()
     }
 
     pub fn table_configuration(&self) -> &TableConfiguration {
@@ -548,13 +557,6 @@ impl EagerSnapshot {
     #[deprecated = "Count any of the file-like iterators instead."]
     pub fn files_count(&self) -> usize {
         self.files.num_rows()
-    }
-
-    /// Get the files in the snapshot
-    pub fn file_actions(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
-        self.files(log_store, None)
-            .map_ok(|v| v.add_action())
-            .boxed()
     }
 
     /// Stream the active files in the snapshot
@@ -647,10 +649,10 @@ impl EagerSnapshot {
     pub async fn transaction_version(
         &self,
         log_store: &dyn LogStore,
-        app_id: impl AsRef<str>,
+        app_id: impl ToString,
     ) -> DeltaResult<Option<i64>> {
         self.snapshot
-            .application_transaction_version(log_store, app_id.as_ref().to_string())
+            .application_transaction_version(log_store, app_id.to_string())
             .await
     }
 }
@@ -782,7 +784,7 @@ mod tests {
         for version in 0..=12 {
             let snapshot =
                 EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
-            let batches: Vec<_> = snapshot.file_actions(&log_store).try_collect().await?;
+            let batches: Vec<_> = snapshot.files(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
 

@@ -9,7 +9,7 @@ use delta_kernel::schema::StructField;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +49,31 @@ impl DeltaTableState {
     /// Return table version
     pub fn version(&self) -> i64 {
         self.snapshot.version()
+    }
+
+    /// The most recent protocol of the table.
+    pub fn protocol(&self) -> &Protocol {
+        self.snapshot.protocol()
+    }
+
+    /// The most recent metadata of the table.
+    pub fn metadata(&self) -> &Metadata {
+        self.snapshot.metadata()
+    }
+
+    /// The table schema
+    pub fn schema(&self) -> &StructType {
+        self.snapshot.schema()
+    }
+
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        self.snapshot.load_config()
+    }
+
+    /// Well known table configuration
+    pub fn table_config(&self) -> &TableProperties {
+        self.snapshot.table_properties()
     }
 
     /// Get the timestamp when a version commit was created.
@@ -136,13 +161,16 @@ impl DeltaTableState {
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
     pub async fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
-        self.snapshot.file_actions(log_store).try_collect().await
+        self.file_actions_iter(log_store).try_collect().await
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
     pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
-        self.snapshot.file_actions(log_store)
+        self.snapshot
+            .files(log_store, None)
+            .map_ok(|v| v.add_action())
+            .boxed()
     }
 
     /// Get the number of files in the current table state
@@ -165,34 +193,9 @@ impl DeltaTableState {
     pub async fn transaction_version(
         &self,
         log_store: &dyn LogStore,
-        app_id: impl AsRef<str>,
+        app_id: impl ToString,
     ) -> DeltaResult<Option<i64>> {
         self.snapshot.transaction_version(log_store, app_id).await
-    }
-
-    /// The most recent protocol of the table.
-    pub fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
-    }
-
-    /// The most recent metadata of the table.
-    pub fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
-    }
-
-    /// The table schema
-    pub fn schema(&self) -> &StructType {
-        self.snapshot.schema()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
-    }
-
-    /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
-        self.snapshot.table_config()
     }
 
     /// Obtain the Eager snapshot of the state

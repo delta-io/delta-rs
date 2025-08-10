@@ -258,7 +258,7 @@ impl TableReference for EagerSnapshot {
     }
 
     fn config(&self) -> &TableProperties {
-        self.table_config()
+        self.table_properties()
     }
 
     fn eager_snapshot(&self) -> &EagerSnapshot {

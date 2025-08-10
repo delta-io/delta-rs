@@ -315,7 +315,7 @@ mod tests {
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
             ]
         );
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let stats = table.snapshot().unwrap().add_actions_table(true).unwrap();
 

@@ -83,6 +83,11 @@ impl<'a> LogDataHandler<'a> {
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.config
     }
+
+    /// The number of files in the log data.
+    pub fn num_files(&self) -> usize {
+        self.data.num_rows()
+    }
 }
 
 impl IntoIterator for LogDataHandler<'_> {

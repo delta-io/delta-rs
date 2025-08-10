@@ -367,7 +367,7 @@ impl<'a> ConflictChecker<'a> {
                     op,
                     &transaction_info
                         .read_snapshot
-                        .table_config()
+                        .table_properties()
                         .isolation_level(),
                 ) {
                     Some(IsolationLevel::SnapshotIsolation)
@@ -378,7 +378,7 @@ impl<'a> ConflictChecker<'a> {
             .unwrap_or_else(|| {
                 transaction_info
                     .read_snapshot
-                    .table_config()
+                    .table_properties()
                     .isolation_level()
             });
 
