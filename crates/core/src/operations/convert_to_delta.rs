@@ -522,6 +522,7 @@ mod tests {
     use arrow::array::{Int32Array, TimestampMicrosecondArray, TimestampMillisecondArray};
     use arrow::record_batch::RecordBatch;
     use delta_kernel::expressions::Scalar;
+    use futures::StreamExt;
     use itertools::Itertools;
     use parquet::arrow::ArrowWriter;
     use pretty_assertions::assert_eq;
@@ -649,12 +650,15 @@ mod tests {
             .snapshot()
             .unwrap()
             .log_data()
-            .into_iter()
+            .iter()
             .flat_map(|add| {
-                add.partition_values()
-                    .unwrap()
+                let Some(vals) = add.partition_values() else {
+                    return Vec::new();
+                };
+                vals.fields()
                     .iter()
-                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .zip(vals.values().iter())
+                    .map(|(k, v)| (k.name().to_string(), v.clone()))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -681,8 +685,8 @@ mod tests {
         let table = create_delta_table(path, Vec::new(), false).await;
         let action = table
             .get_active_add_actions_by_partitions(&[])
-            .expect("Failed to get Add actions")
             .next()
+            .await
             .expect("Iterator index overflows")
             .unwrap();
         assert_eq!(
@@ -1234,10 +1238,11 @@ mod tests {
             .with_location(temp_dir.path().to_str().unwrap())
             .await
             .expect("Failed to convert to Delta table");
+        let state = table.snapshot().unwrap();
 
-        assert_eq!(table.version(), Some(0));
+        assert_eq!(state.version(), 0);
 
-        let delta_schema = table.get_schema().expect("Failed to get schema");
+        let delta_schema = state.schema();
         let fields: Vec<_> = delta_schema.fields().collect();
         let timestamp_fields: Vec<_> = fields
             .iter()
@@ -1263,7 +1268,7 @@ mod tests {
         assert_eq!(files.len(), 1, "Should have one data file");
 
         // Verify can get file metadata
-        let snapshot = table.snapshot().unwrap();
-        assert_eq!(snapshot.files_count(), 1);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.log_data().num_files(), 1);
     }
 }

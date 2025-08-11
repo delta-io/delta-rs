@@ -44,10 +44,7 @@ def test_concurrency(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table"
         t.join()
 
     assert isinstance(exception, CommitFailedError)
-    assert (
-        "a concurrent transaction deleted the same data your transaction deletes"
-        in str(exception)
-    )
+    assert "a concurrent transaction deleted data this operation read" in str(exception)
 
 
 @pytest.mark.polars

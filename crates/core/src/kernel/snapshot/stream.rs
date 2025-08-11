@@ -172,4 +172,4 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
     }
 }
 
-pub type RecordBatchReceiverStreamBuilder = ReceiverStreamBuilder<RecordBatch>;
+pub(crate) type RecordBatchReceiverStreamBuilder = ReceiverStreamBuilder<RecordBatch>;
