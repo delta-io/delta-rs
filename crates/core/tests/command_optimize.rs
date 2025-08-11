@@ -300,7 +300,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
-    let add = &other_dt.snapshot()?.log_data().into_iter().next().unwrap();
+    let add = &other_dt.snapshot()?.log_data().iter().next().unwrap();
     let remove = add.remove_action(true);
 
     let operation = DeltaOperation::Delete { predicate: None };

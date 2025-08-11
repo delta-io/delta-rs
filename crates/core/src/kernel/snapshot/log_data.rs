@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray, StructArray};
+use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_properties::TableProperties;
 use indexmap::IndexMap;
 
 use super::super::scalars::ScalarExt;
@@ -70,6 +72,7 @@ impl<T: PartitionsExt> PartitionsExt for Arc<T> {
 ///
 /// This is a helper struct that provides access to the log data in a more semantic way
 /// to avid the necessiity of knowing the exact layout of the underlying log data.
+#[derive(Clone)]
 pub struct LogDataHandler<'a> {
     data: &'a RecordBatch,
     config: &'a TableConfiguration,
@@ -84,9 +87,26 @@ impl<'a> LogDataHandler<'a> {
         self.config
     }
 
+    pub(crate) fn table_properties(&self) -> &TableProperties {
+        self.config.table_properties()
+    }
+
+    pub(crate) fn protocol(&self) -> &Protocol {
+        self.config.protocol()
+    }
+
+    pub(crate) fn metadata(&self) -> &Metadata {
+        self.config.metadata()
+    }
+
     /// The number of files in the log data.
     pub fn num_files(&self) -> usize {
         self.data.num_rows()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LogicalFileView> {
+        let batch = self.data.clone();
+        (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
     }
 }
 

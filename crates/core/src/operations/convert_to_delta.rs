@@ -650,7 +650,7 @@ mod tests {
             .snapshot()
             .unwrap()
             .log_data()
-            .into_iter()
+            .iter()
             .flat_map(|add| {
                 let Some(vals) = add.partition_values() else {
                     return Vec::new();
