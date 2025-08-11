@@ -7,9 +7,7 @@ use super::CommitInfo;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
-use crate::kernel::EagerSnapshot;
-use crate::kernel::Transaction;
-use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
+use crate::kernel::{Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction};
 use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -101,11 +99,11 @@ pub(crate) struct TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     read_predicates: Option<Expr>,
     /// appIds that have been seen by the transaction
-    pub(crate) read_app_ids: HashSet<String>,
+    read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
     /// read [`DeltaTableState`] used for the transaction
-    pub(crate) read_snapshot: &'a EagerSnapshot,
+    read_snapshot: LogDataHandler<'a>,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
@@ -113,7 +111,7 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     pub fn try_new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: LogDataHandler<'a>,
         read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
@@ -132,22 +130,19 @@ impl<'a> TransactionInfo<'a> {
             }
         }
 
-        Ok(Self {
-            txn_id: "".into(),
-            read_predicates,
-            read_app_ids,
-            actions,
+        Ok(Self::new(
             read_snapshot,
+            read_predicates,
+            actions,
             read_whole_table,
-        })
+        ))
     }
 
     #[cfg(feature = "datafusion")]
-    #[allow(unused)]
     pub fn new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: LogDataHandler<'a>,
         read_predicates: Option<Expr>,
-        actions: &'a Vec<Action>,
+        actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {
         let mut read_app_ids = HashSet::<String>::new();
@@ -168,7 +163,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(not(feature = "datafusion"))]
     pub fn try_new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: LogDataHandler<'a>,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
         read_whole_table: bool,
@@ -203,24 +198,22 @@ impl<'a> TransactionInfo<'a> {
 
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
-                files_matching_predicate(self.read_snapshot.log_data(), &[predicate.clone()])
+                files_matching_predicate(self.read_snapshot.clone(), &[predicate.clone()])
                     .map_err(|err| CommitConflictError::Predicate {
                         source: Box::new(err),
                     })?,
             ))
         } else {
-            Ok(Either::Right(std::iter::empty()))
+            Ok(Either::Right(
+                self.read_snapshot.iter().map(|f| f.add_action()),
+            ))
         }
     }
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self
-            .read_snapshot
-            .log_data()
-            .into_iter()
-            .map(|f| f.add_action()))
+        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
     }
 
     /// Whether the whole table was read during the transaction
@@ -709,7 +702,8 @@ mod tests {
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
         let snapshot = state.snapshot();
-        let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
+        let transaction_info =
+            TransactionInfo::new(snapshot.log_data(), reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,

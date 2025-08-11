@@ -1094,7 +1094,7 @@ impl RawDeltaTable {
 
         self.cloned_state()?
             .log_data()
-            .into_iter()
+            .iter()
             .filter_map(|f| {
                 let path = f.path().to_string();
                 match &path_set {
