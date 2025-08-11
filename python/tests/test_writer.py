@@ -2514,7 +2514,6 @@ def test_write_flush_per_batch_parameter(tmp_path: pathlib.Path):
         "value": Array([f"val_{i}" for i in range(100)], ArrowField("value", type=DataType.string(), nullable=False))
     })
 
-    # Create multiple internal batches
     writer_props = WriterProperties(write_batch_size=20)
 
     write_deltalake(
@@ -2539,7 +2538,14 @@ def test_write_flush_per_batch_parameter(tmp_path: pathlib.Path):
     table_true = DeltaTable(tmp_path / "flush_true")
     files_true = table_true.file_uris()
 
-    assert len(files_true) > len(files_false), f"flush_per_batch=True should create more files. Got {len(files_true)} vs {len(files_false)}"
+    # Get file sizes from add actions
+    add_actions_false = table_false.get_add_actions()
+    add_actions_true = table_true.get_add_actions()
+
+    data_false = table_false.to_pyarrow_table()
+    data_true = table_true.to_pyarrow_table()
+
+    assert len(files_true) > len(files_false), f"flush_per_batch=True should create more files. Got {len(files_true)} files with True vs {len(files_false)} files with False."
 
     assert table_false.to_pyarrow_table() == table_true.to_pyarrow_table()
 

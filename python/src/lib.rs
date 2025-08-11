@@ -1702,6 +1702,11 @@ impl RawDeltaTable {
             }
 
             if let Some(writer_props) = writer_properties {
+                // Extract write_batch_size and set it on WriteBuilder because WriterConfig::new()
+                // does not extract write_batch_size from WriterProperties
+                if let Some(write_batch_size) = writer_props.write_batch_size {
+                    builder = builder.with_write_batch_size(write_batch_size);
+                }
                 builder = builder.with_writer_properties(
                     set_writer_properties(writer_props).map_err(PythonError::from)?,
                 );
