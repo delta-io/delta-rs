@@ -182,9 +182,7 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.log_data()
-            .into_iter()
-            .map(|add| add.object_store_path())
+        self.log_data().iter().map(|add| add.object_store_path())
     }
 
     /// Get the transaction version for the given application ID.
