@@ -110,6 +110,8 @@ pub struct WriterConfig {
     num_indexed_cols: i32,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    /// Write in-memory buffer to disk after each batch if true
+    flush_per_batch: bool,
 }
 
 impl WriterConfig {
@@ -122,6 +124,7 @@ impl WriterConfig {
         write_batch_size: Option<usize>,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        flush_per_batch: bool,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
@@ -139,6 +142,7 @@ impl WriterConfig {
             write_batch_size,
             num_indexed_cols,
             stats_columns,
+            flush_per_batch,
         }
     }
 
@@ -210,6 +214,7 @@ impl DeltaWriter {
                     Some(self.config.writer_properties.clone()),
                     Some(self.config.target_file_size),
                     Some(self.config.write_batch_size),
+                    self.config.flush_per_batch,
                 )?;
                 let mut writer = PartitionWriter::try_with_config(
                     self.object_store.clone(),
@@ -275,6 +280,8 @@ pub struct PartitionWriterConfig {
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
+    /// Write in-memory buffer to disk after each batch if true
+    flush_per_batch: bool,
 }
 
 impl PartitionWriterConfig {
@@ -285,6 +292,7 @@ impl PartitionWriterConfig {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        flush_per_batch: bool,
     ) -> DeltaResult<Self> {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
@@ -303,6 +311,7 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            flush_per_batch,
         })
     }
 }
@@ -448,7 +457,8 @@ impl PartitionWriter {
     }
 
     /// Buffers record batches in-memory up to appx. `target_file_size`.
-    /// Flushes data to storage once a full file can be written.
+    /// Flushes data to storage once a full file can be written or after
+    /// each batch if flush_per_batch is true.
     ///
     /// The `close` method has to be invoked to write all data still buffered
     /// and get the list of all written files.
@@ -465,11 +475,17 @@ impl PartitionWriter {
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length)).await?;
-            // flush currently buffered data to disk once we meet or exceed the target file size.
-            let estimated_size = self.buffer.len().await + self.arrow_writer.in_progress_size();
-            if estimated_size >= self.config.target_file_size {
-                debug!("Writing file with estimated size {estimated_size:?} to disk.");
+
+            if self.config.flush_per_batch {
+                // flush currently buffered data to disk after writing each batch
                 self.flush_arrow_writer().await?;
+            } else {
+                // flush currently buffered data to disk once we meet or exceed the target file size.
+                let estimated_size = self.buffer.len().await + self.arrow_writer.in_progress_size();
+                if estimated_size >= self.config.target_file_size {
+                    debug!("Writing file with estimated size {estimated_size:?} to disk.");
+                    self.flush_arrow_writer().await?;
+                }
             }
         }
 
@@ -500,6 +516,7 @@ mod tests {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        flush_per_batch: bool,
     ) -> DeltaWriter {
         let config = WriterConfig::new(
             batch.schema(),
@@ -509,6 +526,7 @@ mod tests {
             write_batch_size,
             DEFAULT_NUM_INDEX_COLS,
             None,
+            flush_per_batch,
         );
         DeltaWriter::new(object_store, config)
     }
@@ -519,6 +537,7 @@ mod tests {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
+        flush_per_batch: bool,
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
@@ -526,6 +545,7 @@ mod tests {
             writer_properties,
             target_file_size,
             write_batch_size,
+            flush_per_batch,
         )
         .unwrap();
         PartitionWriter::try_with_config(object_store, config, DEFAULT_NUM_INDEX_COLS, None)
@@ -541,7 +561,8 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer =
+            get_partition_writer(object_store.clone(), &batch, None, None, None, false);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -574,8 +595,14 @@ mod tests {
             .set_max_row_group_size(1024)
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
-        let mut writer =
-            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None);
+        let mut writer = get_partition_writer(
+            object_store,
+            &batch,
+            Some(properties),
+            Some(10_000),
+            None,
+            false,
+        );
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -602,7 +629,8 @@ mod tests {
             .unwrap()
             .object_store(None);
         // configure small target file size so we can observe multiple files written
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
+        let mut writer =
+            get_partition_writer(object_store, &batch, None, Some(10_000), None, false);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -630,7 +658,8 @@ mod tests {
             .object_store(None);
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
+        let mut writer =
+            get_partition_writer(object_store, &batch, None, Some(9000), Some(10000), false);
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();
@@ -646,7 +675,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_delta_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer = get_delta_writer(object_store.clone(), &batch, None, None, None, false);
         writer.write(&batch).await.unwrap();
         // Ensure the write hasn't been flushed
         let files = list(object_store.as_ref(), None).await.unwrap();
@@ -684,5 +713,116 @@ mod tests {
                 }
             }
         };
+    }
+
+    #[test]
+    fn test_writer_config_flush_per_batch() {
+        let config = WriterConfig::new(
+            Arc::new(ArrowSchema::empty()),
+            vec![],
+            None,
+            None,
+            None,
+            DEFAULT_NUM_INDEX_COLS,
+            None,
+            true, // flush_per_batch
+        );
+        assert!(config.flush_per_batch);
+
+        let config = WriterConfig::new(
+            Arc::new(ArrowSchema::empty()),
+            vec![],
+            None,
+            None,
+            None,
+            DEFAULT_NUM_INDEX_COLS,
+            None,
+            false, // flush_per_batch
+        );
+        assert!(!config.flush_per_batch);
+    }
+
+    #[tokio::test]
+    async fn test_partition_writer_flush_per_batch() {
+        let base_int = Arc::new(Int32Array::from((0..100).collect::<Vec<i32>>()));
+        let base_str = Arc::new(StringArray::from(vec!["test"; 100]));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![base_int, base_str]).unwrap();
+
+        let object_store = DeltaTableBuilder::from_uri("memory:///")
+            .build_storage()
+            .unwrap()
+            .object_store(None);
+
+        // flush_per_batch = true
+        let mut writer_true = get_partition_writer(
+            object_store.clone(),
+            &batch,
+            None,
+            None,
+            Some(20), // Small batch size
+            true,     // flush_per_batch
+        );
+        writer_true.write(&batch).await.unwrap();
+        let adds_true = writer_true.close().await.unwrap();
+
+        // flush_per_batch = false
+        let object_store2 = DeltaTableBuilder::from_uri("memory:///test2")
+            .build_storage()
+            .unwrap()
+            .object_store(None);
+        let mut writer_false = get_partition_writer(
+            object_store2,
+            &batch,
+            None,
+            None,
+            Some(20), // Small batch size
+            false,    // flush_per_batch
+        );
+        writer_false.write(&batch).await.unwrap();
+        let adds_false = writer_false.close().await.unwrap();
+
+        // Verify the flush behavior: flush_per_batch=true should create more files
+        // because it flushes (and creates a new file) after each batch
+        assert!(adds_true.len() > adds_false.len(), "flush_per_batch=true should create more files than flush_per_batch=false. Got {} vs {}", adds_true.len(), adds_false.len());
+
+        // Verify both wrote the same total number of records
+        let total_records_true: i64 = adds_true
+            .iter()
+            .map(|add| {
+                if let Some(stats) = &add.stats {
+                    serde_json::from_str::<serde_json::Value>(stats).unwrap()["numRecords"]
+                        .as_i64()
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        let total_records_false: i64 = adds_false
+            .iter()
+            .map(|add| {
+                if let Some(stats) = &add.stats {
+                    serde_json::from_str::<serde_json::Value>(stats).unwrap()["numRecords"]
+                        .as_i64()
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        assert_eq!(
+            total_records_true, total_records_false,
+            "Both flush modes should write same total number of records"
+        );
+        assert_eq!(
+            total_records_true, 100,
+            "Should have written all 100 records"
+        );
     }
 }
