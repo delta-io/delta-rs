@@ -266,7 +266,7 @@ impl WriteBuilder {
         self.write_batch_size = Some(write_batch_size);
         self
     }
- 
+
     /// If true, write in-memory buffer to disk after each batch
     pub fn with_flush_per_batch(mut self, flush_per_batch: bool) -> Self {
         self.flush_per_batch = flush_per_batch;
@@ -2008,19 +2008,17 @@ mod tests {
         fn test_write_builder_flush_per_batch() {
             let ops = DeltaOps::new_in_memory();
             let log_store = ops.write(vec![]).log_store().clone();
-            
+
             // Default
             let builder = WriteBuilder::new(log_store.clone(), None);
             assert!(!builder.flush_per_batch);
-            
+
             // True
-            let builder = WriteBuilder::new(log_store.clone(), None)
-                .with_flush_per_batch(true);
+            let builder = WriteBuilder::new(log_store.clone(), None).with_flush_per_batch(true);
             assert!(builder.flush_per_batch);
-            
+
             // False
-            let builder = WriteBuilder::new(log_store.clone(), None)
-                .with_flush_per_batch(false);
+            let builder = WriteBuilder::new(log_store.clone(), None).with_flush_per_batch(false);
             assert!(!builder.flush_per_batch);
         }
     }

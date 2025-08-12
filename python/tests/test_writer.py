@@ -2509,10 +2509,18 @@ def test_write_flush_per_batch_parameter(tmp_path: pathlib.Path):
     """Test that flush_per_batch parameter affects file creation behavior"""
     from deltalake import WriterProperties
 
-    test_data = Table({
-        "id": Array(list(range(100)), ArrowField("id", type=DataType.int32(), nullable=False)),
-        "value": Array([f"val_{i}" for i in range(100)], ArrowField("value", type=DataType.string(), nullable=False))
-    })
+    test_data = Table(
+        {
+            "id": Array(
+                list(range(100)),
+                ArrowField("id", type=DataType.int32(), nullable=False),
+            ),
+            "value": Array(
+                [f"val_{i}" for i in range(100)],
+                ArrowField("value", type=DataType.string(), nullable=False),
+            ),
+        }
+    )
 
     writer_props = WriterProperties(write_batch_size=20)
 
@@ -2521,7 +2529,7 @@ def test_write_flush_per_batch_parameter(tmp_path: pathlib.Path):
         test_data,
         mode="overwrite",
         flush_per_batch=False,
-        writer_properties=writer_props
+        writer_properties=writer_props,
     )
 
     table_false = DeltaTable(tmp_path / "flush_false")
@@ -2532,20 +2540,14 @@ def test_write_flush_per_batch_parameter(tmp_path: pathlib.Path):
         test_data,
         mode="overwrite",
         flush_per_batch=True,
-        writer_properties=writer_props
+        writer_properties=writer_props,
     )
 
     table_true = DeltaTable(tmp_path / "flush_true")
     files_true = table_true.file_uris()
 
-    # Get file sizes from add actions
-    add_actions_false = table_false.get_add_actions()
-    add_actions_true = table_true.get_add_actions()
-
-    data_false = table_false.to_pyarrow_table()
-    data_true = table_true.to_pyarrow_table()
-
-    assert len(files_true) > len(files_false), f"flush_per_batch=True should create more files. Got {len(files_true)} files with True vs {len(files_false)} files with False."
+    assert len(files_true) > len(files_false), (
+        f"flush_per_batch=True should create more files. Got {len(files_true)} files with True vs {len(files_false)} files with False."
+    )
 
     assert table_false.to_pyarrow_table() == table_true.to_pyarrow_table()
-
