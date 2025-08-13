@@ -69,6 +69,19 @@ pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 
+/// Common trait for operations that write to a Delta table
+#[cfg(feature = "datafusion")]
+pub trait OpBuilderWithWrite: Sized {
+    /// Additional information to write to the commit
+    fn with_commit_properties(self, commit_properties: crate::kernel::transaction::CommitProperties) -> Self;
+
+    /// Writer properties passed to parquet writer for when files are rewritten
+    fn with_writer_properties(self, writer_properties: parquet::file::properties::WriterProperties) -> Self;
+
+    /// Set a custom execute handler, for pre and post execution
+    fn with_custom_execute_handler(self, handler: Arc<dyn CustomExecuteHandler>) -> Self;
+}
+
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
     // Execute arbitrary code at the start of a delta operation

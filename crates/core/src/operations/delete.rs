@@ -43,6 +43,7 @@ use serde::Serialize;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use super::Operation;
+use super::OpBuilderWithWrite;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
@@ -137,20 +138,23 @@ impl DeleteBuilder {
         self
     }
 
+}
+
+impl OpBuilderWithWrite for DeleteBuilder {
     /// Additional information to write to the commit
-    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+    fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
         self
     }
 
     /// Writer properties passed to parquet writer for when files are rewritten
-    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+    fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
         self
     }
 
     /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+    fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
         self
     }

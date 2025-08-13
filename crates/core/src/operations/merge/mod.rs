@@ -71,6 +71,7 @@ use uuid::Uuid;
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
 use super::{CustomExecuteHandler, Operation};
+use super::OpBuilderWithWrite;
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
@@ -388,18 +389,6 @@ impl MergeBuilder {
         self
     }
 
-    /// Additional metadata to be added to commit info
-    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
-        self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Writer properties passed to parquet writer for when fiiles are rewritten
-    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
-        self
-    }
-
     /// Specify the cast options to use when casting columns that do not match
     /// the table's schema.  When `cast_options.safe` is set true then any
     /// failures to cast a datatype will use null instead of returning an error
@@ -420,12 +409,28 @@ impl MergeBuilder {
         self
     }
 
+}
+
+impl OpBuilderWithWrite for MergeBuilder {
+    /// Additional information to write to the commit
+    fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
+        self
+    }
+
+    /// Writer properties passed to parquet writer for when files are rewritten
+    fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
+
     /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+    fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
         self
     }
 }
+
 
 #[derive(Default)]
 /// Builder for update clauses
