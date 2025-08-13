@@ -27,12 +27,15 @@ use crate::{DeltaResult, DeltaTableError};
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
 pub use crate::logstore::PeekCommit;
 
+pub use crate::table::table_parquet_options::TableParquetOptions;
+
 pub mod builder;
 pub mod config;
 pub mod state;
 pub mod state_arrow;
 
 mod columns;
+mod table_parquet_options;
 
 // Re-exposing for backwards compatibility
 pub use columns::*;
@@ -72,6 +75,8 @@ pub struct DeltaTable {
     pub state: Option<DeltaTableState>,
     /// the load options used during load
     pub config: DeltaTableConfig,
+    /// parquet options to apply when operating on the table
+    pub table_parquet_options: Option<TableParquetOptions>,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -124,6 +129,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                     state,
                     config,
                     log_store,
+                    table_parquet_options: None,
                 };
                 Ok(table)
             }
@@ -143,6 +149,7 @@ impl DeltaTable {
             state: None,
             log_store,
             config,
+            table_parquet_options: None,
         }
     }
 
@@ -156,6 +163,7 @@ impl DeltaTable {
             state: Some(state),
             log_store,
             config: Default::default(),
+            table_parquet_options: None,
         }
     }
 

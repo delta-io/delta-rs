@@ -14,6 +14,7 @@ use url::Url;
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::table::TableParquetOptions;
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -53,6 +54,11 @@ pub struct DeltaTableConfig {
 
     #[serde(skip_serializing, skip_deserializing)]
     #[delta(skip)]
+    /// Parquet options to apply when operating on the table
+    pub table_parquet_options: Option<TableParquetOptions>,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
 }
@@ -63,6 +69,7 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
+            table_parquet_options: None,
             io_runtime: None,
         }
     }
@@ -73,6 +80,7 @@ impl PartialEq for DeltaTableConfig {
         self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
+            && self.table_parquet_options == other.table_parquet_options
     }
 }
 
@@ -231,6 +239,12 @@ impl DeltaTableBuilder {
     /// This setting is most useful for testing / development when connecting to emulated services.
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = Some(allow_http);
+        self
+    }
+
+    /// Set the parquet options to use when reading/writing parquet files in the table.
+    pub fn with_parquet_config(mut self, table_parquet_options: TableParquetOptions) -> Self {
+        self.table_config.table_parquet_options = Some(table_parquet_options);
         self
     }
 
