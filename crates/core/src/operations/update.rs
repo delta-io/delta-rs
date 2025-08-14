@@ -51,7 +51,6 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use super::OpBuilderWithWrite;
 use crate::delta_datafusion::{
     expr::fmt_expr_to_sql,
     logical::MetricObserver,
@@ -66,7 +65,6 @@ use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::operations::delete::DeleteBuilder;
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
 pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";
@@ -162,6 +160,17 @@ impl UpdateBuilder {
         self
     }
 
+    /// Additional metadata to be added to commit info
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
+        self
+    }
+
+    /// Writer properties passed to parquet writer for when fiiles are rewritten
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
 
     /// Specify the cast options to use when casting columns that do not match
     /// the table's schema.  When `cast_options.safe` is set true then any
@@ -177,24 +186,8 @@ impl UpdateBuilder {
         self
     }
 
-}
-
-
-impl OpBuilderWithWrite for UpdateBuilder {
-    /// Additional information to write to the commit
-    fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
-        self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Writer properties passed to parquet writer for when files are rewritten
-    fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
-        self
-    }
-
     /// Set a custom execute handler, for pre and post execution
-    fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
         self
     }
