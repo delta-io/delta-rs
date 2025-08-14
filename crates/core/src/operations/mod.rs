@@ -140,7 +140,7 @@ pub(crate) trait Operation<State>: std::future::IntoFuture {
 pub struct DeltaOps(pub DeltaTable);
 
 #[cfg(feature = "datafusion")]
-fn add_writer_properties<T: OpBuilderWithWrite>(mut builder: T, table_parquet_options: Option<&TableParquetOptions>) -> T {
+fn add_writer_properties<T: OpBuilderWithWrite>(builder: T, table_parquet_options: Option<&TableParquetOptions>) -> T {
     use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
 
     if let Some(table_parquet_options) = table_parquet_options {

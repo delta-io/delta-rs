@@ -54,11 +54,6 @@ pub struct DeltaTableConfig {
 
     #[serde(skip_serializing, skip_deserializing)]
     #[delta(skip)]
-    /// Parquet options to apply when operating on the table
-    pub table_parquet_options: Option<TableParquetOptions>,
-
-    #[serde(skip_serializing, skip_deserializing)]
-    #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
 }
@@ -69,7 +64,6 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
-            table_parquet_options: None,
             io_runtime: None,
         }
     }
@@ -80,7 +74,6 @@ impl PartialEq for DeltaTableConfig {
         self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
-            && self.table_parquet_options == other.table_parquet_options
     }
 }
 
@@ -98,6 +91,8 @@ pub struct DeltaTableBuilder {
     #[allow(unused_variables)]
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
+    /// Parquet options to apply when operating on the table
+    pub table_parquet_options: Option<TableParquetOptions>,
 }
 
 impl DeltaTableBuilder {
@@ -144,6 +139,7 @@ impl DeltaTableBuilder {
             storage_options: None,
             allow_http: None,
             table_config: DeltaTableConfig::default(),
+            table_parquet_options: None,
         })
     }
 
@@ -244,7 +240,7 @@ impl DeltaTableBuilder {
 
     /// Set the parquet options to use when reading/writing parquet files in the table.
     pub fn with_parquet_config(mut self, table_parquet_options: TableParquetOptions) -> Self {
-        self.table_config.table_parquet_options = Some(table_parquet_options);
+        self.table_parquet_options = Some(table_parquet_options);
         self
     }
 
@@ -293,7 +289,7 @@ impl DeltaTableBuilder {
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
     pub fn build(self) -> DeltaResult<DeltaTable> {
-        Ok(DeltaTable::new(self.build_storage()?, self.table_config))
+        Ok(DeltaTable::new(self.build_storage()?, self.table_config, self.table_parquet_options))
     }
 
     /// Build the [`DeltaTable`] and load its state
