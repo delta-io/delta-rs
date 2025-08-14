@@ -267,6 +267,17 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
+    /// Writer properties passed to parquet writer
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Additional information to write to the commit
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
+        self
+    }
 
     /// Whether to preserve insertion order within files
     pub fn with_preserve_insertion_order(mut self, preserve_insertion_order: bool) -> Self {
@@ -289,18 +300,6 @@ impl<'a> OptimizeBuilder<'a> {
     /// Min commit interval
     pub fn with_min_commit_interval(mut self, min_commit_interval: Duration) -> Self {
         self.min_commit_interval = Some(min_commit_interval);
-        self
-    }
-
-    /// Additional information to write to the commit
-    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
-        self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Writer properties passed to parquet writer for when files are rewritten
-    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
         self
     }
 

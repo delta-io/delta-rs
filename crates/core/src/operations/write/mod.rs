@@ -278,7 +278,17 @@ impl WriteBuilder {
         self
     }
 
+    /// Specify the writer properties to use when writing a parquet file
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
 
+    /// Additional metadata to be added to commit info
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
+        self
+    }
 
     /// Specify the table name. Optionally qualified with
     /// a database name [database_name.] table_name.
@@ -293,6 +303,11 @@ impl WriteBuilder {
         self
     }
 
+    /// Set a custom execute handler, for pre and post execution
+    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
+    }
 
     /// Set configuration on created table
     pub fn with_configuration(
@@ -399,24 +414,6 @@ impl WriteBuilder {
                 Ok(actions)
             }
         }
-    }
-
-    /// Additional information to write to the commit
-    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
-        self.commit_properties = commit_properties;
-        self
-    }
- 
-    /// Writer properties passed to parquet writer for when files are rewritten
-    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
     }
 }
 
