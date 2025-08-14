@@ -12,6 +12,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
+use crate::table::TableParquetOptions;
 
 /// Remove constraints from the table
 pub struct DropConstraintBuilder {
@@ -23,6 +24,8 @@ pub struct DropConstraintBuilder {
     raise_if_not_exists: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// Parquet options for the table
+    table_parquet_options: Option<TableParquetOptions>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -39,12 +42,13 @@ impl super::Operation<()> for DropConstraintBuilder {
 
 impl DropConstraintBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
         Self {
             name: None,
             raise_if_not_exists: true,
             snapshot,
             log_store,
+            table_parquet_options,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
         }
@@ -101,7 +105,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                         "Constraint with name '{name}' does not exist."
                     )));
                 }
-                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
+                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot, this.table_parquet_options));
             }
 
             metadata = metadata.remove_config_key(&configuration_key)?;
@@ -121,6 +125,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
+                this.table_parquet_options.clone(),
             ))
         })
     }

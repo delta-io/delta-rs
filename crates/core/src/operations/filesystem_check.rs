@@ -242,7 +242,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             let plan = this.create_fsck_plan().await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, this.snapshot, None),
                     FileSystemCheckMetrics {
                         files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),
                         dry_run: true,
@@ -251,7 +251,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             }
             if plan.files_to_remove.is_empty() {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, this.snapshot, None),
                     FileSystemCheckMetrics {
                         dry_run: false,
                         files_removed: Vec::new(),
@@ -272,7 +272,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot, None);
             table.update().await?;
             Ok((table, metrics))
         })

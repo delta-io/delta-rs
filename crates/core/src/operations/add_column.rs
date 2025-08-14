@@ -1,7 +1,6 @@
 //! Add a new column to a table
 
 use std::sync::Arc;
-
 use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 use itertools::Itertools;
@@ -13,6 +12,7 @@ use crate::kernel::{MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::table::TableParquetOptions;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Add new columns and/or nested fields to a table
@@ -130,6 +130,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
+                None
             ))
         })
     }

@@ -14,6 +14,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
+use crate::table::TableParquetOptions;
 
 /// Enable table features for a table
 pub struct AddTableFeatureBuilder {
@@ -144,6 +145,7 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
+                None
             ))
         })
     }

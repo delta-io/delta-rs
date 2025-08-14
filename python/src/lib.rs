@@ -525,7 +525,7 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = UpdateBuilder::new(self.log_store()?, self.cloned_state()?)
+            let mut cmd = UpdateBuilder::new(self.log_store()?, self.cloned_state()?, None)
                 .with_safe_cast(safe_cast);
 
             if let Some(writer_props) = writer_properties {
@@ -584,7 +584,7 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
+            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?, None)
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
@@ -647,7 +647,7 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
+            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?, None)
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
                 .with_max_spill_size(max_spill_size)
                 .with_type(OptimizeType::ZOrder(z_order_columns));
@@ -798,7 +798,7 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = DropConstraintBuilder::new(self.log_store()?, self.cloned_state()?)
+            let mut cmd = DropConstraintBuilder::new(self.log_store()?, self.cloned_state()?, None)
                 .with_constraint(name)
                 .with_raise_if_not_exists(raise_if_not_exists);
 
@@ -1461,7 +1461,7 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = DeleteBuilder::new(self.log_store()?, self.cloned_state()?);
+            let mut cmd = DeleteBuilder::new(self.log_store()?, self.cloned_state()?, None);
             if let Some(predicate) = predicate {
                 cmd = cmd.with_predicate(predicate);
             }
@@ -1675,6 +1675,7 @@ impl RawDeltaTable {
                 self.with_table(|t| Ok(t.state.clone()))?,
                 // Take the Option<state> since it might be the first write,
                 // triggered through `write_to_deltalake`
+                None
             )
             .with_save_mode(save_mode);
 

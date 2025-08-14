@@ -61,6 +61,8 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
+use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::TableParquetOptions;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
@@ -74,6 +76,8 @@ pub struct DeleteBuilder {
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// Parquet options for the table
+    table_parquet_options: Option<TableParquetOptions>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -113,14 +117,16 @@ impl super::Operation<()> for DeleteBuilder {
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+        let writer_properties = build_writer_properties(&table_parquet_options);
         Self {
             predicate: None,
             snapshot,
             log_store,
+            table_parquet_options,
             state: None,
             commit_properties: CommitProperties::default(),
-            writer_properties: None,
+            writer_properties,
             custom_execute_handler: None,
         }
     }
@@ -448,7 +454,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, new_snapshot),
+                DeltaTable::new_with_state(this.log_store, new_snapshot, this.table_parquet_options),
                 metrics,
             ))
         })

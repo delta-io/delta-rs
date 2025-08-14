@@ -40,6 +40,7 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
+use crate::table::TableParquetOptions;
 
 /// Errors that can occur during restore
 #[derive(thiserror::Error, Debug)]
@@ -171,7 +172,7 @@ async fn execute(
     {
         return Err(DeltaTableError::from(RestoreError::InvalidRestoreParameter));
     }
-    let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+    let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default(), None);
 
     let version = match datetime_to_restore {
         Some(datetime) => {
@@ -363,7 +364,7 @@ impl std::future::IntoFuture for RestoreBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot, None);
             table.update().await?;
             Ok((table, metrics))
         })

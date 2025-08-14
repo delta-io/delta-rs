@@ -93,6 +93,8 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::TableParquetOptions;
 
 mod barrier;
 mod filter;
@@ -142,6 +144,8 @@ pub struct MergeBuilder {
     merge_schema: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// Parquet options for the table
+    table_parquet_options: Option<TableParquetOptions>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -168,20 +172,23 @@ impl MergeBuilder {
     pub fn new<E: Into<Expression>>(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
         predicate: E,
         source: DataFrame,
     ) -> Self {
         let predicate = predicate.into();
+        let writer_properties = build_writer_properties(&table_parquet_options);
         Self {
             predicate,
             source,
             snapshot,
             log_store,
+            table_parquet_options,
             source_alias: None,
             target_alias: None,
             state: None,
             commit_properties: CommitProperties::default(),
-            writer_properties: None,
+            writer_properties,
             merge_schema: false,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
@@ -1568,7 +1575,7 @@ impl std::future::IntoFuture for MergeBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, snapshot),
+                DeltaTable::new_with_state(this.log_store, snapshot, this.table_parquet_options),
                 metrics,
             ))
         })

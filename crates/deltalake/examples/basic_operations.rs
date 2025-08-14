@@ -12,7 +12,6 @@ use deltalake::parquet::{
 use deltalake::{protocol::SaveMode, DeltaOps};
 
 use std::sync::Arc;
-use deltalake_core::operations::OpBuilderWithWrite;
 
 fn get_table_columns() -> Vec<StructField> {
     vec![

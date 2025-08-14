@@ -14,8 +14,6 @@ use crate::{
         // 3. Write to table a new txn id and then update a different table state that uses the same underlying table
         // 4. Write a checkpoint and read that checkpoint.
 
-        use  crate::operations::OpBuilderWithWrite;
-
         let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
