@@ -226,7 +226,7 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load(self) -> LoadBuilder {
-        LoadBuilder::new(self.0.log_store, self.0.state.unwrap())
+        LoadBuilder::new(self.0.log_store, self.0.state.unwrap(), self.0.table_parquet_options.clone())
     }
 
     /// Load a table with CDF Enabled

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use datafusion::config::{ConfigFileType, TableOptions};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -13,6 +13,7 @@ use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
+use crate::table::TableParquetOptions;
 
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
@@ -22,6 +23,8 @@ pub struct LoadBuilder {
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
+    /// Parquet options for the table
+    table_parquet_options: Option<TableParquetOptions>,
 }
 
 impl super::Operation<()> for LoadBuilder {
@@ -35,11 +38,12 @@ impl super::Operation<()> for LoadBuilder {
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
         Self {
             snapshot,
             log_store,
             columns: None,
+            table_parquet_options: table_parquet_options
         }
     }
 
@@ -81,11 +85,22 @@ impl std::future::IntoFuture for LoadBuilder {
                 .transpose()?;
 
             let ctx = SessionContext::new();
+
+            // Parquet options, if any, are set in table_parquet_options
+            let mut state = ctx.state();
+            if let Some(table_parquet_options) = this.table_parquet_options {
+                let mut table_config = TableOptions::new();
+                table_config.set_config_format(ConfigFileType::PARQUET);
+                table_config.parquet = table_parquet_options;
+                let tom = state.table_options_mut();
+                *tom = table_config;
+            }
+
             let scan_plan = table
-                .scan(&ctx.state(), projection.as_ref(), &[], None)
+                .scan(&state, projection.as_ref(), &[], None)
                 .await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+            let task_ctx = Arc::new(TaskContext::from(&state));
             let stream = plan.execute(0, task_ctx)?;
 
             Ok((table, stream))
