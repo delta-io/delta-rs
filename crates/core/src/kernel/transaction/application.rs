@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::{
+use crate::{
         checkpoints, kernel::transaction::CommitProperties, kernel::Transaction,
-        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
+        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder
     };
 
     #[cfg(feature = "datafusion")]
@@ -13,6 +13,8 @@ mod tests {
         // 2. Read new table
         // 3. Write to table a new txn id and then update a different table state that uses the same underlying table
         // 4. Write a checkpoint and read that checkpoint.
+
+        use  crate::operations::OpBuilderWithWrite;
 
         let tmp_dir = tempfile::tempdir().unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();

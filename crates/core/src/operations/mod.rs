@@ -37,6 +37,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
+use crate::table::TableParquetOptions;
 
 pub mod add_column;
 pub mod add_feature;
@@ -81,6 +82,7 @@ pub trait OpBuilderWithWrite: Sized {
     /// Set a custom execute handler, for pre and post execution
     fn with_custom_execute_handler(self, handler: Arc<dyn CustomExecuteHandler>) -> Self;
 }
+
 
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
@@ -136,6 +138,19 @@ pub(crate) trait Operation<State>: std::future::IntoFuture {
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
+
+#[cfg(feature = "datafusion")]
+fn add_writer_properties<T: OpBuilderWithWrite>(mut builder: T, table_parquet_options: Option<&TableParquetOptions>) -> T {
+    use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
+
+    if let Some(table_parquet_options) = table_parquet_options {
+        let writer_options: ParquetWriterOptions =
+            ParquetWriterOptions::try_from(table_parquet_options)
+                .expect("Failed to convert TableParquetOptions to ParquetWriterOptions");
+        return builder.with_writer_properties(writer_options.writer_options().clone());
+    }
+    builder
+}
 
 impl DeltaOps {
     /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri.
@@ -225,7 +240,8 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.log_store, self.0.state).with_input_batches(batches)
+        add_writer_properties(WriteBuilder::new(self.0.log_store, self.0.state).with_input_batches(batches),
+                              self.0.table_parquet_options.as_ref())
     }
 
     /// Vacuum stale files from delta table
@@ -244,21 +260,21 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
-        OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())
+        add_writer_properties(OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap()), self.0.table_parquet_options.as_ref())
     }
 
     /// Delete data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn delete(self) -> DeleteBuilder {
-        DeleteBuilder::new(self.0.log_store, self.0.state.unwrap())
+        add_writer_properties(DeleteBuilder::new(self.0.log_store, self.0.state.unwrap()), self.0.table_parquet_options.as_ref())
     }
 
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn update(self) -> UpdateBuilder {
-        UpdateBuilder::new(self.0.log_store, self.0.state.unwrap())
+        add_writer_properties(UpdateBuilder::new(self.0.log_store, self.0.state.unwrap()), self.0.table_parquet_options.as_ref())
     }
 
     /// Restore delta table to a specified version or datetime
@@ -275,12 +291,12 @@ impl DeltaOps {
         source: datafusion::prelude::DataFrame,
         predicate: E,
     ) -> MergeBuilder {
-        MergeBuilder::new(
+        add_writer_properties(MergeBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
             predicate.into(),
             source,
-        )
+        ), self.0.table_parquet_options.as_ref())
     }
 
     /// Add a check constraint to a table

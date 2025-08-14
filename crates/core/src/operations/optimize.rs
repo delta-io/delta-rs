@@ -44,7 +44,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
-use super::{CustomExecuteHandler, Operation};
+use super::{CustomExecuteHandler, OpBuilderWithWrite, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
@@ -261,17 +261,6 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Writer properties passed to parquet writer
-    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
-        self
-    }
-
-    /// Additional information to write to the commit
-    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
-        self.commit_properties = commit_properties;
-        self
-    }
 
     /// Whether to preserve insertion order within files
     pub fn with_preserve_insertion_order(mut self, preserve_insertion_order: bool) -> Self {
@@ -296,9 +285,23 @@ impl<'a> OptimizeBuilder<'a> {
         self.min_commit_interval = Some(min_commit_interval);
         self
     }
+}
+
+impl<'a> OpBuilderWithWrite for OptimizeBuilder<'a> {
+    /// Additional information to write to the commit
+    fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
+        self
+    }
+
+    /// Writer properties passed to parquet writer for when files are rewritten
+    fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
 
     /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+    fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
         self
     }

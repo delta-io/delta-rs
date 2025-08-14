@@ -59,7 +59,7 @@ use tracing::log::*;
 
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
-use super::{CreateBuilder, CustomExecuteHandler, Operation};
+use super::{CreateBuilder, CustomExecuteHandler, OpBuilderWithWrite, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::logical::MetricObserver;
@@ -77,6 +77,7 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
+use crate::operations::merge::MergeBuilder;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
@@ -271,17 +272,7 @@ impl WriteBuilder {
         self
     }
 
-    /// Specify the writer properties to use when writing a parquet file
-    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
-        self
-    }
 
-    /// Additional metadata to be added to commit info
-    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
-        self.commit_properties = commit_properties;
-        self
-    }
 
     /// Specify the table name. Optionally qualified with
     /// a database name [database_name.] table_name.
@@ -296,11 +287,6 @@ impl WriteBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
 
     /// Set configuration on created table
     pub fn with_configuration(
@@ -407,6 +393,26 @@ impl WriteBuilder {
                 Ok(actions)
             }
         }
+    }
+}
+
+impl OpBuilderWithWrite for WriteBuilder {
+    /// Additional information to write to the commit
+    fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
+        self
+    }
+
+    /// Writer properties passed to parquet writer for when files are rewritten
+    fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Set a custom execute handler, for pre and post execution
+    fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
+        self.custom_execute_handler = Some(handler);
+        self
     }
 }
 
