@@ -2792,6 +2792,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_select_from_column_mapping() -> DeltaResult<()> {
+        let table = crate::open_table(
+                "../test/tests/data/table_with_column_mapping"
+        ).await?;
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
+        let log = table.log_store();
+
+        let provider =
+            DeltaTableProvider::try_new(table.snapshot().unwrap().clone(), log, config).unwrap();
+        let ctx: SessionContext = DeltaSessionContext::default().into();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        let df = ctx
+            .sql("select * from test")
+            .await?;
+        let actual = df.collect().await?;
+        let expected = vec![
+            "+--------------------+--------------------+",
+            "| test.col_1[col_1a] | test.col_1[col_1b] |",
+            "+--------------------+--------------------+",
+            "| A                  |                    |",
+            "| B                  |                    |",
+            "| E                  | E2                 |",
+            "| F                  | F2                 |",
+            "| G                  | G2                 |",
+            "+--------------------+--------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_predicate_pushdown() {
         use crate::datafusion::prelude::SessionContext;
         let schema = Arc::new(ArrowSchema::new(vec![
