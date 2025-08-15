@@ -107,7 +107,7 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
 
     assert_eq!(table.version(), Some(1));
 
-    /* Broken for now
+
     // The problem here is that DeltaTable::new_with_state does not preserve the table configuration
     // Really, DeltaTable.config is only meant for loading according to the docs so we may need more
     // changes to preserve the config.
@@ -120,8 +120,7 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
         .await?;
 
     assert_eq!(table.version(), Some(2));
-    
-     */
+
 
     Ok(table)
 }
@@ -141,27 +140,27 @@ async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties)
     Ok(())
 }
 
-/*
-async fn update_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
-    let (table, state) = open_table_with_state(uri, decryption_properties).await?;
-    let writer_properties = WriterProperties::builder()
-        .with_file_encryption_properties(crypt.clone())
-        .build();
 
-    let (table, _metrics) = DeltaOps(table)
+async fn update_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
+    let mut ops = DeltaOps::try_from_uri(uri).await?;
+    let mut tpo: TableParquetOptions = TableParquetOptions::default();
+    tpo.crypto.file_encryption = Some(crypt.into());
+    tpo.crypto.file_decryption = Some(decryption_properties.into());
+    ops = ops.with_table_parquet_options(tpo);
+
+    let (table, _metrics) = ops
         .update()
-        .with_session_state(state)
-        .with_writer_properties(writer_properties)
         .with_predicate(col("int").eq(lit(1)))
         .with_update("int", "100")
         .await
         .unwrap();
 
-    assert_eq!(table.version(), 3);
+    assert_eq!(table.version(), Some(3));
 
     Ok(())
 }
 
+/*
 async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
     let (table, state) = open_table_with_state(uri, decryption_properties).await?;
     let writer_properties = WriterProperties::builder()
@@ -259,7 +258,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
         .build()?;
 
     create_table(uri, table_name, &crypt).await?;
-    //update_table(uri, &decrypt, &crypt).await?;
+    update_table(uri, &decrypt, &crypt).await?;
     // delete_from_table(uri, &decrypt, &crypt).await?;
     //merge_table(uri, &decrypt, &crypt).await?;
     read_table(uri, &decrypt).await?;
