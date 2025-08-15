@@ -541,4 +541,32 @@ mod df_tests {
         //     struct_action.min_values().unwrap()
         // );
     }
+
+    #[tokio::test]
+    async fn test_open_column_mapping_table() -> crate::DeltaResult<()> {
+        let table_path = std::path::Path::new("../test/tests/data/table_with_column_mapping");
+        let table_uri =
+            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = crate::open_table(table_uri).await?;
+        let file_stats = table.snapshot().unwrap().snapshot.log_data();
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
+    async fn df_stats_delta_1_2_1_struct_stats_table() {
+        let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
+        let table_uri =
+            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
+
+        let file_stats = table_from_struct_stats
+            .snapshot()
+            .unwrap()
+            .snapshot
+            .log_data();
+
+        let col_stats: Vec<_> = file_stats.iter().filter_map(|f| f.stats()).collect();
+        println!("{col_stats:?}");
+    }
 }
