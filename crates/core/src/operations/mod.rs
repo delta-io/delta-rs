@@ -122,21 +122,6 @@ pub(crate) trait Operation<State>: std::future::IntoFuture {
     }
 }
 
-/*
-#[cfg(feature = "datafusion")]
-fn add_writer_properties<T: OpBuilderWithWrite>(builder: T, table_parquet_options: Option<&TableParquetOptions>) -> T {
-    use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
-
-    if let Some(table_parquet_options) = table_parquet_options {
-        let writer_options: ParquetWriterOptions =
-            ParquetWriterOptions::try_from(table_parquet_options)
-                .expect("Failed to convert TableParquetOptions to ParquetWriterOptions");
-        return builder.with_writer_properties(writer_options.writer_options().clone());
-    }
-    builder
-}
-
- */
 
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
