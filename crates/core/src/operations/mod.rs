@@ -37,6 +37,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
+use crate::table::TableParquetOptions;
 
 pub mod add_column;
 pub mod add_feature;
@@ -140,6 +141,7 @@ fn add_writer_properties<T: OpBuilderWithWrite>(builder: T, table_parquet_option
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaOps(pub DeltaTable);
 
+
 impl DeltaOps {
     /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri.
     ///
@@ -174,6 +176,12 @@ impl DeltaOps {
             Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
             Err(err) => Err(err),
         }
+    }
+
+    /// Set options for parquet files
+    pub fn with_table_parquet_options(mut self, table_parquet_options: TableParquetOptions) -> Self {
+        self.0.table_parquet_options = Some(table_parquet_options);
+        self
     }
 
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table

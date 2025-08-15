@@ -729,10 +729,24 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
+        // Get crypto options from the session table_options
+        /*
+        let tbl_opt = self.session.table_options();
+        let tbl_opt_parquet = &tbl_opt
+            .parquet;
+
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
+            crypto: tbl_opt_parquet.crypto.clone(),
             ..Default::default()
         };
+
+         */
+
+        // The SessionState is built from the SessionContext and so should hold all the derived parquet options
+        // These table options get built by TableOptions::default_from_session_config() during
+        // session context construction
+        let parquet_options = self.session.table_options().parquet.clone();
 
         let mut file_source = ParquetSource::new(parquet_options);
 

@@ -21,13 +21,11 @@ use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
 use deltalake_core::datafusion::config::ConfigFileDecryptionProperties;
 use deltalake_core::{DeltaTable, DeltaTableError, TableProperty};
 use deltalake_core::logstore::LogStoreRef;
-use url::Url;
 use deltalake::arrow::datatypes::Schema;
 use deltalake::datafusion::assert_batches_sorted_eq;
 use deltalake::datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
 use deltalake::datafusion::dataframe::DataFrame;
 use deltalake::datafusion::logical_expr::{col, lit};
-use deltalake_core::table::parquet_config::ParquetConfig;
 
 fn get_table_columns() -> Vec<StructField> {
     vec![
@@ -88,7 +86,6 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
     
     let mut tpo: TableParquetOptions = TableParquetOptions::default();
     tpo.crypto.file_encryption = Some(crypt.into());
-    let pc: ParquetConfig = tpo.into();
 
     // The operations module uses a builder pattern that allows specifying several options
     // on how the command behaves. The builders implement `Into<Future>`, so once
@@ -98,7 +95,7 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
         .with_columns(get_table_columns())
         .with_table_name(table_name)
         .with_comment("A table to show how delta-rs works")
-        .with_parquet_config(pc.to_string())
+        .with_table_parquet_options(tpo)
         .await?;
 
     assert_eq!(table.version(), Some(0));
@@ -134,9 +131,7 @@ async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties)
     
     let mut tpo: TableParquetOptions = TableParquetOptions::default();
     tpo.crypto.file_decryption = Some(decryption_properties.into());
-    let pc: ParquetConfig = tpo.into();
-    ops.0.config.parquet_config = Some(pc.to_string());  // TODO: parquet_config setter for DeltaOps
-    
+    ops = ops.with_table_parquet_options(tpo);
     let (_table, stream) = ops.load()
         .await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
