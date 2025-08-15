@@ -61,7 +61,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{apply_table_options_to_state, build_writer_properties};
+use crate::table::table_parquet_options::build_writer_properties;
 use crate::table::TableParquetOptions;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -195,6 +195,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 #[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
     snapshot: &DeltaTableState,
+    parquet_options: Option<TableParquetOptions>,
     log_store: LogStoreRef,
     state: &SessionState,
     expression: &Expr,
@@ -224,6 +225,7 @@ async fn execute_non_empty_expr(
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_parquet_options(parquet_options)
             .with_files(rewrite.to_vec()),
     );
     let target_provider = provider_as_source(target_provider);
@@ -316,6 +318,7 @@ async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
+    parquet_options: Option<TableParquetOptions>,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
@@ -339,6 +342,7 @@ async fn execute(
         let write_start = Instant::now();
         let add = execute_non_empty_expr(
             &snapshot,
+            parquet_options,
             log_store.clone(),
             &state,
             &predicate,
@@ -427,8 +431,7 @@ impl std::future::IntoFuture for DeleteBuilder {
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
-
-                apply_table_options_to_state(session.state(), this.table_parquet_options.clone())
+                session.state()
             });
 
             let predicate = match this.predicate {
@@ -445,6 +448,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 this.snapshot,
+                this.table_parquet_options.clone(),
                 state,
                 this.writer_properties,
                 this.commit_properties,
@@ -454,7 +458,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, new_snapshot, this.table_parquet_options.clone()),
+                DeltaTable::new_with_state(this.log_store, new_snapshot, this.table_parquet_options),
                 metrics,
             ))
         })

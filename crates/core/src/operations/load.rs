@@ -13,7 +13,6 @@ use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
-use crate::table::table_parquet_options::apply_table_options_to_state;
 use crate::table::TableParquetOptions;
 
 #[derive(Debug, Clone)]
@@ -86,7 +85,7 @@ impl std::future::IntoFuture for LoadBuilder {
                 .transpose()?;
 
             let ctx = SessionContext::new();
-            let state = apply_table_options_to_state(ctx.state(), this.table_parquet_options.clone());
+            let state = ctx.state();
 
             let scan_plan = table
                 .scan(&state, projection.as_ref(), &[], None)

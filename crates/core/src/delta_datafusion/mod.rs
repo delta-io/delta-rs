@@ -480,6 +480,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     limit: Option<usize>,
     files: Option<&'a [Add]>,
     config: Option<DeltaScanConfig>,
+    parquet_options: Option<TableParquetOptions>,
 }
 
 impl<'a> DeltaScanBuilder<'a> {
@@ -497,7 +498,13 @@ impl<'a> DeltaScanBuilder<'a> {
             limit: None,
             files: None,
             config: None,
+            parquet_options: None,
         }
+    }
+
+    pub fn with_parquet_options(mut self, parquet_options: Option<TableParquetOptions>) -> Self {
+        self.parquet_options = parquet_options;
+        self
     }
 
     pub fn with_filter(mut self, filter: Option<Expr>) -> Self {
@@ -729,10 +736,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
-        // The SessionState is built from the SessionContext and so should hold all the derived parquet options
-        // These table options get built by TableOptions::default_from_session_config() during
-        // session context construction
-        let parquet_options = self.session.table_options().parquet.clone();
+        let parquet_options = self.parquet_options.unwrap_or_else(|| self.session.table_options().parquet.clone());
 
         let mut file_source = ParquetSource::new(parquet_options);
 
@@ -853,6 +857,7 @@ impl TableProvider for DeltaTable {
         let filter_expr = conjunction(filters.iter().cloned());
 
         let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
+            .with_parquet_options(self.table_parquet_options.clone())
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -949,6 +954,7 @@ pub struct DeltaTableProvider {
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
     files: Option<Vec<Add>>,
+    parquet_options: Option<TableParquetOptions>,
 }
 
 impl DeltaTableProvider {
@@ -964,7 +970,13 @@ impl DeltaTableProvider {
             log_store,
             config,
             files: None,
+            parquet_options: None,
         })
+    }
+
+    pub fn with_parquet_options(mut self, parquet_options: Option<TableParquetOptions>) -> Self {
+        self.parquet_options = parquet_options;
+        self
     }
 
     /// Define which files to consider while building a scan, for advanced usecases
@@ -1007,6 +1019,7 @@ impl TableProvider for DeltaTableProvider {
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
+            .with_parquet_options(self.parquet_options.clone())
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)

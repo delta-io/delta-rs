@@ -93,7 +93,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{apply_table_options_to_state, build_writer_properties};
+use crate::table::table_parquet_options::build_writer_properties;
 use crate::table::TableParquetOptions;
 
 mod barrier;
@@ -735,6 +735,7 @@ async fn execute(
     mut source: DataFrame,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
+    parquet_options: Option<TableParquetOptions>,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
@@ -826,7 +827,7 @@ async fn execute(
         snapshot.clone(),
         log_store.clone(),
         scan_config.clone(),
-    )?);
+    )?.with_parquet_options(parquet_options));
 
     let target_provider = provider_as_source(target_provider);
     let target =
@@ -1545,8 +1546,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
-
-                apply_table_options_to_state(session.state(), this.table_parquet_options.clone())
+                session.state()
             });
 
             let (snapshot, metrics) = execute(
@@ -1554,6 +1554,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.source,
                 this.log_store.clone(),
                 this.snapshot,
+                this.table_parquet_options.clone(),
                 state,
                 this.writer_properties,
                 this.commit_properties,

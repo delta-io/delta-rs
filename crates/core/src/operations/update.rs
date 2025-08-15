@@ -65,7 +65,7 @@ use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{apply_table_options_to_state, build_writer_properties};
+use crate::table::table_parquet_options::build_writer_properties;
 use crate::table::TableParquetOptions;
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -243,6 +243,7 @@ async fn execute(
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
+    parquet_options: Option<TableParquetOptions>,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
@@ -330,6 +331,7 @@ async fn execute(
     // to either compute the new value or obtain the old one then write these batches
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_parquet_options(parquet_options)
             .with_files(candidates.candidates.clone()),
     );
 
@@ -506,7 +508,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
 
-                apply_table_options_to_state(session.state(), this.table_parquet_options.clone())
+                session.state()
             });
 
             let (snapshot, metrics) = execute(
@@ -514,6 +516,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.updates,
                 this.log_store.clone(),
                 this.snapshot,
+                this.table_parquet_options.clone(),
                 state,
                 this.writer_properties,
                 this.commit_properties,
