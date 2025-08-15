@@ -86,7 +86,8 @@ impl std::future::IntoFuture for LoadBuilder {
 
             let ctx = SessionContext::new();
 
-            // Parquet options, if any, are set in table_parquet_options
+            // Propagate any options set in table_parquet_options to the session state
+            // This allows the table to use these options when reading Parquet files.
             let mut state = ctx.state();
             if let Some(table_parquet_options) = this.table_parquet_options {
                 let mut table_config = TableOptions::new();
