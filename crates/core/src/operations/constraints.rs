@@ -25,6 +25,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, TableParquetOptions};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::table::table_parquet_options::apply_table_options_to_state;
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {

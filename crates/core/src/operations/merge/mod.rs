@@ -93,7 +93,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::table_parquet_options::{apply_table_options_to_state, build_writer_properties};
 use crate::table::TableParquetOptions;
 
 mod barrier;
@@ -1546,7 +1546,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
 
-                session.state()
+                apply_table_options_to_state(session.state(), this.table_parquet_options.clone())
             });
 
             let (snapshot, metrics) = execute(

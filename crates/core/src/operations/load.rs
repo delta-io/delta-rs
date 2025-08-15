@@ -13,6 +13,7 @@ use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
+use crate::table::table_parquet_options::apply_table_options_to_state;
 use crate::table::TableParquetOptions;
 
 #[derive(Debug, Clone)]
@@ -85,17 +86,7 @@ impl std::future::IntoFuture for LoadBuilder {
                 .transpose()?;
 
             let ctx = SessionContext::new();
-
-            // Propagate any options set in table_parquet_options to the session state
-            // This allows the table to use these options when reading Parquet files.
-            let mut state = ctx.state();
-            if let Some(table_parquet_options) = this.table_parquet_options {
-                let mut table_config = TableOptions::new();
-                table_config.set_config_format(ConfigFileType::PARQUET);
-                table_config.parquet = table_parquet_options;
-                let tom = state.table_options_mut();
-                *tom = table_config;
-            }
+            let state = apply_table_options_to_state(ctx.state(), this.table_parquet_options.clone());
 
             let scan_plan = table
                 .scan(&state, projection.as_ref(), &[], None)

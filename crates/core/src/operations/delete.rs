@@ -61,7 +61,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::table_parquet_options::{apply_table_options_to_state, build_writer_properties};
 use crate::table::TableParquetOptions;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -428,7 +428,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 // If a user provides their own their DF state then they must register the store themselves
                 register_store(this.log_store.clone(), session.runtime_env());
 
-                session.state()
+                apply_table_options_to_state(session.state(), this.table_parquet_options.clone())
             });
 
             let predicate = match this.predicate {
@@ -454,7 +454,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, new_snapshot, this.table_parquet_options),
+                DeltaTable::new_with_state(this.log_store, new_snapshot, this.table_parquet_options.clone()),
                 metrics,
             ))
         })
