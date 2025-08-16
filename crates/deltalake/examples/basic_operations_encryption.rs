@@ -27,6 +27,22 @@ use deltalake::datafusion::config::{ConfigFileEncryptionProperties, TableParquet
 use deltalake::datafusion::dataframe::DataFrame;
 use deltalake::datafusion::logical_expr::{col, lit};
 
+async fn ops_with_crypto(
+    uri: &str,
+    enc: Option<&FileEncryptionProperties>,
+    dec: Option<&FileDecryptionProperties>,
+) -> Result<DeltaOps, DeltaTableError> {
+    let ops = DeltaOps::try_from_uri(uri).await?;
+    let mut tpo: TableParquetOptions = TableParquetOptions::default();
+    if let Some(enc) = enc {
+        tpo.crypto.file_encryption = Some(enc.into());
+    }
+    if let Some(dec) = dec {
+        tpo.crypto.file_decryption = Some(dec.into());
+    }
+    Ok(ops.with_table_parquet_options(tpo))
+}
+
 fn get_table_columns() -> Vec<StructField> {
     vec![
         StructField::new(
@@ -82,10 +98,7 @@ fn get_table_batches() -> RecordBatch {
 
 async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionProperties) -> Result<DeltaTable, DeltaTableError> {
     fs::remove_dir_all(uri)?;
-    let ops = DeltaOps::try_from_uri(uri).await?;
-    
-    let mut tpo: TableParquetOptions = TableParquetOptions::default();
-    tpo.crypto.file_encryption = Some(crypt.into());
+    let ops = ops_with_crypto(uri, Some(crypt), None).await?;
 
     // The operations module uses a builder pattern that allows specifying several options
     // on how the command behaves. The builders implement `Into<Future>`, so once
@@ -95,7 +108,6 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
         .with_columns(get_table_columns())
         .with_table_name(table_name)
         .with_comment("A table to show how delta-rs works")
-        .with_table_parquet_options(tpo)
         .await?;
 
     assert_eq!(table.version(), Some(0));
@@ -125,12 +137,8 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
     Ok(table)
 }
 
-async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties) -> Result<(), deltalake::errors::DeltaTableError>{
-    let mut ops =  DeltaOps::try_from_uri(uri).await?;
-    
-    let mut tpo: TableParquetOptions = TableParquetOptions::default();
-    tpo.crypto.file_decryption = Some(decryption_properties.into());
-    ops = ops.with_table_parquet_options(tpo);
+async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties) -> Result<(), DeltaTableError>{
+    let ops = ops_with_crypto(uri, None, Some(decryption_properties)).await?;
     let (_table, stream) = ops.load()
         .await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
@@ -142,11 +150,7 @@ async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties)
 
 
 async fn update_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
-    let mut ops = DeltaOps::try_from_uri(uri).await?;
-    let mut tpo: TableParquetOptions = TableParquetOptions::default();
-    tpo.crypto.file_encryption = Some(crypt.into());
-    tpo.crypto.file_decryption = Some(decryption_properties.into());
-    ops = ops.with_table_parquet_options(tpo);
+    let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
 
     let (table, _metrics) = ops
         .update()
@@ -162,11 +166,7 @@ async fn update_table(uri: &str, decryption_properties: &FileDecryptionPropertie
 
 
 async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
-    let mut ops = DeltaOps::try_from_uri(uri).await?;
-    let mut tpo: TableParquetOptions = TableParquetOptions::default();
-    tpo.crypto.file_encryption = Some(crypt.into());
-    tpo.crypto.file_decryption = Some(decryption_properties.into());
-    ops = ops.with_table_parquet_options(tpo);
+    let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
 
     let (table, _metrics) = ops
         .delete()
@@ -176,10 +176,20 @@ async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProp
 
     assert_eq!(table.version(), Some(4));
 
+    if false {
+        println!("Table after delete:");
+        let (_table, stream) = DeltaOps(table).load()
+            .await?;
+        let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
+
+        println!("{data:?}");
+    }
+
+
     Ok(())
 }
 
-/*
+
 fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
     let ctx = SessionContext::new();
     let batch = RecordBatch::try_new(
@@ -197,19 +207,13 @@ fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
 
 
 async fn merge_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
-
-    let (table, state) = open_table_with_state(uri, decryption_properties).await?;
-    let writer_properties = WriterProperties::builder()
-        .with_file_encryption_properties(crypt.clone())
-        .build();
+    let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
 
     let schema = get_table_schema();
     let source = merge_source(schema);
 
-    let (table, _metrics) = DeltaOps(table)
+    let (table, _metrics) = ops
         .merge(source, col("target.int").eq(col("source.int")))
-        .with_session_state(state.clone())
-        .with_writer_properties(writer_properties)
         .with_source_alias("source")
         .with_target_alias("target")
         .when_not_matched_by_source_delete(|delete| {
@@ -220,26 +224,23 @@ async fn merge_table(uri: &str, decryption_properties: &FileDecryptionProperties
         .unwrap();
 
     let expected = vec![
-        "+----+-------+------------+",
-        "| id | value | modified   |",
-        "+----+-------+------------+",
-        "| A  | 1     | 2021-02-01 |",
-        "| B  | 10    | 2021-02-01 |",
-        "| C  | 10    | 2021-02-02 |",
-        "+----+-------+------------+",
+        "+-----+--------+----------------------------+",
+        "| int | string | timestamp                  |",
+        "+-----+--------+----------------------------+",
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
+        "+-----+--------+----------------------------+",
     ];
 
     let (_table, stream) = DeltaOps(table).load()
-        .with_session_state(state)
         .await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
-    println!("{data:?}");
+    // println!("{data:?}");
 
     assert_batches_sorted_eq!(&expected, &data);
     Ok(())
 }
-*/
+
 async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     let uri = "/home/cjoy/src/delta-rs-with-encryption/delta-rs/crates/deltalake/examples/encrypted_roundtrip";
     let table_name = "roundtrip";
@@ -260,7 +261,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     create_table(uri, table_name, &crypt).await?;
     update_table(uri, &decrypt, &crypt).await?;
     delete_from_table(uri, &decrypt, &crypt).await?;
-    //merge_table(uri, &decrypt, &crypt).await?;
+    merge_table(uri, &decrypt, &crypt).await?;
     read_table(uri, &decrypt).await?;
     Ok(())
 }

@@ -93,7 +93,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::table_parquet_options::{build_writer_properties, ConfigFileType, TableOptions};
 use crate::table::TableParquetOptions;
 
 mod barrier;
@@ -765,6 +765,16 @@ async fn execute(
     let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
         extension_planner: MergeMetricExtensionPlanner {},
     };
+
+    let mut sb = SessionStateBuilder::new_from_existing(state.clone());
+
+    if parquet_options.is_some() {
+        let mut tbl_opts = TableOptions::new();
+        tbl_opts.parquet = parquet_options.clone().unwrap();
+        tbl_opts.set_config_format(ConfigFileType::PARQUET);
+        sb = sb.with_table_options(tbl_opts);
+    }
+    let state = sb.build();
 
     let state = SessionStateBuilder::new_from_existing(state)
         .with_query_planner(Arc::new(merge_planner))
