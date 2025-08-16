@@ -160,26 +160,26 @@ async fn update_table(uri: &str, decryption_properties: &FileDecryptionPropertie
     Ok(())
 }
 
-/*
-async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
-    let (table, state) = open_table_with_state(uri, decryption_properties).await?;
-    let writer_properties = WriterProperties::builder()
-        .with_file_encryption_properties(crypt.clone())
-        .build();
 
-    let (table, _metrics) = DeltaOps(table)
+async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
+    let mut ops = DeltaOps::try_from_uri(uri).await?;
+    let mut tpo: TableParquetOptions = TableParquetOptions::default();
+    tpo.crypto.file_encryption = Some(crypt.into());
+    tpo.crypto.file_decryption = Some(decryption_properties.into());
+    ops = ops.with_table_parquet_options(tpo);
+
+    let (table, _metrics) = ops
         .delete()
-        .with_session_state(state)
-        .with_writer_properties(writer_properties)
         .with_predicate(col("int").eq(lit(2)))
         .await
         .unwrap();
 
-    assert_eq!(table.version(), 3);
+    assert_eq!(table.version(), Some(4));
 
     Ok(())
 }
 
+/*
 fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
     let ctx = SessionContext::new();
     let batch = RecordBatch::try_new(
@@ -259,7 +259,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
 
     create_table(uri, table_name, &crypt).await?;
     update_table(uri, &decrypt, &crypt).await?;
-    // delete_from_table(uri, &decrypt, &crypt).await?;
+    delete_from_table(uri, &decrypt, &crypt).await?;
     //merge_table(uri, &decrypt, &crypt).await?;
     read_table(uri, &decrypt).await?;
     Ok(())

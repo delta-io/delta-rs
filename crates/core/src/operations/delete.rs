@@ -61,7 +61,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::table_parquet_options::{build_writer_properties, ConfigFileType, TableOptions};
 use crate::table::TableParquetOptions;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -214,9 +214,10 @@ async fn execute_non_empty_expr(
         extension_planner: DeleteMetricExtensionPlanner {},
     };
 
+
     let state = SessionStateBuilder::new_from_existing(state.clone())
-        .with_query_planner(Arc::new(delete_planner))
-        .build();
+        .with_query_planner(Arc::new(delete_planner)).build();
+
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
@@ -433,6 +434,16 @@ impl std::future::IntoFuture for DeleteBuilder {
                 register_store(this.log_store.clone(), session.runtime_env());
                 session.state()
             });
+
+            let mut sb = SessionStateBuilder::new_from_existing(state.clone());
+
+            if this.table_parquet_options.is_some() {
+                let mut tbl_opts = TableOptions::new();
+                tbl_opts.parquet = this.table_parquet_options.clone().unwrap();
+                tbl_opts.set_config_format(ConfigFileType::PARQUET);
+                sb = sb.with_table_options(tbl_opts);
+            }
+            let state = sb.build();
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
