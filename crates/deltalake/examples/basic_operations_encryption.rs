@@ -26,6 +26,7 @@ use deltalake::datafusion::assert_batches_sorted_eq;
 use deltalake::datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
 use deltalake::datafusion::dataframe::DataFrame;
 use deltalake::datafusion::logical_expr::{col, lit};
+use deltalake_core::datafusion::common::test_util::format_batches;
 
 async fn ops_with_crypto(
     uri: &str,
@@ -143,7 +144,10 @@ async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties)
         .await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
-    println!("{data:?}");
+    // println!("{data:?}");
+    let formatted = format_batches(&*data)?
+        .to_string();
+    println!("{}", formatted);
 
     Ok(())
 }
