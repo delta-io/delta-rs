@@ -443,3 +443,159 @@ impl TryFrom<&LogicalFileView> for ObjectMeta {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::TestTables;
+    use chrono::DateTime;
+    use futures::TryStreamExt;
+
+    #[tokio::test]
+    async fn test_logical_file_view_with_real_data() {
+        // Use existing test table with real Delta log data
+        let log_store = TestTables::Simple.table_builder().build_storage().unwrap();
+        let snapshot =
+            crate::kernel::snapshot::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap();
+
+        let files: Vec<_> = snapshot
+            .files(&log_store, None)
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(!files.is_empty(), "Should have test files");
+
+        let first_batch = &files[0];
+        let view = LogicalFileView::new(first_batch.clone(), 0);
+
+        // Test basic properties
+        assert!(!view.path().is_empty());
+        assert!(view.size() > 0);
+        assert!(view.modification_time() > 0);
+
+        // Test datetime conversion
+        let datetime = view.modification_datetime().unwrap();
+        assert!(datetime.timestamp_millis() > 0);
+
+        // Test action conversions
+        let add_action = view.add_action();
+        assert_eq!(add_action.path, view.path());
+        assert_eq!(add_action.size, view.size());
+        assert!(add_action.data_change);
+
+        let remove_action = view.remove_action(true);
+        assert_eq!(remove_action.path, view.path());
+        assert!(remove_action.data_change);
+        assert!(remove_action.deletion_timestamp.is_some());
+
+        // Test ObjectMeta conversion
+        let object_meta: ObjectMeta = (&view).try_into().unwrap();
+        assert_eq!(object_meta.size as i64, view.size());
+        assert_eq!(
+            object_meta.last_modified.timestamp_millis(),
+            view.modification_time()
+        );
+    }
+
+    #[test]
+    fn test_path_url_decoding() {
+        // Test URL decoding using the percent_decode_str functionality
+        use percent_encoding::percent_decode_str;
+        use std::borrow::Cow;
+
+        let encoded_path = "path/to/file%20with%20spaces.parquet";
+        let decoded: Cow<str> = percent_decode_str(encoded_path).decode_utf8_lossy();
+        assert_eq!(decoded, "path/to/file with spaces.parquet");
+    }
+
+    #[test]
+    fn test_get_string_value_different_types() {
+        use arrow_array::{Int32Array, StringArray};
+
+        // Test Utf8
+        let utf8_array = StringArray::from(vec![Some("test"), None]);
+        assert_eq!(get_string_value(&utf8_array, 0), Some("test"));
+        assert_eq!(get_string_value(&utf8_array, 1), None);
+
+        // Test LargeUtf8
+        let large_utf8_array = arrow_array::LargeStringArray::from(vec![Some("large_test"), None]);
+        assert_eq!(get_string_value(&large_utf8_array, 0), Some("large_test"));
+        assert_eq!(get_string_value(&large_utf8_array, 1), None);
+
+        // Test Utf8View
+        let utf8_view_array = arrow_array::StringViewArray::from(vec![Some("view_test"), None]);
+        assert_eq!(get_string_value(&utf8_view_array, 0), Some("view_test"));
+        assert_eq!(get_string_value(&utf8_view_array, 1), None);
+
+        // Test unsupported type
+        let int_array = Int32Array::from(vec![123]);
+        assert_eq!(get_string_value(&int_array, 0), None);
+    }
+
+    #[test]
+    fn test_ceil_datetime() {
+        // Test exact millisecond (should be rounded up)
+        assert_eq!(ceil_datetime(1609459200000), 1609459201000);
+
+        // Test with microsecond remainder (should stay the same)
+        assert_eq!(ceil_datetime(1609459200123), 1609459200123);
+
+        // Test zero
+        assert_eq!(ceil_datetime(0), 1000);
+    }
+
+    #[test]
+    fn test_round_ms_datetimes() {
+        use delta_kernel::expressions::{Scalar, StructData};
+        use delta_kernel::schema::{DataType, PrimitiveType, StructField};
+
+        let ceil_fn = |v: i64| v + 1000;
+
+        // Test timestamp scalar
+        let timestamp = Scalar::Timestamp(1609459200000);
+        let rounded = round_ms_datetimes(timestamp, &ceil_fn);
+        assert_eq!(rounded, Scalar::Timestamp(1609459201000));
+
+        // Test timestamp ntz scalar
+        let timestamp_ntz = Scalar::TimestampNtz(1609459200000);
+        let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
+        assert_eq!(rounded, Scalar::TimestampNtz(1609459201000));
+
+        // Test non-timestamp scalar (should be unchanged)
+        let string_scalar = Scalar::String("test".into());
+        let rounded = round_ms_datetimes(string_scalar.clone(), &ceil_fn);
+        assert_eq!(rounded, string_scalar);
+
+        // Test struct with timestamp
+        let fields = vec![StructField::new(
+            "ts",
+            DataType::Primitive(PrimitiveType::Timestamp),
+            true,
+        )];
+        let values = vec![Scalar::Timestamp(1609459200000)];
+        let struct_data = StructData::try_new(fields.clone(), values).unwrap();
+        let struct_scalar = Scalar::Struct(struct_data);
+
+        let rounded = round_ms_datetimes(struct_scalar, &ceil_fn);
+        if let Scalar::Struct(rounded_struct) = rounded {
+            assert_eq!(rounded_struct.values()[0], Scalar::Timestamp(1609459201000));
+        } else {
+            panic!("Expected struct scalar");
+        }
+    }
+
+    #[test]
+    fn test_invalid_modification_time() {
+        // Test that invalid timestamps return errors
+        let invalid_timestamp = i64::MAX;
+        let result = DateTime::from_timestamp_millis(invalid_timestamp);
+        assert!(result.is_none());
+
+        // Test a valid timestamp for comparison
+        let valid_timestamp = 1609459200000; // 2021-01-01
+        let result = DateTime::from_timestamp_millis(valid_timestamp);
+        assert!(result.is_some());
+    }
+}
