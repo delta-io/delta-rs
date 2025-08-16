@@ -50,6 +50,10 @@ pub(crate) struct ScanMetadataArrow {
     pub scan_file_transforms: Vec<Option<ExpressionRef>>,
 }
 
+/// Internal extension trait to streamline working with Kernel scan objects.
+///
+/// THe trait mainly handles conversion between arrow `RecordBatch` and `ArrowEngineData`.
+/// The exposed methods are arrow-variants of methods already exposed on the kernel scan.
 pub(crate) trait ScanExt {
     /// Get the metadata for a table scan.
     ///
@@ -97,12 +101,22 @@ impl ScanExt for Scan {
     }
 }
 
+/// Internal extension traits to the Kernel Snapshot.
+///
+/// These traits provide additional convenience functionality for working with Kernel snapshots.
+/// Some of this may eventually be upstreamed as the kernel implementation matures.
 pub(crate) trait SnapshotExt {
     /// Returns the expected file statistics schema for the snapshot.
     fn stats_schema(&self) -> DeltaResult<SchemaRef>;
 
+    /// The expected schema for partition values
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>>;
 
+    /// The scheme expected for the data returned from a scan.
+    ///
+    /// This is an extended version of the raw schema that includes additional
+    /// computations by delta-rs. Specifically the `stats_parsed` and
+    /// `partitionValues_parsed` fields are added.
     fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef>;
 
     /// Parse stats column into a struct array.
@@ -493,6 +507,10 @@ fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
     })
 }
 
+/// Internal extension trait for expression evaluators.
+///
+/// This just abstracts the conversion between Arrow [`RecoedBatch`]es and
+/// Kernel's [`ArrowEngineData`].
 pub(crate) trait ExpressionEvaluatorExt {
     fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch>;
 }
@@ -504,12 +522,22 @@ impl<T: ExpressionEvaluator + ?Sized> ExpressionEvaluatorExt for T {
     }
 }
 
+/// Extension trait for Kernel's [`StructData`].
+///
+/// StructData is the data structure contained in a Struct scalar.
+/// The exposed API on kernels struct data is very minimal and does not allow
+/// for conveniently probing the fields / values contained within [`StructData`].
+///
+/// This trait therefore adds convenience methods for accessing fields and values.
 pub trait StructDataExt {
+    /// Returns a reference to the field with the given name, if it exists.
     fn field(&self, name: &str) -> Option<&StructField>;
 
-    fn index_of(&self, name: &str) -> Option<usize>;
-
+    /// Returns a reference to the value with the given index, if it exists.
     fn value(&self, index: usize) -> Option<&Scalar>;
+
+    /// Returns the index of the field with the given name, if it exists.
+    fn index_of(&self, name: &str) -> Option<usize>;
 }
 
 impl StructDataExt for StructData {

@@ -83,6 +83,12 @@ static DV_FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(
     indices
 });
 
+/// Provides semantic, typed access to file metadata from Delta log replay.
+///
+/// This struct wraps a RecordBatch containing file data and provides zero-copy
+/// access to individual file entries through an index. It serves as a view into
+/// the kernel's log replay results, offering convenient methods to extract
+/// file properties without unnecessary data copies.
 #[derive(Clone)]
 pub struct LogicalFileView {
     files: RecordBatch,
@@ -90,11 +96,12 @@ pub struct LogicalFileView {
 }
 
 impl LogicalFileView {
+    /// Creates a new view into the specified file entry.
     pub(crate) fn new(files: RecordBatch, index: usize) -> Self {
         Self { files, index }
     }
 
-    /// Path of the file.
+    /// Returns the file path with URL decoding applied.
     pub fn path(&self) -> Cow<'_, str> {
         let raw = get_string_value(
             self.files
@@ -122,7 +129,7 @@ impl LogicalFileView {
         }
     }
 
-    /// Size of the file in bytes.
+    /// Returns the file size in bytes.
     pub fn size(&self) -> i64 {
         self.files
             .column(*FIELD_INDICES.get(FIELD_NAME_SIZE).unwrap())
@@ -130,7 +137,7 @@ impl LogicalFileView {
             .value(self.index)
     }
 
-    /// Modification time of the file in milliseconds since epoch.
+    /// Returns the file modification time in milliseconds since Unix epoch.
     pub fn modification_time(&self) -> i64 {
         self.files
             .column(*FIELD_INDICES.get(FIELD_NAME_MODIFICATION_TIME).unwrap())
@@ -138,7 +145,7 @@ impl LogicalFileView {
             .value(self.index)
     }
 
-    /// Datetime of the last modification time of the file.
+    /// Returns the file modification time as a UTC DateTime.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
         DateTime::from_timestamp_millis(self.modification_time()).ok_or(
             DeltaTableError::MetadataError(format!(
@@ -148,6 +155,7 @@ impl LogicalFileView {
         )
     }
 
+    /// Returns the raw JSON statistics string for this file, if available.
     pub fn stats(&self) -> Option<&str> {
         get_string_value(
             self.files
@@ -156,6 +164,7 @@ impl LogicalFileView {
         )
     }
 
+    /// Returns the parsed partition values as structured data.
     pub fn partition_values(&self) -> Option<StructData> {
         self.files
             .column_by_name(FIELD_NAME_PARTITION_VALUES_PARSED)
@@ -170,6 +179,7 @@ impl LogicalFileView {
             })
     }
 
+    /// Converts partition values to a map of column names to serialized values.
     fn partition_values_map(&self) -> HashMap<String, Option<String>> {
         self.partition_values()
             .map(|data| {
@@ -191,13 +201,14 @@ impl LogicalFileView {
             .unwrap_or_default()
     }
 
+    /// Returns the parsed statistics as a StructArray, if available.
     fn stats_parsed(&self) -> Option<&StructArray> {
         self.files
             .column_by_name(FIELD_NAME_STATS_PARSED)
             .and_then(|col| col.as_struct_opt())
     }
 
-    /// The number of records stored in the data file.
+    /// Returns the number of records in this file.
     pub fn num_records(&self) -> Option<usize> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_NUM_RECORDS))
@@ -205,21 +216,24 @@ impl LogicalFileView {
             .map(|a| a.value(self.index) as usize)
     }
 
-    /// Struct containing all available null counts for the columns in this file.
+    /// Returns null counts for all columns in this file as structured data.
     pub fn null_counts(&self) -> Option<Scalar> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_NULL_COUNT))
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
     }
 
-    /// Struct containing all available min values for the columns in this file.
+    /// Returns minimum values for all columns with statics in this file as structured data.
     pub fn min_values(&self) -> Option<Scalar> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_MIN_VALUES))
             .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
     }
 
-    /// Struct containing all available max values for the columns in this file.
+    /// Returns maximum values for all columns in this file as structured data.
+    ///
+    /// For timestamp columns, values are rounded up to handle microsecond truncation
+    /// in checkpoint statistics.
     pub fn max_values(&self) -> Option<Scalar> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_MAX_VALUES))
@@ -227,6 +241,7 @@ impl LogicalFileView {
             .map(|s| round_ms_datetimes(s, &ceil_datetime))
     }
 
+    /// Returns a view into the deletion vector for this file, if present.
     fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
         let dv_col = self
             .files
@@ -250,6 +265,7 @@ impl LogicalFileView {
             .flatten()
     }
 
+    /// Converts this file view into an Add action for log operations.
     pub(crate) fn add_action(&self) -> Add {
         Add {
             path: self.path().to_string(),
@@ -266,7 +282,7 @@ impl LogicalFileView {
         }
     }
 
-    /// Create a remove action for this logical file.
+    /// Converts this file view into a Remove action for log operations.
     pub fn remove_action(&self, data_change: bool) -> Remove {
         Remove {
             // TODO use the raw (still encoded) path here once we reconciled serde ...
@@ -284,9 +300,11 @@ impl LogicalFileView {
     }
 }
 
-// With delta.checkpoint.writeStatsAsStruct the microsecond timestamps are truncated to ms as defined by protocol
-// this basically implies that it's floored when we parse_stats on the fly they are not truncated
-// to tackle this we always round upwards by 1ms
+/// Rounds up timestamp values to handle microsecond truncation in checkpoint statistics.
+///
+/// When delta.checkpoint.writeStatsAsStruct is enabled, microsecond timestamps are
+/// truncated to milliseconds. This function rounds up by 1ms to ensure correct
+/// range queries when stats are parsed on-the-fly.
 fn ceil_datetime(v: i64) -> i64 {
     let remainder = v % 1000;
     if remainder == 0 {
@@ -298,6 +316,7 @@ fn ceil_datetime(v: i64) -> i64 {
     }
 }
 
+/// Recursively applies a rounding function to timestamp values in scalar data.
 fn round_ms_datetimes<F>(value: Scalar, func: &F) -> Scalar
 where
     F: Fn(i64) -> i64,
@@ -320,15 +339,19 @@ where
     }
 }
 
-/// View into a deletion vector data.
+/// Provides typed access to deletion vector metadata from log data.
+///
+/// This struct wraps a StructArray containing deletion vector information
+/// and provides zero-copy access to individual fields through an index.
 #[derive(Debug)]
 struct DeletionVectorView<'a> {
     data: &'a StructArray,
-    /// Pointer to a specific row in the log data.
+    /// Index into the deletion vector data array.
     index: usize,
 }
 
 impl DeletionVectorView<'_> {
+    /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {
             storage_type: self.storage_type().parse().unwrap(),
@@ -339,6 +362,7 @@ impl DeletionVectorView<'_> {
         }
     }
 
+    /// Returns the storage type of the deletion vector.
     fn storage_type(&self) -> &str {
         get_string_value(
             self.data
@@ -348,6 +372,7 @@ impl DeletionVectorView<'_> {
         .unwrap()
     }
 
+    /// Returns the path or inline data for the deletion vector.
     fn path_or_inline_dv(&self) -> &str {
         get_string_value(
             self.data
@@ -357,6 +382,7 @@ impl DeletionVectorView<'_> {
         .unwrap()
     }
 
+    /// Returns the size of the deletion vector in bytes.
     fn size_in_bytes(&self) -> i32 {
         self.data
             .column(*DV_FIELD_INDICES.get(DV_FIELD_SIZE_IN_BYTES).unwrap())
@@ -364,6 +390,7 @@ impl DeletionVectorView<'_> {
             .value(self.index)
     }
 
+    /// Returns the number of deleted rows represented by this deletion vector.
     fn cardinality(&self) -> i64 {
         self.data
             .column(*DV_FIELD_INDICES.get(DV_FIELD_CARDINALITY).unwrap())
@@ -371,6 +398,7 @@ impl DeletionVectorView<'_> {
             .value(self.index)
     }
 
+    /// Returns the offset within the deletion vector file, if applicable.
     fn offset(&self) -> Option<i32> {
         let col = self
             .data
@@ -380,6 +408,10 @@ impl DeletionVectorView<'_> {
     }
 }
 
+/// Extracts a string value from an Arrow array at the specified index.
+///
+/// Handles different string array types (Utf8, LargeUtf8, Utf8View) and
+/// returns None for null values or unsupported types.
 fn get_string_value(data: &dyn Array, index: usize) -> Option<&str> {
     match data.data_type() {
         ArrowDataType::Utf8 => {
