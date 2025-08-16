@@ -216,7 +216,7 @@ fn filter_to_kernel_predicate(
         // we have allowed to equality against null. So here we have to handle null values explicitly by using
         // is_null and is_not_null methods directly.
         PartitionValue::Equal(raw) => {
-            let scalar = parse_scalar(dt, raw)?;
+            let scalar = dt.parse_scalar(raw)?;
             if scalar.is_null() {
                 column.is_null()
             } else {
@@ -224,21 +224,21 @@ fn filter_to_kernel_predicate(
             }
         }
         PartitionValue::NotEqual(raw) => {
-            let scalar = parse_scalar(dt, raw)?;
+            let scalar = dt.parse_scalar(raw)?;
             if scalar.is_null() {
                 column.is_not_null()
             } else {
                 column.ne(scalar)
             }
         }
-        PartitionValue::LessThan(raw) => column.lt(parse_scalar(dt, raw)?),
-        PartitionValue::LessThanOrEqual(raw) => column.le(parse_scalar(dt, raw)?),
-        PartitionValue::GreaterThan(raw) => column.gt(parse_scalar(dt, raw)?),
-        PartitionValue::GreaterThanOrEqual(raw) => column.ge(parse_scalar(dt, raw)?),
+        PartitionValue::LessThan(raw) => column.lt(dt.parse_scalar(raw)?),
+        PartitionValue::LessThanOrEqual(raw) => column.le(dt.parse_scalar(raw)?),
+        PartitionValue::GreaterThan(raw) => column.gt(dt.parse_scalar(raw)?),
+        PartitionValue::GreaterThanOrEqual(raw) => column.ge(dt.parse_scalar(raw)?),
         op @ PartitionValue::In(raw_values) | op @ PartitionValue::NotIn(raw_values) => {
             let values = raw_values
                 .iter()
-                .map(|v| parse_scalar(dt, v))
+                .map(|v| dt.parse_scalar(v))
                 .collect::<Result<Vec<_>, _>>()?;
             let (expr, operator): (Box<dyn Fn(Scalar) -> Predicate>, _) = match op {
                 PartitionValue::In(_) => {
@@ -253,15 +253,6 @@ fn filter_to_kernel_predicate(
             Predicate::junction(operator, predicates)
         }
     })
-}
-
-fn parse_scalar(dt: &PrimitiveType, raw: &str) -> DeltaResult<Scalar> {
-    match dt {
-        // NOTE: in partition encoding, empty strings are interpreted as NULL,
-        // which is the lesser of two evils ...
-        PrimitiveType::String if raw.is_empty() => Ok(Scalar::Null(DataType::STRING)),
-        _ => Ok(dt.parse_scalar(raw)?),
-    }
 }
 
 #[cfg(test)]
