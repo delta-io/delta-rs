@@ -417,6 +417,25 @@ impl Snapshot {
             .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(version)
     }
+
+    /// Fetch the [domainMetadata] for a specific domain in this snapshot.
+    ///
+    /// This returns the latest configuration for the domain, or None if the domain does not exist.
+    ///
+    /// [domainMetadata]: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#domain-metadata
+    pub async fn domain_metadata(
+        &self,
+        log_store: &dyn LogStore,
+        domain: impl ToString,
+    ) -> DeltaResult<Option<String>> {
+        let engine = log_store.engine(None);
+        let inner = self.inner.clone();
+        let domain = domain.to_string();
+        let metadata = spawn_blocking(move || inner.get_domain_metadata(&domain, engine.as_ref()))
+            .await
+            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        Ok(metadata)
+    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -654,6 +673,14 @@ impl EagerSnapshot {
         self.snapshot
             .application_transaction_version(log_store, app_id.to_string())
             .await
+    }
+
+    pub async fn domain_metadata(
+        &self,
+        log_store: &dyn LogStore,
+        domain: impl ToString,
+    ) -> DeltaResult<Option<String>> {
+        self.snapshot.domain_metadata(log_store, domain).await
     }
 }
 
