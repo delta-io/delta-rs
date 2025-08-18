@@ -5,10 +5,6 @@ use deltalake::arrow::{
 };
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
-use deltalake::parquet::{
-    basic::{Compression, ZstdLevel},
-    file::properties::WriterProperties,
-};
 use deltalake::{arrow, parquet, protocol::SaveMode, DeltaOps};
 use std::fs;
 
@@ -16,16 +12,12 @@ use deltalake::arrow::datatypes::Schema;
 use deltalake::datafusion::assert_batches_sorted_eq;
 use deltalake::datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
 use deltalake::datafusion::dataframe::DataFrame;
-use deltalake::datafusion::execution::runtime_env::RuntimeEnv;
-use deltalake::datafusion::execution::{SessionState, SessionStateBuilder};
 use deltalake::datafusion::logical_expr::{col, lit};
 use deltalake::datafusion::prelude::{SessionConfig, SessionContext};
 use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
 use deltalake_core::datafusion::common::test_util::format_batches;
-use deltalake_core::datafusion::config::ConfigFileDecryptionProperties;
-use deltalake_core::logstore::LogStoreRef;
-use deltalake_core::{DeltaTable, DeltaTableError, TableProperty};
+use deltalake_core::{DeltaTable, DeltaTableError};
 use std::sync::Arc;
 
 async fn ops_with_crypto(
@@ -122,15 +114,9 @@ async fn create_table(
 
     assert_eq!(table.version(), Some(1));
 
-    // The problem here is that DeltaTable::new_with_state does not preserve the table configuration
-    // Really, DeltaTable.config is only meant for loading according to the docs so we may need more
-    // changes to preserve the config.
-    //
-    //
-    // To overwrite instead of append (which is the default), use `.with_save_mode`:
+    // Append records to the table
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
-        .with_save_mode(SaveMode::Overwrite)
         .await?;
 
     assert_eq!(table.version(), Some(2));
@@ -148,6 +134,7 @@ async fn read_table(
 
     // println!("{data:?}");
     let formatted = format_batches(&*data)?.to_string();
+    println!("Final table:");
     println!("{}", formatted);
 
     Ok(())
@@ -167,7 +154,7 @@ async fn update_table(
         .await
         .unwrap();
 
-    assert_eq!(table.version(), Some(3));
+    assert_eq!(table.version(), Some(4));
 
     Ok(())
 }
@@ -185,7 +172,7 @@ async fn delete_from_table(
         .await
         .unwrap();
 
-    assert_eq!(table.version(), Some(4));
+    assert_eq!(table.version(), Some(5));
 
     if false {
         println!("Table after delete:");
@@ -238,6 +225,7 @@ async fn merge_table(
         "| int | string | timestamp                  |",
         "+-----+--------+----------------------------+",
         "| 10  | A      | 1970-01-01T00:08:20.012305 |",
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
         "+-----+--------+----------------------------+",
     ];
 
@@ -247,6 +235,17 @@ async fn merge_table(
     // println!("{data:?}");
 
     assert_batches_sorted_eq!(&expected, &data);
+    Ok(())
+}
+
+async fn optimize_table(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+    crypt: &FileEncryptionProperties,
+) -> Result<(), DeltaTableError> {
+    let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
+    let (table, metrics) = ops.optimize().await?;
+    println!("\nOptimize Metrics:\n{metrics:?}\n");
     Ok(())
 }
 
@@ -267,6 +266,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
         .build()?;
 
     create_table(uri, table_name, &crypt).await?;
+    optimize_table(uri, &decrypt, &crypt).await?;
     update_table(uri, &decrypt, &crypt).await?;
     delete_from_table(uri, &decrypt, &crypt).await?;
     merge_table(uri, &decrypt, &crypt).await?;
