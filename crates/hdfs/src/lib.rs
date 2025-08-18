@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, DeltaIOStorageBackend, LogStore, LogStoreFactory,
-    StorageConfig,
+    default_logstore, logstore_factories, LogStore, LogStoreFactory, StorageConfig,
 };
 use deltalake_core::logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, Path};
-use hdfs_native_object_store::HdfsObjectStore;
+use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use url::Url;
 
 #[derive(Clone, Default, Debug)]
@@ -18,15 +17,16 @@ impl ObjectStoreFactory for HdfsFactory {
         url: &Url,
         config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let mut store: ObjectStoreRef = Arc::new(HdfsObjectStore::with_config(
-            url.as_str(),
-            config.raw.clone(),
-        )?);
+        let mut builder = HdfsObjectStoreBuilder::new()
+            .with_url(url.as_str())
+            .with_config(&config.raw);
 
-        // HDFS doesn't have the spawnService, so we still wrap it in the old io storage backend (not as optimal though)
         if let Some(runtime) = &config.runtime {
-            store = Arc::new(DeltaIOStorageBackend::new(store, runtime.clone()));
-        };
+            builder = builder.with_io_runtime(runtime.get_handle());
+        }
+
+        let store = Arc::new(builder.build()?);
+
         let prefix = Path::parse(url.path())?;
         Ok((store, prefix))
     }
