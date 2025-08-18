@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use datafusion::config::{ConfigFileType, TableOptions};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
+use std::sync::Arc;
 
 use super::CustomExecuteHandler;
 use crate::delta_datafusion::DataFusionMixins;
@@ -12,8 +12,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
 use crate::table::TableParquetOptions;
+use crate::DeltaTable;
 
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
@@ -38,12 +38,16 @@ impl super::Operation<()> for LoadBuilder {
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         Self {
             snapshot,
             log_store,
             columns: None,
-            table_parquet_options: table_parquet_options
+            table_parquet_options: table_parquet_options,
         }
     }
 
@@ -67,7 +71,11 @@ impl std::future::IntoFuture for LoadBuilder {
                 return Err(DeltaTableError::NotInitializedWithFiles("reading".into()));
             }
 
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot, this.table_parquet_options.clone());
+            let table = DeltaTable::new_with_state(
+                this.log_store,
+                this.snapshot,
+                this.table_parquet_options.clone(),
+            );
             let schema = table.snapshot()?.arrow_schema()?;
             let projection = this
                 .columns
@@ -87,9 +95,7 @@ impl std::future::IntoFuture for LoadBuilder {
             let ctx = SessionContext::new();
             let state = ctx.state();
 
-            let scan_plan = table
-                .scan(&state, projection.as_ref(), &[], None)
-                .await?;
+            let scan_plan = table.scan(&state, projection.as_ref(), &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&state));
             let stream = plan.execute(0, task_ctx)?;

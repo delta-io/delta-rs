@@ -1675,7 +1675,7 @@ impl RawDeltaTable {
                 self.with_table(|t| Ok(t.state.clone()))?,
                 // Take the Option<state> since it might be the first write,
                 // triggered through `write_to_deltalake`
-                None
+                None,
             )
             .with_save_mode(save_mode);
 

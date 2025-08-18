@@ -60,9 +60,11 @@ use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::{DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{build_writer_properties, state_with_parquet_options, ConfigFileType, TableOptions};
+use crate::table::table_parquet_options::{
+    build_writer_properties, state_with_parquet_options, ConfigFileType, TableOptions,
+};
 use crate::table::TableParquetOptions;
+use crate::{DeltaTable, DeltaTableError};
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
@@ -117,7 +119,11 @@ impl super::Operation<()> for DeleteBuilder {
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         let writer_properties = build_writer_properties(&table_parquet_options);
         Self {
             predicate: None,
@@ -214,10 +220,9 @@ async fn execute_non_empty_expr(
         extension_planner: DeleteMetricExtensionPlanner {},
     };
 
-
     let state = SessionStateBuilder::new_from_existing(state.clone())
-        .with_query_planner(Arc::new(delete_planner)).build();
-
+        .with_query_planner(Arc::new(delete_planner))
+        .build();
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
@@ -461,7 +466,11 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, new_snapshot, this.table_parquet_options),
+                DeltaTable::new_with_state(
+                    this.log_store,
+                    new_snapshot,
+                    this.table_parquet_options,
+                ),
                 metrics,
             ))
         })

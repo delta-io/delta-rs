@@ -1,5 +1,5 @@
 #[cfg(feature = "datafusion")]
-pub use datafusion::config::{TableParquetOptions, ConfigFileType, TableOptions};
+pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
 use datafusion::execution::SessionState;
 use datafusion::execution::SessionStateBuilder;
@@ -9,9 +9,10 @@ use parquet::file::properties::WriterProperties;
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableParquetOptions {}
 
-
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties(table_parquet_options: &Option<TableParquetOptions>) -> Option<WriterProperties> {
+pub fn build_writer_properties(
+    table_parquet_options: &Option<TableParquetOptions>,
+) -> Option<WriterProperties> {
     use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
     table_parquet_options.as_ref().map(|tpo| {
         let mut tpo = tpo.clone();
@@ -23,7 +24,10 @@ pub fn build_writer_properties(table_parquet_options: &Option<TableParquetOption
     })
 }
 
-pub fn state_with_parquet_options(state: SessionState, parquet_options: Option<&TableParquetOptions>) -> SessionState {
+pub fn state_with_parquet_options(
+    state: SessionState,
+    parquet_options: Option<&TableParquetOptions>,
+) -> SessionState {
     if parquet_options.is_some() {
         let mut sb = SessionStateBuilder::new_from_existing(state.clone());
         let mut tbl_opts = TableOptions::new();
@@ -34,5 +38,4 @@ pub fn state_with_parquet_options(state: SessionState, parquet_options: Option<&
         return state;
     }
     state
-
 }

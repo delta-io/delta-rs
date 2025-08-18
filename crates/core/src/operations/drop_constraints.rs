@@ -10,9 +10,9 @@ use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::table::TableParquetOptions;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
-use crate::table::TableParquetOptions;
 
 /// Remove constraints from the table
 pub struct DropConstraintBuilder {
@@ -42,7 +42,11 @@ impl super::Operation<()> for DropConstraintBuilder {
 
 impl DropConstraintBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         Self {
             name: None,
             raise_if_not_exists: true,
@@ -105,7 +109,11 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                         "Constraint with name '{name}' does not exist."
                     )));
                 }
-                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot, this.table_parquet_options));
+                return Ok(DeltaTable::new_with_state(
+                    this.log_store,
+                    this.snapshot,
+                    this.table_parquet_options,
+                ));
             }
 
             metadata = metadata.remove_config_key(&configuration_key)?;

@@ -1,11 +1,11 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -241,7 +241,10 @@ impl CreateBuilder {
     }
 
     // Set options for parquet files
-    pub fn with_table_parquet_options(mut self, table_parquet_options: TableParquetOptions) -> Self {
+    pub fn with_table_parquet_options(
+        mut self,
+        table_parquet_options: TableParquetOptions,
+    ) -> Self {
         self.table_parquet_options = Some(table_parquet_options);
         self
     }
@@ -270,7 +273,11 @@ impl CreateBuilder {
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
                 ensure_table_uri(log_store.root_uri())?.as_str().to_string(),
-                DeltaTable::new(log_store, Default::default(), self.table_parquet_options.clone()),
+                DeltaTable::new(
+                    log_store,
+                    Default::default(),
+                    self.table_parquet_options.clone(),
+                ),
             )
         } else {
             let storage_url =

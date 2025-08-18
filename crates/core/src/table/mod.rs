@@ -144,7 +144,11 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        config: DeltaTableConfig,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         Self {
             state: None,
             log_store,
@@ -158,7 +162,11 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
-    pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub(crate) fn new_with_state(
+        log_store: LogStoreRef,
+        state: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         Self {
             state: Some(state),
             log_store,

@@ -39,8 +39,8 @@ use crate::kernel::{Action, Add, ProtocolExt as _, ProtocolInner, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
 use crate::table::TableParquetOptions;
+use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
 
 /// Errors that can occur during restore
 #[derive(thiserror::Error, Debug)]

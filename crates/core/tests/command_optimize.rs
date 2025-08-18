@@ -11,7 +11,7 @@ use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::operations::optimize::{
     create_merge_plan, MetricDetails, Metrics, OptimizeType,
 };
-use deltalake_core::operations::{DeltaOps};
+use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};

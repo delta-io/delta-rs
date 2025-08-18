@@ -1,4 +1,3 @@
-use std::fs;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
     datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
@@ -11,22 +10,23 @@ use deltalake::parquet::{
     file::properties::WriterProperties,
 };
 use deltalake::{arrow, parquet, protocol::SaveMode, DeltaOps};
+use std::fs;
 
-use std::sync::Arc;
-use deltalake::datafusion::execution::runtime_env::RuntimeEnv;
-use deltalake::datafusion::execution::{SessionState, SessionStateBuilder};
-use deltalake::datafusion::prelude::{SessionConfig, SessionContext};
-use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
-use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
-use deltalake_core::datafusion::config::ConfigFileDecryptionProperties;
-use deltalake_core::{DeltaTable, DeltaTableError, TableProperty};
-use deltalake_core::logstore::LogStoreRef;
 use deltalake::arrow::datatypes::Schema;
 use deltalake::datafusion::assert_batches_sorted_eq;
 use deltalake::datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
 use deltalake::datafusion::dataframe::DataFrame;
+use deltalake::datafusion::execution::runtime_env::RuntimeEnv;
+use deltalake::datafusion::execution::{SessionState, SessionStateBuilder};
 use deltalake::datafusion::logical_expr::{col, lit};
+use deltalake::datafusion::prelude::{SessionConfig, SessionContext};
+use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
+use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
 use deltalake_core::datafusion::common::test_util::format_batches;
+use deltalake_core::datafusion::config::ConfigFileDecryptionProperties;
+use deltalake_core::logstore::LogStoreRef;
+use deltalake_core::{DeltaTable, DeltaTableError, TableProperty};
+use std::sync::Arc;
 
 async fn ops_with_crypto(
     uri: &str,
@@ -97,7 +97,11 @@ fn get_table_batches() -> RecordBatch {
     .unwrap()
 }
 
-async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionProperties) -> Result<DeltaTable, DeltaTableError> {
+async fn create_table(
+    uri: &str,
+    table_name: &str,
+    crypt: &FileEncryptionProperties,
+) -> Result<DeltaTable, DeltaTableError> {
     fs::remove_dir_all(uri)?;
     let ops = ops_with_crypto(uri, Some(crypt), None).await?;
 
@@ -112,14 +116,11 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
         .await?;
 
     assert_eq!(table.version(), Some(0));
-    
+
     let batch = get_table_batches();
-    let table = DeltaOps(table)
-        .write(vec![batch.clone()])
-        .await?;
+    let table = DeltaOps(table).write(vec![batch.clone()]).await?;
 
     assert_eq!(table.version(), Some(1));
-
 
     // The problem here is that DeltaTable::new_with_state does not preserve the table configuration
     // Really, DeltaTable.config is only meant for loading according to the docs so we may need more
@@ -134,26 +135,29 @@ async fn create_table(uri: &str, table_name: &str, crypt: &FileEncryptionPropert
 
     assert_eq!(table.version(), Some(2));
 
-
     Ok(table)
 }
 
-async fn read_table(uri: &str, decryption_properties: &FileDecryptionProperties) -> Result<(), DeltaTableError>{
+async fn read_table(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, None, Some(decryption_properties)).await?;
-    let (_table, stream) = ops.load()
-        .await?;
+    let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
     // println!("{data:?}");
-    let formatted = format_batches(&*data)?
-        .to_string();
+    let formatted = format_batches(&*data)?.to_string();
     println!("{}", formatted);
 
     Ok(())
 }
 
-
-async fn update_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
+async fn update_table(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+    crypt: &FileEncryptionProperties,
+) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
 
     let (table, _metrics) = ops
@@ -168,8 +172,11 @@ async fn update_table(uri: &str, decryption_properties: &FileDecryptionPropertie
     Ok(())
 }
 
-
-async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
+async fn delete_from_table(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+    crypt: &FileEncryptionProperties,
+) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
 
     let (table, _metrics) = ops
@@ -182,17 +189,14 @@ async fn delete_from_table(uri: &str, decryption_properties: &FileDecryptionProp
 
     if false {
         println!("Table after delete:");
-        let (_table, stream) = DeltaOps(table).load()
-            .await?;
+        let (_table, stream) = DeltaOps(table).load().await?;
         let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
         println!("{data:?}");
     }
 
-
     Ok(())
 }
-
 
 fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
     let ctx = SessionContext::new();
@@ -202,15 +206,19 @@ fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
             Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
             Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
             Arc::new(TimestampMicrosecondArray::from(vec![
-                1000000012, 1000000012, 1000000012
+                1000000012, 1000000012, 1000000012,
             ])),
         ],
-    ).unwrap();
+    )
+    .unwrap();
     ctx.read_batch(batch).unwrap()
 }
 
-
-async fn merge_table(uri: &str, decryption_properties: &FileDecryptionProperties, crypt: &FileEncryptionProperties) -> Result<(), DeltaTableError> {
+async fn merge_table(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+    crypt: &FileEncryptionProperties,
+) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
 
     let schema = get_table_schema();
@@ -220,9 +228,7 @@ async fn merge_table(uri: &str, decryption_properties: &FileDecryptionProperties
         .merge(source, col("target.int").eq(col("source.int")))
         .with_source_alias("source")
         .with_target_alias("target")
-        .when_not_matched_by_source_delete(|delete| {
-            delete
-        })
+        .when_not_matched_by_source_delete(|delete| delete)
         .unwrap()
         .await
         .unwrap();
@@ -235,8 +241,7 @@ async fn merge_table(uri: &str, decryption_properties: &FileDecryptionProperties
         "+-----+--------+----------------------------+",
     ];
 
-    let (_table, stream) = DeltaOps(table).load()
-        .await?;
+    let (_table, stream) = DeltaOps(table).load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
     // println!("{data:?}");
@@ -251,11 +256,10 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     let key: Vec<_> = b"1234567890123450".to_vec();
     let wrong_key: Vec<_> = b"9234567890123450".to_vec();
 
-    let crypt = parquet::encryption::encrypt::
-        FileEncryptionProperties::builder(key.clone())
-            .with_column_key("int", key.clone())
-            .with_column_key("string", key.clone())
-            .build()?;
+    let crypt = parquet::encryption::encrypt::FileEncryptionProperties::builder(key.clone())
+        .with_column_key("int", key.clone())
+        .with_column_key("string", key.clone())
+        .build()?;
 
     let decrypt = FileDecryptionProperties::builder(key.clone())
         .with_column_key("int", key.clone())
@@ -270,11 +274,9 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     Ok(())
 }
 
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     //encrypted_read_test().await?;
     round_trip_test().await?;
     Ok(())
 }
-

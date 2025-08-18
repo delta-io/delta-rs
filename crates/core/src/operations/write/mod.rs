@@ -76,9 +76,9 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
-use crate::table::TableParquetOptions;
 use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::TableParquetOptions;
+use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
@@ -194,8 +194,11 @@ impl super::Operation<()> for WriteBuilder {
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: Option<DeltaTableState>, table_parquet_options: Option<TableParquetOptions>) -> Self {
-
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: Option<DeltaTableState>,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         let writer_properties = build_writer_properties(&table_parquet_options);
         Self {
             snapshot,
@@ -416,7 +419,6 @@ impl WriteBuilder {
         }
     }
 }
-
 
 impl std::future::IntoFuture for WriteBuilder {
     type Output = DeltaResult<DeltaTable>;
@@ -757,7 +759,11 @@ impl std::future::IntoFuture for WriteBuilder {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
 
-            Ok(DeltaTable::new_with_state(this.log_store, commit.snapshot, this.table_parquet_options))
+            Ok(DeltaTable::new_with_state(
+                this.log_store,
+                commit.snapshot,
+                this.table_parquet_options,
+            ))
         })
     }
 }
@@ -1970,8 +1976,8 @@ mod tests {
                 .with_columns(table_schema.fields().cloned())
                 .await?;
             let batch = get_record_batch(None, false);
-            let writer =
-                WriteBuilder::new(table.log_store.clone(), None, None).with_input_batches(vec![batch]);
+            let writer = WriteBuilder::new(table.log_store.clone(), None, None)
+                .with_input_batches(vec![batch]);
 
             let actions = writer.check_preconditions().await?;
             assert_eq!(

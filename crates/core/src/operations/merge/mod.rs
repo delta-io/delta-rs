@@ -92,9 +92,11 @@ use crate::operations::write::generated_columns::{
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{build_writer_properties, state_with_parquet_options, ConfigFileType, TableOptions};
+use crate::table::table_parquet_options::{
+    build_writer_properties, state_with_parquet_options, ConfigFileType, TableOptions,
+};
 use crate::table::TableParquetOptions;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 mod barrier;
 mod filter;
@@ -825,11 +827,10 @@ async fn execute(
         .with_schema(snapshot.input_schema()?)
         .build(&snapshot)?;
 
-    let target_provider = Arc::new(DeltaTableProvider::try_new(
-        snapshot.clone(),
-        log_store.clone(),
-        scan_config.clone(),
-    )?.with_parquet_options(parquet_options));
+    let target_provider = Arc::new(
+        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_parquet_options(parquet_options),
+    );
 
     let target_provider = provider_as_source(target_provider);
     let target =

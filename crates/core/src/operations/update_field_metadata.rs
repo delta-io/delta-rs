@@ -159,7 +159,7 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
-                None
+                None,
             ))
         })
     }

@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-use crate::{
+    use crate::{
         checkpoints, kernel::transaction::CommitProperties, kernel::Transaction,
-        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder
+        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
     };
 
     #[cfg(feature = "datafusion")]

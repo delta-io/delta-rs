@@ -52,10 +52,10 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 use crate::table::table_parquet_options::build_writer_properties;
 use crate::table::TableParquetOptions;
+use crate::writer::utils::arrow_schema_without_partitions;
+use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -230,7 +230,11 @@ impl super::Operation<()> for OptimizeBuilder<'_> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         let writer_properties = build_writer_properties(&table_parquet_options);
         Self {
             snapshot,
@@ -310,7 +314,6 @@ impl<'a> OptimizeBuilder<'a> {
     }
 }
 
-
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
     type Output = DeltaResult<(DeltaTable, Metrics)>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
@@ -356,7 +359,11 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             if let Some(handler) = this.custom_execute_handler {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot, this.table_parquet_options);
+            let mut table = DeltaTable::new_with_state(
+                this.log_store,
+                this.snapshot,
+                this.table_parquet_options,
+            );
             table.update().await?;
             Ok((table, metrics))
         })
@@ -705,7 +712,8 @@ impl MergePlan {
 
         let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
-        let mut table = DeltaTable::new_with_state(log_store.clone(), snapshot.clone(), table_parquet_options);
+        let mut table =
+            DeltaTable::new_with_state(log_store.clone(), snapshot.clone(), table_parquet_options);
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.

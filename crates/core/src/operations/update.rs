@@ -26,6 +26,7 @@ use std::{
 
 use async_trait::async_trait;
 use datafusion::common::{Column, ScalarValue};
+use datafusion::config::TableOptions;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::{
     case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
@@ -39,7 +40,6 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::SessionContext,
 };
-use datafusion::config::TableOptions;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -65,9 +65,11 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{build_writer_properties, state_with_parquet_options, ConfigFileType};
+use crate::table::table_parquet_options::{
+    build_writer_properties, state_with_parquet_options, ConfigFileType,
+};
 use crate::table::TableParquetOptions;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
 pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";
@@ -129,7 +131,11 @@ impl super::Operation<()> for UpdateBuilder {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState, table_parquet_options: Option<TableParquetOptions>) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        table_parquet_options: Option<TableParquetOptions>,
+    ) -> Self {
         let writer_properties = build_writer_properties(&table_parquet_options);
         Self {
             predicate: None,

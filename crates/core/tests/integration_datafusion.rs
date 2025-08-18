@@ -393,7 +393,7 @@ mod local {
         let target_table = WriteBuilder::new(
             target_table.log_store(),
             target_table.snapshot().ok().cloned(),
-            None
+            None,
         )
         .with_input_execution_plan(source_scan)
         .with_input_session_state(state)

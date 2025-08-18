@@ -13,8 +13,8 @@ use url::Url;
 
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::table::TableParquetOptions;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -289,7 +289,11 @@ impl DeltaTableBuilder {
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
     pub fn build(self) -> DeltaResult<DeltaTable> {
-        Ok(DeltaTable::new(self.build_storage()?, self.table_config, self.table_parquet_options))
+        Ok(DeltaTable::new(
+            self.build_storage()?,
+            self.table_config,
+            self.table_parquet_options,
+        ))
     }
 
     /// Build the [`DeltaTable`] and load its state
