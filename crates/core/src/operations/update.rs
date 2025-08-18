@@ -66,7 +66,7 @@ use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{build_writer_properties, ConfigFileType};
+use crate::table::table_parquet_options::{build_writer_properties, state_with_parquet_options, ConfigFileType};
 use crate::table::TableParquetOptions;
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -274,15 +274,7 @@ async fn execute(
         .cloned()
         .collect();
 
-    let mut sb = SessionStateBuilder::from(state)
-        .with_optimizer_rules(rules);
-    if parquet_options.is_some() {
-        let mut tbl_opts = TableOptions::new();
-        tbl_opts.parquet = parquet_options.clone().unwrap();
-        tbl_opts.set_config_format(ConfigFileType::PARQUET);
-        sb = sb.with_table_options(tbl_opts);
-    }
-    let state = sb.build();
+    let state = state_with_parquet_options(state, parquet_options.as_ref());
 
     let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
         extension_planner: UpdateMetricExtensionPlanner {},

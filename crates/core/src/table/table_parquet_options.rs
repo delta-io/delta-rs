@@ -2,7 +2,7 @@
 pub use datafusion::config::{TableParquetOptions, ConfigFileType, TableOptions};
 #[cfg(feature = "datafusion")]
 use datafusion::execution::SessionState;
-
+use datafusion::execution::SessionStateBuilder;
 use parquet::file::properties::WriterProperties;
 
 #[cfg(not(feature = "datafusion"))]
@@ -21,4 +21,18 @@ pub fn build_writer_properties(table_parquet_options: &Option<TableParquetOption
             .writer_options()
             .clone()
     })
+}
+
+pub fn state_with_parquet_options(state: SessionState, parquet_options: Option<&TableParquetOptions>) -> SessionState {
+    if parquet_options.is_some() {
+        let mut sb = SessionStateBuilder::new_from_existing(state.clone());
+        let mut tbl_opts = TableOptions::new();
+        tbl_opts.parquet = parquet_options.unwrap().clone();
+        tbl_opts.set_config_format(ConfigFileType::PARQUET);
+        sb = sb.with_table_options(tbl_opts);
+        let state = sb.build();
+        return state;
+    }
+    state
+
 }

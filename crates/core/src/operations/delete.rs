@@ -61,7 +61,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
-use crate::table::table_parquet_options::{build_writer_properties, ConfigFileType, TableOptions};
+use crate::table::table_parquet_options::{build_writer_properties, state_with_parquet_options, ConfigFileType, TableOptions};
 use crate::table::TableParquetOptions;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -435,15 +435,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
-            let mut sb = SessionStateBuilder::new_from_existing(state.clone());
-
-            if this.table_parquet_options.is_some() {
-                let mut tbl_opts = TableOptions::new();
-                tbl_opts.parquet = this.table_parquet_options.clone().unwrap();
-                tbl_opts.set_config_format(ConfigFileType::PARQUET);
-                sb = sb.with_table_options(tbl_opts);
-            }
-            let state = sb.build();
+            let state = state_with_parquet_options(state, this.table_parquet_options.as_ref());
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
