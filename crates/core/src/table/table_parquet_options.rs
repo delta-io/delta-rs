@@ -1,8 +1,7 @@
 #[cfg(feature = "datafusion")]
 pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
-use datafusion::execution::SessionState;
-use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::{SessionState, SessionStateBuilder};
 use parquet::file::properties::WriterProperties;
 
 #[cfg(not(feature = "datafusion"))]
@@ -24,6 +23,7 @@ pub fn build_writer_properties(
     })
 }
 
+#[cfg(feature = "datafusion")]
 pub fn state_with_parquet_options(
     state: SessionState,
     parquet_options: Option<&TableParquetOptions>,
