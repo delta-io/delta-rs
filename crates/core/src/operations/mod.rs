@@ -202,8 +202,8 @@ impl DeltaOps {
     #[must_use]
     pub fn create(self) -> CreateBuilder {
         let mut cb = CreateBuilder::default().with_log_store(self.0.log_store);
-        if self.0.table_parquet_options.is_some() {
-            cb = cb.with_table_parquet_options(self.0.table_parquet_options.unwrap());
+        if let Some(table_parquet_options) = self.0.table_parquet_options {
+            cb = cb.with_table_parquet_options(table_parquet_options);
         }
         cb
     }
