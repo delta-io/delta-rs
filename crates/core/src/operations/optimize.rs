@@ -35,8 +35,10 @@ use futures::{Future, StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_cpus;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
+use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
@@ -635,18 +637,36 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.path);
                     }
+
                     let object_store_ref = log_store.object_store(Some(operation_id));
+                    let mut decrypt: Option<FileDecryptionProperties> = None;
+                    let tpo = table_parquet_options.clone();
+                    if let Some(table_parquet_options) = tpo {
+                        if let Some(file_decryption) = table_parquet_options.crypto.file_decryption {
+                            decrypt = Some(file_decryption.clone().into());
+                        }
+                    }
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
                             let meta = ObjectMeta::try_from(file).unwrap();
-                            async move {
-                                let file_reader =
-                                    ParquetObjectReader::new(object_store_ref, meta.location)
-                                        .with_file_size(meta.size);
-                                ParquetRecordBatchStreamBuilder::new(file_reader)
-                                    .await?
-                                    .build()
+                            {
+                                {
+                                    let decrypt = decrypt.clone();
+                                    async move {
+                                        let file_reader =
+                                            ParquetObjectReader::new(object_store_ref, meta.location)
+                                                .with_file_size(meta.size);
+                                        let mut options = ArrowReaderOptions::new();
+                                        if decrypt.is_some() {
+                                            options = options.with_file_decryption_properties(decrypt.unwrap());
+                                        }
+
+                                        ParquetRecordBatchStreamBuilder::new_with_options(file_reader, options)
+                                            .await?
+                                            .build()
+                                    }
+                                }
                             }
                         })
                         .try_flatten()
@@ -695,7 +715,7 @@ impl MergePlan {
                                 log_store.clone(),
                                 scan_config.clone(),
                             )
-                            .unwrap(),
+                                .unwrap(),
                         );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
@@ -713,7 +733,7 @@ impl MergePlan {
         let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
         let mut table =
-            DeltaTable::new_with_state(log_store.clone(), snapshot.clone(), table_parquet_options);
+            DeltaTable::new_with_state(log_store.clone(), snapshot.clone(), table_parquet_options.clone());
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.

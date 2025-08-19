@@ -5,19 +5,19 @@ use deltalake::arrow::{
 };
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
-use deltalake::{arrow, parquet, protocol::SaveMode, DeltaOps};
+use deltalake::{arrow, parquet, DeltaOps};
 use std::fs;
-
+use std::path::PathBuf;
 use deltalake::arrow::datatypes::Schema;
 use deltalake::datafusion::assert_batches_sorted_eq;
-use deltalake::datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
+use deltalake::datafusion::config::{TableParquetOptions};
 use deltalake::datafusion::dataframe::DataFrame;
 use deltalake::datafusion::logical_expr::{col, lit};
-use deltalake::datafusion::prelude::{SessionConfig, SessionContext};
+use deltalake::datafusion::prelude::{SessionContext};
 use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
 use deltalake_core::datafusion::common::test_util::format_batches;
-use deltalake_core::{DeltaTable, DeltaTableError};
+use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
 use std::sync::Arc;
 
 async fn ops_with_crypto(
@@ -146,6 +146,9 @@ async fn update_table(
     crypt: &FileEncryptionProperties,
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
+    let table: DeltaTable = ops.into();
+    let version = table.version();
+    let ops: DeltaOps = table.into();
 
     let (table, _metrics) = ops
         .update()
@@ -154,7 +157,7 @@ async fn update_table(
         .await
         .unwrap();
 
-    assert_eq!(table.version(), Some(4));
+    assert_eq!(table.version(), Some(version.unwrap() + 1));
 
     Ok(())
 }
@@ -165,6 +168,9 @@ async fn delete_from_table(
     crypt: &FileEncryptionProperties,
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
+    let table: DeltaTable = ops.into();
+    let version = table.version();
+    let ops: DeltaOps = table.into();
 
     let (table, _metrics) = ops
         .delete()
@@ -172,7 +178,7 @@ async fn delete_from_table(
         .await
         .unwrap();
 
-    assert_eq!(table.version(), Some(5));
+    assert_eq!(table.version(), Some(version.unwrap() + 1));
 
     if false {
         println!("Table after delete:");
@@ -244,13 +250,39 @@ async fn optimize_table(
     crypt: &FileEncryptionProperties,
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
-    let (table, metrics) = ops.optimize().await?;
+    let (_table, metrics) = ops.optimize().await?;
     println!("\nOptimize Metrics:\n{metrics:?}\n");
     Ok(())
 }
 
+/*
+I guess this test isn't needed since checkpoints only summarize what files to use.
+ */
+async fn checkpoint_table(uri: &str,
+                                decryption_properties: &FileDecryptionProperties,
+                                crypt: &FileEncryptionProperties,) -> Result<(), DeltaTableError> {
+
+    let table_location = uri;
+    let table_path = PathBuf::from(table_location);
+    let log_path = table_path.join("_delta_log");
+
+    let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
+    let table: DeltaTable = ops.into();
+    let version = table.version();
+
+    // Write a checkpoint
+    checkpoints::create_checkpoint(&table, None).await.unwrap();
+
+    // checkpoint should exist
+    let filename = format!("00000000000000000{:03}.checkpoint.parquet", version.unwrap());
+    let checkpoint_path = log_path.join(filename);
+    assert!(checkpoint_path.as_path().exists());
+
+    Ok(())
+}
+
 async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
-    let uri = "/home/cjoy/src/delta-rs-with-encryption/delta-rs/crates/deltalake/examples/encrypted_roundtrip";
+    let uri = "/home/cjoy/src/delta-rs/crates/deltalake/examples/encrypted_roundtrip";
     let table_name = "roundtrip";
     let key: Vec<_> = b"1234567890123450".to_vec();
     let wrong_key: Vec<_> = b"9234567890123450".to_vec();
@@ -267,6 +299,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
 
     create_table(uri, table_name, &crypt).await?;
     optimize_table(uri, &decrypt, &crypt).await?;
+    checkpoint_table(uri, &decrypt, &crypt).await?;
     update_table(uri, &decrypt, &crypt).await?;
     delete_from_table(uri, &decrypt, &crypt).await?;
     merge_table(uri, &decrypt, &crypt).await?;
