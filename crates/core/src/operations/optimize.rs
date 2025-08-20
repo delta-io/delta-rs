@@ -717,11 +717,8 @@ impl MergePlan {
                         .unwrap()
                         .with_parquet_options(tpo.clone());
 
-                        let batch_stream = Self::read_zorder(
-                            files.clone(),
-                            exec_context.clone(),
-                            dtp,
-                        );
+                        let batch_stream =
+                            Self::read_zorder(files.clone(), exec_context.clone(), dtp);
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
                             partition,

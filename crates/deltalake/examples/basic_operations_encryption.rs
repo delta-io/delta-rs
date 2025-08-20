@@ -1,25 +1,25 @@
+use deltalake::arrow::datatypes::Schema;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
     datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
-use deltalake::kernel::{DataType, PrimitiveType, StructField};
-use deltalake::operations::collect_sendable_stream;
-use deltalake::{arrow, parquet, DeltaOps};
-use std::fs;
-use std::path::PathBuf;
-use deltalake::arrow::datatypes::Schema;
 use deltalake::datafusion::assert_batches_sorted_eq;
-use deltalake::datafusion::config::{TableParquetOptions};
+use deltalake::datafusion::config::TableParquetOptions;
 use deltalake::datafusion::dataframe::DataFrame;
 use deltalake::datafusion::logical_expr::{col, lit};
-use deltalake::datafusion::prelude::{SessionContext};
+use deltalake::datafusion::prelude::SessionContext;
+use deltalake::kernel::{DataType, PrimitiveType, StructField};
+use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
+use deltalake::{arrow, parquet, DeltaOps};
 use deltalake_core::datafusion::common::test_util::format_batches;
-use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
-use std::sync::Arc;
 use deltalake_core::operations::optimize::OptimizeType;
+use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 async fn ops_with_crypto(
     uri: &str,
@@ -116,9 +116,7 @@ async fn create_table(
     assert_eq!(table.version(), Some(1));
 
     // Append records to the table
-    let table = DeltaOps(table)
-        .write(vec![batch.clone()])
-        .await?;
+    let table = DeltaOps(table).write(vec![batch.clone()]).await?;
 
     assert_eq!(table.version(), Some(2));
 
@@ -251,7 +249,13 @@ async fn optimize_table_z_order(
     crypt: &FileEncryptionProperties,
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
-    let (_table, metrics) = ops.optimize().with_type(OptimizeType::ZOrder(vec!["timestamp".to_string(), "int".to_string()])).await?;
+    let (_table, metrics) = ops
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec![
+            "timestamp".to_string(),
+            "int".to_string(),
+        ]))
+        .await?;
     println!("\nOptimize Z-Order:\n{metrics:?}\n");
     Ok(())
 }
@@ -270,10 +274,11 @@ async fn optimize_table_compact(
 /*
 I guess this test isn't needed since checkpoints only summarize what files to use.
  */
-async fn checkpoint_table(uri: &str,
-                                decryption_properties: &FileDecryptionProperties,
-                                crypt: &FileEncryptionProperties,) -> Result<(), DeltaTableError> {
-
+async fn checkpoint_table(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+    crypt: &FileEncryptionProperties,
+) -> Result<(), DeltaTableError> {
     let table_location = uri;
     let table_path = PathBuf::from(table_location);
     let log_path = table_path.join("_delta_log");
@@ -286,7 +291,10 @@ async fn checkpoint_table(uri: &str,
     checkpoints::create_checkpoint(&table, None).await.unwrap();
 
     // checkpoint should exist
-    let filename = format!("00000000000000000{:03}.checkpoint.parquet", version.unwrap());
+    let filename = format!(
+        "00000000000000000{:03}.checkpoint.parquet",
+        version.unwrap()
+    );
     let checkpoint_path = log_path.join(filename);
     assert!(checkpoint_path.as_path().exists());
 
