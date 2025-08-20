@@ -322,7 +322,8 @@ impl LogicalFile<'_> {
             size: self.size(),
             modification_time: self.modification_time(),
             data_change: true,
-            stats: Scalar::from_array(self.stats as &dyn Array, self.index).map(|s| s.serialize()),
+            stats: Scalar::from_array(self.stats as &dyn Array, self.index)
+                .and_then(|s| serde_json::to_string(&s.to_json()).ok()),
             tags: None,
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
             base_row_id: None,
@@ -417,11 +418,12 @@ impl<'a> FileStatsAccessor<'a> {
         metadata: &'a Metadata,
         schema: &'a StructType,
     ) -> DeltaResult<Self> {
-        let paths = extract_and_cast::<StringArray>(data, "add.path")?;
-        let sizes = extract_and_cast::<Int64Array>(data, "add.size")?;
-        let modification_times = extract_and_cast::<Int64Array>(data, "add.modificationTime")?;
-        let stats = extract_and_cast::<StructArray>(data, "add.stats_parsed")?;
-        let partition_values = extract_and_cast::<MapArray>(data, "add.partitionValues")?;
+        let paths = extract_and_cast::<StringArray>(data, "path")?;
+        let sizes = extract_and_cast::<Int64Array>(data, "size")?;
+        let modification_times = extract_and_cast::<Int64Array>(data, "modificationTime")?;
+        let stats = extract_and_cast::<StructArray>(data, "stats_parsed")?;
+        let partition_values =
+            extract_and_cast::<MapArray>(data, "fileConstantValues.partitionValues")?;
         let partition_fields = Arc::new(
             metadata
                 .partition_columns()
@@ -438,7 +440,7 @@ impl<'a> FileStatsAccessor<'a> {
                 })
                 .collect::<DeltaResult<IndexMap<_, _>>>()?,
         );
-        let deletion_vector = extract_and_cast_opt::<StructArray>(data, "add.deletionVector");
+        let deletion_vector = extract_and_cast_opt::<StructArray>(data, "deletionVector");
         let deletion_vector = deletion_vector.and_then(|dv| {
             if dv.null_count() == dv.len() {
                 None
@@ -511,14 +513,14 @@ impl<'a> Iterator for FileStatsAccessor<'a> {
 /// This is a helper struct that provides access to the log data in a more semantic way
 /// to avid the necessiity of knowing the exact layout of the underlying log data.
 pub struct LogDataHandler<'a> {
-    data: &'a Vec<RecordBatch>,
+    data: &'a RecordBatch,
     metadata: &'a Metadata,
     schema: &'a StructType,
 }
 
 impl<'a> LogDataHandler<'a> {
     pub(crate) fn new(
-        data: &'a Vec<RecordBatch>,
+        data: &'a RecordBatch,
         metadata: &'a Metadata,
         schema: &'a StructType,
     ) -> Self {
@@ -535,14 +537,7 @@ impl<'a> IntoIterator for LogDataHandler<'a> {
     type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(
-            self.data
-                .iter()
-                .flat_map(|data| {
-                    FileStatsAccessor::try_new(data, self.metadata, self.schema).into_iter()
-                })
-                .flatten(),
-        )
+        Box::new(FileStatsAccessor::try_new(self.data, self.metadata, self.schema).unwrap())
     }
 }
 
@@ -558,7 +553,6 @@ mod datafusion {
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
-    use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
@@ -732,34 +726,25 @@ mod datafusion {
 
     impl LogDataHandler<'_> {
         fn num_records(&self) -> Precision<usize> {
-            self.data
-                .iter()
-                .flat_map(|b| {
-                    FileStatsAccessor::try_new(b, self.metadata, self.schema)
-                        .map(|a| a.num_records())
-                })
+            FileStatsAccessor::try_new(self.data, self.metadata, self.schema)
+                .map(|a| a.num_records())
+                .into_iter()
                 .reduce(|acc, num_records| acc.add(&num_records))
                 .unwrap_or(Precision::Absent)
         }
 
         fn total_size_files(&self) -> Precision<usize> {
-            self.data
-                .iter()
-                .flat_map(|b| {
-                    FileStatsAccessor::try_new(b, self.metadata, self.schema)
-                        .map(|a| a.total_size_files())
-                })
+            FileStatsAccessor::try_new(self.data, self.metadata, self.schema)
+                .map(|a| a.total_size_files())
+                .into_iter()
                 .reduce(|acc, size| acc.add(&size))
                 .unwrap_or(Precision::Absent)
         }
 
         pub(crate) fn column_stats(&self, name: impl AsRef<str>) -> Option<ColumnStatistics> {
-            self.data
-                .iter()
-                .flat_map(|b| {
-                    FileStatsAccessor::try_new(b, self.metadata, self.schema)
-                        .map(|a| a.column_stats(name.as_ref()))
-                })
+            FileStatsAccessor::try_new(self.data, self.metadata, self.schema)
+                .map(|a| a.column_stats(name.as_ref()))
+                .into_iter()
                 .collect::<Result<Vec<_>, _>>()
                 .ok()?
                 .iter()
@@ -791,21 +776,17 @@ mod datafusion {
                 return None;
             }
             let expression = if self.metadata.partition_columns().contains(&column.name) {
-                Expression::column(["add", "partitionValues_parsed", &column.name])
+                Expression::column(["partitionValues_parsed", &column.name])
             } else {
-                Expression::column(["add", "stats_parsed", stats_field, &column.name])
+                Expression::column(["stats_parsed", stats_field, &column.name])
             };
             let evaluator = ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
                 expression,
                 field.data_type().clone(),
             );
-            let mut results = Vec::with_capacity(self.data.len());
-            for batch in self.data.iter() {
-                let result = evaluator.evaluate_arrow(batch.clone()).ok()?;
-                results.push(result);
-            }
-            let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+
+            let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             batch.column_by_name("output").cloned()
         }
     }
@@ -826,7 +807,7 @@ mod datafusion {
         /// return the number of containers (e.g. row groups) being
         /// pruned with these statistics
         fn num_containers(&self) -> usize {
-            self.data.iter().map(|f| f.num_rows()).sum()
+            self.data.num_rows()
         }
 
         /// return the number of null values for the named column as an
@@ -866,12 +847,7 @@ mod datafusion {
                 )
             });
 
-            let mut results = Vec::with_capacity(self.data.len());
-            for batch in self.data.iter() {
-                let result = ROW_COUNTS_EVAL.evaluate_arrow(batch.clone()).ok()?;
-                results.push(result);
-            }
-            let batch = concat_batches(results[0].schema_ref(), &results).ok()?;
+            let batch = ROW_COUNTS_EVAL.evaluate_arrow(self.data.clone()).ok()?;
             arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
         }
 
@@ -975,6 +951,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
     async fn df_stats_delta_1_2_1_struct_stats_table() {
         let table_uri = "../test/tests/data/delta-1.2.1-only-struct-stats";
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();

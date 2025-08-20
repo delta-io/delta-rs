@@ -91,6 +91,7 @@ use crate::operations::write::generated_columns::{
 };
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::table_parquet_options::{
     build_writer_properties, state_with_parquet_options, ConfigFileType, TableOptions,
@@ -1389,7 +1390,8 @@ async fn execute(
         snapshot.table_config().num_indexed_cols(),
         snapshot
             .table_config()
-            .stats_columns()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
@@ -1399,7 +1401,7 @@ async fn execute(
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
-        Some(snapshot.table_config().target_file_size() as usize),
+        Some(snapshot.table_config().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -1614,6 +1616,7 @@ mod tests {
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
     use itertools::Itertools;
+    use pretty_assertions::assert_eq;
     use regex::Regex;
     use serde_json::json;
     use std::ops::Neg;
@@ -1732,14 +1735,14 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         (table, merge_source(schema))
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
         assert_eq!(table.version(), Some(2));
-        assert!(table.get_files_count() >= 1);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 1);
         assert!(metrics.num_target_files_added >= 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -1890,7 +1893,10 @@ mod tests {
             json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
         );
 
-        assert_eq!(table.schema(), after_table.schema());
+        assert_eq!(
+            table.snapshot().unwrap().schema(),
+            after_table.snapshot().unwrap().schema()
+        );
 
         let snapshot_bytes = after_table
             .log_store
@@ -2171,7 +2177,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -2239,7 +2245,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -2417,7 +2423,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2473,7 +2479,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert!(table.get_files_count() >= 3);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2574,7 +2580,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 4);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 4);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2613,7 +2619,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert!(table.get_files_count() >= 3);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -2653,7 +2659,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2717,7 +2723,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert!(table.get_files_count() >= 3);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2763,7 +2769,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2791,7 +2797,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert!(table.get_files_count() >= 2);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2833,7 +2839,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2861,7 +2867,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert!(table.get_files_count() >= 2);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 2);
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2902,7 +2908,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2930,7 +2936,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2966,7 +2972,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3036,7 +3042,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3065,7 +3071,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -3101,7 +3107,7 @@ mod tests {
 
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3168,7 +3174,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3212,7 +3218,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        assert!(table.get_files_count() >= 2);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -3255,7 +3261,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3296,7 +3302,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        assert!(table.get_files_count() >= 2);
+        assert!(table.snapshot().unwrap().file_paths_iter().count() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -3325,8 +3331,8 @@ mod tests {
             "+----+-------+-------------+------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        let expected_schema_struct: StructType = schema.as_ref().try_into_kernel().unwrap();
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -3380,7 +3386,7 @@ mod tests {
 
         let table = write_data(table, &arrow_schema).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let (table, _metrics) = DeltaOps(table)
             .merge(source, "target.Id = source.Id")
@@ -3676,7 +3682,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&arrow_schema.clone()),
@@ -3791,7 +3797,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&arrow_schema.clone()),
@@ -3901,7 +3907,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&arrow_schema.clone()),
@@ -4015,7 +4021,7 @@ mod tests {
         let table = write_data(table, &schema).await;
 
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         let source = merge_source(schema);
 
         let (table, metrics) = DeltaOps(table)
@@ -4115,7 +4121,7 @@ mod tests {
         let table = write_data(table, &schema).await;
 
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         let source = merge_source(schema);
         let source = source.with_column("inserted_by", lit("new_value")).unwrap();
 
@@ -4160,7 +4166,7 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = source_schema.try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
         assert_batches_sorted_eq!(&expected, &actual);
 
         let ctx = SessionContext::new();
@@ -4225,7 +4231,7 @@ mod tests {
         let table = write_data(table, &schema).await;
 
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         let source = merge_source(schema);
 
         let (table, _metrics) = DeltaOps(table)

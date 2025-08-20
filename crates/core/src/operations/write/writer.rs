@@ -7,6 +7,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
@@ -107,7 +108,7 @@ pub struct WriterConfig {
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
     /// Num index cols to collect stats for
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
 }
@@ -120,7 +121,7 @@ impl WriterConfig {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
-        num_indexed_cols: i32,
+        num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
@@ -320,7 +321,7 @@ pub struct PartitionWriter {
     part_counter: usize,
     files_written: Vec<Add>,
     /// Num index cols to collect stats for
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
 }
@@ -330,7 +331,7 @@ impl PartitionWriter {
     pub fn try_with_config(
         object_store: ObjectStoreRef,
         config: PartitionWriterConfig,
-        num_indexed_cols: i32,
+        num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
         let buffer = AsyncShareableBuffer::default();
@@ -507,7 +508,7 @@ mod tests {
             writer_properties,
             target_file_size,
             write_batch_size,
-            DEFAULT_NUM_INDEX_COLS,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
             None,
         );
         DeltaWriter::new(object_store, config)
@@ -528,8 +529,13 @@ mod tests {
             write_batch_size,
         )
         .unwrap();
-        PartitionWriter::try_with_config(object_store, config, DEFAULT_NUM_INDEX_COLS, None)
-            .unwrap()
+        PartitionWriter::try_with_config(
+            object_store,
+            config,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        )
+        .unwrap()
     }
 
     #[tokio::test]

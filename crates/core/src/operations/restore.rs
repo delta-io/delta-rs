@@ -196,9 +196,10 @@ async fn execute(
         )));
     }
 
-    let metadata_restored_version = table.metadata()?;
+    let snapshot_restored = table.snapshot()?;
+    let metadata_restored_version = snapshot_restored.metadata();
 
-    let state_to_restore_files = table.snapshot()?.file_actions()?;
+    let state_to_restore_files = snapshot_restored.file_actions()?;
     let latest_state_files = snapshot.file_actions()?;
     let state_to_restore_files_set =
         HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
@@ -248,27 +249,27 @@ async fn execute(
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
         ProtocolInner {
-            min_reader_version: table.protocol()?.min_reader_version(),
-            min_writer_version: table.protocol()?.min_writer_version(),
+            min_reader_version: snapshot_restored.protocol().min_reader_version(),
+            min_writer_version: snapshot_restored.protocol().min_writer_version(),
             writer_features: if snapshot.protocol().min_writer_version() < 7 {
                 None
             } else {
-                table.protocol()?.writer_features_set()
+                snapshot_restored.protocol().writer_features_set()
             },
             reader_features: if snapshot.protocol().min_reader_version() < 3 {
                 None
             } else {
-                table.protocol()?.reader_features_set()
+                snapshot_restored.protocol().reader_features_set()
             },
         }
     } else {
         ProtocolInner {
             min_reader_version: max(
-                table.protocol()?.min_reader_version(),
+                snapshot_restored.protocol().min_reader_version(),
                 snapshot.protocol().min_reader_version(),
             ),
             min_writer_version: max(
-                table.protocol()?.min_writer_version(),
+                snapshot_restored.protocol().min_writer_version(),
                 snapshot.protocol().min_writer_version(),
             ),
             writer_features: snapshot.protocol().writer_features_set(),
@@ -382,6 +383,8 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "datafusion")]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
+        use crate::table::config::TablePropertiesExt as _;
+
         let batch = get_record_batch(None, false);
         let table = DeltaOps(create_bare_table())
             .write(vec![batch.clone()])

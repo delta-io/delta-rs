@@ -7,6 +7,7 @@
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 use async_trait::async_trait;
+use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use std::collections::HashMap;
 use std::sync::Arc;
 use update_field_metadata::UpdateFieldMetadataBuilder;
@@ -37,6 +38,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::TableParquetOptions;
+use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
 use crate::DeltaTable;
 
 pub mod add_column;
@@ -369,19 +371,33 @@ impl AsRef<DeltaTable> for DeltaOps {
 /// If table_config does not exist (only can occur in the first write action) it takes
 /// the configuration that was passed to the writerBuilder.
 pub fn get_num_idx_cols_and_stats_columns(
-    config: Option<crate::table::config::TableConfig<'_>>,
+    config: Option<&TableProperties>,
     configuration: HashMap<String, Option<String>>,
-) -> (i32, Option<Vec<String>>) {
+) -> (DataSkippingNumIndexedCols, Option<Vec<String>>) {
     let (num_index_cols, stats_columns) = match &config {
-        Some(conf) => (conf.num_indexed_cols(), conf.stats_columns()),
+        Some(conf) => (
+            conf.num_indexed_cols(),
+            conf.data_skipping_stats_columns
+                .clone()
+                .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+        ),
         _ => (
             configuration
                 .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| v.clone().map(|v| v.parse::<i32>().unwrap()))
-                .unwrap_or(crate::table::config::DEFAULT_NUM_INDEX_COLS),
+                .and_then(|v| {
+                    v.as_ref()
+                        .and_then(|vv| vv.parse::<u64>().ok())
+                        .map(DataSkippingNumIndexedCols::NumColumns)
+                })
+                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
+                    DEFAULT_NUM_INDEX_COLS,
+                )),
             configuration
                 .get("delta.dataSkippingStatsColumns")
-                .and_then(|v| v.as_ref().map(|v| v.split(',').collect::<Vec<&str>>())),
+                .and_then(|v| {
+                    v.as_ref()
+                        .map(|v| v.split(',').map(|s| s.to_string()).collect::<Vec<String>>())
+                }),
         ),
     };
     (
@@ -396,14 +412,14 @@ pub fn get_num_idx_cols_and_stats_columns(
 /// If table_config does not exist (only can occur in the first write action) it takes
 /// the configuration that was passed to the writerBuilder.
 pub(crate) fn get_target_file_size(
-    config: &Option<crate::table::config::TableConfig<'_>>,
+    config: Option<&TableProperties>,
     configuration: &HashMap<String, Option<String>>,
-) -> i64 {
+) -> u64 {
     match &config {
-        Some(conf) => conf.target_file_size(),
+        Some(conf) => conf.target_file_size().get(),
         _ => configuration
             .get("delta.targetFileSize")
-            .and_then(|v| v.clone().map(|v| v.parse::<i64>().unwrap()))
+            .and_then(|v| v.clone().map(|v| v.parse::<u64>().unwrap()))
             .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
     }
 }

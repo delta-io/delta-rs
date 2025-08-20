@@ -52,12 +52,6 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use crate::delta_datafusion::{
-    expr::fmt_expr_to_sql,
-    logical::MetricObserver,
-    physical::{find_metric_node, get_metric, MetricObserverExec},
-    DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
-};
 use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Remove};
@@ -69,6 +63,16 @@ use crate::table::table_parquet_options::{
     build_writer_properties, state_with_parquet_options, ConfigFileType,
 };
 use crate::table::TableParquetOptions;
+use crate::{
+    delta_datafusion::{
+        expr::fmt_expr_to_sql,
+        logical::MetricObserver,
+        physical::{find_metric_node, get_metric, MetricObserverExec},
+        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext,
+        DeltaTableProvider,
+    },
+    table::config::TablePropertiesExt,
+};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -393,7 +397,8 @@ async fn execute(
         snapshot.table_config().num_indexed_cols(),
         snapshot
             .table_config()
-            .stats_columns()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
@@ -405,7 +410,7 @@ async fn execute(
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
-        Some(snapshot.table_config().target_file_size() as usize),
+        Some(snapshot.table_config().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -467,7 +472,7 @@ async fn execute(
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
-                    Some(snapshot.table_config().target_file_size() as usize),
+                    Some(snapshot.table_config().target_file_size().get() as usize),
                     None,
                     writer_properties,
                     writer_stats_config,
@@ -548,7 +553,7 @@ impl std::future::IntoFuture for UpdateBuilder {
 mod tests {
     use super::*;
 
-    use crate::kernel::{Action, PrimitiveType, Protocol, StructField, StructType};
+    use crate::kernel::{Action, PrimitiveType, StructField, StructType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
     use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;
@@ -649,7 +654,7 @@ mod tests {
         use parquet::arrow::async_reader::ParquetObjectReader;
         use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
-        for pq in table.get_files_iter()? {
+        for pq in table.snapshot()?.file_paths_iter() {
             let store = table.log_store().object_store(None);
             let reader = ParquetObjectReader::new(store, pq);
             let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
@@ -688,7 +693,7 @@ mod tests {
 
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -697,7 +702,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 4);
@@ -742,7 +747,7 @@ mod tests {
 
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -752,7 +757,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -799,7 +804,7 @@ mod tests {
 
         let table = write_batch(table, batch.clone()).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -810,7 +815,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -834,7 +839,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -849,7 +854,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 3);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 3);
         assert_eq!(metrics.num_added_files, 2);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 1);
@@ -945,7 +950,7 @@ mod tests {
     async fn test_update_null() {
         let table = prepare_values_table().await;
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let (table, metrics) = DeltaOps(table)
             .update()
@@ -953,7 +958,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 5);
@@ -983,7 +988,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -1019,7 +1024,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -1229,7 +1234,7 @@ mod tests {
     async fn test_no_cdc_on_older_tables() {
         let table = prepare_values_table().await;
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
@@ -1254,19 +1259,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-
-        // NOTE: This currently doesn't really assert anything because cdc_files() is not reading
-        // actions correct
-        if let Some(state) = table.state.clone() {
-            let cdc_files = state.cdc_files();
-            assert!(cdc_files.is_ok());
-            if let Ok(cdc_files) = cdc_files {
-                let cdc_files: Vec<_> = cdc_files.collect();
-                assert_eq!(cdc_files.len(), 0);
-            }
-        } else {
-            panic!("I shouldn't exist!");
-        }
 
         // Too close for missiles, switching to guns. Just checking that the data wasn't actually
         // written instead!

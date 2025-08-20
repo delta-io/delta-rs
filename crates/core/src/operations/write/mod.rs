@@ -609,13 +609,13 @@ impl std::future::IntoFuture for WriteBuilder {
                 _ => (None, None),
             };
 
-            let config: Option<crate::table::config::TableConfig<'_>> = this
+            let config = this
                 .snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.table_config());
 
             let target_file_size = this.target_file_size.or_else(|| {
-                Some(super::get_target_file_size(&config, &this.configuration) as usize)
+                Some(super::get_target_file_size(config, &this.configuration) as usize)
             });
             let (num_indexed_cols, stats_columns) =
                 super::get_num_idx_cols_and_stats_columns(config, this.configuration);
@@ -847,11 +847,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
-        assert_eq!(write_metrics.num_added_files, table.get_files_count());
+        assert_eq!(
+            write_metrics.num_added_files,
+            table.snapshot().unwrap().file_paths_iter().count()
+        );
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
@@ -876,7 +879,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert_eq!(write_metrics.num_added_files, 1);
@@ -904,7 +907,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(3));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert!(write_metrics.num_removed_files > 0);
@@ -1043,7 +1046,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
     }
@@ -1058,7 +1061,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_files, 2);
         assert_common_write_metrics(write_metrics);
@@ -1070,7 +1073,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.get_files_count(), 4);
+        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 4);
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_files, 4);
@@ -1132,15 +1135,16 @@ mod tests {
             .unwrap();
         table.load().await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.metadata().unwrap().parse_schema().unwrap();
+        let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
         let fields = new_schema.fields();
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
 
         // <https://github.com/delta-io/delta-rs/issues/2925>
         let metadata = table
-            .metadata()
-            .expect("Failed to retrieve updated metadata");
+            .snapshot()
+            .expect("Failed to retrieve updated snapshot")
+            .metadata();
         assert_ne!(
             None,
             metadata.created_time(),
@@ -1206,12 +1210,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.metadata().unwrap().parse_schema().unwrap();
+        let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
         let fields = new_schema.fields();
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
-        let part_cols = table.metadata().unwrap().partition_columns().clone();
+        let part_cols = table
+            .snapshot()
+            .unwrap()
+            .metadata()
+            .partition_columns()
+            .clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;

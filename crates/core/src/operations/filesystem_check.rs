@@ -138,8 +138,7 @@ impl FileSystemCheckBuilder {
     }
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
-        let mut files_relative: HashMap<String, Add> =
-            HashMap::with_capacity(self.snapshot.files_count());
+        let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
 
         for active in self.snapshot.file_actions_iter()? {

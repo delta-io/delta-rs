@@ -29,6 +29,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -53,6 +54,7 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIE
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::table_parquet_options::build_writer_properties;
 use crate::table::TableParquetOptions;
@@ -204,7 +206,7 @@ pub struct OptimizeBuilder<'a> {
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
-    target_size: Option<i64>,
+    target_size: Option<u64>,
     /// Properties passed to underlying parquet writer
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
@@ -268,7 +270,7 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Set the target file size
-    pub fn with_target_size(mut self, target: i64) -> Self {
+    pub fn with_target_size(mut self, target: u64) -> Self {
         self.target_size = Some(target);
         self
     }
@@ -374,14 +376,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
 #[derive(Debug, Clone)]
 struct OptimizeInput {
-    target_size: i64,
+    target_size: u64,
     predicate: Option<String>,
 }
 
 impl From<OptimizeInput> for DeltaOperation {
     fn from(opt_input: OptimizeInput) -> Self {
         DeltaOperation::Optimize {
-            target_size: opt_input.target_size,
+            target_size: opt_input.target_size as i64,
             predicate: opt_input.predicate,
         }
     }
@@ -472,7 +474,7 @@ pub struct MergeTaskParameters {
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
     /// Num index cols to collect stats for
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
 }
@@ -831,10 +833,11 @@ pub fn create_merge_plan(
     optimize_type: OptimizeType,
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter],
-    target_size: Option<i64>,
+    target_size: Option<u64>,
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
+    let target_size =
+        target_size.unwrap_or_else(|| snapshot.table_config().target_file_size().get());
     let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics) = match optimize_type {
@@ -863,7 +866,8 @@ pub fn create_merge_plan(
             num_indexed_cols: snapshot.table_config().num_indexed_cols(),
             stats_columns: snapshot
                 .table_config()
-                .stats_columns()
+                .data_skipping_stats_columns
+                .as_ref()
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
         }),
         read_table_version: snapshot.version(),
@@ -874,7 +878,7 @@ pub fn create_merge_plan(
 #[derive(Debug, Clone)]
 struct MergeBin {
     files: Vec<Add>,
-    size_bytes: i64,
+    size_bytes: u64,
 }
 
 impl MergeBin {
@@ -885,7 +889,7 @@ impl MergeBin {
         }
     }
 
-    fn total_file_size(&self) -> i64 {
+    fn total_file_size(&self) -> u64 {
         self.size_bytes
     }
 
@@ -894,7 +898,7 @@ impl MergeBin {
     }
 
     fn add(&mut self, add: Add) {
-        self.size_bytes += add.size;
+        self.size_bytes += add.size as u64;
         self.files.push(add);
     }
 
@@ -915,7 +919,7 @@ impl IntoIterator for MergeBin {
 fn build_compaction_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter],
-    target_size: i64,
+    target_size: u64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
@@ -924,7 +928,7 @@ fn build_compaction_plan(
         let add = add?;
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;
-        if (object_meta.size as i64) > target_size {
+        if object_meta.size > target_size {
             metrics.total_files_skipped += 1;
             continue;
         }
@@ -952,7 +956,7 @@ fn build_compaction_plan(
 
         'files: for file in files {
             for bin in merge_bins.iter_mut() {
-                if bin.total_file_size() + file.size <= target_size {
+                if bin.total_file_size() + file.size as u64 <= target_size {
                     bin.add(file);
                     // Move to next file
                     continue 'files;

@@ -1,7 +1,6 @@
 //! Delta Table read and write implementation
 
 use std::cmp::{min, Ordering};
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -14,9 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{
-    CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType, Transaction,
-};
+use crate::kernel::{CommitInfo, DataCheck, DataType, LogicalFile, Metadata, Protocol, StructType};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -32,7 +29,6 @@ pub use crate::table::table_parquet_options::TableParquetOptions;
 pub mod builder;
 pub mod config;
 pub mod state;
-pub mod state_arrow;
 
 mod columns;
 pub(crate) mod table_parquet_options;
@@ -290,7 +286,7 @@ impl DeltaTable {
     ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
         self.state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .get_active_add_actions_by_partitions(filters)
     }
 
@@ -322,11 +318,12 @@ impl DeltaTable {
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
+    #[deprecated = "Use `snapshot()?.file_paths_iter()` instead"]
     pub fn get_files_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
         Ok(self
             .state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .file_paths_iter())
     }
 
@@ -335,55 +332,58 @@ impl DeltaTable {
         Ok(self
             .state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .file_paths_iter()
             .map(|path| self.log_store.to_uri(&path)))
     }
 
     /// Get the number of files in the table - returns 0 if no metadata is loaded
+    #[deprecated = "Count any of the file-like iterators on `snapshot()` instead."]
     pub fn get_files_count(&self) -> usize {
         self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }
 
     /// Returns the currently loaded state snapshot.
+    ///
+    /// This method provides access to the currently loaded state of the Delta table.
+    ///
+    /// ## Returns
+    ///
+    /// A reference to the current state of the Delta table.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`NotInitialized`](DeltaTableError::NotInitialized) if the table has not been initialized.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
     }
 
     /// Returns current table protocol
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.protocol()` instead")]
     pub fn protocol(&self) -> DeltaResult<&Protocol> {
         Ok(self
             .state
             .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
+            .ok_or(DeltaTableError::NotInitialized)?
             .protocol())
     }
 
     /// Returns the metadata associated with the loaded state.
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.metadata()` instead")]
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
         Ok(self.snapshot()?.metadata())
     }
 
-    #[deprecated(
-        since = "0.27.0",
-        note = "Use `snapshot()?.transaction_version(app_id)` instead."
-    )]
-    /// Returns the current version of the DeltaTable based on the loaded metadata.
-    pub fn get_app_transaction_version(&self) -> HashMap<String, Transaction> {
-        self.state
-            .as_ref()
-            .and_then(|s| s.snapshot.transactions.clone())
-            .unwrap_or_default()
-    }
-
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
     pub fn schema(&self) -> Option<&StructType> {
         Some(self.snapshot().ok()?.schema())
     }
 
     /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
     /// been loaded or no metadata was found in the log.
+    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
     pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
         Ok(self.snapshot()?.schema())
     }

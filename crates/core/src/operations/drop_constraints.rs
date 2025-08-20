@@ -180,7 +180,15 @@ mod tests {
 
         let expected_name = "id";
         assert_eq!(get_constraint_op_params(&mut table).await, expected_name);
-        assert_eq!(table.metadata().unwrap().configuration().get("id"), None);
+        assert_eq!(
+            table
+                .snapshot()
+                .unwrap()
+                .metadata()
+                .configuration()
+                .get("id"),
+            None
+        );
         Ok(())
     }
 
