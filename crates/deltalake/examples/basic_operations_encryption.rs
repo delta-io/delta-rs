@@ -19,6 +19,7 @@ use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
 use deltalake_core::datafusion::common::test_util::format_batches;
 use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
 use std::sync::Arc;
+use deltalake_core::operations::optimize::OptimizeType;
 
 async fn ops_with_crypto(
     uri: &str,
@@ -244,14 +245,25 @@ async fn merge_table(
     Ok(())
 }
 
-async fn optimize_table(
+async fn optimize_table_z_order(
     uri: &str,
     decryption_properties: &FileDecryptionProperties,
     crypt: &FileEncryptionProperties,
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
-    let (_table, metrics) = ops.optimize().await?;
-    println!("\nOptimize Metrics:\n{metrics:?}\n");
+    let (_table, metrics) = ops.optimize().with_type(OptimizeType::ZOrder(vec!["timestamp".to_string(), "int".to_string()])).await?;
+    println!("\nOptimize Z-Order:\n{metrics:?}\n");
+    Ok(())
+}
+
+async fn optimize_table_compact(
+    uri: &str,
+    decryption_properties: &FileDecryptionProperties,
+    crypt: &FileEncryptionProperties,
+) -> Result<(), DeltaTableError> {
+    let ops = ops_with_crypto(uri, Some(crypt), Some(decryption_properties)).await?;
+    let (_table, metrics) = ops.optimize().with_type(OptimizeType::Compact).await?;
+    println!("\nOptimize Compact:\n{metrics:?}\n");
     Ok(())
 }
 
@@ -298,7 +310,8 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
         .build()?;
 
     create_table(uri, table_name, &crypt).await?;
-    optimize_table(uri, &decrypt, &crypt).await?;
+    optimize_table_z_order(uri, &decrypt, &crypt).await?;
+    optimize_table_compact(uri, &decrypt, &crypt).await?;
     checkpoint_table(uri, &decrypt, &crypt).await?;
     update_table(uri, &decrypt, &crypt).await?;
     delete_from_table(uri, &decrypt, &crypt).await?;

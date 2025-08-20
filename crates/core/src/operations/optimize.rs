@@ -704,17 +704,21 @@ impl MergePlan {
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
                 let log_store = log_store.clone();
+                let tpo = table_parquet_options.clone();
                 futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
+                        let dtp = DeltaTableProvider::try_new(
+                            snapshot.clone(),
+                            log_store.clone(),
+                            scan_config.clone(),
+                        )
+                        .unwrap()
+                        .with_parquet_options(tpo.clone());
+
                         let batch_stream = Self::read_zorder(
                             files.clone(),
                             exec_context.clone(),
-                            DeltaTableProvider::try_new(
-                                snapshot.clone(),
-                                log_store.clone(),
-                                scan_config.clone(),
-                            )
-                            .unwrap(),
+                            dtp,
                         );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
