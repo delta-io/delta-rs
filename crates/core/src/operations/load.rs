@@ -1,4 +1,3 @@
-use datafusion::config::{ConfigFileType, TableOptions};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;

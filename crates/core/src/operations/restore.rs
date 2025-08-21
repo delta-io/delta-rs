@@ -39,7 +39,6 @@ use crate::kernel::{Action, Add, ProtocolExt as _, ProtocolInner, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::TableParquetOptions;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
 
 /// Errors that can occur during restore
@@ -374,7 +373,6 @@ impl std::future::IntoFuture for RestoreBuilder {
 
 #[cfg(test)]
 mod tests {
-
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult};
 

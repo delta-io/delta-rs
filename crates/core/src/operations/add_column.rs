@@ -12,7 +12,6 @@ use crate::kernel::{MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::TableParquetOptions;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Add new columns and/or nested fields to a table

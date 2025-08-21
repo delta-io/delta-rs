@@ -12,7 +12,6 @@ use crate::kernel::{ProtocolExt as _, TableFeatures};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::TableParquetOptions;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 

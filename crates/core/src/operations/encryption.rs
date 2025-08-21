@@ -1,6 +1,5 @@
 //! Configuration for Parquet modular encryption
 use crate::{DeltaResult, SchemaRef};
-use arrow_schema::Schema;
 use object_store::path::Path;
 use parquet::file::properties::WriterPropertiesBuilder;
 use std::sync::Arc;

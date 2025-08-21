@@ -26,7 +26,6 @@ use std::{
 
 use async_trait::async_trait;
 use datafusion::common::{Column, ScalarValue};
-use datafusion::config::TableOptions;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::{
     case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
@@ -59,9 +58,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{
-    build_writer_properties, state_with_parquet_options, ConfigFileType,
-};
+use crate::table::table_parquet_options::{build_writer_properties_factory, state_with_parquet_options, DefaultWriterPropertiesFactory, WriterPropertiesFactory};
 use crate::table::TableParquetOptions;
 use crate::{
     delta_datafusion::{
@@ -98,7 +95,7 @@ pub struct UpdateBuilder {
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -140,7 +137,7 @@ impl UpdateBuilder {
         snapshot: DeltaTableState,
         table_parquet_options: Option<TableParquetOptions>,
     ) -> Self {
-        let writer_properties = build_writer_properties(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory(&table_parquet_options);
         Self {
             predicate: None,
             updates: HashMap::new(),
@@ -148,7 +145,7 @@ impl UpdateBuilder {
             log_store,
             table_parquet_options,
             state: None,
-            writer_properties,
+            writer_properties_factory,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
             custom_execute_handler: None,
@@ -185,7 +182,8 @@ impl UpdateBuilder {
 
     /// Writer properties passed to parquet writer for when fiiles are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -256,7 +254,7 @@ async fn execute(
     snapshot: DeltaTableState,
     parquet_options: Option<TableParquetOptions>,
     state: SessionState,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     operation_id: Uuid,
@@ -412,7 +410,7 @@ async fn execute(
         log_store.object_store(Some(operation_id)).clone(),
         Some(snapshot.table_config().target_file_size().get() as usize),
         None,
-        writer_properties.clone(),
+        writer_properties_factory.clone(),
         writer_stats_config.clone(),
     )
     .await?;
@@ -474,7 +472,7 @@ async fn execute(
                     log_store.object_store(Some(operation_id)),
                     Some(snapshot.table_config().target_file_size().get() as usize),
                     None,
-                    writer_properties,
+                    writer_properties_factory,
                     writer_stats_config,
                 )
                 .await?;
@@ -529,7 +527,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.snapshot,
                 this.table_parquet_options.clone(),
                 state,
-                this.writer_properties,
+                this.writer_properties_factory,
                 this.commit_properties,
                 this.safe_cast,
                 operation_id,

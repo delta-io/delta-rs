@@ -71,6 +71,7 @@ pub mod set_tbl_properties;
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
+#[cfg(feature = "datafusion")]
 mod encryption;
 
 #[async_trait]

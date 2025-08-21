@@ -1,9 +1,10 @@
+use std::fmt::Debug;
 #[cfg(feature = "datafusion")]
 pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
 use datafusion::execution::{SessionState, SessionStateBuilder};
 
-use crate::{crate_version, DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DeltaResult};
 use arrow_schema::Schema;
 use object_store::path::Path;
 use parquet::basic::Compression;
@@ -31,6 +32,31 @@ pub fn build_writer_properties(
 }
 
 #[cfg(feature = "datafusion")]
+pub fn build_writer_properties_factory(
+    table_parquet_options: &Option<TableParquetOptions>,
+) -> Option<Arc<dyn WriterPropertiesFactory>> {
+    let props = build_writer_properties(table_parquet_options);
+    props.map(|wp| Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>)
+}
+
+#[cfg(feature = "datafusion")]
+pub fn build_writer_properties_factory_or_default(
+    table_parquet_options: &Option<TableParquetOptions>,
+) -> Arc<dyn WriterPropertiesFactory> {
+    let props = build_writer_properties(table_parquet_options);
+    let maybe_wp = props.map(|wp| Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>);
+    maybe_wp.unwrap_or_else(|| Arc::new(DefaultWriterPropertiesFactory::default()))
+}
+
+#[cfg(not(feature = "datafusion"))]
+pub fn build_writer_properties_factory_or_default(
+    table_parquet_options: &Option<TableParquetOptions>,
+) -> Arc<dyn WriterPropertiesFactory> {
+    Arc::new(DefaultWriterPropertiesFactory::default())
+}
+
+
+#[cfg(feature = "datafusion")]
 pub fn state_with_parquet_options(
     state: SessionState,
     parquet_options: Option<&TableParquetOptions>,
@@ -47,7 +73,7 @@ pub fn state_with_parquet_options(
     state
 }
 
-pub trait WriterPropertiesFactory {
+pub trait WriterPropertiesFactory: Send + Sync + std::fmt::Debug + 'static {
     fn compression(&self, column_path: &ColumnPath) -> Compression;
     fn create_writer_properties(
         &self,
@@ -56,18 +82,26 @@ pub trait WriterPropertiesFactory {
     ) -> DeltaResult<WriterProperties>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DefaultWriterPropertiesFactory {
     writer_properties: WriterProperties,
-    compression: Compression,
 }
 
 impl DefaultWriterPropertiesFactory {
-    pub fn new(writer_properties: WriterProperties, compression: Compression) -> Self {
+    pub fn new(writer_properties: WriterProperties) -> Self {
         Self {
-            writer_properties,
-            compression,
+            writer_properties
         }
+    }
+}
+
+impl WriterPropertiesFactory for DefaultWriterPropertiesFactory {
+    fn compression(&self, column_path: &ColumnPath) -> Compression {
+        self.writer_properties.compression(column_path)
+    }
+
+    fn create_writer_properties(&self, _file_path: &Path, _file_schema: &Arc<Schema>) -> DeltaResult<WriterProperties> {
+        Ok(self.writer_properties.clone())
     }
 }
 

@@ -76,7 +76,7 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::table_parquet_options::{build_writer_properties_factory, DefaultWriterPropertiesFactory, WriterPropertiesFactory};
 use crate::table::TableParquetOptions;
 use crate::DeltaTable;
 
@@ -156,7 +156,7 @@ pub struct WriteBuilder {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
     /// Parquet writer properties
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
@@ -199,7 +199,7 @@ impl WriteBuilder {
         snapshot: Option<DeltaTableState>,
         table_parquet_options: Option<TableParquetOptions>,
     ) -> Self {
-        let writer_properties = build_writer_properties(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory(&table_parquet_options);
         Self {
             snapshot,
             log_store,
@@ -213,7 +213,7 @@ impl WriteBuilder {
             write_batch_size: None,
             safe_cast: false,
             schema_mode: None,
-            writer_properties,
+            writer_properties_factory,
             commit_properties: CommitProperties::default(),
             name: None,
             description: None,
@@ -283,7 +283,8 @@ impl WriteBuilder {
 
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -663,7 +664,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 snapshot,
                                 state.clone(),
                                 partition_columns.clone(),
-                                this.writer_properties.clone(),
+                                this.writer_properties_factory.clone(),
                                 deletion_timestamp,
                                 writer_stats_config.clone(),
                                 operation_id,
@@ -707,7 +708,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.log_store.object_store(Some(operation_id)).clone(),
                 target_file_size,
                 this.write_batch_size,
-                this.writer_properties,
+                this.writer_properties_factory,
                 writer_stats_config.clone(),
                 predicate.clone(),
                 contains_cdc,

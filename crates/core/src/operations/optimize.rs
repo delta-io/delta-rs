@@ -38,7 +38,6 @@ use itertools::Itertools;
 use num_cpus;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
-use parquet::basic::{Compression, ZstdLevel};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
@@ -56,10 +55,10 @@ use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::build_writer_properties;
+use crate::table::table_parquet_options::{build_writer_properties_factory, DefaultWriterPropertiesFactory, WriterPropertiesFactory};
 use crate::table::TableParquetOptions;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
+use crate::{DeltaTable, ObjectMeta, PartitionFilter};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -208,7 +207,7 @@ pub struct OptimizeBuilder<'a> {
     /// Desired file size after bin-packing files
     target_size: Option<u64>,
     /// Properties passed to underlying parquet writer
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     /// Whether to preserve insertion order within files (default false)
@@ -239,14 +238,14 @@ impl<'a> OptimizeBuilder<'a> {
         snapshot: DeltaTableState,
         table_parquet_options: Option<TableParquetOptions>,
     ) -> Self {
-        let writer_properties = build_writer_properties(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory(&table_parquet_options);
         Self {
             snapshot,
             log_store,
             table_parquet_options,
             filters: &[],
             target_size: None,
-            writer_properties,
+            writer_properties_factory,
             commit_properties: CommitProperties::default(),
             preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
@@ -277,7 +276,8 @@ impl<'a> OptimizeBuilder<'a> {
 
     /// Writer properties passed to parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -333,18 +333,12 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let writer_properties = this.writer_properties.unwrap_or_else(|| {
-                WriterProperties::builder()
-                    .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
-                    .set_created_by(format!("delta-rs version {}", crate_version()))
-                    .build()
-            });
             let plan = create_merge_plan(
                 this.optimize_type,
                 &this.snapshot,
                 this.filters,
                 this.target_size.to_owned(),
-                writer_properties,
+                this.writer_properties_factory,
             )?;
             let metrics = plan
                 .execute(
@@ -472,7 +466,7 @@ pub struct MergeTaskParameters {
     /// Schema of written files
     file_schema: ArrowSchemaRef,
     /// Properties passed to parquet writer
-    writer_properties: WriterProperties,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     /// Num index cols to collect stats for
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
@@ -528,7 +522,7 @@ impl MergePlan {
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
             partition_values.clone(),
-            Some(task_parameters.writer_properties.clone()),
+            task_parameters.writer_properties_factory.clone(),
             Some(task_parameters.input_parameters.target_size as usize),
             None,
         )?;
@@ -831,7 +825,7 @@ pub fn create_merge_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter],
     target_size: Option<u64>,
-    writer_properties: WriterProperties,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
         target_size.unwrap_or_else(|| snapshot.table_config().target_file_size().get());
@@ -859,7 +853,7 @@ pub fn create_merge_plan(
         task_parameters: Arc::new(MergeTaskParameters {
             input_parameters,
             file_schema,
-            writer_properties,
+            writer_properties_factory,
             num_indexed_cols: snapshot.table_config().num_indexed_cols(),
             stats_columns: snapshot
                 .table_config()

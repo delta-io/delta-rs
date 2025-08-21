@@ -23,7 +23,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::{Constraint, TableParquetOptions};
+use crate::table::{Constraint};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Build a constraint to add to a table
