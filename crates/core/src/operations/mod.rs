@@ -72,7 +72,7 @@ pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 #[cfg(feature = "datafusion")]
-mod encryption;
+pub(crate) mod encryption;
 
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {

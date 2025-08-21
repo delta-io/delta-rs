@@ -4,11 +4,12 @@ pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
 use datafusion::execution::{SessionState, SessionStateBuilder};
 
-use crate::{DeltaResult};
-use arrow_schema::Schema;
+use crate::{crate_version, DeltaResult};
+use arrow_schema::Schema as ArrowSchema;
+
 use object_store::path::Path;
 use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
 
@@ -78,7 +79,7 @@ pub trait WriterPropertiesFactory: Send + Sync + std::fmt::Debug + 'static {
     fn create_writer_properties(
         &self,
         file_path: &Path,
-        file_schema: &Arc<Schema>,
+        file_schema: &Arc<ArrowSchema>,
     ) -> DeltaResult<WriterProperties>;
 }
 
@@ -100,77 +101,70 @@ impl WriterPropertiesFactory for DefaultWriterPropertiesFactory {
         self.writer_properties.compression(column_path)
     }
 
-    fn create_writer_properties(&self, _file_path: &Path, _file_schema: &Arc<Schema>) -> DeltaResult<WriterProperties> {
+    fn create_writer_properties(&self, _file_path: &Path, _file_schema: &Arc<ArrowSchema>) -> DeltaResult<WriterProperties> {
         Ok(self.writer_properties.clone())
     }
 }
 
 
 // More advanced factory with KMS support
-/*
+
 #[derive(Clone, Debug, Default)]
-pub struct DefaultWriterPropertiesFactory {
-    overridden_properties: Option<WriterProperties>,
-    encryption: Option<TableEncryption>,
-    compression: Option<Compression>,
+pub struct KMSWriterPropertiesFactory {
+    writer_properties: WriterProperties,
+    encryption: Option<crate::operations::encryption::TableEncryption>,
 }
 
-impl DefaultWriterPropertiesFactory {
-    const DEFAULT_COMPRESSION: Compression = Compression::SNAPPY;
+impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
+    fn compression(&self, column_path: &ColumnPath) -> Compression {
+        self.writer_properties.compression(column_path)
+    }
 
-    pub fn for_table(table: &DeltaTable) -> WriterPropertiesFactory {
-        let mut writer_properties_factory = WriterPropertiesFactory::default();
-        if let Some(encryption) = &table.encryption_config {
-            writer_properties_factory.set_encryption(encryption.clone());
+    fn create_writer_properties(&self, file_path: &Path, file_schema: &Arc<ArrowSchema>) -> DeltaResult<WriterProperties> {
+        let mut builder = self.writer_properties.to_builder();
+        if let Some(encryption) = self.encryption.as_ref() {
+            builder = encryption.update_writer_properties(builder, file_path, file_schema)?;
         }
-        writer_properties_factory
-    }
-
-    pub fn set_properties(&mut self, properties: WriterProperties) {
-        self.overridden_properties = Some(properties);
-    }
-
-    pub fn set_encryption(&mut self, encryption: TableEncryption) {
-        self.encryption = Some(encryption);
-    }
-
-    pub fn set_compression(&mut self, compression: Compression) {
-        self.compression = Some(compression);
-    }
-
-    pub(crate) fn compression(&self, column_path: &ColumnPath) -> Compression {
-        if let Some(properties) = self.overridden_properties.as_ref() {
-            properties.compression(column_path)
-        } else if let Some(compression) = self.compression {
-            compression
-        } else {
-            Self::DEFAULT_COMPRESSION
-        }
-    }
-
-    pub(crate) fn create_writer_properties(
-        &self,
-        file_path: &Path,
-        file_schema: &Arc<Schema>,
-    ) -> DeltaResult<WriterProperties> {
-        if let Some(properties) = self.overridden_properties.as_ref() {
-            if self.encryption.is_some() {
-                return Err(DeltaTableError::Generic(
-                    "Cannot specify both Parquet WriterProperties and table encryption".to_owned(),
-                ));
-            }
-            Ok(properties.clone())
-        } else {
-            let compression = self.compression.unwrap_or(Self::DEFAULT_COMPRESSION);
-            let mut builder = WriterProperties::builder()
-                .set_compression(compression)
-                .set_created_by(format!("delta-rs version {}", crate_version()));
-            if let Some(encryption) = self.encryption.as_ref() {
-                builder = encryption.update_writer_properties(builder, file_path, file_schema)?;
-            }
-            Ok(builder.build())
-        }
+        Ok(builder.build())
     }
 }
 
- */
+
+
+/// AI generated code to get builder from existing WriterProperties
+/// May not be right
+///
+/// Extension to construct a WriterPropertiesBuilder from existing WriterProperties
+pub trait WriterPropertiesExt {
+    fn to_builder(&self) -> WriterPropertiesBuilder;
+}
+
+impl WriterPropertiesExt for WriterProperties {
+    fn to_builder(&self) -> WriterPropertiesBuilder {
+        let mut builder = WriterProperties::builder()
+            .set_writer_version(self.writer_version())
+            .set_data_page_size_limit(self.data_page_size_limit())
+            .set_data_page_row_count_limit(self.data_page_row_count_limit())
+            .set_dictionary_page_size_limit(self.dictionary_page_size_limit())
+            .set_write_batch_size(self.write_batch_size())
+            .set_max_row_group_size(self.max_row_group_size())
+            .set_bloom_filter_position(self.bloom_filter_position())
+            .set_created_by(self.created_by().to_string())
+            .set_offset_index_disabled(self.offset_index_disabled())
+            .set_key_value_metadata(self.key_value_metadata().cloned())
+            .set_sorting_columns(self.sorting_columns().cloned())
+            .set_column_index_truncate_length(self.column_index_truncate_length())
+            .set_statistics_truncate_length(self.statistics_truncate_length())
+            .set_coerce_types(self.coerce_types());
+
+        // Set default compression (use empty column path to retrieve default)
+        let default_compression = self.compression(&ColumnPath::new(Vec::new()));
+        builder = builder.set_compression(default_compression);
+
+        // Preserve encryption properties if present
+        if let Some(fep) = self.file_encryption_properties() {
+            builder = builder.with_file_encryption_properties(fep.clone());
+        }
+        builder
+    }
+}
