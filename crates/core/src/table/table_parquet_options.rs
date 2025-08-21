@@ -141,6 +141,7 @@ pub trait WriterPropertiesExt {
 
 impl WriterPropertiesExt for WriterProperties {
     fn to_builder(&self) -> WriterPropertiesBuilder {
+        // Start with copying top-level writer properties
         let mut builder = WriterProperties::builder()
             .set_writer_version(self.writer_version())
             .set_data_page_size_limit(self.data_page_size_limit())
@@ -157,9 +158,41 @@ impl WriterPropertiesExt for WriterProperties {
             .set_statistics_truncate_length(self.statistics_truncate_length())
             .set_coerce_types(self.coerce_types());
 
-        // Set default compression (use empty column path to retrieve default)
-        let default_compression = self.compression(&ColumnPath::new(Vec::new()));
+        // Use an empty ColumnPath to read default column-level properties
+        let empty = ColumnPath::new(Vec::new());
+
+        // Default compression
+        let default_compression = self.compression(&empty);
         builder = builder.set_compression(default_compression);
+
+        // Default encoding (if explicitly set)
+        if let Some(enc) = self.encoding(&empty) {
+            builder = builder.set_encoding(enc);
+        }
+
+        // Default dictionary enabled
+        builder = builder.set_dictionary_enabled(self.dictionary_enabled(&empty));
+
+        // Default statistics setting
+        builder = builder.set_statistics_enabled(self.statistics_enabled(&empty));
+
+        // Default max statistics size (deprecated in parquet, but preserve value if used)
+        #[allow(deprecated)]
+        {
+            let max_stats = self.max_statistics_size(&empty);
+            builder = builder.set_max_statistics_size(max_stats);
+        }
+
+        // Default bloom filter settings
+        if let Some(bfp) = self.bloom_filter_properties(&empty) {
+            builder = builder
+                .set_bloom_filter_enabled(true)
+                .set_bloom_filter_fpp(bfp.fpp)
+                .set_bloom_filter_ndv(bfp.ndv);
+        } else {
+            // Ensure bloom filters are disabled if not present
+            builder = builder.set_bloom_filter_enabled(false);
+        }
 
         // Preserve encryption properties if present
         if let Some(fep) = self.file_encryption_properties() {
