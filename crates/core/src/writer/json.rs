@@ -10,10 +10,7 @@ use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use object_store::path::Path;
-use parquet::{
-    arrow::ArrowWriter, errors::ParquetError,
-    file::properties::WriterProperties,
-};
+use parquet::{arrow::ArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -29,9 +26,11 @@ use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_or_default, WriterPropertiesFactory,
+};
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
-use crate::table::table_parquet_options::{build_writer_properties_factory_or_default, WriterPropertiesFactory};
 
 type BadValue = (Value, ParquetError);
 
@@ -194,7 +193,8 @@ impl JsonWriter {
             .load()
             .await?;
 
-        let writer_properties_factory = build_writer_properties_factory_or_default(&table.table_parquet_options);
+        let writer_properties_factory =
+            build_writer_properties_factory_or_default(&table.table_parquet_options);
 
         Ok(Self {
             table,
@@ -211,7 +211,8 @@ impl JsonWriter {
         let metadata = table.snapshot()?.metadata();
         let partition_columns = metadata.partition_columns().clone();
 
-        let writer_properties_factory = build_writer_properties_factory_or_default(&table.table_parquet_options);
+        let writer_properties_factory =
+            build_writer_properties_factory_or_default(&table.table_parquet_options);
 
         Ok(Self {
             table: table.clone(),
@@ -331,7 +332,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                         extract_partition_values(&partition_columns, &record_batch)?;
                     let prefix = Path::parse(partition_values.hive_partition_path())?;
                     let uuid = Uuid::new_v4();
-                    let path = next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
+                    let path =
+                        next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
                     let writer_properties = self
                         .writer_properties_factory
                         .create_writer_properties(&path, &arrow_schema)?;

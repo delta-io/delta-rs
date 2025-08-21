@@ -18,8 +18,8 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::{path::Path, ObjectStore};
+use parquet::file::properties::WriterProperties;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
-use parquet::{file::properties::WriterProperties};
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -36,8 +36,11 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_or_default, DefaultWriterPropertiesFactory,
+    WriterPropertiesFactory,
+};
 use crate::DeltaTable;
-use crate::table::table_parquet_options::{build_writer_properties_factory_or_default, DefaultWriterPropertiesFactory, WriterPropertiesFactory};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -69,7 +72,8 @@ impl RecordBatchWriter {
         let delta_table = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
-        let writer_properties_factory = build_writer_properties_factory_or_default(&delta_table.table_parquet_options);
+        let writer_properties_factory =
+            build_writer_properties_factory_or_default(&delta_table.table_parquet_options);
 
         // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
         let configuration = delta_table.snapshot().map_or_else(
@@ -109,7 +113,8 @@ impl RecordBatchWriter {
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns().clone();
 
-        let writer_properties_factory = build_writer_properties_factory_or_default(&table.table_parquet_options);
+        let writer_properties_factory =
+            build_writer_properties_factory_or_default(&table.table_parquet_options);
 
         let configuration = table.snapshot()?.metadata().configuration().clone();
 
@@ -180,7 +185,8 @@ impl RecordBatchWriter {
             None => {
                 let prefix = Path::parse(&partition_key)?;
                 let uuid = Uuid::new_v4();
-                let path = next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
+                let path =
+                    next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
                 let writer_properties = self
                     .writer_properties_factory
                     .create_writer_properties(&path, &arrow_schema)?;
@@ -200,7 +206,8 @@ impl RecordBatchWriter {
 
     /// Sets the writer properties for the underlying arrow writer.
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        let writer_properties_factory =
+            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
         self.writer_properties_factory = writer_properties_factory;
         self
     }
@@ -329,7 +336,7 @@ impl PartitionWriter {
         let arrow_writer = ArrowWriter::try_new(
             buffer.clone(),
             arrow_schema.clone(),
-            Some(writer_properties.clone())
+            Some(writer_properties.clone()),
         )?;
 
         let buffered_record_batch_count = 0;
@@ -341,7 +348,7 @@ impl PartitionWriter {
             arrow_writer,
             partition_values,
             buffered_record_batch_count,
-            path
+            path,
         })
     }
 

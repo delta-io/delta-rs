@@ -59,6 +59,8 @@ pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
 #[cfg(feature = "datafusion")]
+pub(crate) mod encryption;
+#[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
 pub mod load_cdf;
@@ -71,8 +73,6 @@ pub mod set_tbl_properties;
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
-#[cfg(feature = "datafusion")]
-pub(crate) mod encryption;
 
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {

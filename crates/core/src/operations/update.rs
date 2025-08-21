@@ -58,7 +58,10 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory, state_with_parquet_options, DefaultWriterPropertiesFactory, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory, state_with_parquet_options, DefaultWriterPropertiesFactory,
+    WriterPropertiesFactory,
+};
 use crate::table::TableParquetOptions;
 use crate::{
     delta_datafusion::{
@@ -182,7 +185,8 @@ impl UpdateBuilder {
 
     /// Writer properties passed to parquet writer for when fiiles are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        let writer_properties_factory =
+            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }

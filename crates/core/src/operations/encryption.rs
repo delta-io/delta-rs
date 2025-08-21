@@ -1,11 +1,11 @@
 //! Configuration for Parquet modular encryption
-use crate::{DeltaResult};
+use crate::DeltaResult;
+use arrow_schema::Schema as ArrowSchema;
+use datafusion::common::{DataFusionError, HashMap};
+use datafusion::config::{ConfigField, ExtensionOptions, Visit};
 use object_store::path::Path;
 use parquet::file::properties::WriterPropertiesBuilder;
 use std::sync::Arc;
-use datafusion::common::{DataFusionError, HashMap};
-use datafusion::config::{ConfigField, ExtensionOptions, Visit};
-use arrow_schema::Schema as ArrowSchema;
 
 pub type SchemaRef = Arc<ArrowSchema>;
 /*
@@ -13,14 +13,13 @@ use datafusion::config::EncryptionFactoryOptions;
 use datafusion::execution::parquet_encryption::EncryptionFactory;
  */
 
-
 ///////////////////////////////////////////////////////////////////////////////
 // Copy code from datafusion
 // Updating to version  > 49.0.1 is a bigger change
-use std::result;
 use delta_kernel::schema::StructType;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
+use std::result;
 
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T, E = DataFusionError> = result::Result<T, E>;

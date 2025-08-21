@@ -22,7 +22,9 @@ use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::table::table_parquet_options::{DefaultWriterPropertiesFactory, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    DefaultWriterPropertiesFactory, WriterPropertiesFactory,
+};
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -173,7 +175,8 @@ impl DeltaWriter {
 
     /// Apply custom writer_properties to the underlying parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        let writer_properties_factory =
+            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
         self.config.writer_properties_factory = writer_properties_factory;
         self
     }
@@ -383,7 +386,11 @@ impl PartitionWriter {
 
     fn reset_writer(
         &mut self,
-    ) -> DeltaResult<(AsyncArrowWriter<AsyncShareableBuffer>, AsyncShareableBuffer, Path)> {
+    ) -> DeltaResult<(
+        AsyncArrowWriter<AsyncShareableBuffer>,
+        AsyncShareableBuffer,
+        Path,
+    )> {
         let new_buffer = AsyncShareableBuffer::default();
         let new_path = self.next_data_path();
         let writer_properties = self
@@ -523,8 +530,9 @@ mod tests {
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> DeltaWriter {
-        let writer_properties_factory =
-            writer_properties.map(|wp| Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>);
+        let writer_properties_factory = writer_properties.map(|wp| {
+            Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+        });
 
         let config = WriterConfig::new(
             batch.schema(),
@@ -545,8 +553,9 @@ mod tests {
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> PartitionWriter {
-        let writer_properties_factory =
-            writer_properties.map(|wp| Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>);
+        let writer_properties_factory = writer_properties.map(|wp| {
+            Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+        });
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),

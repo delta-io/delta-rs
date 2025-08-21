@@ -305,7 +305,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     let uri = "/home/cjoy/src/delta-rs/crates/deltalake/examples/encrypted_roundtrip";
     let table_name = "roundtrip";
     let key: Vec<_> = b"1234567890123450".to_vec();
-    let _wrong_key: Vec<_> = b"9234567890123450".to_vec();  // Can use to check encryption
+    let _wrong_key: Vec<_> = b"9234567890123450".to_vec(); // Can use to check encryption
 
     let crypt = parquet::encryption::encrypt::FileEncryptionProperties::builder(key.clone())
         .with_column_key("int", key.clone())

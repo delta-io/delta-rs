@@ -1,8 +1,8 @@
-use std::fmt::Debug;
 #[cfg(feature = "datafusion")]
 pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
 use datafusion::execution::{SessionState, SessionStateBuilder};
+use std::fmt::Debug;
 
 use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
@@ -37,7 +37,9 @@ pub fn build_writer_properties_factory(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
     let props = build_writer_properties(table_parquet_options);
-    props.map(|wp| Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>)
+    props.map(|wp| {
+        Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+    })
 }
 
 #[cfg(feature = "datafusion")]
@@ -45,7 +47,9 @@ pub fn build_writer_properties_factory_or_default(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Arc<dyn WriterPropertiesFactory> {
     let props = build_writer_properties(table_parquet_options);
-    let maybe_wp = props.map(|wp| Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>);
+    let maybe_wp = props.map(|wp| {
+        Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+    });
     maybe_wp.unwrap_or_else(|| Arc::new(DefaultWriterPropertiesFactory::default()))
 }
 
@@ -55,7 +59,6 @@ pub fn build_writer_properties_factory_or_default(
 ) -> Arc<dyn WriterPropertiesFactory> {
     Arc::new(DefaultWriterPropertiesFactory::default())
 }
-
 
 #[cfg(feature = "datafusion")]
 pub fn state_with_parquet_options(
@@ -90,9 +93,7 @@ pub struct DefaultWriterPropertiesFactory {
 
 impl DefaultWriterPropertiesFactory {
     pub fn new(writer_properties: WriterProperties) -> Self {
-        Self {
-            writer_properties
-        }
+        Self { writer_properties }
     }
 }
 
@@ -101,11 +102,14 @@ impl WriterPropertiesFactory for DefaultWriterPropertiesFactory {
         self.writer_properties.compression(column_path)
     }
 
-    fn create_writer_properties(&self, _file_path: &Path, _file_schema: &Arc<ArrowSchema>) -> DeltaResult<WriterProperties> {
+    fn create_writer_properties(
+        &self,
+        _file_path: &Path,
+        _file_schema: &Arc<ArrowSchema>,
+    ) -> DeltaResult<WriterProperties> {
         Ok(self.writer_properties.clone())
     }
 }
-
 
 // More advanced factory with KMS support
 
@@ -120,7 +124,11 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
         self.writer_properties.compression(column_path)
     }
 
-    fn create_writer_properties(&self, file_path: &Path, file_schema: &Arc<ArrowSchema>) -> DeltaResult<WriterProperties> {
+    fn create_writer_properties(
+        &self,
+        file_path: &Path,
+        file_schema: &Arc<ArrowSchema>,
+    ) -> DeltaResult<WriterProperties> {
         let mut builder = self.writer_properties.to_builder();
         if let Some(encryption) = self.encryption.as_ref() {
             builder = encryption.update_writer_properties(builder, file_path, file_schema)?;
@@ -128,8 +136,6 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
         Ok(builder.build())
     }
 }
-
-
 
 /// AI generated code to get builder from existing WriterProperties
 /// May not be right

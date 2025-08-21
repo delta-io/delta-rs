@@ -93,7 +93,10 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory, state_with_parquet_options, DefaultWriterPropertiesFactory, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory, state_with_parquet_options, DefaultWriterPropertiesFactory,
+    WriterPropertiesFactory,
+};
 use crate::table::TableParquetOptions;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -404,7 +407,8 @@ impl MergeBuilder {
 
     /// Writer properties passed to parquet writer for when fiiles are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+        let writer_properties_factory =
+            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
