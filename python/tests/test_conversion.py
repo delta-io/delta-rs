@@ -1,3 +1,5 @@
+import pathlib
+
 import pytest
 from arro3.core import DataType, Field, Schema
 
@@ -418,3 +420,214 @@ def test_merge_casting_table_provider(tmp_path):
         source_alias="source",
         target_alias="target",
     ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_pandas_null_columns_to_existing_table_should_work(tmp_path: pathlib.Path):
+    import pandas as pd
+    import pyarrow as pa
+
+    initial_data = pa.table(
+        {
+            "id": [1, 2, 3],
+            "name": ["Alice", "Bob", "Charlie"],
+            "age": [25, 30, 35],
+            "score": [85.5, 92.0, 88.5],
+        }
+    )
+
+    write_deltalake(tmp_path, initial_data)
+
+    df_with_nulls = pd.DataFrame(
+        {
+            "id": [4, 5],
+            "name": [None, None],  # object dtype -> null type in Arrow
+            "age": [None, None],  # object dtype -> null type in Arrow
+            "score": [None, None],  # object dtype -> null type in Arrow
+        }
+    )
+
+    arrow_table = pa.Table.from_pandas(df_with_nulls)
+
+    assert arrow_table.schema.field("name").type == pa.null()
+    assert arrow_table.schema.field("age").type == pa.null()
+    assert arrow_table.schema.field("score").type == pa.null()
+
+    write_deltalake(tmp_path, df_with_nulls, mode="append")
+
+    updated_dt = DeltaTable(tmp_path)
+    result_df = updated_dt.to_pandas()
+
+    # Should have 5 rows total (3 initial + 2 appended)
+    assert len(result_df) == 5
+
+    # Check that all expected IDs are present (order may vary)
+    all_ids = sorted(result_df["id"].tolist())
+    assert all_ids == [1, 2, 3, 4, 5]
+
+    # Check that rows with IDs 4 and 5 have null values for other columns
+    new_rows = result_df[result_df["id"].isin([4, 5])]
+    assert len(new_rows) == 2
+    assert pd.isna(new_rows["name"]).all()
+    assert pd.isna(new_rows["age"]).all()
+    assert pd.isna(new_rows["score"]).all()
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_null_conversion_prevents_infinite_recursion():
+    from deltalake.writer._conversion import _convert_arro3_schema_to_delta
+
+    source_schema = Schema(
+        [
+            Field("id", DataType.int64()),
+            Field("problematic_field", DataType.null()),
+        ]
+    )
+
+    existing_schema = Schema(
+        [
+            Field("id", DataType.int64()),
+            Field("problematic_field", DataType.null()),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    assert converted.field(0).type == DataType.int64()
+    assert DataType.is_null(converted.field(1).type)
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_null_conversion_with_mixed_types():
+    from deltalake.writer._conversion import _convert_arro3_schema_to_delta
+
+    source_schema = Schema(
+        [
+            Field("concrete_field", DataType.int64()),
+            Field("null_field", DataType.null()),
+            Field("missing_field", DataType.string()),
+        ]
+    )
+
+    existing_schema = Schema(
+        [
+            Field("concrete_field", DataType.int64()),
+            Field("null_field", DataType.string()),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    assert converted.field(0).type == DataType.int64()
+    assert converted.field(1).type == DataType.string()
+    assert converted.field(2).type == DataType.string()
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_null_conversion_without_existing_schema():
+    from deltalake.writer._conversion import _convert_arro3_schema_to_delta
+
+    source_schema = Schema(
+        [
+            Field("id", DataType.int64()),
+            Field("null_field", DataType.null()),
+            Field("timestamp_field", DataType.timestamp("ns")),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema)
+
+    assert converted.field(0).type == DataType.int64()
+    assert DataType.is_null(converted.field(1).type)
+    assert converted.field(2).type == DataType.timestamp("us")
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_null_conversion_field_not_found():
+    from deltalake.writer._conversion import _convert_arro3_schema_to_delta
+
+    source_schema = Schema(
+        [
+            Field("missing_field", DataType.null()),
+        ]
+    )
+
+    existing_schema = Schema(
+        [
+            Field("other_field", DataType.string()),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    assert DataType.is_null(converted.field(0).type)
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_null_conversion_no_field_name():
+    from deltalake.writer._conversion import _convert_arro3_schema_to_delta
+
+    source_schema = Schema(
+        [
+            Field("list_field", DataType.list(Field("element", DataType.null()))),
+        ]
+    )
+
+    existing_schema = Schema(
+        [
+            Field("list_field", DataType.list(Field("element", DataType.string()))),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    list_field = converted.field(0)
+    assert DataType.is_list(list_field.type)
+
+
+@pytest.mark.pandas
+@pytest.mark.pyarrow
+def test_null_conversion_with_struct_types():
+    from deltalake.writer._conversion import _convert_arro3_schema_to_delta
+
+    source_schema = Schema(
+        [
+            Field(
+                "struct_field",
+                DataType.struct(
+                    [
+                        Field("inner_null", DataType.null()),
+                        Field("inner_int", DataType.int32()),
+                    ]
+                ),
+            ),
+        ]
+    )
+
+    existing_schema = Schema(
+        [
+            Field(
+                "struct_field",
+                DataType.struct(
+                    [
+                        Field("inner_null", DataType.string()),
+                        Field("inner_int", DataType.int32()),
+                    ]
+                ),
+            ),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    struct_field = converted.field(0)
+    assert DataType.is_struct(struct_field.type)
+    inner_fields = struct_field.type.fields
+    assert DataType.is_null(inner_fields[0].type)
+    assert inner_fields[1].type == DataType.int32()
