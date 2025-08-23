@@ -158,9 +158,9 @@ impl Write for ShareableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::table::table_parquet_options::build_writer_properties_factory_wp;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::properties::WriterProperties;
-    use crate::table::table_parquet_options::build_writer_properties_factory_wp;
 
     #[test]
     fn test_data_path() {
@@ -173,13 +173,7 @@ mod tests {
             .build();
 
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.parquet"
         );
 
@@ -187,13 +181,7 @@ mod tests {
             .set_compression(Compression::SNAPPY)
             .build();
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.snappy.parquet"
         );
 
@@ -201,13 +189,7 @@ mod tests {
             .set_compression(Compression::GZIP(GzipLevel::default()))
             .build();
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.gz.parquet"
         );
 
@@ -215,13 +197,7 @@ mod tests {
             .set_compression(Compression::LZ4)
             .build();
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4.parquet"
         );
 
@@ -229,13 +205,7 @@ mod tests {
             .set_compression(Compression::ZSTD(ZstdLevel::default()))
             .build();
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.zstd.parquet"
         );
 
@@ -243,13 +213,7 @@ mod tests {
             .set_compression(Compression::LZ4_RAW)
             .build();
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4raw.parquet"
         );
 
@@ -257,13 +221,7 @@ mod tests {
             .set_compression(Compression::BROTLI(BrotliLevel::default()))
             .build();
         assert_eq!(
-            next_data_path(
-                &prefix,
-                1,
-                &uuid,
-                build_writer_properties_factory_wp(props)
-            )
-            .as_ref(),
+            next_data_path(&prefix, 1, &uuid, build_writer_properties_factory_wp(props)).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.br.parquet"
         );
     }

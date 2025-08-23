@@ -58,7 +58,7 @@ pub fn build_writer_properties_factory_or_default_tpo(
 }
 
 pub fn build_writer_properties_factory_wp(
-    writer_properties: WriterProperties
+    writer_properties: WriterProperties,
 ) -> Arc<dyn WriterPropertiesFactory> {
     Arc::new(SimpleWriterPropertiesFactory::new(writer_properties))
 }
@@ -66,7 +66,6 @@ pub fn build_writer_properties_factory_wp(
 pub fn build_writer_properties_factory_default() -> Arc<dyn WriterPropertiesFactory> {
     Arc::new(SimpleWriterPropertiesFactory::default())
 }
-
 
 #[cfg(feature = "datafusion")]
 pub fn state_with_parquet_options(

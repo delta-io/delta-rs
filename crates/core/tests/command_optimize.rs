@@ -283,13 +283,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
-    let plan = create_merge_plan(
-        OptimizeType::Compact,
-        dt.snapshot()?,
-        &filter,
-        None,
-        None,
-    )?;
+    let plan = create_merge_plan(OptimizeType::Compact, dt.snapshot()?, &filter, None, None)?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
@@ -346,13 +340,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let version = dt.version().unwrap();
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
-    let plan = create_merge_plan(
-        OptimizeType::Compact,
-        dt.snapshot()?,
-        &filter,
-        None,
-        None,
-    )?;
+    let plan = create_merge_plan(OptimizeType::Compact, dt.snapshot()?, &filter, None, None)?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut other_dt = deltalake_core::open_table(uri).await?;
@@ -406,13 +394,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
-    let plan = create_merge_plan(
-        OptimizeType::Compact,
-        dt.snapshot()?,
-        &[],
-        None,
-        None,
-    )?;
+    let plan = create_merge_plan(OptimizeType::Compact, dt.snapshot()?, &[], None, None)?;
 
     let metrics = plan
         .execute(
