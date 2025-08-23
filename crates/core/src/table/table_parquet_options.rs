@@ -12,6 +12,7 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
+use tracing::info;
 
 #[cfg(not(feature = "datafusion"))]
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -121,9 +122,10 @@ impl WriterPropertiesFactory for SimpleWriterPropertiesFactory {
 
     fn create_writer_properties(
         &self,
-        _file_path: &Path,
+        file_path: &Path,
         _file_schema: &Arc<ArrowSchema>,
     ) -> DeltaResult<WriterProperties> {
+        info!("Called create_writer_properties for file: {file_path}");
         Ok(self.writer_properties.clone())
     }
 }
