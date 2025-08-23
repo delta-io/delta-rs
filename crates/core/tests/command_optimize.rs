@@ -288,7 +288,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?,
         &filter,
         None,
-        WriterProperties::builder().build(),
+        None,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -351,7 +351,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?,
         &filter,
         None,
-        WriterProperties::builder().build(),
+        None,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -411,7 +411,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?,
         &[],
         None,
-        WriterProperties::builder().build(),
+        None,
     )?;
 
     let metrics = plan

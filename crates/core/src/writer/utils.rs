@@ -158,9 +158,9 @@ impl Write for ShareableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::table_parquet_options::DefaultWriterPropertiesFactory;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::properties::WriterProperties;
+    use crate::table::table_parquet_options::build_writer_properties_factory_wp;
 
     #[test]
     fn test_data_path() {
@@ -177,7 +177,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.parquet"
@@ -191,7 +191,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.snappy.parquet"
@@ -205,7 +205,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.gz.parquet"
@@ -219,7 +219,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4.parquet"
@@ -233,7 +233,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.zstd.parquet"
@@ -247,7 +247,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4raw.parquet"
@@ -261,7 +261,7 @@ mod tests {
                 &prefix,
                 1,
                 &uuid,
-                Arc::new(DefaultWriterPropertiesFactory::new(props))
+                build_writer_properties_factory_wp(props)
             )
             .as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.br.parquet"

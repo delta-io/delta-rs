@@ -27,7 +27,7 @@ use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::table_parquet_options::{
-    build_writer_properties_factory_or_default, WriterPropertiesFactory,
+    build_writer_properties_factory_or_default_tpo, WriterPropertiesFactory,
 };
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
@@ -194,7 +194,7 @@ impl JsonWriter {
             .await?;
 
         let writer_properties_factory =
-            build_writer_properties_factory_or_default(&table.table_parquet_options);
+            build_writer_properties_factory_or_default_tpo(&table.table_parquet_options);
 
         Ok(Self {
             table,
@@ -212,7 +212,7 @@ impl JsonWriter {
         let partition_columns = metadata.partition_columns().clone();
 
         let writer_properties_factory =
-            build_writer_properties_factory_or_default(&table.table_parquet_options);
+            build_writer_properties_factory_or_default_tpo(&table.table_parquet_options);
 
         Ok(Self {
             table: table.clone(),

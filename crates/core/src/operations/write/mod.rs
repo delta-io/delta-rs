@@ -76,9 +76,7 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{
-    build_writer_properties_factory, DefaultWriterPropertiesFactory, WriterPropertiesFactory,
-};
+use crate::table::table_parquet_options::{build_writer_properties_factory_tpo, build_writer_properties_factory_wp, WriterPropertiesFactory};
 use crate::table::TableParquetOptions;
 use crate::DeltaTable;
 
@@ -201,7 +199,7 @@ impl WriteBuilder {
         snapshot: Option<DeltaTableState>,
         table_parquet_options: Option<TableParquetOptions>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory_tpo(&table_parquet_options);
         Self {
             snapshot,
             log_store,
@@ -286,7 +284,7 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         let writer_properties_factory =
-            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+            build_writer_properties_factory_wp(writer_properties);
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }

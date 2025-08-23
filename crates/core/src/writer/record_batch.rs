@@ -36,10 +36,7 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::table::table_parquet_options::{
-    build_writer_properties_factory_or_default, DefaultWriterPropertiesFactory,
-    WriterPropertiesFactory,
-};
+use crate::table::table_parquet_options::{build_writer_properties_factory_or_default_tpo, build_writer_properties_factory_wp, WriterPropertiesFactory};
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
@@ -73,7 +70,7 @@ impl RecordBatchWriter {
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
         let writer_properties_factory =
-            build_writer_properties_factory_or_default(&delta_table.table_parquet_options);
+            build_writer_properties_factory_or_default_tpo(&delta_table.table_parquet_options);
 
         // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
         let configuration = delta_table.snapshot().map_or_else(
@@ -114,7 +111,7 @@ impl RecordBatchWriter {
         let partition_columns = metadata.partition_columns().clone();
 
         let writer_properties_factory =
-            build_writer_properties_factory_or_default(&table.table_parquet_options);
+            build_writer_properties_factory_or_default_tpo(&table.table_parquet_options);
 
         let configuration = table.snapshot()?.metadata().configuration().clone();
 
@@ -207,7 +204,7 @@ impl RecordBatchWriter {
     /// Sets the writer properties for the underlying arrow writer.
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         let writer_properties_factory =
-            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+            build_writer_properties_factory_wp(writer_properties);
         self.writer_properties_factory = writer_properties_factory;
         self
     }

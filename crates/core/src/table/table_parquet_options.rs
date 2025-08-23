@@ -8,7 +8,7 @@ use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
 
 use object_store::path::Path;
-use parquet::basic::Compression;
+use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 pub struct TableParquetOptions {}
 
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties(
+pub fn build_writer_properties_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Option<WriterProperties> {
     use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
@@ -33,32 +33,40 @@ pub fn build_writer_properties(
 }
 
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties_factory(
+pub fn build_writer_properties_factory_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
-    let props = build_writer_properties(table_parquet_options);
+    let props = build_writer_properties_tpo(table_parquet_options);
     props.map(|wp| {
-        Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+        Arc::new(SimpleWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
     })
 }
 
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties_factory_or_default(
+pub fn build_writer_properties_factory_or_default_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Arc<dyn WriterPropertiesFactory> {
-    let props = build_writer_properties(table_parquet_options);
-    let maybe_wp = props.map(|wp| {
-        Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
-    });
-    maybe_wp.unwrap_or_else(|| Arc::new(DefaultWriterPropertiesFactory::default()))
+    let maybe_wp = build_writer_properties_factory_tpo(table_parquet_options);
+    maybe_wp.unwrap_or_else(|| build_writer_properties_factory_default())
 }
 
 #[cfg(not(feature = "datafusion"))]
-pub fn build_writer_properties_factory_or_default(
-    table_parquet_options: &Option<TableParquetOptions>,
+pub fn build_writer_properties_factory_or_default_tpo(
+    _table_parquet_options: &Option<TableParquetOptions>,
 ) -> Arc<dyn WriterPropertiesFactory> {
-    Arc::new(DefaultWriterPropertiesFactory::default())
+    build_writer_properties_factory_default()
 }
+
+pub fn build_writer_properties_factory_wp(
+    writer_properties: WriterProperties
+) -> Arc<dyn WriterPropertiesFactory> {
+    Arc::new(SimpleWriterPropertiesFactory::new(writer_properties))
+}
+
+pub fn build_writer_properties_factory_default() -> Arc<dyn WriterPropertiesFactory> {
+    Arc::new(SimpleWriterPropertiesFactory::default())
+}
+
 
 #[cfg(feature = "datafusion")]
 pub fn state_with_parquet_options(
@@ -86,18 +94,28 @@ pub trait WriterPropertiesFactory: Send + Sync + std::fmt::Debug + 'static {
     ) -> DeltaResult<WriterProperties>;
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct DefaultWriterPropertiesFactory {
+#[derive(Clone, Debug)]
+pub struct SimpleWriterPropertiesFactory {
     writer_properties: WriterProperties,
 }
 
-impl DefaultWriterPropertiesFactory {
+impl SimpleWriterPropertiesFactory {
     pub fn new(writer_properties: WriterProperties) -> Self {
         Self { writer_properties }
     }
 }
 
-impl WriterPropertiesFactory for DefaultWriterPropertiesFactory {
+impl Default for SimpleWriterPropertiesFactory {
+    fn default() -> Self {
+        let writer_properties = WriterProperties::builder()
+            // .set_compression(Compression::SNAPPY)
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
+            .set_created_by(format!("delta-rs version {}", crate_version()))
+            .build();
+        Self { writer_properties }
+    }
+}
+impl WriterPropertiesFactory for SimpleWriterPropertiesFactory {
     fn compression(&self, column_path: &ColumnPath) -> Compression {
         self.writer_properties.compression(column_path)
     }
@@ -112,13 +130,14 @@ impl WriterPropertiesFactory for DefaultWriterPropertiesFactory {
 }
 
 // More advanced factory with KMS support
-
-#[derive(Clone, Debug, Default)]
+#[cfg(feature = "datafusion")]
+#[derive(Clone, Debug)]
 pub struct KMSWriterPropertiesFactory {
     writer_properties: WriterProperties,
     encryption: Option<crate::operations::encryption::TableEncryption>,
 }
 
+#[cfg(feature = "datafusion")]
 impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
     fn compression(&self, column_path: &ColumnPath) -> Compression {
         self.writer_properties.compression(column_path)

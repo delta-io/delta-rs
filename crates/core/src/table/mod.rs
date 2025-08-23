@@ -31,7 +31,7 @@ pub mod config;
 pub mod state;
 
 mod columns;
-pub(crate) mod table_parquet_options;
+pub mod table_parquet_options;
 
 // Re-exposing for backwards compatibility
 pub use columns::*;

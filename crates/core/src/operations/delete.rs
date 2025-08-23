@@ -61,10 +61,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{
-    build_writer_properties_factory, state_with_parquet_options, DefaultWriterPropertiesFactory,
-    WriterPropertiesFactory,
-};
+use crate::table::table_parquet_options::{build_writer_properties_factory_tpo, build_writer_properties_factory_wp, state_with_parquet_options, WriterPropertiesFactory};
 use crate::table::TableParquetOptions;
 use crate::{DeltaTable, DeltaTableError};
 
@@ -126,7 +123,7 @@ impl DeleteBuilder {
         snapshot: DeltaTableState,
         table_parquet_options: Option<TableParquetOptions>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory_tpo(&table_parquet_options);
         Self {
             predicate: None,
             snapshot,
@@ -160,7 +157,7 @@ impl DeleteBuilder {
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         let writer_properties_factory =
-            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+            build_writer_properties_factory_wp(writer_properties);
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }

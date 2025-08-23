@@ -22,9 +22,7 @@ use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::table::table_parquet_options::{
-    DefaultWriterPropertiesFactory, WriterPropertiesFactory,
-};
+use crate::table::table_parquet_options::{build_writer_properties_factory_default, build_writer_properties_factory_wp, WriterPropertiesFactory};
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -128,10 +126,11 @@ impl WriterConfig {
         stats_columns: Option<Vec<String>>,
     ) -> Self {
         let writer_properties_factory = writer_properties_factory.unwrap_or_else(|| {
+            // Keep these compression defaults for backwards compatibility
             let wp = WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
                 .build();
-            Arc::new(DefaultWriterPropertiesFactory::new(wp))
+            build_writer_properties_factory_wp(wp)
         });
         let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
@@ -176,7 +175,7 @@ impl DeltaWriter {
     /// Apply custom writer_properties to the underlying parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         let writer_properties_factory =
-            Arc::new(DefaultWriterPropertiesFactory::new(writer_properties));
+            build_writer_properties_factory_wp(writer_properties);
         self.config.writer_properties_factory = writer_properties_factory;
         self
     }
@@ -296,10 +295,11 @@ impl PartitionWriterConfig {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
         let writer_properties_factory = writer_properties_factory.unwrap_or_else(|| {
+            // These particular compression settings are required by writer::tests::test_unflushed_row_group_size
             let wp = WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
                 .build();
-            Arc::new(DefaultWriterPropertiesFactory::new(wp))
+            build_writer_properties_factory_wp(wp)
         });
         let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
@@ -531,7 +531,7 @@ mod tests {
         write_batch_size: Option<usize>,
     ) -> DeltaWriter {
         let writer_properties_factory = writer_properties.map(|wp| {
-            Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+            build_writer_properties_factory_wp(wp)
         });
 
         let config = WriterConfig::new(
@@ -554,7 +554,7 @@ mod tests {
         write_batch_size: Option<usize>,
     ) -> PartitionWriter {
         let writer_properties_factory = writer_properties.map(|wp| {
-            Arc::new(DefaultWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
+            build_writer_properties_factory_wp(wp)
         });
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
