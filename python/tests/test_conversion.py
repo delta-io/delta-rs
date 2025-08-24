@@ -495,8 +495,8 @@ def test_null_conversion_prevents_infinite_recursion():
 
     converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
 
-    assert converted.field(0).type == DataType.int64()
-    assert DataType.is_null(converted.field(1).type)
+    assert converted.field("id").type == DataType.int64()
+    assert DataType.is_null(converted.field("problematic_field").type)
 
 
 @pytest.mark.pandas
@@ -521,9 +521,9 @@ def test_null_conversion_with_mixed_types():
 
     converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
 
-    assert converted.field(0).type == DataType.int64()
-    assert converted.field(1).type == DataType.string()
-    assert converted.field(2).type == DataType.string()
+    assert converted.field("concrete_field").type == DataType.int64()
+    assert converted.field("null_field").type == DataType.string()
+    assert converted.field("missing_field").type == DataType.string()
 
 
 @pytest.mark.pandas
@@ -541,9 +541,9 @@ def test_null_conversion_without_existing_schema():
 
     converted = _convert_arro3_schema_to_delta(source_schema)
 
-    assert converted.field(0).type == DataType.int64()
-    assert DataType.is_null(converted.field(1).type)
-    assert converted.field(2).type == DataType.timestamp("us")
+    assert converted.field("id").type == DataType.int64()
+    assert DataType.is_null(converted.field("null_field").type)
+    assert converted.field("timestamp_field").type == DataType.timestamp("us")
 
 
 @pytest.mark.pandas
@@ -565,7 +565,7 @@ def test_null_conversion_field_not_found():
 
     converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
 
-    assert DataType.is_null(converted.field(0).type)
+    assert DataType.is_null(converted.field("missing_field").type)
 
 
 @pytest.mark.pandas
@@ -587,7 +587,7 @@ def test_null_conversion_no_field_name():
 
     converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
 
-    list_field = converted.field(0)
+    list_field = converted.field("list_field")
     assert DataType.is_list(list_field.type)
 
 
@@ -626,7 +626,7 @@ def test_null_conversion_with_struct_types():
 
     converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
 
-    struct_field = converted.field(0)
+    struct_field = converted.field("struct_field")
     assert DataType.is_struct(struct_field.type)
     inner_fields = struct_field.type.fields
     assert DataType.is_null(inner_fields[0].type)
