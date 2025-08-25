@@ -29,6 +29,7 @@ use super::utils::{
     ShareableBuffer,
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use crate::ensure_table_uri;
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::MetadataExt as _;
@@ -65,7 +66,8 @@ impl RecordBatchWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaTableError> {
-        let delta_table = DeltaTableBuilder::from_uri(table_uri)
+        let table_url = ensure_table_uri(table_uri)?;
+        let delta_table = DeltaTableBuilder::from_uri(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
         // Initialize writer properties for the underlying arrow writer

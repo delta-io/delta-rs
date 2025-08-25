@@ -608,7 +608,9 @@ mod tests {
             .unwrap_or_else(|e| {
                 panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
             });
-        open_table(temp_dir).await.expect("Failed to open table")
+        open_table(ensure_table_uri(temp_dir).unwrap())
+            .await
+            .expect("Failed to open table")
     }
 
     fn assert_delta_table(

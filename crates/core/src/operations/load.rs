@@ -95,6 +95,7 @@ impl std::future::IntoFuture for LoadBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::ensure_table_uri;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::writer::test_utils::{get_record_batch, TestResult};
     use crate::DeltaTableBuilder;
@@ -102,10 +103,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
-        let table = DeltaTableBuilder::from_uri("../test/tests/data/delta-0.8.0")
-            .load()
-            .await
-            .unwrap();
+        let table = DeltaTableBuilder::from_uri(
+            ensure_table_uri("../test/tests/data/delta-0.8.0").unwrap(),
+        )?
+        .load()
+        .await
+        .unwrap();
 
         let (_table, stream) = DeltaOps(table).load().await?;
         let data = collect_sendable_stream(stream).await?;

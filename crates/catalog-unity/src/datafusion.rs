@@ -19,7 +19,7 @@ use super::models::{
     TableTempCredentialsResponse, TemporaryTableCredentials,
 };
 use super::{DataCatalogResult, UnityCatalog, UnityCatalogError};
-use deltalake_core::DeltaTableBuilder;
+use deltalake_core::{ensure_table_uri, DeltaTableBuilder};
 
 /// In-memory list of catalogs populated by unity catalog
 #[derive(Debug)]
@@ -228,7 +228,10 @@ impl SchemaProvider for UnitySchemaProvider {
                 let new_storage_opts = temp_creds.get_credentials().ok_or_else(|| {
                     DataFusionError::External(UnityCatalogError::MissingCredential.into())
                 })?;
-                let table = DeltaTableBuilder::from_uri(table.storage_location)
+                let table_url = ensure_table_uri(&table.storage_location)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let table = DeltaTableBuilder::from_uri(table_url)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .with_storage_options(new_storage_opts)
                     .load()
                     .await?;

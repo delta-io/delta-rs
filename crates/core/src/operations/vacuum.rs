@@ -31,7 +31,9 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
+use std::path::Path as StdPath;
 use tracing::log::*;
+use url::Url;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -529,7 +531,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_vacuum_full() -> DeltaResult<()> {
-        let table = open_table("../test/tests/data/simple_commit").await?;
+        let table_uri =
+            Url::from_directory_path(StdPath::new("../test/tests/data/simple_commit")).unwrap();
+        let table = open_table(table_uri).await?;
 
         let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
             .with_retention_period(Duration::hours(0))
@@ -569,7 +573,8 @@ mod tests {
     #[tokio::test]
     async fn test_vacuum_keep_version_sanity_check() -> DeltaResult<()> {
         let table_loc = "../test/tests/data/simple_table";
-        let table = open_table(table_loc).await?;
+        let table_uri = Url::from_directory_path(StdPath::new(table_loc)).unwrap();
+        let table = open_table(table_uri).await?;
         let versions_to_keep = vec![3];
 
         // First, vacuum without keeping any particular versions
@@ -605,7 +610,8 @@ mod tests {
     #[tokio::test]
     async fn test_vacuum_keep_version_add_removes() -> DeltaResult<()> {
         let table_loc = "../test/tests/data/simple_table";
-        let table = open_table(table_loc).await?;
+        let table_uri = Url::from_directory_path(StdPath::new(table_loc)).unwrap();
+        let table = open_table(table_uri).await?;
         let versions_to_keep = vec![2, 3];
 
         // First, vacuum without keeping any particular versions
@@ -678,7 +684,12 @@ mod tests {
         }
 
         let mut table = crate::DeltaTableBuilder::from_valid_uri("memory:///")?
-            .with_storage_backend(Arc::new(store), url::Url::parse("memory:///").unwrap())
+            .with_storage_backend(
+                Arc::new(store),
+                url::Url::parse("memory:///").map_err(|e| {
+                    crate::DeltaTableError::InvalidTableLocation(format!("memory:///: {}", e))
+                })?,
+            )
             .build()?;
         table.load().await?;
 
@@ -705,7 +716,9 @@ mod tests {
 
     #[tokio::test]
     async fn vacuum_delta_8_0_table() -> DeltaResult<()> {
-        let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
+        let table_uri =
+            Url::from_directory_path(StdPath::new("../test/tests/data/delta-0.8.0")).unwrap();
+        let table = open_table(table_uri).await.unwrap();
 
         let result = VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())
             .with_retention_period(Duration::hours(1))
@@ -714,7 +727,9 @@ mod tests {
 
         assert!(result.is_err());
 
-        let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
+        let table_uri =
+            Url::from_directory_path(StdPath::new("../test/tests/data/delta-0.8.0")).unwrap();
+        let table = open_table(table_uri).await.unwrap();
 
         let (table, result) =
             VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())

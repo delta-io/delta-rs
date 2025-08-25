@@ -7,7 +7,7 @@ use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::{DeltaTable, DeltaTableBuilder};
+use deltalake_core::{ensure_table_uri, DeltaTable, DeltaTableBuilder};
 
 use crate::utils::*;
 
@@ -28,7 +28,8 @@ async fn prepare_table(
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
 
-    let table = DeltaTableBuilder::from_uri(&table_uri)
+    let table_url = ensure_table_uri(&table_uri)?;
+    let table = DeltaTableBuilder::from_uri(table_url)?
         .with_allow_http(true)
         .build()?;
 
@@ -97,7 +98,9 @@ pub struct Worker {
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
         std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
-        let table = DeltaTableBuilder::from_uri(path)
+        let table_url = ensure_table_uri(path).unwrap();
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .unwrap()
             .with_allow_http(true)
             .load()
             .await

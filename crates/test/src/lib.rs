@@ -11,7 +11,7 @@ use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
-use deltalake_core::{ObjectStore, Path};
+use deltalake_core::{ensure_table_uri, ObjectStore, Path};
 use tempfile::TempDir;
 
 pub mod acceptance;
@@ -60,7 +60,9 @@ impl TestContext {
     fn new_storage(&self) -> Arc<dyn LogStore> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
-        DeltaTableBuilder::from_uri(uri)
+        let table_url = ensure_table_uri(&uri).unwrap();
+        DeltaTableBuilder::from_uri(table_url)
+            .unwrap()
             .with_storage_options(config)
             .build_storage()
             .unwrap()

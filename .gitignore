@@ -37,3 +37,4 @@ __pycache__
 .zed
 .zed/
 dat/
+.history/
