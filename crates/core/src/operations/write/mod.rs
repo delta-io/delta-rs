@@ -147,6 +147,8 @@ pub struct WriteBuilder {
     target_file_size: Option<usize>,
     /// Number of records to be written in single batch to underlying writer
     write_batch_size: Option<usize>,
+    /// Write in-memory buffer to disk after each batch if true
+    flush_per_batch: bool,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
     schema_mode: Option<SchemaMode>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
@@ -201,6 +203,7 @@ impl WriteBuilder {
             predicate: None,
             target_file_size: None,
             write_batch_size: None,
+            flush_per_batch: false,
             safe_cast: false,
             schema_mode: None,
             writer_properties: None,
@@ -261,6 +264,12 @@ impl WriteBuilder {
     /// Specify the target batch size for row groups written to parquet files.
     pub fn with_write_batch_size(mut self, write_batch_size: usize) -> Self {
         self.write_batch_size = Some(write_batch_size);
+        self
+    }
+
+    /// If true, write in-memory buffer to disk after each batch
+    pub fn with_flush_per_batch(mut self, flush_per_batch: bool) -> Self {
+        self.flush_per_batch = flush_per_batch;
         self
     }
 
@@ -701,6 +710,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 writer_stats_config.clone(),
                 predicate.clone(),
                 contains_cdc,
+                this.flush_per_batch,
             )
             .await?;
 
@@ -2001,6 +2011,24 @@ mod tests {
             }
 
             Ok(())
+        }
+
+        #[test]
+        fn test_write_builder_flush_per_batch() {
+            let ops = DeltaOps::new_in_memory();
+            let log_store = ops.write(vec![]).log_store().clone();
+
+            // Default
+            let builder = WriteBuilder::new(log_store.clone(), None);
+            assert!(!builder.flush_per_batch);
+
+            // True
+            let builder = WriteBuilder::new(log_store.clone(), None).with_flush_per_batch(true);
+            assert!(builder.flush_per_batch);
+
+            // False
+            let builder = WriteBuilder::new(log_store.clone(), None).with_flush_per_batch(false);
+            assert!(!builder.flush_per_batch);
         }
     }
 }
