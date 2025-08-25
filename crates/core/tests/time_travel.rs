@@ -2,6 +2,7 @@ use chrono::{DateTime, FixedOffset, Utc};
 use std::fs::{FileTimes, OpenOptions};
 use std::path::Path;
 use std::time::SystemTime;
+use url::Url;
 
 #[tokio::test]
 async fn time_travel_by_ds() {
@@ -29,70 +30,78 @@ async fn time_travel_by_ds() {
         file.set_times(times).unwrap()
     }
 
-    let mut table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-01T00:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    let mut table = deltalake_core::open_table_with_ds(table_url, "2020-05-01T00:47:31-07:00")
+        .await
+        .unwrap();
 
     assert_eq!(table.version(), Some(0));
 
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-02T22:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-02T22:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(1));
 
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-02T23:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-02T23:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(1));
 
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-03T22:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-03T22:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(2));
 
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-04T22:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-04T22:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(3));
 
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-05T21:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-05T21:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(3));
 
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-05T22:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-05T22:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(4));
 
     // Final append in .tmp subdir is uncommitted and should be ignored
-    table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/simple_table",
-        "2020-05-25T22:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/simple_table")).unwrap(),
     )
-    .await
     .unwrap();
+    table = deltalake_core::open_table_with_ds(table_url, "2020-05-25T22:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(4));
 }
 
@@ -126,20 +135,22 @@ async fn time_travel_by_ds_checkpoint_vacuumed() {
         file.set_times(times).unwrap()
     }
 
-    let table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/checkpoints_vacuumed",
-        "2020-05-02T00:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/checkpoints_vacuumed")).unwrap(),
     )
-    .await
     .unwrap();
+    let table = deltalake_core::open_table_with_ds(table_url, "2020-05-02T00:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(5));
 
-    let table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/checkpoints_vacuumed",
-        "2020-05-09T00:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/checkpoints_vacuumed")).unwrap(),
     )
-    .await
     .unwrap();
+    let table = deltalake_core::open_table_with_ds(table_url, "2020-05-09T00:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(10));
 
     let latest_version = table.get_latest_version().await.unwrap();
@@ -154,12 +165,13 @@ async fn time_travel_by_ds_checkpoint_vacuumed() {
     .unwrap();
     assert!(temp_checkpoint.path().exists());
 
-    let table = deltalake_core::open_table_with_ds(
-        "../test/tests/data/checkpoints_vacuumed",
-        "2020-05-09T00:47:31-07:00",
+    let table_url = Url::from_directory_path(
+        std::fs::canonicalize(Path::new("../test/tests/data/checkpoints_vacuumed")).unwrap(),
     )
-    .await
     .unwrap();
+    let table = deltalake_core::open_table_with_ds(table_url, "2020-05-09T00:47:31-07:00")
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(10));
 }
 

@@ -16,6 +16,7 @@ use parquet::{
 };
 use serde_json::Value;
 use tracing::{info, warn};
+use url::Url;
 use uuid::Uuid;
 
 use super::stats::create_add;
@@ -27,7 +28,7 @@ use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
-use crate::table::builder::DeltaTableBuilder;
+use crate::table::builder::{ensure_table_uri, DeltaTableBuilder};
 use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
 use crate::DeltaTable;
@@ -185,12 +186,12 @@ impl DataArrowWriter {
 impl JsonWriter {
     /// Create a new JsonWriter instance
     pub async fn try_new(
-        table_uri: String,
+        table_url: Url,
         schema_ref: ArrowSchemaRef,
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaTableError> {
-        let table = DeltaTableBuilder::from_uri(table_uri)
+        let table = DeltaTableBuilder::from_uri(ensure_table_uri(&table_url)?)?
             .with_storage_options(storage_options.unwrap_or_default())
             .load()
             .await?;
@@ -427,7 +428,8 @@ fn quarantine_failed_parquet_rows(
     let mut bad: Vec<BadValue> = Vec::new();
 
     for value in values {
-        let record_batch = record_batch_from_message(arrow_schema.clone(), &[value.clone()])?;
+        let record_batch =
+            record_batch_from_message(arrow_schema.clone(), std::slice::from_ref(&value))?;
         let buffer = ShareableBuffer::default();
         let mut writer = ArrowWriter::try_new(buffer.clone(), arrow_schema.clone(), None)?;
 
@@ -470,6 +472,7 @@ mod tests {
 
     use crate::arrow::array::Int32Array;
     use crate::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
+    use crate::ensure_table_uri;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::get_delta_schema;
 
@@ -497,7 +500,7 @@ mod tests {
         let schema = table.snapshot().unwrap().schema();
         let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
-            table.table_uri(),
+            ensure_table_uri(&table.table_uri()).unwrap(),
             Arc::new(arrow_schema),
             Some(vec!["modified".to_string()]),
             None,
@@ -574,7 +577,7 @@ mod tests {
         let arrow_schema: ArrowSchema =
             table.snapshot().unwrap().schema().try_into_arrow().unwrap();
         let mut writer = JsonWriter::try_new(
-            table.table_uri(),
+            ensure_table_uri(&table.table_uri()).unwrap(),
             Arc::new(arrow_schema),
             Some(vec!["modified".to_string()]),
             None,
@@ -612,7 +615,7 @@ mod tests {
             let arrow_schema: ArrowSchema =
                 table.snapshot().unwrap().schema().try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
-                table.table_uri(),
+                Url::from_directory_path(table_dir.path()).unwrap(),
                 Arc::new(arrow_schema),
                 Some(vec!["modified".to_string()]),
                 None,
@@ -653,7 +656,7 @@ mod tests {
             let schema = table.snapshot().unwrap().schema();
             let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
-                table.table_uri(),
+                ensure_table_uri(&table.table_uri()).unwrap(),
                 Arc::new(arrow_schema),
                 Some(vec!["modified".to_string()]),
                 None,
@@ -740,7 +743,6 @@ mod tests {
     #[tokio::test]
     async fn test_json_write_data_skipping_stats_columns() {
         let table_dir = tempfile::tempdir().unwrap();
-        let schema = get_delta_schema();
         let path = table_dir.path().to_str().unwrap().to_string();
         let config: HashMap<String, Option<String>> = vec![(
             "delta.dataSkippingStatsColumns".to_string(),
@@ -748,6 +750,8 @@ mod tests {
         )]
         .into_iter()
         .collect();
+
+        let schema = get_delta_schema();
         let mut table = CreateBuilder::new()
             .with_location(&path)
             .with_table_name("test-table")
@@ -757,7 +761,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let mut writer = JsonWriter::for_table(&table).unwrap();
+        let arrow_schema: ArrowSchema =
+            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
+        let mut writer = JsonWriter::try_new(
+            crate::ensure_table_uri(&table.table_uri()).unwrap(),
+            Arc::new(arrow_schema),
+            Some(vec!["modified".to_string()]),
+            None,
+        )
+        .await
+        .unwrap();
         let data = serde_json::json!(
             {
                 "id" : "A",
@@ -794,7 +807,6 @@ mod tests {
     #[tokio::test]
     async fn test_json_write_data_skipping_num_indexed_cols() {
         let table_dir = tempfile::tempdir().unwrap();
-        let schema = get_delta_schema();
         let path = table_dir.path().to_str().unwrap().to_string();
         let config: HashMap<String, Option<String>> = vec![(
             "delta.dataSkippingNumIndexedCols".to_string(),
@@ -802,6 +814,8 @@ mod tests {
         )]
         .into_iter()
         .collect();
+
+        let schema = get_delta_schema();
         let mut table = CreateBuilder::new()
             .with_location(&path)
             .with_table_name("test-table")
@@ -811,7 +825,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let mut writer = JsonWriter::for_table(&table).unwrap();
+        let arrow_schema: ArrowSchema =
+            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
+        let mut writer = JsonWriter::try_new(
+            crate::ensure_table_uri(&table.table_uri()).unwrap(),
+            Arc::new(arrow_schema),
+            Some(vec!["modified".to_string()]),
+            None,
+        )
+        .await
+        .unwrap();
         let data = serde_json::json!(
             {
                 "id" : "A",

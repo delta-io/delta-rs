@@ -28,7 +28,13 @@ async fn prepare_table(
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
 
-    let table = DeltaTableBuilder::from_uri(&table_uri)
+    if table_uri.starts_with("file://") {
+        let path = table_uri.strip_prefix("file://").unwrap();
+        std::fs::create_dir_all(path)?;
+    }
+
+    let table_url = url::Url::parse(&table_uri)?;
+    let table = DeltaTableBuilder::from_uri(table_url)?
         .with_allow_http(true)
         .build()?;
 
@@ -97,7 +103,9 @@ pub struct Worker {
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
         std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
-        let table = DeltaTableBuilder::from_uri(path)
+        let table_url = url::Url::parse(path).unwrap();
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .unwrap()
             .with_allow_http(true)
             .load()
             .await

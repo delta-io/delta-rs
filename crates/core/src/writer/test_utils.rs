@@ -5,6 +5,7 @@ use std::sync::Arc;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use arrow_select::take::take;
+use url::Url;
 
 use crate::kernel::{
     new_metadata, DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType,
@@ -12,7 +13,6 @@ use crate::kernel::{
 use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
 use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
-
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
 pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
@@ -291,7 +291,9 @@ pub async fn setup_table_with_configuration(
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
-    DeltaTableBuilder::from_uri(table_path.to_str().unwrap())
+    let table_uri = Url::from_directory_path(table_path).unwrap();
+    DeltaTableBuilder::from_uri(table_uri)
+        .unwrap()
         .build()
         .unwrap()
 }
