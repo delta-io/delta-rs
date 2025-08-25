@@ -619,19 +619,34 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let commit_or_bytes = this.commit_or_bytes;
 
             if this.table_data.is_none() {
-                this.log_store
+                match this
+                    .log_store
                     .write_commit_entry(0, commit_or_bytes.clone(), this.operation_id)
-                    .await?;
-                return Ok(PostCommit {
-                    version: 0,
-                    data: this.data,
-                    create_checkpoint: false,
-                    cleanup_expired_logs: None,
-                    log_store: this.log_store,
-                    table_data: None,
-                    custom_execute_handler: this.post_commit_hook_handler,
-                    metrics: CommitMetrics { num_retries: 0 },
-                });
+                    .await
+                {
+                    Ok(_) => {
+                        return Ok(PostCommit {
+                            version: 0,
+                            data: this.data,
+                            create_checkpoint: false,
+                            cleanup_expired_logs: None,
+                            log_store: this.log_store,
+                            table_data: None,
+                            custom_execute_handler: this.post_commit_hook_handler,
+                            metrics: CommitMetrics { num_retries: 0 },
+                        })
+                    }
+                    Err(TransactionError::VersionAlreadyExists(0)) => {
+                        // this can happen if the table has been created by another writer since the `this.table_data.is_none()` check above
+                        // therefore, we need to re-download the table state
+                        this.table_data = this
+                            .log_store
+                            .read_commit_entry(this.log_store.get_latest_version(0).await?)
+                            .await?;
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }?;
             }
 
             // unwrap() is safe here due to the above check
