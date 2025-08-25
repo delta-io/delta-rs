@@ -86,7 +86,7 @@ impl Snapshot {
         let version = version.map(|v| v as u64);
 
         // NB: kernel engine uses Url::join to construct paths,
-        // if the path does not end with a slash, the would override the ebtire path.
+        // if the path does not end with a slash, the would override the entire path.
         // So we need to be extra sure its ends with a slash.
         if !table_root.path().ends_with('/') {
             table_root.set_path(&format!("{}/", table_root.path()));
