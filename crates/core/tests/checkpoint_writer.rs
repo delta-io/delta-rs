@@ -25,7 +25,8 @@ mod simple_checkpoint {
         cleanup_checkpoint_files(log_path.as_path());
 
         // Load the delta table at version 5
-        let mut table = deltalake_core::open_table_with_version(table_location, 5)
+        let table_url = deltalake_core::table::builder::parse_table_uri(table_location).unwrap();
+        let mut table = deltalake_core::open_table_with_version(table_url.clone(), 5)
             .await
             .unwrap();
 
@@ -58,7 +59,7 @@ mod simple_checkpoint {
         assert_eq!(10, version);
 
         // delta table should load just fine with the checkpoint in place
-        let table_result = deltalake_core::open_table(table_location).await.unwrap();
+        let table_result = deltalake_core::open_table(table_url.clone()).await.unwrap();
         let table = table_result;
         let files = table.snapshot().unwrap().log_data().num_files();
         assert_eq!(12, files);
@@ -76,7 +77,8 @@ mod simple_checkpoint {
         cleanup_checkpoint_files(log_path.as_path());
 
         // Load the delta table
-        let base_table = deltalake_core::open_table(table_location).await.unwrap();
+        let table_url = deltalake_core::table::builder::parse_table_uri(table_location).unwrap();
+        let base_table = deltalake_core::open_table(table_url).await.unwrap();
 
         // Set the table properties to disable run length encoding
         // this alters table version and should be done in a more principled way
@@ -104,7 +106,10 @@ mod simple_checkpoint {
         assert_eq!(table.version(), Some(version));
 
         // delta table should load just fine with the checkpoint in place
-        let table_result = deltalake_core::open_table(table_location).await.unwrap();
+        let table_result =
+            deltalake_core::open_table(deltalake_core::ensure_table_uri(table_location).unwrap())
+                .await
+                .unwrap();
         let table = table_result;
         let files = table.snapshot().unwrap().file_paths_iter();
         assert_eq!(12, files.count());
@@ -222,7 +227,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(2).await.expect("Cannot load version 2");
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            &table.table_uri(),
+            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
             table.version().unwrap(),
             None,
             None,
@@ -276,7 +281,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(1).await.expect("Cannot load version 1");
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            &table.table_uri(),
+            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
             table.version().unwrap(),
             None,
             None,

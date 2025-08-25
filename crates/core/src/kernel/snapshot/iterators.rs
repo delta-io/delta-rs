@@ -454,7 +454,11 @@ mod tests {
     #[tokio::test]
     async fn test_logical_file_view_with_real_data() {
         // Use existing test table with real Delta log data
-        let log_store = TestTables::Simple.table_builder().build_storage().unwrap();
+        let log_store = TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
         let snapshot =
             crate::kernel::snapshot::Snapshot::try_new(&log_store, Default::default(), None)
                 .await

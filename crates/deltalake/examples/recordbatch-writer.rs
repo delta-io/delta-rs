@@ -17,8 +17,8 @@ use deltalake::parquet::{
     file::properties::WriterProperties,
 };
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::Path;
 use deltalake::*;
+use deltalake::{ensure_table_uri, Path};
 use std::sync::Arc;
 use tracing::*;
 
@@ -33,11 +33,12 @@ async fn main() -> Result<(), DeltaTableError> {
     let table_uri = std::env::var("TABLE_URI").map_err(|e| DeltaTableError::GenericError {
         source: Box::new(e),
     })?;
+    let table_url = ensure_table_uri(&table_uri).unwrap();
     info!("Using the location of: {table_uri:?}");
 
     let table_path = Path::parse(&table_uri)?;
 
-    let maybe_table = deltalake::open_table(&table_path).await;
+    let maybe_table = deltalake::open_table(table_url).await;
     let mut table = match maybe_table {
         Ok(table) => table,
         Err(DeltaTableError::NotATable(_)) => {

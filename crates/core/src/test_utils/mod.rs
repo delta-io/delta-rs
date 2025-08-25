@@ -65,9 +65,15 @@ impl TestTables {
         }
     }
 
-    pub fn table_builder(&self) -> DeltaTableBuilder {
-        let url = Url::from_directory_path(self.as_path()).unwrap();
-        DeltaTableBuilder::from_uri(url).with_allow_http(true)
+    pub fn table_builder(&self) -> Result<DeltaTableBuilder, crate::DeltaTableError> {
+        let url = Url::from_directory_path(self.as_path()).map_err(|_| {
+            crate::DeltaTableError::InvalidTableLocation(
+                self.as_path().to_string_lossy().into_owned(),
+            )
+        })?;
+        Ok(DeltaTableBuilder::from_uri(url)
+            .unwrap()
+            .with_allow_http(true))
     }
 }
 
