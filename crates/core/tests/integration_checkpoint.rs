@@ -209,3 +209,25 @@ async fn test_v2_checkpoint_json() -> DeltaResult<()> {
     create_checkpoint(&table, None).await?;
     Ok(())
 }
+
+#[tokio::test]
+/// This test that we can read a table with domain metadata. Since we cannot
+/// write domain metadata atm, we can at least test, that accessing restricted
+/// domain metadata in the table fails with a proper error.
+async fn test_checkpoint_with_domain_meta() -> DeltaResult<()> {
+    let temp_table = fs_common::clone_table("table-with-domain-metadata");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table = deltalake_core::open_table(format!("file://{table_path}")).await?;
+    assert_eq!(table.version(), Some(108));
+    let metadata = table
+        .snapshot()
+        .unwrap()
+        .snapshot()
+        .domain_metadata(&table.log_store(), "delta.clustering")
+        .await;
+    assert!(metadata
+        .unwrap_err()
+        .to_string()
+        .contains("User DomainMetadata are not allowed to use system-controlled 'delta.*' domain"));
+    Ok(())
+}
