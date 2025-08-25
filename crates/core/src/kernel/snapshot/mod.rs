@@ -313,7 +313,8 @@ impl Snapshot {
             .as_str(),
         );
 
-        let dummy_url = url::Url::parse("memory:///").unwrap();
+        let dummy_url = url::Url::parse("memory:///")
+            .map_err(|e| DeltaTableError::InvalidTableLocation(format!("memory:///: {}", e)))?;
         let mut commit_files = Vec::new();
         for meta in store
             .list_with_offset(Some(&log_root), &start_from)
@@ -652,9 +653,7 @@ impl EagerSnapshot {
         } else {
             self.files.clone()
         };
-        let iter = (0..data.num_rows())
-            .into_iter()
-            .map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
+        let iter = (0..data.num_rows()).map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
         futures::stream::iter(iter).boxed()
     }
 
@@ -729,7 +728,7 @@ mod tests {
     // }
 
     async fn test_snapshot() -> TestResult {
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
         let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
 
@@ -772,7 +771,7 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
-        let log_store = TestTables::Checkpoints.table_builder().build_storage()?;
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
             let snapshot = Snapshot::try_new(&log_store, Default::default(), Some(version)).await?;
@@ -788,7 +787,7 @@ mod tests {
     }
 
     async fn test_eager_snapshot() -> TestResult {
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
         let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
 
@@ -800,7 +799,7 @@ mod tests {
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
-        let log_store = TestTables::Checkpoints.table_builder().build_storage()?;
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
             let snapshot =
