@@ -23,7 +23,11 @@ def _convert_arro3_schema_to_delta(
     def dtype_to_delta_dtype(
         dtype: DataType, field_name: str | None = None
     ) -> DataType:
-        if DataType.is_null(dtype) and existing_schema is not None and field_name is not None:
+        if (
+            DataType.is_null(dtype)
+            and existing_schema is not None
+            and field_name is not None
+        ):
             try:
                 existing_field = existing_schema.field(field_name)
                 # Prevent infinite recursion: if existing field is also null, keep as null
