@@ -44,7 +44,7 @@ aws-sdk-dynamodb = { version = "=1.79.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "=1.73.0", default-features = false, features = [
+aws-sdk-sts = { version = "=1.84.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
