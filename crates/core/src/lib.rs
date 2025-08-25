@@ -2,20 +2,24 @@
 //!
 //! # Usage
 //!
-//! Load a Delta Table by path:
+//! Load a Delta Table by URL:
 //!
 //! ```rust
+//! # use url::Url;
 //! async {
-//!   let table = deltalake_core::open_table("../test/tests/data/simple_table").await.unwrap();
+//!   let table_url = Url::from_directory_path("../test/tests/data/simple_table").unwrap();
+//!   let table = deltalake_core::open_table(table_url).await.unwrap();
 //!   let version = table.version();
 //! };
 //! ```
 //!
-//! Load a specific version of Delta Table by path then filter files by partitions:
+//! Load a specific version of Delta Table by URL then filter files by partitions:
 //!
 //! ```rust
+//! # use url::Url;
 //! async {
-//!   let table = deltalake_core::open_table_with_version("../test/tests/data/simple_table", 0).await.unwrap();
+//!   let table_url = Url::from_directory_path("../test/tests/data/simple_table").unwrap();
+//!   let table = deltalake_core::open_table_with_version(table_url, 0).await.unwrap();
 //!   let filter = [deltalake_core::PartitionFilter {
 //!       key: "month".to_string(),
 //!       value: deltalake_core::PartitionValue::Equal("12".to_string()),
@@ -24,12 +28,14 @@
 //! };
 //! ```
 //!
-//! Load a specific version of Delta Table by path and datetime:
+//! Load a specific version of Delta Table by URL and datetime:
 //!
 //! ```rust
+//! # use url::Url;
 //! async {
+//!   let table_url = Url::from_directory_path("../test/tests/data/simple_table").unwrap();
 //!   let table = deltalake_core::open_table_with_ds(
-//!       "../test/tests/data/simple_table",
+//!       table_url,
 //!       "2020-05-02T23:47:31-07:00",
 //!   ).await.unwrap();
 //!   let version = table.version();
@@ -50,12 +56,14 @@
 //! Querying from local filesystem:
 //! ```
 //! use std::sync::Arc;
+//! # use url::Url;
 //!
 //! # #[cfg(feature="datafusion")]
 //! async {
 //!   use datafusion::prelude::SessionContext;
 //!   let mut ctx = SessionContext::new();
-//!   let table = deltalake_core::open_table("../test/tests/data/simple_table")
+//!   let table_url = Url::from_directory_path("../test/tests/data/simple_table").unwrap();
+//!   let table = deltalake_core::open_table(table_url)
 //!       .await
 //!       .unwrap();
 //!   ctx.register_table("demo", Arc::new(table)).unwrap();
@@ -88,12 +96,15 @@ pub mod writer;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use url::Url;
 
 pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
-pub use self::table::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
+pub use self::table::builder::{
+    ensure_table_uri, DeltaTableBuilder, DeltaTableConfig, DeltaVersion,
+};
 pub use self::table::config::TableProperty;
 pub use self::table::DeltaTable;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
@@ -110,12 +121,12 @@ pub use parquet;
 #[cfg(not(any(feature = "rustls", feature = "native-tls")))]
 compile_error!("You must enable at least one of the features: `rustls` or `native-tls`.");
 
-/// Creates and loads a DeltaTable from the given path with current metadata.
-/// Infers the storage backend to use from the scheme in the given table path.
+/// Creates and loads a DeltaTable from the given URL with current metadata.
+/// Infers the storage backend to use from the scheme in the given table URL.
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
-pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_valid_uri(table_uri)?.load().await?;
+pub async fn open_table(table_uri: Url) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)?.load().await?;
     Ok(table)
 }
 
@@ -124,42 +135,42 @@ pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaT
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_storage_options(
-    table_uri: impl AsRef<str>,
+    table_uri: Url,
     storage_options: HashMap<String, String>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_valid_uri(table_uri)?
+    let table = DeltaTableBuilder::from_uri(table_uri)?
         .with_storage_options(storage_options)
         .load()
         .await?;
     Ok(table)
 }
 
-/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
-/// Infers the storage backend to use from the scheme in the given table path.
+/// Creates a DeltaTable from the given URL and loads it with the metadata from the given version.
+/// Infers the storage backend to use from the scheme in the given table URL.
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_version(
-    table_uri: impl AsRef<str>,
+    table_url: Url,
     version: i64,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_valid_uri(table_uri)?
+    let table = DeltaTableBuilder::from_uri(table_url)?
         .with_version(version)
         .load()
         .await?;
     Ok(table)
 }
 
-/// Creates a DeltaTable from the given path.
+/// Creates a DeltaTable from the given URL.
 ///
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
-/// Infers the storage backend to use from the scheme in the given table path.
+/// Infers the storage backend to use from the scheme in the given table URL.
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_ds(
-    table_uri: impl AsRef<str>,
+    table_uri: Url,
     ds: impl AsRef<str>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_valid_uri(table_uri)?
+    let table = DeltaTableBuilder::from_uri(table_uri)?
         .with_datestring(ds)?
         .load()
         .await?;
@@ -190,9 +201,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_2_0_table_without_version() {
-        let table = crate::open_table("../test/tests/data/delta-0.2.0")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.2.0")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         let snapshot = table.snapshot().unwrap();
         assert_eq!(snapshot.version(), 3);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
@@ -229,9 +242,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_with_update() {
-        let path = "../test/tests/data/simple_table_with_checkpoint/";
-        let table_newest_version = crate::open_table(path).await.unwrap();
-        let mut table_to_update = crate::open_table_with_version(path, 0).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/simple_table_with_checkpoint/")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table_newest_version = crate::open_table(table_url.clone()).await.unwrap();
+        let mut table_to_update = crate::open_table_with_version(table_url, 0).await.unwrap();
         // calling update several times should not produce any duplicates
         table_to_update.update().await.unwrap();
         table_to_update.update().await.unwrap();
@@ -252,7 +268,11 @@ mod tests {
     }
     #[tokio::test]
     async fn read_delta_2_0_table_with_version() {
-        let mut table = crate::open_table_with_version("../test/tests/data/delta-0.2.0", 0)
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.2.0")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let mut table = crate::open_table_with_version(table_url.clone(), 0)
             .await
             .unwrap();
         let snapshot = table.snapshot().unwrap();
@@ -267,7 +287,7 @@ mod tests {
             ],
         );
 
-        table = crate::open_table_with_version("../test/tests/data/delta-0.2.0", 2)
+        table = crate::open_table_with_version(table_url.clone(), 2)
             .await
             .unwrap();
         let snapshot = table.snapshot().unwrap();
@@ -282,9 +302,7 @@ mod tests {
             ]
         );
 
-        table = crate::open_table_with_version("../test/tests/data/delta-0.2.0", 3)
-            .await
-            .unwrap();
+        table = crate::open_table_with_version(table_url, 3).await.unwrap();
         let snapshot = table.snapshot().unwrap();
         assert_eq!(snapshot.version(), 3);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
@@ -301,9 +319,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_without_version() {
-        let table = crate::open_table("../test/tests/data/delta-0.8.0")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.8.0")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         let snapshot = table.snapshot().unwrap();
         assert_eq!(snapshot.version(), 1);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
@@ -358,9 +378,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_load_version() {
-        let mut table = crate::open_table("../test/tests/data/delta-0.8.0")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.8.0")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let mut table = crate::open_table(table_url).await.unwrap();
         let snapshot = table.snapshot().unwrap();
         assert_eq!(snapshot.version(), 1);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
@@ -388,9 +410,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_partitions() {
-        let table = crate::open_table("../test/tests/data/delta-0.8.0-partitioned")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.8.0-partitioned")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
 
         let filters = vec![
             crate::PartitionFilter {
@@ -461,9 +485,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_null_partition() {
-        let table = crate::open_table("../test/tests/data/delta-0.8.0-null-partition")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.8.0-null-partition")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
 
         let filters = vec![crate::PartitionFilter {
             key: "k".to_string(),
@@ -490,9 +516,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_with_special_partition() {
-        let table = crate::open_table("../test/tests/data/delta-0.8.0-special-partition")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.8.0-special-partition")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
 
         assert_eq!(
             table.snapshot().unwrap().file_paths_iter().collect_vec(),
@@ -523,9 +551,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_8_0_table_partition_with_compare_op() {
-        let table = crate::open_table("../test/tests/data/delta-0.8.0-numeric-partition")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-0.8.0-numeric-partition")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
 
         let filters = vec![crate::PartitionFilter {
             key: "x".to_string(),
@@ -552,10 +582,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_history() {
-        let path = "../test/tests/data/simple_table_with_checkpoint";
-        let latest_table = crate::open_table(path).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/simple_table_with_checkpoint")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let latest_table = crate::open_table(table_url.clone()).await.unwrap();
 
-        let table = crate::open_table_with_version(path, 1).await.unwrap();
+        let table = crate::open_table_with_version(table_url, 1).await.unwrap();
 
         let history1 = table.history(None).await.expect("Cannot get table history");
         let history2 = latest_table
@@ -574,8 +607,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_table_commits() {
-        let path = "../test/tests/data/simple_table_with_checkpoint";
-        let mut table = crate::open_table_with_version(path, 9).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/simple_table_with_checkpoint")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let mut table = crate::open_table_with_version(table_url, 9).await.unwrap();
         assert_eq!(table.version(), Some(9));
         let peek = table
             .log_store()
@@ -613,15 +649,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_vacuumed_log() {
-        let path = "../test/tests/data/checkpoints_vacuumed";
-        let table = crate::open_table(path).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/checkpoints_vacuumed")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         assert_eq!(table.version(), Some(12));
     }
 
     #[tokio::test]
     async fn test_read_vacuumed_log_history() {
-        let path = "../test/tests/data/checkpoints_vacuumed";
-        let table = crate::open_table(path).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/checkpoints_vacuumed")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
 
         // load history for table version with available log file
         let history = table
@@ -643,7 +685,8 @@ mod tests {
     #[tokio::test]
     async fn read_empty_folder() {
         let dir = std::env::temp_dir();
-        let result = crate::open_table(&dir.into_os_string().into_string().unwrap()).await;
+        let table_url = url::Url::from_directory_path(&dir).unwrap();
+        let result = crate::open_table(table_url).await;
 
         assert!(matches!(
             result.unwrap_err(),
@@ -651,11 +694,8 @@ mod tests {
         ));
 
         let dir = std::env::temp_dir();
-        let result = crate::open_table_with_ds(
-            &dir.into_os_string().into_string().unwrap(),
-            "2021-08-09T13:18:31+08:00",
-        )
-        .await;
+        let table_url = url::Url::from_directory_path(&dir).unwrap();
+        let result = crate::open_table_with_ds(table_url, "2021-08-09T13:18:31+08:00").await;
 
         assert!(matches!(
             result.unwrap_err(),
@@ -665,9 +705,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_table_with_cdc() {
-        let table = crate::open_table("../test/tests/data/simple_table_with_cdc")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/simple_table_with_cdc")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(
             table.snapshot().unwrap().file_paths_iter().collect_vec(),
@@ -679,10 +721,13 @@ mod tests {
 
     #[tokio::test()]
     async fn test_version_zero_table_load() {
-        let path = "../test/tests/data/COVID-19_NYT";
-        let latest_table: DeltaTable = crate::open_table(path).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/COVID-19_NYT")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let latest_table: DeltaTable = crate::open_table(table_url.clone()).await.unwrap();
 
-        let version_0_table = crate::open_table_with_version(path, 0).await.unwrap();
+        let version_0_table = crate::open_table_with_version(table_url, 0).await.unwrap();
 
         let version_0_history = version_0_table
             .history(None)
@@ -706,7 +751,10 @@ mod tests {
         let path_doesnt_exist = !FolderPath::new(non_existing_path_str).exists();
         assert!(path_doesnt_exist);
 
-        let error = crate::open_table(non_existing_path_str).await.unwrap_err();
+        let table_path = std::path::Path::new(non_existing_path_str);
+        let abs_path = std::fs::canonicalize(".").unwrap().join(table_path);
+        let table_url = url::Url::from_directory_path(abs_path).unwrap();
+        let error = crate::open_table(table_url).await.unwrap_err();
         let _expected_error_msg = format!(
             "Local path \"{non_existing_path_str}\" does not exist or you don't have access!"
         );
@@ -719,8 +767,11 @@ mod tests {
     /// <https://github.com/delta-io/delta-rs/issues/2152>
     #[tokio::test]
     async fn test_identity_column() {
-        let path = "../test/tests/data/issue-2152";
-        let _ = crate::open_table(path)
+        let table_path = std::path::Path::new("../test/tests/data/issue-2152")
+            .canonicalize()
+            .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let _ = crate::open_table(table_url)
             .await
             .expect("Failed to load the table");
     }

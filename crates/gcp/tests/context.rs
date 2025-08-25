@@ -53,11 +53,13 @@ pub async fn copy_table(
     to_options: Option<HashMap<String, String>>,
     allow_http: bool,
 ) -> Result<(), DeltaTableError> {
-    let from_store = DeltaTableBuilder::from_uri(from)
+    let from_url = deltalake_core::table::builder::parse_table_uri(from)?;
+    let from_store = DeltaTableBuilder::from_uri(from_url)?
         .with_storage_options(from_options.unwrap_or_default())
         .with_allow_http(allow_http)
         .build_storage()?;
-    let to_store = DeltaTableBuilder::from_uri(to)
+    let to_url = deltalake_core::table::builder::parse_table_uri(to)?;
+    let to_store = DeltaTableBuilder::from_uri(to_url)?
         .with_storage_options(to_options.unwrap_or_default())
         .with_allow_http(allow_http)
         .build_storage()?;

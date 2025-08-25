@@ -711,8 +711,9 @@ mod tests {
         use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
         use arrow::record_batch::RecordBatch;
         use pretty_assertions::assert_eq;
+        use std::path::Path;
         use std::sync::Arc;
-
+        use url::Url;
         fn sort_batch_by(batch: &RecordBatch, column: &str) -> arrow::error::Result<RecordBatch> {
             let sort_column = batch.column(batch.schema().column_with_name(column).unwrap().0);
             let sort_indices = sort_to_indices(sort_column, None, None)?;
@@ -735,7 +736,9 @@ mod tests {
         async fn test_with_partitions() {
             // test table with partitions
             let path = "../test/tests/data/delta-0.8.0-null-partition";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -778,7 +781,8 @@ mod tests {
         async fn test_with_deletion_vector() {
             // test table with partitions
             let path = "../test/tests/data/table_with_deletion_logs";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri = Url::from_directory_path(Path::new(path)).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
@@ -884,7 +888,9 @@ mod tests {
         async fn test_without_partitions() {
             // test table without partitions
             let path = "../test/tests/data/simple_table";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
 
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -961,7 +967,8 @@ mod tests {
         async fn test_with_column_mapping() {
             // test table with column mapping and partitions
             let path = "../test/tests/data/table_with_column_mapping";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri = Url::from_directory_path(Path::new(path)).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -1035,7 +1042,9 @@ mod tests {
         async fn test_with_stats() {
             // test table with stats
             let path = "../test/tests/data/delta-0.8.0";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
@@ -1074,7 +1083,9 @@ mod tests {
         #[tokio::test]
         async fn test_table_not_always_with_stats() {
             let path = "../test/tests/data/delta-stats-optional";
-            let mut table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -1100,7 +1111,9 @@ mod tests {
         #[tokio::test]
         async fn test_table_checkpoint_not_always_with_stats() {
             let path = "../test/tests/data/delta-checkpoint-stats-optional";
-            let mut table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
 
             assert_eq!(
@@ -1120,7 +1133,8 @@ mod tests {
         async fn test_only_struct_stats() {
             // test table with no json stats
             let path = "../test/tests/data/delta-1.2.1-only-struct-stats";
-            let mut table = crate::open_table(path).await.unwrap();
+            let table_uri = Url::from_directory_path(Path::new(path)).unwrap();
+            let mut table = crate::open_table(table_uri).await.unwrap();
             table.load_version(1).await.unwrap();
 
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();

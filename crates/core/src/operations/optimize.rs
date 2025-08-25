@@ -1502,6 +1502,7 @@ pub(super) mod zorder {
         use arrow_schema::DataType;
 
         use super::*;
+        use crate::ensure_table_uri;
 
         #[test]
         fn test_rejects_no_columns() {
@@ -1557,14 +1558,15 @@ pub(super) mod zorder {
             let source_path = format!("../test/tests/data/{table_name}");
             fs_extra::dir::copy(source_path, tmp_dir.path(), &Default::default()).unwrap();
 
+            let table_uri =
+                ensure_table_uri(tmp_dir.path().join(table_name).to_str().unwrap()).unwrap();
             // Run optimize
-            let (_, metrics) =
-                DeltaOps::try_from_uri(tmp_dir.path().join(table_name).to_str().unwrap())
-                    .await
-                    .unwrap()
-                    .optimize()
-                    .await
-                    .unwrap();
+            let (_, metrics) = DeltaOps::try_from_uri(table_uri)
+                .await
+                .unwrap()
+                .optimize()
+                .await
+                .unwrap();
 
             // Verify it worked
             assert_eq!(metrics.num_files_added, 1);

@@ -4,7 +4,7 @@ use bytes::Bytes;
 use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::Path;
 use futures::stream::BoxStream;
-use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};
 use std::ops::Range;
 
 use deltalake_core::logstore::object_store::{
@@ -127,7 +127,7 @@ impl ObjectStore for GcsStorageBackend {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }

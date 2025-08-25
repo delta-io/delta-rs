@@ -93,27 +93,57 @@ pub struct DeltaTableBuilder {
 }
 
 impl DeltaTableBuilder {
-    /// Creates `DeltaTableBuilder` from table uri
+    /// Creates `DeltaTableBuilder` from table URL
+    ///
+    /// ```rust
+    /// # use deltalake_core::table::builder::*;
+    /// # use url::Url;
+    /// let url = Url::parse("memory:///test").unwrap();
+    /// let builder = DeltaTableBuilder::from_uri(url);
+    /// ```
+    pub fn from_uri(table_uri: Url) -> DeltaResult<Self> {
+        if table_uri.scheme() == "file" {
+            let path = table_uri.to_file_path().map_err(|_| {
+                DeltaTableError::InvalidTableLocation(table_uri.as_str().to_string())
+            })?;
+            ensure_file_location_exists(path)?;
+        }
+
+        debug!("creating table builder with {table_uri}");
+
+        Ok(Self {
+            table_uri: table_uri.into(),
+            storage_backend: None,
+            version: DeltaVersion::default(),
+            storage_options: None,
+            allow_http: None,
+            table_config: DeltaTableConfig::default(),
+        })
+    }
+
+    /// Creates `DeltaTableBuilder` from table uri string (deprecated)
     ///
     /// Can panic on an invalid URI
     ///
     /// ```rust
     /// # use deltalake_core::table::builder::*;
-    /// let builder = DeltaTableBuilder::from_uri("../test/tests/data/delta-0.8.0");
+    /// let builder = DeltaTableBuilder::from_uri_str("../test/tests/data/delta-0.8.0");
     /// assert!(true);
     /// ```
-    pub fn from_uri(table_uri: impl AsRef<str>) -> Self {
+    #[deprecated(note = "Use from_uri with url::Url instead")]
+    pub fn from_uri_str(table_uri: impl AsRef<str>) -> Self {
         let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
-        DeltaTableBuilder::from_valid_uri(url).expect("Failed to create valid builder")
+        DeltaTableBuilder::from_uri(url).expect("Failed to create valid builder")
     }
 
-    /// Creates `DeltaTableBuilder` from verified table uri.
+    /// Creates `DeltaTableBuilder` from verified table uri string (deprecated).
     ///
     /// ```rust
     /// # use deltalake_core::table::builder::*;
     /// let builder = DeltaTableBuilder::from_valid_uri("memory:///");
     /// assert!(builder.is_ok(), "Builder failed with {builder:?}");
     /// ```
+    #[deprecated(note = "Use from_uri with url::Url instead")]
     pub fn from_valid_uri(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
         if let Ok(url) = Url::parse(table_uri.as_ref()) {
             if url.scheme() == "file" {
@@ -367,7 +397,37 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
 ///
 /// Extra slashes will be removed from the end path as well.
 ///
+/// Parse a table URI to a URL without creating directories.
+/// This is useful for opening existing tables where we don't want to create directories.
+pub fn parse_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
+    let table_uri = table_uri.as_ref();
+
+    let uri_type: UriType = resolve_uri_type(table_uri)?;
+
+    let mut url = match uri_type {
+        UriType::LocalPath(path) => {
+            let path = std::fs::canonicalize(path).map_err(|err| {
+                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
+                DeltaTableError::InvalidTableLocation(msg)
+            })?;
+            Url::from_directory_path(path).map_err(|_| {
+                let msg = format!(
+                    "Could not construct a URL from the canonical path: {table_uri}.\n\
+                    Something must be very wrong with the table path.",
+                );
+                DeltaTableError::InvalidTableLocation(msg)
+            })?
+        }
+        UriType::Url(url) => url,
+    };
+
+    let trimmed_path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&trimmed_path);
+    Ok(url)
+}
+
 /// Will return an error if the location is not valid. For example,
+/// Creates directories for local paths if they don't exist.
 pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
 
@@ -582,7 +642,9 @@ mod tests {
             let mut storage_opts = HashMap::<String, String>::new();
             storage_opts.insert(key.to_owned(), val.to_owned());
 
-            let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(storage_opts);
+            let table = DeltaTableBuilder::from_uri(table_uri)
+                .unwrap()
+                .with_storage_options(storage_opts);
             let found_opts = table.storage_options();
             assert_eq!(expected, found_opts.get(key).unwrap());
         }
