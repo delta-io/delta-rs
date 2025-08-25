@@ -10,6 +10,7 @@ use deltalake_test::read::read_table_paths;
 use deltalake_test::{test_concurrent_writes, test_read_tables, IntegrationContext, TestResult};
 use object_store::path::Path;
 use serial_test::serial;
+use url::Url;
 
 mod context;
 use context::*;
@@ -70,7 +71,9 @@ async fn test_object_store_onelake_abfs() -> TestResult {
 
 #[allow(dead_code)]
 async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> TestResult {
-    let delta_store = DeltaTableBuilder::from_uri(context.root_uri())
+    let table_uri = Url::parse(&context.root_uri()).unwrap();
+    let delta_store = DeltaTableBuilder::from_uri(table_uri)
+        .unwrap()
         .with_allow_http(true)
         .build_storage()?
         .object_store(None);

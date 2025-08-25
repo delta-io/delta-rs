@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf, process::Command};
 use url::Url;
 
 pub use self::factories::*;
-use crate::DeltaTableBuilder;
+use crate::{DeltaResult, DeltaTableBuilder};
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
@@ -65,9 +65,13 @@ impl TestTables {
         }
     }
 
-    pub fn table_builder(&self) -> DeltaTableBuilder {
-        let url = Url::from_directory_path(self.as_path()).unwrap();
-        DeltaTableBuilder::from_uri(url).with_allow_http(true)
+    pub fn table_builder(&self) -> DeltaResult<DeltaTableBuilder> {
+        let url = Url::from_directory_path(self.as_path()).map_err(|_| {
+            crate::DeltaTableError::InvalidTableLocation(
+                self.as_path().to_string_lossy().into_owned(),
+            )
+        })?;
+        DeltaTableBuilder::from_uri(url).map(|b| b.with_allow_http(true))
     }
 }
 

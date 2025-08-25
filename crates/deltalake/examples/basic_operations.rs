@@ -9,7 +9,8 @@ use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
-use deltalake::{protocol::SaveMode, DeltaOps};
+use deltalake::{protocol::SaveMode, DeltaOps, DeltaTableError};
+use url::Url;
 
 use std::sync::Arc;
 
@@ -65,7 +66,9 @@ fn get_table_batches() -> RecordBatch {
 async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     // Create a delta operations client pointing at an un-initialized location.
     let ops = if let Ok(table_uri) = std::env::var("TABLE_URI") {
-        DeltaOps::try_from_uri(table_uri).await?
+        let table_url = Url::parse(&table_uri)
+            .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
+        DeltaOps::try_from_uri(table_url).await?
     } else {
         DeltaOps::new_in_memory()
     };

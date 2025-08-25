@@ -8,7 +8,10 @@
 //!
 //! async {
 //!   let mut ctx = SessionContext::new();
-//!   let table = deltalake_core::open_table("./tests/data/simple_table")
+//!   let table = deltalake_core::open_table_with_storage_options(
+//!       url::Url::parse("memory://").unwrap(),
+//!       std::collections::HashMap::new()
+//!   )
 //!       .await
 //!       .unwrap();
 //!   ctx.register_table("demo", Arc::new(table)).unwrap();
@@ -797,9 +800,11 @@ impl TableProviderFactory for DeltaTableFactory {
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let provider = if cmd.options.is_empty() {
-            open_table(cmd.to_owned().location).await?
+            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            open_table(table_url).await?
         } else {
-            open_table_with_storage_options(cmd.to_owned().location, cmd.to_owned().options).await?
+            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
         Ok(Arc::new(provider))
     }
@@ -1213,8 +1218,8 @@ mod tests {
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use futures::{stream::BoxStream, StreamExt};
     use object_store::{
-        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutOptions,
-        PutPayload, PutResult,
+        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use object_store::{ObjectMeta, PutMultipartOptions};
     use serde_json::json;
@@ -1502,9 +1507,11 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("../test/tests/data/delta-2.2.0-partitioned-types")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         let config = DeltaScanConfigBuilder::new()
             .with_file_column_name(&"file_source")
             .build(table.snapshot().unwrap())
@@ -2076,9 +2083,11 @@ mod tests {
         //
         // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
         // datafusion rejected.
-        let table = crate::open_table("../test/tests/data/delta-2.2.0-partitioned-types")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
 

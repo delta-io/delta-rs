@@ -1,6 +1,6 @@
 #![allow(dead_code, missing_docs)]
 use deltalake_core::logstore::ObjectStoreRef;
-use deltalake_core::{DeltaResult, DeltaTableBuilder};
+use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 use fs_extra::dir::{copy, CopyOptions};
 use std::collections::HashMap;
 use std::process::ExitStatus;
@@ -18,7 +18,9 @@ pub trait StorageIntegration {
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus>;
 
     fn object_store(&self) -> DeltaResult<ObjectStoreRef> {
-        Ok(DeltaTableBuilder::from_uri(self.root_uri())
+        let table_url = url::Url::parse(&self.root_uri())
+            .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
+        Ok(DeltaTableBuilder::from_uri(table_url)?
             .with_allow_http(true)
             .build_storage()?
             .object_store(None))
@@ -111,7 +113,10 @@ impl IntegrationContext {
     pub fn table_builder(&self, table: TestTables) -> DeltaTableBuilder {
         let name = table.as_name();
         let table_uri = format!("{}/{}", self.root_uri(), &name);
-        DeltaTableBuilder::from_uri(table_uri).with_allow_http(true)
+        let table_url = url::Url::parse(&table_uri).unwrap();
+        DeltaTableBuilder::from_uri(table_url)
+            .unwrap()
+            .with_allow_http(true)
     }
 
     pub fn uri_for_table(&self, table: TestTables) -> String {
