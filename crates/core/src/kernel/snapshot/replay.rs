@@ -8,6 +8,7 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
+use tracing::log::*;
 
 use super::parse::collect_map;
 use crate::kernel::arrow::extract::{self as ex};
@@ -19,6 +20,7 @@ pub(crate) fn parse_partitions(
     partition_schema: &StructType,
     raw_path: &str,
 ) -> DeltaResult<StructArray> {
+    trace!("parse_partitions: batch: {batch:?}\npartition_schema: {partition_schema:?}\npath: {raw_path}");
     let partitions =
         ex::extract_and_cast_opt::<MapArray>(batch, raw_path).ok_or(DeltaTableError::generic(
             "No partitionValues column found in files batch. This is unexpected.",
@@ -29,7 +31,7 @@ pub(crate) fn parse_partitions(
         .fields()
         .map(|f| {
             (
-                f.name().to_string(),
+                f.physical_name().to_string(),
                 Vec::<Scalar>::with_capacity(partitions.len()),
             )
         })
@@ -69,17 +71,17 @@ pub(crate) fn parse_partitions(
 
         partition_schema.fields().for_each(|f| {
             let value = data
-                .get(f.name())
+                .get(f.physical_name())
                 .cloned()
                 .unwrap_or(Scalar::Null(f.data_type().clone()));
-            values.get_mut(f.name()).unwrap().push(value);
+            values.get_mut(f.physical_name()).unwrap().push(value);
         });
     }
 
     let columns = partition_schema
         .fields()
         .map(|f| {
-            let values = values.get(f.name()).unwrap();
+            let values = values.get(f.physical_name()).unwrap();
             match f.data_type() {
                 DataType::Primitive(p) => {
                     // Safety: we created the Scalars above using the parsing function of the same PrimitiveType
@@ -200,4 +202,116 @@ pub(crate) fn parse_partitions(
         None,
         num_rows,
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::MapBuilder;
+    use arrow::array::MapFieldNames;
+    use arrow::array::StringBuilder;
+    use arrow::datatypes::DataType as ArrowDataType;
+    use arrow::datatypes::Field as ArrowField;
+    use arrow::datatypes::Schema as ArrowSchema;
+    use arrow_schema::Field;
+    use delta_kernel::schema::{MapType, MetadataValue, SchemaRef, StructField};
+
+    #[test]
+    fn test_physical_partition_name_mapping() -> crate::DeltaResult<()> {
+        let physical_partition_name = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb".to_string();
+        let schema: SchemaRef = delta_kernel::scan::scan_row_schema().project(&[
+            "path",
+            "size",
+            "fileConstantValues",
+        ])?;
+        let partition_schema = StructType::new(vec![StructField::nullable(
+            "Company Very Short",
+            DataType::STRING,
+        )
+        .with_metadata(vec![
+            (
+                "delta.columnMapping.id".to_string(),
+                MetadataValue::Number(1),
+            ),
+            (
+                "delta.columnMapping.physicalName".to_string(),
+                MetadataValue::String(physical_partition_name.clone()),
+            ),
+        ])]);
+
+        let partition_values = MapType::new(DataType::STRING, DataType::STRING, true);
+        let file_constant_values: SchemaRef = Arc::new(StructType::new([StructField::nullable(
+            "partitionValues",
+            partition_values,
+        )]));
+        // Inspecting the schema of file_constant_values:
+        let _: ArrowSchema = file_constant_values.as_ref().try_into_arrow()?;
+
+        // Constructing complex types in Arrow is hell.
+        // Absolute hell.
+        //
+        // The partition column values that should be coming off the log are:
+        //  "col-173b4db9-b5ad-427f-9e75-516aae37fbbb":"BMS"
+        let keys_builder = StringBuilder::new();
+        let values_builder = StringBuilder::new();
+        let map_fields = MapFieldNames {
+            entry: "key_value".into(),
+            key: "key".into(),
+            value: "value".into(),
+        };
+        let mut partitions = MapBuilder::new(Some(map_fields), keys_builder, values_builder);
+
+        // The partition named in the schema, we need to get the physical name's "rename" out though
+        partitions
+            .keys()
+            .append_value(physical_partition_name.clone());
+        partitions.values().append_value("BMS");
+        partitions.append(true).unwrap();
+        let partitions = partitions.finish();
+
+        let struct_fields = Fields::from(vec![
+            Field::new("key", ArrowDataType::Utf8, false),
+            Field::new("value", ArrowDataType::Utf8, true),
+        ]);
+        let map_field = Arc::new(ArrowField::new(
+            "key_value",
+            ArrowDataType::Struct(struct_fields),
+            false,
+        ));
+
+        let parts = StructArray::from(vec![(
+            Arc::new(ArrowField::new(
+                "partitionValues",
+                ArrowDataType::Map(map_field, false),
+                true,
+            )),
+            Arc::new(partitions) as ArrayRef,
+        )]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.as_ref().try_into_arrow()?),
+            vec![
+                // path
+                Arc::new(StringArray::from(vec!["foo.parquet".to_string()])),
+                // size
+                Arc::new(Int64Array::from(vec![1])),
+                // fileConstantValues
+                Arc::new(parts),
+            ],
+        )?;
+
+        let raw_path = "fileConstantValues.partitionValues";
+        let partitions = parse_partitions(&batch, &partition_schema, raw_path)?;
+        assert_eq!(
+            None,
+            partitions.column_by_name(&physical_partition_name),
+            "Should not have found the physical column name"
+        );
+        assert_ne!(
+            None,
+            partitions.column_by_name("Company Very Short"),
+            "Should have found the renamed column"
+        );
+        Ok(())
+    }
 }
