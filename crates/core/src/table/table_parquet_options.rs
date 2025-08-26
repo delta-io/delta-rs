@@ -19,7 +19,7 @@ use tracing::info;
 pub struct TableParquetOptions {}
 
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties_tpo(
+fn build_writer_properties_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Option<WriterProperties> {
     use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
