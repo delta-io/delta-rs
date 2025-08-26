@@ -1,8 +1,14 @@
 # Using Delta Lake with Sail
 
-[Sail](https://github.com/lakehq/sail) is an open-source multimodal distributed compute framework, built in Rust, unifying batch, streaming, and AI workloads. For seamless adoption, Sail offers a drop-in replacement for the Spark SQL and DataFrame APIs in both single-host and distributed settings. You can use Sail for both ad-hoc queries on your laptop and large-scale data processing jobs in a cluster.
+[Sail](https://github.com/lakehq/sail) is an open-source multimodal distributed compute framework, built in Rust,
+unifying batch, streaming, and AI workloads. For seamless adoption, Sail offers a drop-in replacement for the Spark SQL
+and DataFrame APIs in both single-host and distributed settings. You can use Sail for both ad-hoc queries on your laptop
+and large-scale data processing jobs in a cluster.
 
-Delta Lake is a natural fit for Sail. Delta Lake provides a reliable storage layer with strong data management guarantees, while Sail focuses on flexible, unified multimodal compute. By combining the two, you can start with a familiar PySpark client, while benefiting from Sail’s native support for Delta Lake tables and ensuring interoperability with existing Delta datasets.
+Delta Lake is a natural fit for Sail. Delta Lake provides a reliable storage layer with strong data management
+guarantees, while Sail focuses on flexible, unified multimodal compute. By combining the two, you can start with a
+familiar PySpark client, while benefiting from Sail’s native support for Delta Lake tables and ensuring interoperability
+with existing Delta datasets.
 
 ## Getting Started with Sail
 
@@ -30,7 +36,8 @@ _, port = server.listening_address
 spark = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
 ```
 
-<br>
+### Note
+
 In all the examples below, `spark` refers to the Spark session connected to the Sail server.
 
 ## Basic Delta Lake Usage in Sail
@@ -68,7 +75,8 @@ spark.sql("SELECT * FROM users").show()
 
 ## Data Partitioning
 
-Partitioned Delta tables organize data into directories based on the values of one or more columns. This improves query performance by skipping data files that do not match the filter conditions.
+Partitioned Delta tables organize data into directories based on the values of one or more columns. This improves query
+performance by skipping data files that do not match the filter conditions.
 
 ### DataFrame API
 
@@ -101,13 +109,17 @@ spark.sql("SELECT * FROM metrics WHERE year > 2024").show()
 
 ## Schema Evolution
 
-Delta Lake handles schema evolution gracefully. By default, if you try to write data with a different schema than the one of the existing Delta table, an error will occur. You can enable schema evolution by setting the `mergeSchema` option to `true` when writing  data. In this case, if you change the data type of an existing column to a compatible type, or add a new column, Delta Lake will automatically update the schema of the table.
+Delta Lake handles schema evolution gracefully. By default, if you try to write data with a different schema than the
+one of the existing Delta table, an error will occur. You can enable schema evolution by setting the `mergeSchema`
+option to `true` when writing data. In this case, if you change the data type of an existing column to a compatible
+type, or add a new column, Delta Lake will automatically update the schema of the table.
 
 ```python
 df.write.format("delta").mode("append").option("mergeSchema", "true").save(path)
 ```
 
-You can also use the `overwriteSchema` option to overwrite the schema of an existing Delta table. But this works only if you set the write mode to `overwrite`.
+You can also use the `overwriteSchema` option to overwrite the schema of an existing Delta table. But this works only if
+you set the write mode to `overwrite`.
 
 ```python
 df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
@@ -123,6 +135,7 @@ df = spark.read.format("delta").option("versionAsOf", "0").load(path)
 
 ## Contribute to Sail
 
-You can refer to the [Sail documentation](https://docs.lakesail.com/sail/latest/) for more information, such as reading or writing Delta tables stored in various object storages supported by Sail.
+You can refer to the [Sail documentation](https://docs.lakesail.com/sail/latest/) for more information, such as reading
+or writing Delta tables stored in various object storages supported by Sail.
 
 Excited about Sail and want to contribute? Join them on [GitHub](https://github.com/lakehq/sail)! 🚀
