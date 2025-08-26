@@ -108,8 +108,7 @@ impl SimpleWriterPropertiesFactory {
 impl Default for SimpleWriterPropertiesFactory {
     fn default() -> Self {
         let writer_properties = WriterProperties::builder()
-            // .set_compression(Compression::SNAPPY)
-            .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
+            .set_compression(Compression::SNAPPY) // Code assumes Snappy by default
             .set_created_by(format!("delta-rs version {}", crate_version()))
             .build();
         Self { writer_properties }
