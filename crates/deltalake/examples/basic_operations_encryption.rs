@@ -38,7 +38,7 @@ async fn ops_with_crypto(
     }
     let mut tbl_options = TableOptions::new();
     tbl_options.parquet = tpo;
-    tbl_options.current_format = Some(ConfigFileType::JSON);
+    tbl_options.current_format = Some(ConfigFileType::PARQUET);
     let format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options));
     Ok(ops.with_file_format_options(format_options))
 }
