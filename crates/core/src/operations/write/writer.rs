@@ -23,7 +23,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
 use crate::table::table_parquet_options::{
-    build_writer_properties_factory_default, build_writer_properties_factory_wp,
+    build_writer_properties_factory_wp,
     WriterPropertiesFactory,
 };
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};

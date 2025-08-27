@@ -457,7 +457,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 this.snapshot,
-                this.table_parquet_options.clone(),
+                to_table_parquet_options_from_ffo(this.file_format_options.as_ref()),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,
@@ -470,7 +470,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 DeltaTable::new_with_state(
                     this.log_store,
                     new_snapshot,
-                    this.table_parquet_options,
+                    this.file_format_options,
                 ),
                 metrics,
             ))

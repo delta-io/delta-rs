@@ -20,6 +20,7 @@ use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use deltalake_core::datafusion::config::ConfigFileType;
 use deltalake_core::table::table_parquet_options::SimpleFileFormatOptions;
 
 async fn ops_with_crypto(
@@ -35,7 +36,9 @@ async fn ops_with_crypto(
     if let Some(dec) = dec {
         tpo.crypto.file_decryption = Some(dec.into());
     }
-    let tbl_options: TableOptions = tpo.into();
+    let mut tbl_options = TableOptions::new();
+    tbl_options.parquet = tpo;
+    tbl_options.current_format = Some(ConfigFileType::JSON);
     let format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options));
     Ok(ops.with_file_format_options(format_options))
 }

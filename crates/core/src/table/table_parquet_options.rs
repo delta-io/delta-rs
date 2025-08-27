@@ -8,7 +8,7 @@ use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
 
 use object_store::path::Path;
-use parquet::basic::{Compression, ZstdLevel};
+use parquet::basic::{Compression};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;

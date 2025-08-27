@@ -99,7 +99,7 @@ impl CreateBuilder {
             storage_options: None,
             actions: Default::default(),
             log_store: None,
-            table_parquet_options: None,
+            file_format_options: None,
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
@@ -279,7 +279,7 @@ impl CreateBuilder {
                 DeltaTable::new(
                     log_store,
                     Default::default(),
-                    self.table_parquet_options.clone(),
+                    self.file_format_options.clone(),
                 ),
             )
         } else {

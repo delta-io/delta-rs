@@ -76,7 +76,7 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_tpo, build_writer_properties_factory_wp, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatOptions, WriterPropertiesFactory};
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -196,7 +196,7 @@ impl WriteBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: Option<DeltaTableState>,
-        file_foramt_options: Option<Arc<dyn FileFormatOptions>>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
         let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
@@ -762,7 +762,7 @@ impl std::future::IntoFuture for WriteBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot,
-                this.table_parquet_options,
+                this.file_format_options,
             ))
         })
     }

@@ -39,6 +39,7 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::SessionContext,
 };
+use datafusion::config::TableParquetOptions;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -58,7 +59,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_tpo, build_writer_properties_factory_wp, state_with_parquet_options, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory};
 use crate::{
     delta_datafusion::{
         expr::fmt_expr_to_sql,
@@ -272,7 +273,7 @@ async fn execute(
     // NOTE: The optimize_projections rule is being temporarily disabled because it errors with
     // our schemas for Lists due to issues discussed
     // [here](https://github.com/delta-io/delta-rs/pull/2886#issuecomment-2481550560>
-    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = state
+    let _rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = state
         .optimizers()
         .iter()
         .filter(|rule| {
@@ -524,7 +525,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.updates,
                 this.log_store.clone(),
                 this.snapshot,
-                this.table_parquet_options.clone(),
+                to_table_parquet_options_from_ffo(this.file_format_options.as_ref()),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,
@@ -539,7 +540,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, snapshot, this.table_parquet_options),
+                DeltaTable::new_with_state(this.log_store, snapshot, this.file_format_options),
                 metrics,
             ))
         })
