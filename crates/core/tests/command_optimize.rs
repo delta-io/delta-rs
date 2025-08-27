@@ -359,8 +359,9 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        None)
-        .await?;
+        None,
+    )
+    .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut other_dt = deltalake_core::open_table(uri).await?;
@@ -421,7 +422,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
-        None
+        None,
     )
     .await?;
 
