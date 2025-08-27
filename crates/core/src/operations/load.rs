@@ -11,8 +11,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
-use crate::table::TableParquetOptions;
 use crate::DeltaTable;
+use crate::table::table_parquet_options::FileFormatOptions;
 
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
@@ -22,8 +22,8 @@ pub struct LoadBuilder {
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
-    /// Parquet options for the table
-    table_parquet_options: Option<TableParquetOptions>,
+    /// Options to apply when operating on the table files
+    file_format_options: Option<Arc<dyn FileFormatOptions>>
 }
 
 impl super::Operation<()> for LoadBuilder {

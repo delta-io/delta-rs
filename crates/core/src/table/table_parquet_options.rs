@@ -14,9 +14,52 @@ use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
 use tracing::info;
 
+
 #[cfg(not(feature = "datafusion"))]
 #[derive(Clone, Default, Debug, PartialEq)]
-pub struct TableParquetOptions {}
+pub struct TableOptions {}
+
+
+// Top level trait for file format options used by a DeltaTable
+pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
+    fn table_options(&self) -> TableOptions;
+    fn writer_properties_factory(
+        &self
+    ) -> Arc<dyn WriterPropertiesFactory>;
+
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SimpleFileFormatOptions {
+    table_options: TableOptions,
+}
+
+impl SimpleFileFormatOptions {
+    pub fn new(table_options: TableOptions) -> Self {
+        Self { table_options }
+    }
+}
+
+#[cfg(feature = "datafusion")]
+impl FileFormatOptions for SimpleFileFormatOptions {
+    fn table_options(&self) -> TableOptions {
+        self.table_options.clone()
+    }
+
+    fn writer_properties_factory(
+        &self
+    ) -> Arc<dyn WriterPropertiesFactory> {
+        build_writer_properties_factory_tpo(&Some(self.table_options.parquet.clone())).unwrap()
+    }
+}
+
+#[cfg(feature = "datafusion")]
+pub fn build_writer_properties_factory_ffo(
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
+) -> Option<Arc<dyn WriterPropertiesFactory>> {
+    file_format_options.map(|ffo| ffo.writer_properties_factory())
+}
+
 
 #[cfg(feature = "datafusion")]
 fn build_writer_properties_tpo(
@@ -33,8 +76,9 @@ fn build_writer_properties_tpo(
     })
 }
 
+
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties_factory_tpo(
+fn build_writer_properties_factory_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
     let props = build_writer_properties_tpo(table_parquet_options);
@@ -43,8 +87,9 @@ pub fn build_writer_properties_factory_tpo(
     })
 }
 
+
 #[cfg(feature = "datafusion")]
-pub fn build_writer_properties_factory_or_default_tpo(
+fn build_writer_properties_factory_or_default_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Arc<dyn WriterPropertiesFactory> {
     let maybe_wp = build_writer_properties_factory_tpo(table_parquet_options);
@@ -155,6 +200,7 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
         Ok(builder.build())
     }
 }
+
 
 /// AI generated code to get builder from existing WriterProperties
 /// May not be right

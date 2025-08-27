@@ -55,11 +55,7 @@ use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{
-    build_writer_properties_factory_tpo, build_writer_properties_factory_wp,
-    WriterPropertiesFactory,
-};
-use crate::table::TableParquetOptions;
+use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_tpo, build_writer_properties_factory_wp, FileFormatOptions, WriterPropertiesFactory};
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{DeltaTable, ObjectMeta, PartitionFilter};
 
@@ -203,8 +199,8 @@ pub struct OptimizeBuilder<'a> {
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Parquet options for the table
-    table_parquet_options: Option<TableParquetOptions>,
+    /// Options to apply when operating on the table files
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
@@ -239,13 +235,13 @@ impl<'a> OptimizeBuilder<'a> {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        table_parquet_options: Option<TableParquetOptions>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_tpo(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options);
         Self {
             snapshot,
             log_store,
-            table_parquet_options,
+            file_format_options,
             filters: &[],
             target_size: None,
             writer_properties_factory,

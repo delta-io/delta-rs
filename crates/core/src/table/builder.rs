@@ -13,8 +13,8 @@ use url::Url;
 
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
-use crate::table::TableParquetOptions;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::table::table_parquet_options::FileFormatOptions;
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -92,7 +92,7 @@ pub struct DeltaTableBuilder {
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
     /// Parquet options to apply when operating on the table
-    pub table_parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
 }
 
 impl DeltaTableBuilder {
@@ -139,7 +139,7 @@ impl DeltaTableBuilder {
             storage_options: None,
             allow_http: None,
             table_config: DeltaTableConfig::default(),
-            table_parquet_options: None,
+            file_format_options: None,
         })
     }
 
@@ -237,10 +237,11 @@ impl DeltaTableBuilder {
         self.allow_http = Some(allow_http);
         self
     }
+    
 
     /// Set the parquet options to use when reading/writing parquet files in the table.
-    pub fn with_parquet_config(mut self, table_parquet_options: TableParquetOptions) -> Self {
-        self.table_parquet_options = Some(table_parquet_options);
+    pub fn with_parquet_config(mut self, file_format_options: Arc<dyn FileFormatOptions>) -> Self {
+        self.file_format_options = Some(file_format_options);
         self
     }
 
@@ -292,7 +293,7 @@ impl DeltaTableBuilder {
         Ok(DeltaTable::new(
             self.build_storage()?,
             self.table_config,
-            self.table_parquet_options,
+            self.file_format_options,
         ))
     }
 

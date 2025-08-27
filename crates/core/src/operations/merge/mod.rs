@@ -93,11 +93,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{
-    build_writer_properties_factory_tpo, build_writer_properties_factory_wp,
-    state_with_parquet_options, WriterPropertiesFactory,
-};
-use crate::table::TableParquetOptions;
+use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_tpo, build_writer_properties_factory_wp, state_with_parquet_options, FileFormatOptions, WriterPropertiesFactory};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 mod barrier;
@@ -148,8 +144,8 @@ pub struct MergeBuilder {
     merge_schema: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Parquet options for the table
-    table_parquet_options: Option<TableParquetOptions>,
+    /// Options to apply when operating on the table files
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -176,18 +172,18 @@ impl MergeBuilder {
     pub fn new<E: Into<Expression>>(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        table_parquet_options: Option<TableParquetOptions>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
         predicate: E,
         source: DataFrame,
     ) -> Self {
         let predicate = predicate.into();
-        let writer_properties_factory = build_writer_properties_factory_tpo(&table_parquet_options);
+        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate,
             source,
             snapshot,
             log_store,
-            table_parquet_options,
+            file_format_options,
             source_alias: None,
             target_alias: None,
             state: None,

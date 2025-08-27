@@ -20,8 +20,8 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
-use crate::table::TableParquetOptions;
 use crate::{DeltaTable, DeltaTableBuilder};
+use crate::table::table_parquet_options::FileFormatOptions;
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -61,7 +61,7 @@ pub struct CreateBuilder {
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
-    table_parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
     configuration: HashMap<String, Option<String>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
@@ -240,14 +240,17 @@ impl CreateBuilder {
         self
     }
 
-    // Set options for parquet files
-    pub fn with_table_parquet_options(
+
+
+    // Set format options for underlying table files
+    pub fn with_file_format_options(
         mut self,
-        table_parquet_options: TableParquetOptions,
+        file_format_options: Arc<dyn FileFormatOptions>,
     ) -> Self {
-        self.table_parquet_options = Some(table_parquet_options);
+        self.file_format_options = Some(file_format_options);
         self
     }
+    
 
     /// Set a custom execute handler, for pre and post execution
     pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {

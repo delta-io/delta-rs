@@ -3,7 +3,7 @@
 use std::cmp::{min, Ordering};
 use std::fmt;
 use std::fmt::Formatter;
-
+use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -25,7 +25,6 @@ use crate::{DeltaResult, DeltaTableError};
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
 pub use crate::logstore::PeekCommit;
 
-pub use crate::table::table_parquet_options::TableParquetOptions;
 
 pub mod builder;
 pub mod config;
@@ -34,8 +33,10 @@ pub mod state;
 mod columns;
 pub mod table_parquet_options;
 
+
 // Re-exposing for backwards compatibility
 pub use columns::*;
+use crate::table::table_parquet_options::{FileFormatOptions};
 
 /// In memory representation of a Delta Table
 ///
@@ -49,8 +50,8 @@ pub struct DeltaTable {
     pub state: Option<DeltaTableState>,
     /// the load options used during load
     pub config: DeltaTableConfig,
-    /// parquet options to apply when operating on the table
-    pub table_parquet_options: Option<TableParquetOptions>,
+    /// options to apply when operating on the table files
+    pub file_format_options: Option<Arc<dyn FileFormatOptions>>,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -103,7 +104,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                     state,
                     config,
                     log_store,
-                    table_parquet_options: None,
+                    file_format_options: None,
                 };
                 Ok(table)
             }
@@ -121,13 +122,13 @@ impl DeltaTable {
     pub fn new(
         log_store: LogStoreRef,
         config: DeltaTableConfig,
-        table_parquet_options: Option<TableParquetOptions>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
         Self {
             state: None,
             log_store,
             config,
-            table_parquet_options,
+            file_format_options,
         }
     }
 
@@ -139,13 +140,13 @@ impl DeltaTable {
     pub(crate) fn new_with_state(
         log_store: LogStoreRef,
         state: DeltaTableState,
-        table_parquet_options: Option<TableParquetOptions>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
         Self {
             state: Some(state),
             log_store,
             config: Default::default(),
-            table_parquet_options,
+            file_format_options,
         }
     }
 

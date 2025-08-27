@@ -5,7 +5,7 @@ use deltalake::arrow::{
     record_batch::RecordBatch,
 };
 use deltalake::datafusion::assert_batches_sorted_eq;
-use deltalake::datafusion::config::TableParquetOptions;
+use deltalake::datafusion::config::{TableOptions, TableParquetOptions};
 use deltalake::datafusion::dataframe::DataFrame;
 use deltalake::datafusion::logical_expr::{col, lit};
 use deltalake::datafusion::prelude::SessionContext;
@@ -20,6 +20,7 @@ use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use deltalake_core::table::table_parquet_options::SimpleFileFormatOptions;
 
 async fn ops_with_crypto(
     uri: &str,
@@ -34,7 +35,9 @@ async fn ops_with_crypto(
     if let Some(dec) = dec {
         tpo.crypto.file_decryption = Some(dec.into());
     }
-    Ok(ops.with_table_parquet_options(tpo))
+    let tbl_options: TableOptions = tpo.into();
+    let format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options));
+    Ok(ops.with_file_format_options(format_options))
 }
 
 fn get_table_columns() -> Vec<StructField> {

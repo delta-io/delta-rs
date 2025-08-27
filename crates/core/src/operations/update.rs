@@ -58,11 +58,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{
-    build_writer_properties_factory_tpo, build_writer_properties_factory_wp,
-    state_with_parquet_options, WriterPropertiesFactory,
-};
-use crate::table::TableParquetOptions;
+use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_tpo, build_writer_properties_factory_wp, state_with_parquet_options, FileFormatOptions, WriterPropertiesFactory};
 use crate::{
     delta_datafusion::{
         expr::fmt_expr_to_sql,
@@ -93,8 +89,8 @@ pub struct UpdateBuilder {
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Parquet options for the table
-    table_parquet_options: Option<TableParquetOptions>,
+    /// Options to use operating on the table files
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -138,15 +134,15 @@ impl UpdateBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        table_parquet_options: Option<TableParquetOptions>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_tpo(&table_parquet_options);
+        let writer_properties_factory =build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate: None,
             updates: HashMap::new(),
             snapshot,
             log_store,
-            table_parquet_options,
+            file_format_options,
             state: None,
             writer_properties_factory,
             commit_properties: CommitProperties::default(),
