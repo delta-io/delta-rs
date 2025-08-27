@@ -61,6 +61,39 @@ pub fn build_writer_properties_factory_ffo(
 }
 
 
+
+#[cfg(feature = "datafusion")]
+pub fn build_writer_properties_factory_or_default_ffo(
+    file_format_options: Option<Arc<dyn FileFormatOptions>>,
+) -> Arc<dyn WriterPropertiesFactory> {
+    build_writer_properties_factory_ffo(file_format_options)
+        .unwrap_or_else(|| build_writer_properties_factory_default())
+}
+
+#[cfg(feature = "datafusion")]
+pub fn to_table_parquet_options_from_ffo(
+    file_format_options: Option<&Arc<dyn FileFormatOptions>>,
+) -> Option<TableParquetOptions> {
+    file_format_options.map(|ffo| ffo.table_options().parquet.clone())
+}
+
+#[cfg(feature = "datafusion")]
+pub fn state_with_file_format_options(
+    state: SessionState,
+    file_format_options: Option<&Arc<dyn FileFormatOptions>>,
+) -> SessionState {
+    if let Some(ffo) = file_format_options {
+        let mut sb = SessionStateBuilder::new_from_existing(state.clone());
+        let mut tbl_opts = ffo.table_options();
+        tbl_opts.set_config_format(ConfigFileType::PARQUET);
+        sb = sb.with_table_options(tbl_opts);
+        let state = sb.build();
+        return state;
+    }
+    state
+}
+
+
 #[cfg(feature = "datafusion")]
 fn build_writer_properties_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
@@ -272,3 +305,4 @@ impl WriterPropertiesExt for WriterProperties {
         builder
     }
 }
+

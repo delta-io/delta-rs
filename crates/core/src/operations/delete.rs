@@ -62,7 +62,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_tpo, build_writer_properties_factory_wp, state_with_parquet_options, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory};
 use crate::{DeltaTable, DeltaTableError};
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -441,7 +441,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
-            let state = state_with_parquet_options(state, this.table_parquet_options.as_ref());
+            let state = state_with_file_format_options(state, this.file_format_options.as_ref());
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {

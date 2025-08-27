@@ -40,13 +40,13 @@ impl LoadBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        table_parquet_options: Option<TableParquetOptions>,
+        file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
         Self {
             snapshot,
             log_store,
             columns: None,
-            table_parquet_options: table_parquet_options,
+            file_format_options,
         }
     }
 
@@ -73,7 +73,7 @@ impl std::future::IntoFuture for LoadBuilder {
             let table = DeltaTable::new_with_state(
                 this.log_store,
                 this.snapshot,
-                this.table_parquet_options.clone(),
+                this.file_format_options.clone(),
             );
             let schema = table.snapshot()?.arrow_schema()?;
             let projection = this

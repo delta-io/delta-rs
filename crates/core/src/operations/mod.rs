@@ -219,7 +219,7 @@ impl DeltaOps {
         LoadBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
-            self.0.table_parquet_options,
+            self.0.file_format_options,
         )
     }
 
@@ -234,7 +234,7 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.log_store, self.0.state, self.0.table_parquet_options)
+        WriteBuilder::new(self.0.log_store, self.0.state, self.0.file_format_options)
             .with_input_batches(batches)
     }
 
@@ -257,7 +257,7 @@ impl DeltaOps {
         OptimizeBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
-            self.0.table_parquet_options,
+            self.0.file_format_options,
         )
     }
 
@@ -268,7 +268,7 @@ impl DeltaOps {
         DeleteBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
-            self.0.table_parquet_options,
+            self.0.file_format_options,
         )
     }
 
@@ -279,7 +279,7 @@ impl DeltaOps {
         UpdateBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
-            self.0.table_parquet_options,
+            self.0.file_format_options,
         )
     }
 
@@ -300,7 +300,7 @@ impl DeltaOps {
         MergeBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
-            self.0.table_parquet_options,
+            self.0.file_format_options,
             predicate.into(),
             source,
         )
@@ -326,7 +326,7 @@ impl DeltaOps {
         DropConstraintBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
-            self.0.table_parquet_options,
+            self.0.file_format_options,
         )
     }
 
