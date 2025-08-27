@@ -1,5 +1,83 @@
 # Changelog
 
+## [rust-v0.28.0](https://github.com/delta-io/delta-rs/tree/rust-v0.28.0) (2025-08-27)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.27.0...rust-v0.28.0)
+
+
+:warning: There is a known performance regression when opening very wide tables (50+ columns) that have hundreds of thousands of transactions. The fix is pending a new [delta-kernel-rs](https://github.com/delta-io/delta-kernel-rs) release.
+
+**Implemented enhancements:**
+
+- Python: Automatically convert Pandas null types to valid Delta Lake types in write\_deltalake\(\) [\#3691](https://github.com/delta-io/delta-rs/issues/3691)
+- Update HDFS object store to 0.15 [\#3680](https://github.com/delta-io/delta-rs/issues/3680)
+- create a v2 uuid checkpoint regression test [\#3666](https://github.com/delta-io/delta-rs/issues/3666)
+- Feature: update python table vacuum to add keep\_versions parameter [\#3634](https://github.com/delta-io/delta-rs/issues/3634)
+- TypeError in `DeltaTable.to_pyarrow_dataset` when using non-string partition filter values \(e.g., int\) [\#3597](https://github.com/delta-io/delta-rs/issues/3597)
+- Make "cloud" feature optional [\#3589](https://github.com/delta-io/delta-rs/issues/3589)
+- `convert_to_deltalake` cannot convert parquet dataset if it has millisecond-precision timestamps [\#3535](https://github.com/delta-io/delta-rs/issues/3535)
+- Musl wheels  [\#3399](https://github.com/delta-io/delta-rs/issues/3399)
+
+**Fixed bugs:**
+
+- Significant performance regression when opening S3 table on next branch [\#3667](https://github.com/delta-io/delta-rs/issues/3667)
+- Concurrent overwrite doesn't fail conflict checking [\#3622](https://github.com/delta-io/delta-rs/issues/3622)
+- source distributions missing in v1.1.1 [\#3621](https://github.com/delta-io/delta-rs/issues/3621)
+- Missing linux distro for v1.1.1 [\#3620](https://github.com/delta-io/delta-rs/issues/3620)
+- azurite tets failing in main [\#3612](https://github.com/delta-io/delta-rs/issues/3612)
+- Generic S3 Error on \_last\_checkpoint on ARM64 AWS Lambda with `write_deltalake` [\#3602](https://github.com/delta-io/delta-rs/issues/3602)
+- write\_deltalake merge with list and large\_list [\#3595](https://github.com/delta-io/delta-rs/issues/3595)
+- Python DeltaTable does not support writes in multiple threads \(again?\) [\#3594](https://github.com/delta-io/delta-rs/issues/3594)
+- Checkpoint creation fails on Azure in \>=1.0.0 with "Azure does not support suffix range requests" [\#3593](https://github.com/delta-io/delta-rs/issues/3593)
+- Partition value strings containing reserved ASCII and non-ASCII are double-encoded. [\#3577](https://github.com/delta-io/delta-rs/issues/3577)
+- Deltalake version 1.0.2 errors with Azure Storage after appending many times [\#3567](https://github.com/delta-io/delta-rs/issues/3567)
+- Python deltalake 1.0.2 is not compatible with polars.Array [\#3566](https://github.com/delta-io/delta-rs/issues/3566)
+- Checkpoint schema breaking change between 0.25.5 and 1.0.2 [\#3527](https://github.com/delta-io/delta-rs/issues/3527)
+
+**Closed issues:**
+
+- Array/list not encoded with partition filters [\#3648](https://github.com/delta-io/delta-rs/issues/3648)
+
+**Merged pull requests:**
+
+- fix: reintroduce the 100 commit checkpoint interval [\#3708](https://github.com/delta-io/delta-rs/pull/3708) ([rtyler](https://github.com/rtyler))
+- fix: enabling correctly pulling partition values out of column mapped tables [\#3706](https://github.com/delta-io/delta-rs/pull/3706) ([rtyler](https://github.com/rtyler))
+- fix\(format\): fix formatting in Python for conversion file [\#3705](https://github.com/delta-io/delta-rs/pull/3705) ([fvaleye](https://github.com/fvaleye))
+- chore: remove unused dependencies [\#3698](https://github.com/delta-io/delta-rs/pull/3698) ([rtyler](https://github.com/rtyler))
+- fix\(pandas\): implement-automatic-conversion-for-pandas-null-types [\#3695](https://github.com/delta-io/delta-rs/pull/3695) ([fvaleye](https://github.com/fvaleye))
+- chore: update hdfs object store to 0.15 [\#3681](https://github.com/delta-io/delta-rs/pull/3681) ([Kimahriman](https://github.com/Kimahriman))
+- feat!: use kernel predicates on file streams [\#3669](https://github.com/delta-io/delta-rs/pull/3669) ([roeap](https://github.com/roeap))
+- chore: bump python [\#3664](https://github.com/delta-io/delta-rs/pull/3664) ([ion-elgreco](https://github.com/ion-elgreco))
+- fix: use RFC3896 percent encoding with delta protocol correctness [\#3661](https://github.com/delta-io/delta-rs/pull/3661) ([ion-elgreco](https://github.com/ion-elgreco))
+- feat!: kernel log replay [\#3660](https://github.com/delta-io/delta-rs/pull/3660) ([roeap](https://github.com/roeap))
+- ci: run integration tests against next branches [\#3658](https://github.com/delta-io/delta-rs/pull/3658) ([roeap](https://github.com/roeap))
+- fix: handle checking partition filters in array/list when converting … [\#3657](https://github.com/delta-io/delta-rs/pull/3657) ([smeyerre](https://github.com/smeyerre))
+- fix: aws special paths encoding [\#3656](https://github.com/delta-io/delta-rs/pull/3656) ([roeap](https://github.com/roeap))
+- feat: support converting parquet with non-microsecond timestamps to d… [\#3654](https://github.com/delta-io/delta-rs/pull/3654) ([smeyerre](https://github.com/smeyerre))
+- chore: use pytest-xdist for speeding up python tests [\#3642](https://github.com/delta-io/delta-rs/pull/3642) ([rtyler](https://github.com/rtyler))
+- chore: remove deprecated use of kernel's Table [\#3639](https://github.com/delta-io/delta-rs/pull/3639) ([rtyler](https://github.com/rtyler))
+- feat: add keep\_versions parameter to vacuum command for python [\#3635](https://github.com/delta-io/delta-rs/pull/3635) ([corwinjoy](https://github.com/corwinjoy))
+- chore: bump version for release [\#3633](https://github.com/delta-io/delta-rs/pull/3633) ([rtyler](https://github.com/rtyler))
+- fix: avoid parsing generationExpressions as JSON [\#3632](https://github.com/delta-io/delta-rs/pull/3632) ([rtyler](https://github.com/rtyler))
+- feat: build musl wheels upon release [\#3631](https://github.com/delta-io/delta-rs/pull/3631) ([rtyler](https://github.com/rtyler))
+- fix: make the docs link checking more useful/less faily [\#3630](https://github.com/delta-io/delta-rs/pull/3630) ([rtyler](https://github.com/rtyler))
+- fix: coerce polars.Array into a suitable Arrow list type [\#3623](https://github.com/delta-io/delta-rs/pull/3623) ([rtyler](https://github.com/rtyler))
+- fix: ensure openssl-sys doesn't creep into the dependency via the kernel default engine [\#3619](https://github.com/delta-io/delta-rs/pull/3619) ([rtyler](https://github.com/rtyler))
+- fix: allow writing to DeltaTable objects across Python threads [\#3618](https://github.com/delta-io/delta-rs/pull/3618) ([rtyler](https://github.com/rtyler))
+- docs: fix broken daft links \(how daft\) [\#3617](https://github.com/delta-io/delta-rs/pull/3617) ([rtyler](https://github.com/rtyler))
+- fix: ensure new checkpoints can be written after old checkpoints [\#3616](https://github.com/delta-io/delta-rs/pull/3616) ([rtyler](https://github.com/rtyler))
+- fix: switch the url schemes for Azure integration tests [\#3614](https://github.com/delta-io/delta-rs/pull/3614) ([rtyler](https://github.com/rtyler))
+- fix: allow non-string primitive types for partition filters when converting to pyarrow dataset [\#3613](https://github.com/delta-io/delta-rs/pull/3613) ([smeyerre](https://github.com/smeyerre))
+- refactor: make match\_partitions and new\_metadata public [\#3605](https://github.com/delta-io/delta-rs/pull/3605) ([zeevm](https://github.com/zeevm))
+- fix: fix typo to fix CI typo check [\#3604](https://github.com/delta-io/delta-rs/pull/3604) ([alamb](https://github.com/alamb))
+- chore: update to DataFusion `49.0.0` [\#3603](https://github.com/delta-io/delta-rs/pull/3603) ([alamb](https://github.com/alamb))
+- chore: minor API changes after integration testing [\#3598](https://github.com/delta-io/delta-rs/pull/3598) ([rtyler](https://github.com/rtyler))
+- fix: scan time was always 0 for merge metrics [\#3596](https://github.com/delta-io/delta-rs/pull/3596) ([rtyler](https://github.com/rtyler))
+- refactor: make "cloud" feature in object\_store optional [\#3590](https://github.com/delta-io/delta-rs/pull/3590) ([zeevm](https://github.com/zeevm))
+- chore: generate a more recentish updated changelog [\#3588](https://github.com/delta-io/delta-rs/pull/3588) ([rtyler](https://github.com/rtyler))
+- fix: creating new DeltaTable with invalid table name path no longer creates empty directory [\#3504](https://github.com/delta-io/delta-rs/pull/3504) ([smeyerre](https://github.com/smeyerre))
+
+
 ## [rust-v0.27.0](https://github.com/delta-io/delta-rs/tree/rust-v0.27.0) (2025-07-12)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.26.2...rust-v0.27.0)
