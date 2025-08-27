@@ -258,7 +258,7 @@ impl TableReference for EagerSnapshot {
     }
 
     fn config(&self) -> &TableProperties {
-        self.table_config()
+        self.table_properties()
     }
 
     fn eager_snapshot(&self) -> &EagerSnapshot {
@@ -666,7 +666,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         )
                         .await?;
                         let transaction_info = TransactionInfo::try_new(
-                            &read_snapshot,
+                            read_snapshot.log_data(),
                             this.data.operation.read_predicate(),
                             &this.data.actions,
                             this.data.operation.read_whole_table(),

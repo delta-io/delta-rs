@@ -1,6 +1,5 @@
 //! The module for delta table state.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -9,22 +8,23 @@ use delta_kernel::expressions::column_expr;
 use delta_kernel::schema::StructField;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
-use futures::TryStreamExt;
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
-use super::{get_partition_col_data_types, DeltaTableConfig};
+use super::DeltaTableConfig;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata, Protocol, Remove,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, Remove,
     StructType, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
-use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{to_kernel_predicate, DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,31 @@ impl DeltaTableState {
         self.snapshot.version()
     }
 
+    /// The most recent protocol of the table.
+    pub fn protocol(&self) -> &Protocol {
+        self.snapshot.protocol()
+    }
+
+    /// The most recent metadata of the table.
+    pub fn metadata(&self) -> &Metadata {
+        self.snapshot.metadata()
+    }
+
+    /// The table schema
+    pub fn schema(&self) -> &StructType {
+        self.snapshot.schema()
+    }
+
+    /// Get the table config which is loaded with of the snapshot
+    pub fn load_config(&self) -> &DeltaTableConfig {
+        self.snapshot.load_config()
+    }
+
+    /// Well known table configuration
+    pub fn table_config(&self) -> &TableProperties {
+        self.snapshot.table_properties()
+    }
+
     /// Get the timestamp when a version commit was created.
     /// This is the timestamp of the commit file.
     /// If the commit file is not present, None is returned.
@@ -63,6 +88,7 @@ impl DeltaTableState {
     pub async fn from_actions(actions: Vec<Action>) -> DeltaResult<Self> {
         use crate::kernel::transaction::CommitData;
         use crate::protocol::{DeltaOperation, SaveMode};
+        use std::collections::HashMap;
 
         let metadata = actions
             .iter()
@@ -134,14 +160,17 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions(&self) -> DeltaResult<Vec<Add>> {
-        Ok(self.snapshot.file_actions()?.collect())
+    pub async fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
+        self.file_actions_iter(log_store).try_collect().await
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
-    pub fn file_actions_iter(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        self.snapshot.file_actions()
+    pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
+        self.snapshot
+            .files(log_store, None)
+            .map_ok(|v| v.add_action())
+            .boxed()
     }
 
     /// Get the number of files in the current table state
@@ -153,9 +182,7 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.log_data()
-            .into_iter()
-            .map(|add| add.object_store_path())
+        self.log_data().iter().map(|add| add.object_store_path())
     }
 
     /// Get the transaction version for the given application ID.
@@ -164,34 +191,9 @@ impl DeltaTableState {
     pub async fn transaction_version(
         &self,
         log_store: &dyn LogStore,
-        app_id: impl AsRef<str>,
+        app_id: impl ToString,
     ) -> DeltaResult<Option<i64>> {
         self.snapshot.transaction_version(log_store, app_id).await
-    }
-
-    /// The most recent protocol of the table.
-    pub fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
-    }
-
-    /// The most recent metadata of the table.
-    pub fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
-    }
-
-    /// The table schema
-    pub fn schema(&self) -> &StructType {
-        self.snapshot.schema()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
-    }
-
-    /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
-        self.snapshot.table_config()
     }
 
     /// Obtain the Eager snapshot of the state
@@ -212,52 +214,29 @@ impl DeltaTableState {
         Ok(())
     }
 
-    /// Obtain Add actions for files that match the filter
-    pub fn get_active_add_actions_by_partitions<'a>(
-        &'a self,
-        filters: &'a [PartitionFilter],
-    ) -> Result<impl Iterator<Item = DeltaResult<LogicalFile<'a>>>, DeltaTableError> {
-        let current_metadata = self.metadata();
-
-        let nonpartitioned_columns: Vec<String> = filters
-            .iter()
-            .filter(|f| !current_metadata.partition_columns().contains(&f.key))
-            .map(|f| f.key.to_string())
-            .collect();
-
-        if !nonpartitioned_columns.is_empty() {
-            return Err(DeltaTableError::ColumnsNotPartitioned {
-                nonpartitioned_columns: { nonpartitioned_columns },
-            });
+    /// Obtain a stream of logical file views that match the partition filters
+    ///
+    /// ## Arguments
+    ///
+    /// * `log_store` - The log store to use for reading the table's log.
+    /// * `filters` - The partition filters to apply to the file views.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of logical file views that match the partition filters.
+    pub fn get_active_add_actions_by_partitions(
+        &self,
+        log_store: &dyn LogStore,
+        filters: &[PartitionFilter],
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        if filters.is_empty() {
+            return self.snapshot().files(log_store, None);
         }
-
-        let partition_col_data_types: HashMap<&String, &DataType> =
-            get_partition_col_data_types(self.schema(), current_metadata)
-                .into_iter()
-                .collect();
-
-        Ok(self.log_data().into_iter().filter_map(move |add| {
-            let partitions = add.partition_values();
-            if partitions.is_err() {
-                return Some(Err(DeltaTableError::Generic(
-                    "Failed to parse partition values".to_string(),
-                )));
-            }
-            let partitions = partitions
-                .unwrap()
-                .iter()
-                .map(|(k, v)| DeltaTablePartition::from_partition_value((*k, v)))
-                .collect::<Vec<_>>();
-            let is_valid = filters
-                .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types));
-
-            if is_valid {
-                Some(Ok(add))
-            } else {
-                None
-            }
-        }))
+        let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
+            Ok(predicate) => Arc::new(predicate),
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+        };
+        self.snapshot().files(log_store, Some(predicate))
     }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.

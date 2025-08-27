@@ -79,6 +79,7 @@ use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::table_configuration::TableConfiguration;
 use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -93,7 +94,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{
     Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
 };
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -154,11 +155,30 @@ pub trait DataFusionMixins {
 
 impl DataFusionMixins for Snapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self, true)
+        _arrow_schema(self.table_configuration(), true)
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self, false)
+        _arrow_schema(self.table_configuration(), false)
+    }
+
+    fn parse_predicate_expression(
+        &self,
+        expr: impl AsRef<str>,
+        df_state: &SessionState,
+    ) -> DeltaResult<Expr> {
+        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        parse_predicate_expression(&schema, expr, df_state)
+    }
+}
+
+impl DataFusionMixins for LogDataHandler<'_> {
+    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self.table_configuration(), true)
+    }
+
+    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        _arrow_schema(self.table_configuration(), false)
     }
 
     fn parse_predicate_expression(
@@ -207,10 +227,13 @@ impl DataFusionMixins for DeltaTableState {
     }
 }
 
-fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
+fn _arrow_schema(
+    snapshot: &TableConfiguration,
+    wrap_partitions: bool,
+) -> DeltaResult<ArrowSchemaRef> {
     let meta = snapshot.metadata();
+    let schema = snapshot.schema();
 
-    let schema = meta.parse_schema()?;
     let fields = schema
         .fields()
         .filter(|f| !meta.partition_columns().contains(&f.name().to_string()))
@@ -245,31 +268,30 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
 }
 
 pub(crate) fn files_matching_predicate<'a>(
-    snapshot: &'a EagerSnapshot,
+    log_data: LogDataHandler<'a>,
     filters: &[Expr],
 ) -> DeltaResult<impl Iterator<Item = Add> + 'a> {
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
         let expr = SessionContext::new()
-            .create_physical_expr(predicate, &snapshot.arrow_schema()?.to_dfschema()?)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
-        Ok(Either::Left(
-            snapshot
-                .file_actions()?
-                .zip(pruning_predicate.prune(snapshot)?)
-                .filter_map(
-                    |(action, keep_file)| {
-                        if keep_file {
-                            Some(action)
-                        } else {
-                            None
-                        }
-                    },
-                ),
-        ))
+            .create_physical_expr(predicate, &log_data.arrow_schema()?.to_dfschema()?)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, log_data.arrow_schema()?)?;
+        let mask = pruning_predicate.prune(&log_data)?;
+
+        Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
+            |(file, keep_file)| {
+                if keep_file {
+                    Some(file.add_action())
+                } else {
+                    None
+                }
+            },
+        )))
     } else {
-        Ok(Either::Right(snapshot.file_actions()?))
+        Ok(Either::Right(
+            log_data.into_iter().map(|file| file.add_action()),
+        ))
     }
 }
 
@@ -583,10 +605,8 @@ impl<'a> DeltaScanBuilder<'a> {
             .filter
             .and_then(|expr| {
                 let predicates = split_conjunction(&expr);
-                let pushdown_filters = get_pushdown_filters(
-                    &predicates,
-                    self.snapshot.metadata().partition_columns().as_slice(),
-                );
+                let pushdown_filters =
+                    get_pushdown_filters(&predicates, self.snapshot.metadata().partition_columns());
 
                 let filtered_predicates = predicates
                     .into_iter()
@@ -612,7 +632,7 @@ impl<'a> DeltaScanBuilder<'a> {
             None => {
                 // early return in case we have no push down filters or limit
                 if logical_filter.is_none() && self.limit.is_none() {
-                    let files = self.snapshot.file_actions()?;
+                    let files = self.snapshot.file_actions(&self.log_store).await?;
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
                 } else {
@@ -632,10 +652,14 @@ impl<'a> DeltaScanBuilder<'a> {
                     let mut rows_collected = 0;
                     let mut files = vec![];
 
-                    for (action, keep) in self
+                    let file_actions: Vec<_> = self
                         .snapshot
-                        .file_actions_iter()?
-                        .zip(files_to_prune.iter().cloned())
+                        .file_actions_iter(&self.log_store)
+                        .try_collect()
+                        .await?;
+
+                    for (action, keep) in
+                        file_actions.into_iter().zip(files_to_prune.iter().cloned())
                     {
                         // prune file based on predicate pushdown
                         if keep {
@@ -729,9 +753,8 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
             let es = self.snapshot.snapshot();
-            let pruned_stats = prune_file_statistics(&vec![es.files.clone()], mask);
-            let pruned_stats = concat_batches(pruned_stats[0].schema_ref(), &pruned_stats)?;
-            LogDataHandler::new(&pruned_stats, es.metadata(), es.schema()).statistics()
+            let pruned_stats = filter_record_batch(&es.files, &BooleanArray::from(mask))?;
+            LogDataHandler::new(&pruned_stats, es.table_configuration()).statistics()
         } else {
             self.snapshot.datafusion_table_statistics()
         };
@@ -804,27 +827,6 @@ fn simplify_expr(
     let simplified = simplifier.simplify(expr).unwrap();
 
     context.create_physical_expr(simplified, df_schema).unwrap()
-}
-
-fn prune_file_statistics(
-    record_batches: &Vec<RecordBatch>,
-    pruning_mask: Vec<bool>,
-) -> Vec<RecordBatch> {
-    let mut filtered_batches = Vec::new();
-    let mut mask_offset = 0;
-
-    for batch in record_batches {
-        let num_rows = batch.num_rows();
-        let batch_mask = &pruning_mask[mask_offset..mask_offset + num_rows];
-        mask_offset += num_rows;
-
-        let boolean_mask = BooleanArray::from(batch_mask.to_vec());
-        let filtered_batch =
-            filter_record_batch(batch, &boolean_mask).expect("Failed to filter RecordBatch");
-        filtered_batches.push(filtered_batch);
-    }
-
-    filtered_batches
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable
@@ -1039,8 +1041,10 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot.metadata().partition_columns().as_slice();
-        Ok(get_pushdown_filters(filter, partition_cols))
+        Ok(get_pushdown_filters(
+            filter,
+            self.snapshot.metadata().partition_columns(),
+        ))
     }
 
     fn statistics(&self) -> Option<Statistics> {
@@ -1191,7 +1195,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         }
         ArrowDataType::Dictionary(k, v) => Ok(ScalarValue::Dictionary(
             k.clone(),
-            Box::new(get_null_of_arrow_type(v).unwrap()),
+            Box::new(get_null_of_arrow_type(v)?),
         )),
         //Unsupported types...
         ArrowDataType::Float16
@@ -1795,9 +1799,10 @@ pub(crate) async fn find_files_scan(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
-        .map(|add| (add.path.clone(), add.to_owned()))
-        .collect();
+        .file_actions_iter(&log_store)
+        .map_ok(|add| (add.path.clone(), add.to_owned()))
+        .try_collect()
+        .await?;
 
     let scan_config = DeltaScanConfigBuilder {
         include_file_column: true,
@@ -1847,10 +1852,11 @@ pub(crate) async fn find_files_scan(
 }
 
 pub(crate) async fn scan_memory_table(
+    log_store: &dyn LogStore,
     snapshot: &DeltaTableState,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.file_actions()?;
+    let actions = snapshot.file_actions(log_store).await?;
 
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
@@ -1922,7 +1928,7 @@ pub async fn find_files(
             expr_properties.result?;
 
             if expr_properties.partition_only {
-                let candidates = scan_memory_table(snapshot, predicate).await?;
+                let candidates = scan_memory_table(&log_store, snapshot, predicate).await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
@@ -1938,7 +1944,7 @@ pub async fn find_files(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions()?,
+            candidates: snapshot.file_actions(&log_store).await?,
             partition_scan: true,
         }),
     }

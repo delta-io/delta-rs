@@ -169,7 +169,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version().unwrap();
-    assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 5);
+    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 5);
 
     let optimize = DeltaOps(dt).optimize().with_target_size(2_000_000);
     let (dt, metrics) = optimize.await?;
@@ -179,7 +179,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(metrics.total_considered_files, 5);
     assert_eq!(metrics.partitions_optimized, 1);
-    assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 2);
+    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 2);
 
     let commit_info = dt.history(None).await?;
     let last_commit = &commit_info[0];
@@ -241,15 +241,20 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(version + 1, dt.version().unwrap());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(dt.snapshot().unwrap().file_paths_iter().count(), 3);
+    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 3);
 
     let partition_adds = dt
-        .get_active_add_actions_by_partitions(&filter)?
-        .collect::<Result<Vec<_>, _>>()?;
+        .get_active_add_actions_by_partitions(&filter)
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(partition_adds.len(), 1);
-    let partition_values = partition_adds[0].partition_values()?;
+    let partition_values = partition_adds[0].partition_values().unwrap();
+    let data_idx = partition_values
+        .fields()
+        .iter()
+        .position(|field| field.name() == "date");
     assert_eq!(
-        partition_values.get("date"),
+        data_idx.map(|idx| &partition_values.values()[idx]),
         Some(&delta_kernel::expressions::Scalar::String(
             "2022-05-22".to_string()
         ))
@@ -283,11 +288,19 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
-    let plan = create_merge_plan(OptimizeType::Compact, dt.snapshot()?, &filter, None, None)?;
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?,
+        &filter,
+        None,
+        WriterProperties::builder().build(),
+    )
+    .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let other_dt = deltalake_core::open_table(uri).await?;
-    let add = &other_dt.snapshot()?.log_data().into_iter().next().unwrap();
+    let add = &other_dt.snapshot()?.log_data().iter().next().unwrap();
     let remove = add.remove_action(true);
 
     let operation = DeltaOperation::Delete { predicate: None };
@@ -340,7 +353,14 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let version = dt.version().unwrap();
 
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
-    let plan = create_merge_plan(OptimizeType::Compact, dt.snapshot()?, &filter, None, None)?;
+    let plan = create_merge_plan(
+        OptimizeType::Compact,
+        dt.snapshot()?,
+        &filter,
+        None,
+        WriterProperties::builder().build(),
+        None)
+        .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let mut other_dt = deltalake_core::open_table(uri).await?;
@@ -394,7 +414,16 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
-    let plan = create_merge_plan(OptimizeType::Compact, dt.snapshot()?, &[], None, None)?;
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?,
+        &[],
+        None,
+        WriterProperties::builder().build(),
+        None
+    )
+    .await?;
 
     let metrics = plan
         .execute(
@@ -787,7 +816,7 @@ async fn test_zorder_partitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 2);
 
     // Check data
-    let files = dt.get_files_by_partitions(&filter)?;
+    let files = dt.get_files_by_partitions(&filter).await?;
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;

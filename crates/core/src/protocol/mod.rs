@@ -1103,7 +1103,16 @@ mod tests {
             let mut table = crate::open_table(path).await.unwrap();
             table.load().await.unwrap();
 
-            assert_eq!(2, table.snapshot().unwrap().file_actions().unwrap().len());
+            assert_eq!(
+                2,
+                table
+                    .snapshot()
+                    .unwrap()
+                    .file_actions(&table.log_store)
+                    .await
+                    .unwrap()
+                    .len()
+            );
         }
 
         #[tokio::test]

@@ -555,19 +555,22 @@ mod tests {
             ],
         )
         .unwrap();
+
         // write some data
         let table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 1);
+        assert_eq!(state.log_data().num_files(), 1);
 
         let (table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let state = table.snapshot().unwrap();
 
-        assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(state.version(), 2);
+        assert_eq!(state.log_data().num_files(), 0);
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, 0);
@@ -620,8 +623,9 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 1);
+        assert_eq!(state.log_data().num_files(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -644,16 +648,18 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 2);
+        assert_eq!(state.log_data().num_files(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("value").eq(lit(1)))
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(3));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 3);
+        assert_eq!(state.log_data().num_files(), 2);
 
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
@@ -800,16 +806,18 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 1);
+        assert_eq!(state.log_data().num_files(), 2);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 1);
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 2);
+        assert_eq!(state.log_data().num_files(), 1);
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
@@ -857,8 +865,10 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 3);
+
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 1);
+        assert_eq!(state.log_data().num_files(), 3);
 
         let (table, metrics) = DeltaOps(table)
             .delete()
@@ -869,8 +879,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 2);
+
+        let state = table.snapshot().unwrap();
+        assert_eq!(state.version(), 2);
+        assert_eq!(state.log_data().num_files(), 2);
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);

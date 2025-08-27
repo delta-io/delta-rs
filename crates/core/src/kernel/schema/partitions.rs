@@ -1,15 +1,11 @@
 //! Delta Table partition handling logic.
-use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use delta_kernel::expressions::{Expression, JunctionPredicateOp, Predicate, Scalar};
-use delta_kernel::schema::StructType;
+use delta_kernel::schema::{DataType, PrimitiveType, StructType};
 use serde::{Serialize, Serializer};
 
-use super::{DataType, PrimitiveType};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::scalars::ScalarExt;
 
 /// A special value used in Hive to represent the null partition in partitioned tables
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -35,44 +31,6 @@ pub enum PartitionValue {
     NotIn(Vec<String>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
-struct ScalarHelper<'a>(&'a Scalar);
-
-impl PartialOrd for ScalarHelper<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use Scalar::*;
-        match (self.0, other.0) {
-            (Null(_), Null(_)) => Some(Ordering::Equal),
-            (Integer(a), Integer(b)) => a.partial_cmp(b),
-            (Long(a), Long(b)) => a.partial_cmp(b),
-            (Short(a), Short(b)) => a.partial_cmp(b),
-            (Byte(a), Byte(b)) => a.partial_cmp(b),
-            (Float(a), Float(b)) => a.partial_cmp(b),
-            (Double(a), Double(b)) => a.partial_cmp(b),
-            (String(a), String(b)) => a.partial_cmp(b),
-            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
-            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
-            (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
-            (Date(a), Date(b)) => a.partial_cmp(b),
-            (Binary(a), Binary(b)) => a.partial_cmp(b),
-            (Decimal(decimal1), Decimal(decimal2)) => {
-                // TODO implement proper decimal comparison
-                if decimal1.precision() != decimal2.precision()
-                    || decimal1.scale() != decimal2.scale()
-                {
-                    return None;
-                };
-                decimal1.bits().partial_cmp(&decimal2.bits())
-            }
-            // TODO should we make an assumption about the ordering of nulls?
-            // right now this is only used for internal purposes.
-            (Null(_), _) => Some(Ordering::Less),
-            (_, Null(_)) => Some(Ordering::Greater),
-            _ => None,
-        }
-    }
-}
-
 /// A Struct used for filtering a DeltaTable partition by key and value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionFilter {
@@ -80,95 +38,6 @@ pub struct PartitionFilter {
     pub key: String,
     /// The value of the PartitionFilter
     pub value: PartitionValue,
-}
-
-fn compare_typed_value(
-    partition_value: &Scalar,
-    filter_value: &str,
-    data_type: &DataType,
-) -> Option<Ordering> {
-    match data_type {
-        DataType::Primitive(primitive_type) => {
-            let other = primitive_type.parse_scalar(filter_value).ok()?;
-            ScalarHelper(partition_value).partial_cmp(&ScalarHelper(&other))
-        }
-        // NOTE: complex types are not supported as partition columns
-        _ => None,
-    }
-}
-
-/// Partition filters methods for filtering the DeltaTable partitions.
-impl PartitionFilter {
-    /// Indicates if a DeltaTable partition matches with the partition filter by key and value.
-    pub(crate) fn match_partition(
-        &self,
-        partition: &DeltaTablePartition,
-        data_type: &DataType,
-    ) -> bool {
-        if self.key != partition.key {
-            return false;
-        }
-        if self.value == PartitionValue::Equal("".to_string()) {
-            return partition.value.is_null();
-        }
-
-        match &self.value {
-            PartitionValue::Equal(value) => {
-                if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
-                    compare_typed_value(&partition.value, value, data_type)
-                        .map(|x| x.is_eq())
-                        .unwrap_or(false)
-                } else {
-                    partition.value.serialize() == *value
-                }
-            }
-            PartitionValue::NotEqual(value) => {
-                if let DataType::Primitive(PrimitiveType::Timestamp) = data_type {
-                    compare_typed_value(&partition.value, value, data_type)
-                        .map(|x| !x.is_eq())
-                        .unwrap_or(false)
-                } else {
-                    !(partition.value.serialize() == *value)
-                }
-            }
-            PartitionValue::GreaterThan(value) => {
-                compare_typed_value(&partition.value, value, data_type)
-                    .map(|x| x.is_gt())
-                    .unwrap_or(false)
-            }
-            PartitionValue::GreaterThanOrEqual(value) => {
-                compare_typed_value(&partition.value, value, data_type)
-                    .map(|x| x.is_ge())
-                    .unwrap_or(false)
-            }
-            PartitionValue::LessThan(value) => {
-                compare_typed_value(&partition.value, value, data_type)
-                    .map(|x| x.is_lt())
-                    .unwrap_or(false)
-            }
-            PartitionValue::LessThanOrEqual(value) => {
-                compare_typed_value(&partition.value, value, data_type)
-                    .map(|x| x.is_le())
-                    .unwrap_or(false)
-            }
-            PartitionValue::In(value) => value.contains(&partition.value.serialize()),
-            PartitionValue::NotIn(value) => !value.contains(&partition.value.serialize()),
-        }
-    }
-
-    /// Indicates if one of the DeltaTable partition among the list
-    /// matches with the partition filter.
-    #[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
-    pub fn match_partitions(
-        &self,
-        partitions: &[DeltaTablePartition],
-        partition_col_data_types: &HashMap<&String, &DataType>,
-    ) -> bool {
-        let data_type = partition_col_data_types.get(&self.key).unwrap().to_owned();
-        partitions
-            .iter()
-            .any(|partition| self.match_partition(partition, data_type))
-    }
 }
 
 /// Create desired string representation for PartitionFilter.
@@ -343,8 +212,25 @@ fn filter_to_kernel_predicate(
 
     let column = Expression::column([field.name()]);
     Ok(match &filter.value {
-        PartitionValue::Equal(raw) => column.eq(dt.parse_scalar(raw)?),
-        PartitionValue::NotEqual(raw) => column.ne(dt.parse_scalar(raw)?),
+        // NOTE: In SQL NULL is not equal to anything, including itself. However when specifying partition filters
+        // we have allowed to equality against null. So here we have to handle null values explicitly by using
+        // is_null and is_not_null methods directly.
+        PartitionValue::Equal(raw) => {
+            let scalar = dt.parse_scalar(raw)?;
+            if scalar.is_null() {
+                column.is_null()
+            } else {
+                column.eq(scalar)
+            }
+        }
+        PartitionValue::NotEqual(raw) => {
+            let scalar = dt.parse_scalar(raw)?;
+            if scalar.is_null() {
+                column.is_not_null()
+            } else {
+                column.ne(scalar)
+            }
+        }
         PartitionValue::LessThan(raw) => column.lt(dt.parse_scalar(raw)?),
         PartitionValue::LessThanOrEqual(raw) => column.le(dt.parse_scalar(raw)?),
         PartitionValue::GreaterThan(raw) => column.gt(dt.parse_scalar(raw)?),
@@ -373,6 +259,7 @@ fn filter_to_kernel_predicate(
 mod tests {
     use super::*;
     use crate::kernel::StructField;
+    use delta_kernel::schema::{DataType, PrimitiveType};
     use serde_json::json;
 
     fn check_json_serialize(filter: PartitionFilter, expected_json: &str) {
@@ -457,97 +344,6 @@ mod tests {
                 partition: _wrong_path
             },
         ))
-    }
-
-    #[test]
-    fn test_match_partition() {
-        let partition_2021 = DeltaTablePartition {
-            key: "year".into(),
-            value: Scalar::String("2021".into()),
-        };
-        let partition_2020 = DeltaTablePartition {
-            key: "year".into(),
-            value: Scalar::String("2020".into()),
-        };
-        let partition_2019 = DeltaTablePartition {
-            key: "year".into(),
-            value: Scalar::String("2019".into()),
-        };
-
-        let partition_year_2020_filter = PartitionFilter {
-            key: "year".to_string(),
-            value: PartitionValue::Equal("2020".to_string()),
-        };
-        let partition_month_12_filter = PartitionFilter {
-            key: "month".to_string(),
-            value: PartitionValue::Equal("12".to_string()),
-        };
-        let string_type = DataType::Primitive(PrimitiveType::String);
-
-        assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
-        assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
-        assert!(!partition_year_2020_filter.match_partition(&partition_2019, &string_type));
-        assert!(!partition_month_12_filter.match_partition(&partition_2019, &string_type));
-
-        /* TODO: To be re-enabled at a future date, needs some type futzing
-        let partition_2020_12_31_23_59_59 = DeltaTablePartition {
-            key: "time".into(),
-            value: PrimitiveType::TimestampNtz.parse_scalar("2020-12-31 23:59:59").expect("Failed to parse timestamp"),
-        };
-
-        let partition_time_2020_12_31_23_59_59_filter = PartitionFilter {
-            key: "time".to_string(),
-            value: PartitionValue::Equal("2020-12-31 23:59:59.000000".into()),
-        };
-
-        assert!(partition_time_2020_12_31_23_59_59_filter.match_partition(
-            &partition_2020_12_31_23_59_59,
-            &DataType::Primitive(PrimitiveType::TimestampNtz)
-        ));
-        assert!(!partition_time_2020_12_31_23_59_59_filter
-            .match_partition(&partition_2020_12_31_23_59_59, &string_type));
-        */
-    }
-
-    #[test]
-    fn test_match_filters() {
-        let partitions = vec![
-            DeltaTablePartition {
-                key: "year".into(),
-                value: Scalar::String("2021".into()),
-            },
-            DeltaTablePartition {
-                key: "month".into(),
-                value: Scalar::String("12".into()),
-            },
-        ];
-
-        let string_type = DataType::Primitive(PrimitiveType::String);
-        let partition_data_types: HashMap<&String, &DataType> = vec![
-            (&partitions[0].key, &string_type),
-            (&partitions[1].key, &string_type),
-        ]
-        .into_iter()
-        .collect();
-
-        let valid_filters = PartitionFilter {
-            key: "year".to_string(),
-            value: PartitionValue::Equal("2021".to_string()),
-        };
-
-        let valid_filter_month = PartitionFilter {
-            key: "month".to_string(),
-            value: PartitionValue::Equal("12".to_string()),
-        };
-
-        let invalid_filter = PartitionFilter {
-            key: "year".to_string(),
-            value: PartitionValue::Equal("2020".to_string()),
-        };
-
-        assert!(valid_filters.match_partitions(&partitions, &partition_data_types),);
-        assert!(valid_filter_month.match_partitions(&partitions, &partition_data_types),);
-        assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
     }
 
     #[test]

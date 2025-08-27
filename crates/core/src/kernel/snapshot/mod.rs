@@ -26,6 +26,7 @@ use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
 use futures::stream::BoxStream;
@@ -41,13 +42,15 @@ use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
 use crate::kernel::parse::read_removes;
 #[cfg(test)]
 use crate::kernel::transaction::CommitData;
-use crate::kernel::{ActionType, Add, StructType};
+use crate::kernel::{ActionType, StructType};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
+pub use iterators::*;
 pub use stream::*;
 
+mod iterators;
 mod log_data;
 pub(crate) mod parse;
 pub(crate) mod replay;
@@ -79,9 +82,15 @@ impl Snapshot {
     ) -> DeltaResult<Self> {
         // TODO: bundle operation_id with logstore ...
         let engine = log_store.engine(None);
-        let table_root = log_store.table_root_url();
+        let mut table_root = log_store.table_root_url();
         let version = version.map(|v| v as u64);
 
+        // NB: kernel engine uses Url::join to construct paths,
+        // if the path does not end with a slash, the would override the entire path.
+        // So we need to be extra sure its ends with a slash.
+        if !table_root.path().ends_with('/') {
+            table_root.set_path(&format!("{}/", table_root.path()));
+        }
         let snapshot = match spawn_blocking(move || {
             KernelSnapshot::try_new(table_root, engine.as_ref(), version)
         })
@@ -207,9 +216,13 @@ impl Snapshot {
         Ok(Path::from_url_path(self.table_url.path())?)
     }
 
-    /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
+    /// Well known properties of the table
+    pub fn table_properties(&self) -> &TableProperties {
         self.inner.table_properties()
+    }
+
+    pub fn table_configuration(&self) -> &TableConfiguration {
+        self.inner.table_configuration()
     }
 
     /// Get the active files for the current snapshot.
@@ -272,6 +285,16 @@ impl Snapshot {
     }
 
     /// Get the commit infos in the snapshot
+    ///
+    /// ## Parameters
+    ///
+    /// * `log_store`: The log store to use.
+    /// * `limit`: The maximum number of commit infos to return (optional).
+    ///
+    /// ## Returns
+    ///
+    /// A stream of commit infos.
+    // TODO: move outer error into stream.
     pub(crate) async fn commit_infos(
         &self,
         log_store: &dyn LogStore,
@@ -378,6 +401,9 @@ impl Snapshot {
             .boxed()
     }
 
+    /// Fetch the latest version of the provided application_id for this snapshot.
+    ///
+    /// Filters the txn based on the SetTransactionRetentionDuration property and lastUpdated
     async fn application_transaction_version(
         &self,
         log_store: &dyn LogStore,
@@ -514,13 +540,17 @@ impl EagerSnapshot {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
-        self.snapshot.table_config()
+    pub fn table_properties(&self) -> &TableProperties {
+        self.snapshot.table_properties()
+    }
+
+    pub fn table_configuration(&self) -> &TableConfiguration {
+        self.snapshot.table_configuration()
     }
 
     /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
     pub fn log_data(&self) -> LogDataHandler<'_> {
-        LogDataHandler::new(&self.files, self.metadata(), self.schema())
+        LogDataHandler::new(&self.files, self.snapshot.table_configuration())
     }
 
     /// Get the number of files in the snapshot
@@ -529,24 +559,100 @@ impl EagerSnapshot {
         self.files.num_rows()
     }
 
-    /// Get the files in the snapshot
-    pub fn file_actions(&self) -> DeltaResult<impl Iterator<Item = Add> + '_> {
-        Ok(self.files().map(|v| v.add_action()))
-    }
+    /// Stream the active files in the snapshot
+    ///
+    /// This function returns a stream of [`LogicalFileView`] objects,
+    /// which represent the active files in the snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `log_store` - A reference to a [`LogStore`] implementation.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// # Returns
+    ///
+    /// A stream of [`LogicalFileView`] objects.
+    pub fn files(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        // TODO: the logic in this function would be more suitable as an async fn rather than
+        // a stream. However as we are moving from an eager to a cached snapshot, this should be
+        // a stream just like on the Snapshot. So we swallow the awkward error handling for now
+        // knowing that we will be able to clean this up soon (TM).
+        let data = if let Some(predicate) = predicate {
+            let scan = match self
+                .snapshot
+                .inner
+                .clone()
+                .scan_builder()
+                .with_predicate(predicate)
+                .build()
+            {
+                Ok(scan) => scan,
+                Err(err) => {
+                    return Box::pin(futures::stream::once(async {
+                        Err(DeltaTableError::KernelError(err))
+                    }))
+                }
+            };
+            let engine = log_store.engine(None);
+            let current_files = self.files.clone();
+            let current_version = self.version() as u64;
 
-    /// Get a file action iterator for the given version
-    pub fn files(&self) -> impl Iterator<Item = LogicalFile<'_>> {
-        self.log_data().into_iter()
+            // TODO: while we are always re-processing the cached files, we are confident that no IO
+            // is performed when processing, so for now we are not spawning this on a blocking thread.
+            // As we continue refactoring, we need to move this onto an actual stream.
+            let files_iter = match scan.scan_metadata_from_arrow(
+                engine.as_ref(),
+                current_version,
+                Box::new(std::iter::once(current_files)),
+                None,
+            ) {
+                Ok(files_iter) => files_iter,
+                Err(err) => {
+                    return Box::pin(futures::stream::once(async {
+                        Err(DeltaTableError::KernelError(err))
+                    }))
+                }
+            };
+
+            let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
+                Ok(files) => files,
+                Err(err) => {
+                    return Box::pin(futures::stream::once(async {
+                        Err(DeltaTableError::KernelError(err))
+                    }))
+                }
+            };
+
+            let files = match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
+                .map_err(DeltaTableError::from)
+                .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
+            {
+                Ok(files) => files,
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+            };
+
+            files
+        } else {
+            self.files.clone()
+        };
+        let iter = (0..data.num_rows())
+            .into_iter()
+            .map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
+        futures::stream::iter(iter).boxed()
     }
 
     /// Iterate over all latest app transactions
     pub async fn transaction_version(
         &self,
         log_store: &dyn LogStore,
-        app_id: impl AsRef<str>,
+        app_id: impl ToString,
     ) -> DeltaResult<Option<i64>> {
         self.snapshot
-            .application_transaction_version(log_store, app_id.as_ref().to_string())
+            .application_transaction_version(log_store, app_id.to_string())
             .await
     }
 }
@@ -678,7 +784,7 @@ mod tests {
         for version in 0..=12 {
             let snapshot =
                 EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
-            let batches = snapshot.file_actions()?.collect::<Vec<_>>();
+            let batches: Vec<_> = snapshot.files(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
 

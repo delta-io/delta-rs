@@ -13,6 +13,7 @@ pub mod schema;
 mod snapshot;
 pub mod transaction;
 
+pub use arrow::engine_ext::StructDataExt;
 pub use delta_kernel::engine;
 pub use error::*;
 pub use models::*;
