@@ -57,7 +57,7 @@ use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory,
+    to_table_parquet_options_from_ffo, FileFormatOptions, FileFormatRef, WriterPropertiesFactory,
 };
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{DeltaTable, ObjectMeta, PartitionFilter};
@@ -203,7 +203,7 @@ pub struct OptimizeBuilder<'a> {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Options to apply when operating on the table files
-    file_format_options: Option<Arc<dyn FileFormatOptions>>,
+    file_format_options: FileFormatRef,
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
@@ -238,7 +238,7 @@ impl<'a> OptimizeBuilder<'a> {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        file_format_options: Option<Arc<dyn FileFormatOptions>>,
+        file_format_options: FileFormatRef,
     ) -> Self {
         let writer_properties_factory =
             build_writer_properties_factory_ffo(file_format_options.clone());

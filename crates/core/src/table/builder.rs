@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
-use crate::table::file_format_options::FileFormatOptions;
+use crate::table::file_format_options::{FileFormatOptions, FileFormatRef};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
@@ -92,7 +92,7 @@ pub struct DeltaTableBuilder {
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
     /// options to apply when operating on the table files
-    file_format_options: Option<Arc<dyn FileFormatOptions>>,
+    file_format_options: FileFormatRef,
 }
 
 impl DeltaTableBuilder {
