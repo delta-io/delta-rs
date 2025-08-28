@@ -26,7 +26,6 @@ pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
 
 /// Convenience alias for file format options reference used across the codebase
 pub type FileFormatRef = Arc<dyn FileFormatOptions>;
-pub type OptionalFileFormatRef = Option<FileFormatRef>;
 
 #[derive(Clone, Debug, Default)]
 pub struct SimpleFileFormatOptions {
@@ -52,14 +51,14 @@ impl FileFormatOptions for SimpleFileFormatOptions {
 
 #[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_ffo(
-    file_format_options: OptionalFileFormatRef,
+    file_format_options: Option<FileFormatRef>,
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
     file_format_options.map(|ffo| ffo.writer_properties_factory())
 }
 
 #[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_or_default_ffo(
-    file_format_options: OptionalFileFormatRef,
+    file_format_options: Option<FileFormatRef>,
 ) -> Arc<dyn WriterPropertiesFactory> {
     build_writer_properties_factory_ffo(file_format_options)
         .unwrap_or_else(|| build_writer_properties_factory_default())

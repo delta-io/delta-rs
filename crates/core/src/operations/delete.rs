@@ -63,7 +63,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, to_table_parquet_options_from_ffo, OptionalFileFormatRef,
+    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatRef,
     WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;
@@ -82,7 +82,7 @@ pub struct DeleteBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Options to apply when operating on the table files
-    file_format_options: OptionalFileFormatRef,
+    file_format_options: Option<FileFormatRef>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
@@ -125,7 +125,7 @@ impl DeleteBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        file_format_options: OptionalFileFormatRef,
+        file_format_options: Option<FileFormatRef>,
     ) -> Self {
         let writer_properties_factory =
             build_writer_properties_factory_ffo(file_format_options.clone());

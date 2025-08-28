@@ -10,7 +10,7 @@ use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
-use crate::table::file_format_options::OptionalFileFormatRef;
+use crate::table::file_format_options::FileFormatRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
@@ -23,7 +23,7 @@ pub struct LoadBuilder {
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
     /// Options to apply when operating on the table files
-    file_format_options: OptionalFileFormatRef,
+    file_format_options: Option<FileFormatRef>,
 }
 
 impl super::Operation<()> for LoadBuilder {
@@ -40,7 +40,7 @@ impl LoadBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        file_format_options: OptionalFileFormatRef,
+        file_format_options: Option<FileFormatRef>,
     ) -> Self {
         Self {
             snapshot,

@@ -33,7 +33,7 @@ mod columns;
 pub mod file_format_options;
 
 // Re-exposing for backwards compatibility
-use crate::table::file_format_options::OptionalFileFormatRef;
+use crate::table::file_format_options::FileFormatRef;
 pub use columns::*;
 
 /// In memory representation of a Delta Table
@@ -49,7 +49,7 @@ pub struct DeltaTable {
     /// the load options used during load
     pub config: DeltaTableConfig,
     /// options to apply when operating on the table files
-    pub file_format_options: OptionalFileFormatRef,
+    pub file_format_options: Option<FileFormatRef>,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -120,7 +120,7 @@ impl DeltaTable {
     pub fn new(
         log_store: LogStoreRef,
         config: DeltaTableConfig,
-        file_format_options: OptionalFileFormatRef,
+        file_format_options: Option<FileFormatRef>,
     ) -> Self {
         Self {
             state: None,
@@ -138,7 +138,7 @@ impl DeltaTable {
     pub(crate) fn new_with_state(
         log_store: LogStoreRef,
         state: DeltaTableState,
-        file_format_options: OptionalFileFormatRef,
+        file_format_options: Option<FileFormatRef>,
     ) -> Self {
         Self {
             state: Some(state),

@@ -20,7 +20,7 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
-use crate::table::file_format_options::{FileFormatRef, OptionalFileFormatRef};
+use crate::table::file_format_options::FileFormatRef;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -61,7 +61,7 @@ pub struct CreateBuilder {
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
-    file_format_options: OptionalFileFormatRef,
+    file_format_options: Option<FileFormatRef>,
     configuration: HashMap<String, Option<String>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
