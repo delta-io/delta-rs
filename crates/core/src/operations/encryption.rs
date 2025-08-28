@@ -16,7 +16,6 @@ use datafusion::execution::parquet_encryption::EncryptionFactory;
 ///////////////////////////////////////////////////////////////////////////////
 // Copy code from datafusion
 // Updating to version  > 49.0.1 is a bigger change
-use delta_kernel::schema::StructType;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use std::result;

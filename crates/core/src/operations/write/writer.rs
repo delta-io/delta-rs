@@ -532,7 +532,7 @@ mod tests {
         write_batch_size: Option<usize>,
     ) -> DeltaWriter {
         let writer_properties_factory =
-            writer_properties.map(|wp| build_writer_properties_factory_wp(wp));
+            writer_properties.map(build_writer_properties_factory_wp);
 
         let config = WriterConfig::new(
             batch.schema(),
@@ -554,7 +554,7 @@ mod tests {
         write_batch_size: Option<usize>,
     ) -> PartitionWriter {
         let writer_properties_factory =
-            writer_properties.map(|wp| build_writer_properties_factory_wp(wp));
+            writer_properties.map(build_writer_properties_factory_wp);
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),

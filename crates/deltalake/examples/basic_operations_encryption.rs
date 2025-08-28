@@ -48,7 +48,7 @@ fn get_table_columns() -> Vec<StructField> {
 }
 
 fn get_table_schema() -> Arc<Schema> {
-    let schema = Arc::new(ArrowSchema::new(vec![
+   Arc::new(ArrowSchema::new(vec![
         Field::new("int", ArrowDataType::Int32, false),
         Field::new("string", ArrowDataType::Utf8, true),
         Field::new(
@@ -56,8 +56,7 @@ fn get_table_schema() -> Arc<Schema> {
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ),
-    ]));
-    schema
+    ]))
 }
 
 fn get_table_batches() -> RecordBatch {
