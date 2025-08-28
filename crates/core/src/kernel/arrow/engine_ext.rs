@@ -581,7 +581,7 @@ mod tests {
         let expression = column_expr!("a");
         let expr = handler.new_expression_evaluator(
             Arc::new((&schema).try_into_kernel().unwrap()),
-            expression,
+            expression.into(),
             DataType::INTEGER,
         );
 
