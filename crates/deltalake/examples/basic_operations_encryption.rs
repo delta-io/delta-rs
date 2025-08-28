@@ -1,47 +1,34 @@
-use deltalake::arrow::datatypes::Schema;
+use std::{fs, path::PathBuf, sync::Arc};
+
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
-    datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
+    datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
-use deltalake::datafusion::assert_batches_sorted_eq;
-use deltalake::datafusion::config::{TableOptions, TableParquetOptions};
-use deltalake::datafusion::dataframe::DataFrame;
-use deltalake::datafusion::logical_expr::{col, lit};
-use deltalake::datafusion::prelude::SessionContext;
+use deltalake::datafusion::{
+    assert_batches_sorted_eq,
+    config::{TableOptions, TableParquetOptions},
+    dataframe::DataFrame,
+    logical_expr::{col, lit},
+    prelude::SessionContext,
+};
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
-use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
-use deltalake::parquet::encryption::encrypt::FileEncryptionProperties;
+use deltalake::parquet::encryption::{
+    decrypt::FileDecryptionProperties,
+    encrypt::FileEncryptionProperties,
+};
 use deltalake::{arrow, parquet, DeltaOps};
-use deltalake_core::datafusion::common::test_util::format_batches;
-use deltalake_core::operations::optimize::OptimizeType;
-use deltalake_core::{checkpoints, DeltaTable, DeltaTableError};
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
-use deltalake_core::datafusion::config::ConfigFileType;
-use deltalake_core::table::table_parquet_options::SimpleFileFormatOptions;
 
-async fn ops_with_crypto(
-    uri: &str,
-    enc: Option<&FileEncryptionProperties>,
-    dec: Option<&FileDecryptionProperties>,
-) -> Result<DeltaOps, DeltaTableError> {
-    let ops = DeltaOps::try_from_uri(uri).await?;
-    let mut tpo: TableParquetOptions = TableParquetOptions::default();
-    if let Some(enc) = enc {
-        tpo.crypto.file_encryption = Some(enc.into());
-    }
-    if let Some(dec) = dec {
-        tpo.crypto.file_decryption = Some(dec.into());
-    }
-    let mut tbl_options = TableOptions::new();
-    tbl_options.parquet = tpo;
-    tbl_options.current_format = Some(ConfigFileType::PARQUET);
-    let format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options));
-    Ok(ops.with_file_format_options(format_options))
-}
+use deltalake_core::{
+    checkpoints,
+    datafusion::{common::test_util::format_batches, config::ConfigFileType},
+    operations::optimize::OptimizeType,
+    table::table_parquet_options::SimpleFileFormatOptions,
+    DeltaTable,
+    DeltaTableError,
+};
+
 
 fn get_table_columns() -> Vec<StructField> {
     vec![
@@ -94,6 +81,26 @@ fn get_table_batches() -> RecordBatch {
         ],
     )
     .unwrap()
+}
+
+async fn ops_with_crypto(
+    uri: &str,
+    enc: Option<&FileEncryptionProperties>,
+    dec: Option<&FileDecryptionProperties>,
+) -> Result<DeltaOps, DeltaTableError> {
+    let ops = DeltaOps::try_from_uri(uri).await?;
+    let mut tpo: TableParquetOptions = TableParquetOptions::default();
+    if let Some(enc) = enc {
+        tpo.crypto.file_encryption = Some(enc.into());
+    }
+    if let Some(dec) = dec {
+        tpo.crypto.file_decryption = Some(dec.into());
+    }
+    let mut tbl_options = TableOptions::new();
+    tbl_options.parquet = tpo;
+    tbl_options.current_format = Some(ConfigFileType::PARQUET);
+    let format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options));
+    Ok(ops.with_file_format_options(format_options))
 }
 
 async fn create_table(
@@ -335,8 +342,7 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
-    //encrypted_read_test().await?;
+async fn main() -> Result<(), DeltaTableError> {
     round_trip_test().await?;
     Ok(())
 }
