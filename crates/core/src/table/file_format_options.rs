@@ -24,8 +24,9 @@ pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
     fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory>;
 }
 
-/// Convenience alias for optional file format options reference used across the codebase
-pub type FileFormatRef = Option<Arc<dyn FileFormatOptions>>;
+/// Convenience alias for file format options reference used across the codebase
+pub type FileFormatRef = Arc<dyn FileFormatOptions>;
+pub type OptionalFileFormatRef = Option<FileFormatRef>;
 
 #[derive(Clone, Debug, Default)]
 pub struct SimpleFileFormatOptions {
@@ -51,14 +52,14 @@ impl FileFormatOptions for SimpleFileFormatOptions {
 
 #[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_ffo(
-    file_format_options: FileFormatRef,
+    file_format_options: OptionalFileFormatRef,
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
     file_format_options.map(|ffo| ffo.writer_properties_factory())
 }
 
 #[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_or_default_ffo(
-    file_format_options: FileFormatRef,
+    file_format_options: OptionalFileFormatRef,
 ) -> Arc<dyn WriterPropertiesFactory> {
     build_writer_properties_factory_ffo(file_format_options)
         .unwrap_or_else(|| build_writer_properties_factory_default())
@@ -66,7 +67,7 @@ pub fn build_writer_properties_factory_or_default_ffo(
 
 #[cfg(feature = "datafusion")]
 pub fn to_table_parquet_options_from_ffo(
-    file_format_options: Option<&Arc<dyn FileFormatOptions>>,
+    file_format_options: Option<&FileFormatRef>,
 ) -> Option<TableParquetOptions> {
     file_format_options.map(|ffo| ffo.table_options().parquet)
 }
@@ -74,7 +75,7 @@ pub fn to_table_parquet_options_from_ffo(
 #[cfg(feature = "datafusion")]
 pub fn state_with_file_format_options(
     state: SessionState,
-    file_format_options: Option<&Arc<dyn FileFormatOptions>>,
+    file_format_options: Option<&FileFormatRef>,
 ) -> SessionState {
     // Convert file format options to parquet options and delegate to the common implementation
     let parquet_options = to_table_parquet_options_from_ffo(file_format_options);

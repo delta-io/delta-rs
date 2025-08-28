@@ -9,7 +9,7 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::file_format_options::{FileFormatOptions, FileFormatRef};
+use crate::table::file_format_options::OptionalFileFormatRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
@@ -25,7 +25,7 @@ pub struct DropConstraintBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// options to apply when operating on the table files
-    file_format_options: FileFormatRef,
+    file_format_options: OptionalFileFormatRef,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -45,7 +45,7 @@ impl DropConstraintBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
-        file_format_options: FileFormatRef,
+        file_format_options: OptionalFileFormatRef,
     ) -> Self {
         Self {
             name: None,

@@ -76,8 +76,8 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatOptions,
-    FileFormatRef, WriterPropertiesFactory,
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, OptionalFileFormatRef,
+    WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -138,7 +138,7 @@ pub struct WriteBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Options to apply when operating on the table files
-    file_format_options: FileFormatRef,
+    file_format_options: OptionalFileFormatRef,
     /// The input plan
     input: Option<Arc<LogicalPlan>>,
     /// Datafusion session state relevant for executing the input plan
@@ -199,7 +199,7 @@ impl WriteBuilder {
     pub fn new(
         log_store: LogStoreRef,
         snapshot: Option<DeltaTableState>,
-        file_format_options: FileFormatRef,
+        file_format_options: OptionalFileFormatRef,
     ) -> Self {
         let writer_properties_factory =
             build_writer_properties_factory_ffo(file_format_options.clone());

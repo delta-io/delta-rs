@@ -38,7 +38,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
-use crate::table::file_format_options::FileFormatOptions;
+use crate::table::file_format_options::FileFormatRef;
 use crate::DeltaTable;
 
 pub mod add_column;
@@ -166,10 +166,7 @@ impl DeltaOps {
     }
 
     /// Set options for parquet files
-    pub fn with_file_format_options(
-        mut self,
-        file_format_options: Arc<dyn FileFormatOptions>,
-    ) -> Self {
+    pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
         self.0.file_format_options = Some(file_format_options);
         self
     }
