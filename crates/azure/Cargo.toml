@@ -15,14 +15,10 @@ rust-version.workspace = true
 deltalake-core = { version = "0.28.0", path = "../core", features = ["cloud"] }
 
 # workspace depenndecies
-async-trait = { workspace = true }
 bytes = { workspace = true }
-futures = { workspace = true }
-tracing = { workspace = true }
 object_store = { workspace = true, features = ["azure"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-regex = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
