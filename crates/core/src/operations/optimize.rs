@@ -611,7 +611,7 @@ impl MergePlan {
         mut self,
         log_store: LogStoreRef,
         snapshot: &DeltaTableState,
-        file_format_options: Option<Arc<dyn FileFormatOptions>>,
+        file_format_options: FileFormatRef,
         max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
