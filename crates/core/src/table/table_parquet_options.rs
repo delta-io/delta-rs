@@ -82,15 +82,9 @@ pub fn state_with_file_format_options(
     state: SessionState,
     file_format_options: Option<&Arc<dyn FileFormatOptions>>,
 ) -> SessionState {
-    if let Some(ffo) = file_format_options {
-        let mut sb = SessionStateBuilder::new_from_existing(state.clone());
-        let mut tbl_opts = ffo.table_options();
-        tbl_opts.set_config_format(ConfigFileType::PARQUET);
-        sb = sb.with_table_options(tbl_opts);
-        let state = sb.build();
-        return state;
-    }
-    state
+    // Convert file format options to parquet options and delegate to the common implementation
+    let parquet_options = to_table_parquet_options_from_ffo(file_format_options);
+    state_with_parquet_options(state, parquet_options.as_ref())
 }
 
 #[cfg(feature = "datafusion")]
