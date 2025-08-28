@@ -65,7 +65,7 @@ pub fn build_writer_properties_factory_or_default_ffo(
 pub fn to_table_parquet_options_from_ffo(
     file_format_options: Option<&Arc<dyn FileFormatOptions>>,
 ) -> Option<TableParquetOptions> {
-    file_format_options.map(|ffo| ffo.table_options().parquet.clone())
+    file_format_options.map(|ffo| ffo.table_options().parquet)
 }
 
 #[cfg(feature = "datafusion")]
