@@ -166,3 +166,6 @@ required-features = ["datafusion"]
 [[test]]
 name = "read_delta_partitions_test"
 required-features = ["datafusion"]
+
+[package.metadata.cargo-machete]
+ignored = ["foyer"]
