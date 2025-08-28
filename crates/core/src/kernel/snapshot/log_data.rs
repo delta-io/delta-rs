@@ -382,7 +382,7 @@ mod datafusion {
             };
             let evaluator = ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
-                expression,
+                expression.into(),
                 field.data_type().clone(),
             );
 
@@ -447,7 +447,7 @@ mod datafusion {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
                 ARROW_HANDLER.new_expression_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column(["add", "stats_parsed", "numRecords"]),
+                    Expression::column(["add", "stats_parsed", "numRecords"]).into(),
                     DataType::Primitive(PrimitiveType::Long),
                 )
             });
