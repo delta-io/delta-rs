@@ -26,6 +26,7 @@ use std::{
 
 use async_trait::async_trait;
 use datafusion::common::{Column, ScalarValue};
+use datafusion::config::TableParquetOptions;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::{
     case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
@@ -39,7 +40,6 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::SessionContext,
 };
-use datafusion::config::TableParquetOptions;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -59,7 +59,11 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
+    state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatOptions,
+    WriterPropertiesFactory,
+};
 use crate::{
     delta_datafusion::{
         expr::fmt_expr_to_sql,
@@ -137,7 +141,8 @@ impl UpdateBuilder {
         snapshot: DeltaTableState,
         file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
-        let writer_properties_factory =build_writer_properties_factory_ffo(file_format_options.clone());
+        let writer_properties_factory =
+            build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate: None,
             updates: HashMap::new(),

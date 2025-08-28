@@ -8,25 +8,20 @@ use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
 
 use object_store::path::Path;
-use parquet::basic::{Compression};
+use parquet::basic::Compression;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
 use tracing::info;
 
-
 #[cfg(not(feature = "datafusion"))]
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableOptions {}
 
-
 // Top level trait for file format options used by a DeltaTable
 pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
     fn table_options(&self) -> TableOptions;
-    fn writer_properties_factory(
-        &self
-    ) -> Arc<dyn WriterPropertiesFactory>;
-
+    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -46,9 +41,7 @@ impl FileFormatOptions for SimpleFileFormatOptions {
         self.table_options.clone()
     }
 
-    fn writer_properties_factory(
-        &self
-    ) -> Arc<dyn WriterPropertiesFactory> {
+    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
         build_writer_properties_factory_tpo(&Some(self.table_options.parquet.clone())).unwrap()
     }
 }
@@ -59,8 +52,6 @@ pub fn build_writer_properties_factory_ffo(
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
     file_format_options.map(|ffo| ffo.writer_properties_factory())
 }
-
-
 
 #[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_or_default_ffo(
@@ -104,7 +95,6 @@ pub fn state_with_parquet_options(
     state
 }
 
-
 #[cfg(feature = "datafusion")]
 fn build_writer_properties_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
@@ -120,7 +110,6 @@ fn build_writer_properties_tpo(
     })
 }
 
-
 #[cfg(feature = "datafusion")]
 fn build_writer_properties_factory_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
@@ -131,7 +120,6 @@ fn build_writer_properties_factory_tpo(
     })
 }
 
-
 pub fn build_writer_properties_factory_wp(
     writer_properties: WriterProperties,
 ) -> Arc<dyn WriterPropertiesFactory> {
@@ -141,7 +129,6 @@ pub fn build_writer_properties_factory_wp(
 pub fn build_writer_properties_factory_default() -> Arc<dyn WriterPropertiesFactory> {
     Arc::new(SimpleWriterPropertiesFactory::default())
 }
-
 
 pub trait WriterPropertiesFactory: Send + Sync + std::fmt::Debug + 'static {
     fn compression(&self, column_path: &ColumnPath) -> Compression;
@@ -214,7 +201,6 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
     }
 }
 
-
 /// AI generated code to get builder from existing WriterProperties
 /// May not be right
 ///
@@ -285,4 +271,3 @@ impl WriterPropertiesExt for WriterProperties {
         builder
     }
 }
-

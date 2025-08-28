@@ -20,8 +20,8 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
-use crate::{DeltaTable, DeltaTableBuilder};
 use crate::table::table_parquet_options::FileFormatOptions;
+use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -240,8 +240,6 @@ impl CreateBuilder {
         self
     }
 
-
-
     // Set format options for underlying table files
     pub fn with_file_format_options(
         mut self,
@@ -250,7 +248,6 @@ impl CreateBuilder {
         self.file_format_options = Some(file_format_options);
         self
     }
-    
 
     /// Set a custom execute handler, for pre and post execution
     pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {

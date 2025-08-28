@@ -10,9 +10,9 @@ use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::table::table_parquet_options::FileFormatOptions;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
-use crate::table::table_parquet_options::FileFormatOptions;
 
 /// Remove constraints from the table
 pub struct DropConstraintBuilder {

@@ -37,6 +37,7 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
@@ -58,7 +59,6 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::{cast, DataFrame, SessionContext},
 };
-use datafusion::config::TableParquetOptions;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
@@ -93,7 +93,11 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
+    state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatOptions,
+    WriterPropertiesFactory,
+};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 mod barrier;
@@ -177,7 +181,8 @@ impl MergeBuilder {
         source: DataFrame,
     ) -> Self {
         let predicate = predicate.into();
-        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options.clone());
+        let writer_properties_factory =
+            build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate,
             source,

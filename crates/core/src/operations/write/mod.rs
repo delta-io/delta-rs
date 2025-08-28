@@ -76,7 +76,10 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatOptions,
+    WriterPropertiesFactory,
+};
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -198,7 +201,8 @@ impl WriteBuilder {
         snapshot: Option<DeltaTableState>,
         file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options.clone());
+        let writer_properties_factory =
+            build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             snapshot,
             log_store,

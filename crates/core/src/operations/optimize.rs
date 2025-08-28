@@ -55,7 +55,10 @@ use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
+    to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory,
+};
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{DeltaTable, ObjectMeta, PartitionFilter};
 
@@ -237,7 +240,8 @@ impl<'a> OptimizeBuilder<'a> {
         snapshot: DeltaTableState,
         file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options.clone());
+        let writer_properties_factory =
+            build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             snapshot,
             log_store,
@@ -358,11 +362,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             if let Some(handler) = this.custom_execute_handler {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
-            let mut table = DeltaTable::new_with_state(
-                this.log_store,
-                this.snapshot,
-                this.file_format_options,
-            );
+            let mut table =
+                DeltaTable::new_with_state(this.log_store, this.snapshot, this.file_format_options);
             table.update().await?;
             Ok((table, metrics))
         })

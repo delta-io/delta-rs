@@ -15,8 +15,7 @@ use deltalake::datafusion::{
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::encryption::{
-    decrypt::FileDecryptionProperties,
-    encrypt::FileEncryptionProperties,
+    decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties,
 };
 use deltalake::{arrow, parquet, DeltaOps};
 
@@ -25,10 +24,8 @@ use deltalake_core::{
     datafusion::{common::test_util::format_batches, config::ConfigFileType},
     operations::optimize::OptimizeType,
     table::table_parquet_options::SimpleFileFormatOptions,
-    DeltaTable,
-    DeltaTableError,
+    DeltaTable, DeltaTableError,
 };
-
 
 fn get_table_columns() -> Vec<StructField> {
     vec![

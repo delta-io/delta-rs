@@ -1,9 +1,5 @@
 //! Delta Table read and write implementation
 
-use std::cmp::{min, Ordering};
-use std::fmt;
-use std::fmt::Formatter;
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -11,6 +7,10 @@ use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::cmp::{min, Ordering};
+use std::fmt;
+use std::fmt::Formatter;
+use std::sync::Arc;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
@@ -25,7 +25,6 @@ use crate::{DeltaResult, DeltaTableError};
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
 pub use crate::logstore::PeekCommit;
 
-
 pub mod builder;
 pub mod config;
 pub mod state;
@@ -33,10 +32,9 @@ pub mod state;
 mod columns;
 pub mod table_parquet_options;
 
-
 // Re-exposing for backwards compatibility
+use crate::table::table_parquet_options::FileFormatOptions;
 pub use columns::*;
-use crate::table::table_parquet_options::{FileFormatOptions};
 
 /// In memory representation of a Delta Table
 ///

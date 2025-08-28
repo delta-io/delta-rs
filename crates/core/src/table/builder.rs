@@ -13,8 +13,8 @@ use url::Url;
 
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::table::table_parquet_options::FileFormatOptions;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -237,7 +237,6 @@ impl DeltaTableBuilder {
         self.allow_http = Some(allow_http);
         self
     }
-    
 
     /// Set the parquet options to use when reading/writing parquet files in the table.
     pub fn with_parquet_config(mut self, file_format_options: Arc<dyn FileFormatOptions>) -> Self {

@@ -32,10 +32,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
 
+use datafusion::config::TableParquetOptions;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use datafusion::config::TableParquetOptions;
 use uuid::Uuid;
 
 use parquet::file::properties::WriterProperties;
@@ -62,7 +62,11 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::{build_writer_properties_factory_ffo, build_writer_properties_factory_wp, state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatOptions, WriterPropertiesFactory};
+use crate::table::table_parquet_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
+    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatOptions,
+    WriterPropertiesFactory,
+};
 use crate::{DeltaTable, DeltaTableError};
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -123,7 +127,8 @@ impl DeleteBuilder {
         snapshot: DeltaTableState,
         file_format_options: Option<Arc<dyn FileFormatOptions>>,
     ) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options.clone());
+        let writer_properties_factory =
+            build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate: None,
             snapshot,
@@ -467,11 +472,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             Ok((
-                DeltaTable::new_with_state(
-                    this.log_store,
-                    new_snapshot,
-                    this.file_format_options,
-                ),
+                DeltaTable::new_with_state(this.log_store, new_snapshot, this.file_format_options),
                 metrics,
             ))
         })
