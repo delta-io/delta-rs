@@ -30,10 +30,10 @@ pub mod config;
 pub mod state;
 
 mod columns;
-pub mod table_parquet_options;
+pub mod file_format_options;
 
 // Re-exposing for backwards compatibility
-use crate::table::table_parquet_options::FileFormatOptions;
+use crate::table::file_format_options::FileFormatOptions;
 pub use columns::*;
 
 /// In memory representation of a Delta Table

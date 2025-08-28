@@ -35,7 +35,7 @@ use datafusion::logical_expr::col;
 
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::{WriteError, WriterStatsConfig};
-use crate::table::table_parquet_options::WriterPropertiesFactory;
+use crate::table::file_format_options::WriterPropertiesFactory;
 
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {

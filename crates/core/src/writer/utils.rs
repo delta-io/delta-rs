@@ -15,7 +15,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::errors::DeltaResult;
-use crate::table::table_parquet_options::WriterPropertiesFactory;
+use crate::table::file_format_options::WriterPropertiesFactory;
 use crate::writer::DeltaWriterError;
 
 /// Generate the name of the file to be written
@@ -158,7 +158,7 @@ impl Write for ShareableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::table_parquet_options::build_writer_properties_factory_wp;
+    use crate::table::file_format_options::build_writer_properties_factory_wp;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::properties::WriterProperties;
 

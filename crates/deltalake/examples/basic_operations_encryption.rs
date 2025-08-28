@@ -23,7 +23,7 @@ use deltalake_core::{
     checkpoints,
     datafusion::{common::test_util::format_batches, config::ConfigFileType},
     operations::optimize::OptimizeType,
-    table::table_parquet_options::SimpleFileFormatOptions,
+    table::file_format_options::SimpleFileFormatOptions,
     DeltaTable, DeltaTableError,
 };
 

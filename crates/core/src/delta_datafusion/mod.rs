@@ -864,7 +864,7 @@ impl TableProvider for DeltaTable {
 
         let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
             .with_parquet_options(
-                crate::table::table_parquet_options::to_table_parquet_options_from_ffo(
+                crate::table::file_format_options::to_table_parquet_options_from_ffo(
                     self.file_format_options.as_ref(),
                 ),
             )

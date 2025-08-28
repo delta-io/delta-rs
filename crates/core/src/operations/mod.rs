@@ -38,7 +38,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
-use crate::table::table_parquet_options::FileFormatOptions;
+use crate::table::file_format_options::FileFormatOptions;
 use crate::DeltaTable;
 
 pub mod add_column;

@@ -36,7 +36,7 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::table::table_parquet_options::{
+use crate::table::file_format_options::{
     build_writer_properties_factory_or_default_ffo, build_writer_properties_factory_wp,
     WriterPropertiesFactory,
 };

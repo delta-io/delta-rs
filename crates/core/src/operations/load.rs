@@ -11,7 +11,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
-use crate::table::table_parquet_options::FileFormatOptions;
+use crate::table::file_format_options::FileFormatOptions;
 use crate::DeltaTable;
 
 #[derive(Debug, Clone)]
