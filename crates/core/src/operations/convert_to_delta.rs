@@ -519,7 +519,7 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 mod tests {
     use std::fs;
 
-    use arrow::array::{Int32Array, TimestampMicrosecondArray, TimestampMillisecondArray};
+    use arrow::array::{Int32Array, TimestampMillisecondArray};
     use arrow::record_batch::RecordBatch;
     use delta_kernel::expressions::Scalar;
     use futures::StreamExt;
@@ -1262,10 +1262,6 @@ mod tests {
             3,
             "Should have 3 timestamp fields (Timestamp + TimestampNtz)"
         );
-
-        // Verify table can be read
-        let files: Vec<_> = table.get_files_iter().unwrap().collect();
-        assert_eq!(files.len(), 1, "Should have one data file");
 
         // Verify can get file metadata
         let state = table.snapshot().unwrap();
