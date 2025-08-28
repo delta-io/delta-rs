@@ -91,7 +91,7 @@ pub struct DeltaTableBuilder {
     #[allow(unused_variables)]
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
-    /// Parquet options to apply when operating on the table
+    /// options to apply when operating on the table files
     file_format_options: Option<Arc<dyn FileFormatOptions>>,
 }
 

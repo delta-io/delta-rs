@@ -137,7 +137,7 @@ pub struct WriteBuilder {
     snapshot: Option<DeltaTableState>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Options to use when operating on the table files
+    /// Options to apply when operating on the table files
     file_format_options: Option<Arc<dyn FileFormatOptions>>,
     /// The input plan
     input: Option<Arc<LogicalPlan>>,

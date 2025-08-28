@@ -94,7 +94,7 @@ pub struct UpdateBuilder {
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Options to use operating on the table files
+    /// Options to apply when operating on the table files
     file_format_options: Option<Arc<dyn FileFormatOptions>>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
