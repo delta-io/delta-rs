@@ -75,11 +75,11 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatOptions, FileFormatRef,
-    WriterPropertiesFactory,
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatOptions,
+    FileFormatRef, WriterPropertiesFactory,
 };
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]

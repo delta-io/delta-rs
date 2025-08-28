@@ -9,8 +9,8 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{FileFormatOptions, FileFormatRef};
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 

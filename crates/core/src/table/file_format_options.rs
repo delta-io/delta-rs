@@ -86,7 +86,7 @@ pub fn state_with_parquet_options(
     state: SessionState,
     parquet_options: Option<&TableParquetOptions>,
 ) -> SessionState {
-    if let Some(parquet) = parquet_options{
+    if let Some(parquet) = parquet_options {
         let mut sb = SessionStateBuilder::new_from_existing(state.clone());
         let mut tbl_opts = TableOptions::new();
         tbl_opts.parquet = parquet.clone();

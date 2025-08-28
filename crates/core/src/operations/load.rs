@@ -10,8 +10,8 @@ use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::LogStoreRef;
-use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{FileFormatOptions, FileFormatRef};
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 #[derive(Debug, Clone)]

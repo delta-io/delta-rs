@@ -61,12 +61,12 @@ use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatOptions, FileFormatRef,
-    WriterPropertiesFactory,
+    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatOptions,
+    FileFormatRef, WriterPropertiesFactory,
 };
+use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
