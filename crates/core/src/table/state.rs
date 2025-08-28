@@ -173,12 +173,6 @@ impl DeltaTableState {
             .boxed()
     }
 
-    /// Get the number of files in the current table state
-    #[deprecated = "Count any of the file-like iterators instead."]
-    pub fn files_count(&self) -> usize {
-        self.snapshot.files_count()
-    }
-
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
