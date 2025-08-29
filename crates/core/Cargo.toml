@@ -74,6 +74,7 @@ tempfile = { version = "3.19.1", optional = true }
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
+dirs = "6.0"
 either = "1.8"
 indexmap = "2.2.1"
 itertools = "0.14"
