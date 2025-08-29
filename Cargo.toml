@@ -49,9 +49,9 @@ object_store = { version = "0.12.1" }
 parquet = { version = "55.2.0" , features=["encryption"]}
 
 # datafusion
-datafusion = { version = "49.0.1", features = ["parquet_encryption"] }
-datafusion-ffi = "49.0.1"
-datafusion-proto = "49.0.1"
+datafusion = { git = "https://github.com/adamreeve/datafusion.git", branch = "49-encryption-factory", features = ["parquet_encryption"] }
+datafusion-ffi = { git = "https://github.com/adamreeve/datafusion.git", branch = "49-encryption-factory" }
+datafusion-proto = { git = "https://github.com/adamreeve/datafusion.git", branch = "49-encryption-factory" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
