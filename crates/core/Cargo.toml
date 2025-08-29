@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.28.0"
+version = "0.28.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -50,7 +50,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true, features = ["serde"] }
-percent-encoding-rfc3986 = {workspace = true}
+percent-encoding-rfc3986 = { workspace = true }
 
 # runtime
 async-trait = { workspace = true }
@@ -74,6 +74,7 @@ tempfile = { version = "3.19.1", optional = true }
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
+dirs = "6.0"
 either = "1.8"
 indexmap = "2.2.1"
 itertools = "0.14"
@@ -103,14 +104,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["rustls"]
-datafusion = [
-    "dep:datafusion",
-    "datafusion-proto",
-]
+datafusion = ["dep:datafusion", "datafusion-proto"]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-native-tls = ["delta_kernel/default-engine"]
+native-tls = ["delta_kernel/default-engine-native-tls"]
 rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud"]
 
@@ -166,3 +164,6 @@ required-features = ["datafusion"]
 [[test]]
 name = "read_delta_partitions_test"
 required-features = ["datafusion"]
+
+[package.metadata.cargo-machete]
+ignored = ["foyer"]

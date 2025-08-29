@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.28.0"
+version = "0.28.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -70,3 +70,6 @@ required-features = ["datafusion"]
 
 [[example]]
 name = "recordbatch-writer"
+
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-glue"]
