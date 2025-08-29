@@ -123,7 +123,8 @@ impl DeltaTableBuilder {
                 ensure_file_location_exists(path)?;
             }
         } else {
-            ensure_file_location_exists(PathBuf::from(table_uri.as_ref()))?;
+            let expanded_path = expand_tilde_path(table_uri.as_ref())?;
+            ensure_file_location_exists(expanded_path)?;
         }
 
         let url = ensure_table_uri(&table_uri)?;
@@ -300,6 +301,26 @@ enum UriType {
     Url(Url),
 }
 
+/// Expand tilde (~) in path to home directory
+fn expand_tilde_path(path: &str) -> DeltaResult<PathBuf> {
+    if path.starts_with("~/") || path == "~" {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            DeltaTableError::InvalidTableLocation(
+                "Could not determine home directory for tilde expansion".to_string(),
+            )
+        })?;
+
+        if path == "~" {
+            Ok(home_dir)
+        } else {
+            let relative_path = &path[2..];
+            Ok(home_dir.join(relative_path))
+        }
+    } else {
+        Ok(PathBuf::from(path))
+    }
+}
+
 /// Utility function to figure out whether string representation of the path
 /// is either local path or some kind or URL.
 ///
@@ -324,7 +345,7 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
         // NOTE this check is required to support absolute windows paths which may properly parse as url
         // we assume here that a single character scheme is a windows drive letter
         } else if scheme.len() == 1 {
-            Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+            Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
         } else {
             Err(DeltaTableError::InvalidTableLocation(format!(
                 "Unknown scheme: {scheme}. Known schemes: {}",
@@ -332,7 +353,7 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
             )))
         }
     } else {
-        Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+        Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
     }
 }
 
@@ -565,5 +586,82 @@ mod tests {
             let found_opts = table.storage_options();
             assert_eq!(expected, found_opts.get(key).unwrap());
         }
+    }
+
+    #[test]
+    fn test_expand_tilde_path() {
+        let home_dir = dirs::home_dir().expect("Should have home directory");
+
+        let result = expand_tilde_path("~").unwrap();
+        assert_eq!(result, home_dir);
+
+        let result = expand_tilde_path("~/test/path").unwrap();
+        assert_eq!(result, home_dir.join("test/path"));
+
+        let result = expand_tilde_path("/absolute/path").unwrap();
+        assert_eq!(result, PathBuf::from("/absolute/path"));
+
+        let result = expand_tilde_path("relative/path").unwrap();
+        assert_eq!(result, PathBuf::from("relative/path"));
+
+        let result = expand_tilde_path("~other").unwrap();
+        assert_eq!(result, PathBuf::from("~other"));
+    }
+
+    #[test]
+    fn test_resolve_uri_type_with_tilde() {
+        let home_dir = dirs::home_dir().expect("Should have home directory");
+
+        match resolve_uri_type("~/test/path").unwrap() {
+            UriType::LocalPath(path) => {
+                assert_eq!(path, home_dir.join("test/path"));
+            }
+            _ => panic!("Expected LocalPath"),
+        }
+
+        match resolve_uri_type("~").unwrap() {
+            UriType::LocalPath(path) => {
+                assert_eq!(path, home_dir);
+            }
+            _ => panic!("Expected LocalPath"),
+        }
+
+        match resolve_uri_type("regular/path").unwrap() {
+            UriType::LocalPath(path) => {
+                assert_eq!(path, PathBuf::from("regular/path"));
+            }
+            _ => panic!("Expected LocalPath"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_table_uri_with_tilde() {
+        let home_dir = dirs::home_dir().expect("Should have home directory");
+
+        let test_dir = home_dir.join("delta_test_temp");
+        std::fs::create_dir_all(&test_dir).ok();
+
+        let tilde_path = "~/delta_test_temp";
+        let result = ensure_table_uri(tilde_path);
+        assert!(
+            result.is_ok(),
+            "ensure_table_uri should work with tilde paths"
+        );
+
+        let url = result.unwrap();
+        assert!(!url.as_str().contains("~"));
+
+        #[cfg(windows)]
+        {
+            let home_dir_normalized = home_dir.to_string_lossy().replace('\\', "/");
+            assert!(url.as_str().contains(&home_dir_normalized));
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(url.as_str().contains(home_dir.to_string_lossy().as_ref()));
+        }
+
+        std::fs::remove_dir_all(&test_dir).ok();
     }
 }
