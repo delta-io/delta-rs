@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
 
+use crate::operations::encryption::TableEncryption;
 use async_trait::async_trait;
 use object_store::path::Path;
 use parquet::basic::Compression;
@@ -187,6 +188,20 @@ impl WriterPropertiesFactory for SimpleWriterPropertiesFactory {
 pub struct KMSWriterPropertiesFactory {
     writer_properties: WriterProperties,
     encryption: Option<crate::operations::encryption::TableEncryption>,
+}
+
+#[cfg(feature = "datafusion")]
+impl KMSWriterPropertiesFactory {
+    pub fn with_encryption(table_encryption: TableEncryption) -> Self {
+        let writer_properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY) // Code assumes Snappy by default
+            .set_created_by(format!("delta-rs version {}", crate_version()))
+            .build();
+        Self {
+            writer_properties,
+            encryption: Some(table_encryption),
+        }
+    }
 }
 
 #[cfg(feature = "datafusion")]

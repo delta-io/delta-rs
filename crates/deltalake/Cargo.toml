@@ -59,6 +59,10 @@ rustls = ["deltalake-core/rustls"]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 tracing = { workspace = true }
+object_store = { workspace = true }
+async-trait = { workspace = true }
+tempfile = "3.21.0"
+parquet-key-management = { version = "0.3.0", features = ["_test_utils"] }
 
 [[example]]
 name = "basic_operations"
@@ -66,6 +70,10 @@ required-features = ["datafusion"]
 
 [[example]]
 name = "basic_operations_encryption"
+required-features = ["datafusion"]
+
+[[example]]
+name = "basic_operations_kms_encryption"
 required-features = ["datafusion"]
 
 [[example]]
