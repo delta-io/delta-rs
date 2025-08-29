@@ -50,7 +50,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true, features = ["serde"] }
-percent-encoding-rfc3986 = {workspace = true}
+percent-encoding-rfc3986 = { workspace = true }
 
 # runtime
 async-trait = { workspace = true }
@@ -104,14 +104,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["rustls"]
-datafusion = [
-    "dep:datafusion",
-    "datafusion-proto",
-]
+datafusion = ["dep:datafusion", "datafusion-proto"]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-native-tls = ["delta_kernel/default-engine"]
+native-tls = ["delta_kernel/default-engine-native-tls"]
 rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud"]
 
@@ -167,3 +164,6 @@ required-features = ["datafusion"]
 [[test]]
 name = "read_delta_partitions_test"
 required-features = ["datafusion"]
+
+[package.metadata.cargo-machete]
+ignored = ["foyer"]
