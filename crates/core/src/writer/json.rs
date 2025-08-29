@@ -336,7 +336,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                         next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
                     let writer_properties = self
                         .writer_properties_factory
-                        .create_writer_properties(&path, &arrow_schema)?;
+                        .create_writer_properties(&path, &arrow_schema)
+                        .await?;
                     let mut writer =
                         DataArrowWriter::new(schema, writer_properties, partition_values, path)?;
 

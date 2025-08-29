@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
 
+use async_trait::async_trait;
 use object_store::path::Path;
 use parquet::basic::Compression;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -133,9 +134,10 @@ pub fn build_writer_properties_factory_default() -> Arc<dyn WriterPropertiesFact
     Arc::new(SimpleWriterPropertiesFactory::default())
 }
 
+#[async_trait]
 pub trait WriterPropertiesFactory: Send + Sync + std::fmt::Debug + 'static {
     fn compression(&self, column_path: &ColumnPath) -> Compression;
-    fn create_writer_properties(
+    async fn create_writer_properties(
         &self,
         file_path: &Path,
         file_schema: &Arc<ArrowSchema>,
@@ -162,12 +164,14 @@ impl Default for SimpleWriterPropertiesFactory {
         Self { writer_properties }
     }
 }
+
+#[async_trait]
 impl WriterPropertiesFactory for SimpleWriterPropertiesFactory {
     fn compression(&self, column_path: &ColumnPath) -> Compression {
         self.writer_properties.compression(column_path)
     }
 
-    fn create_writer_properties(
+    async fn create_writer_properties(
         &self,
         file_path: &Path,
         _file_schema: &Arc<ArrowSchema>,
@@ -186,19 +190,22 @@ pub struct KMSWriterPropertiesFactory {
 }
 
 #[cfg(feature = "datafusion")]
+#[async_trait]
 impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
     fn compression(&self, column_path: &ColumnPath) -> Compression {
         self.writer_properties.compression(column_path)
     }
 
-    fn create_writer_properties(
+    async fn create_writer_properties(
         &self,
         file_path: &Path,
         file_schema: &Arc<ArrowSchema>,
     ) -> DeltaResult<WriterProperties> {
         let mut builder = self.writer_properties.to_builder();
         if let Some(encryption) = self.encryption.as_ref() {
-            builder = encryption.update_writer_properties(builder, file_path, file_schema)?;
+            builder = encryption
+                .update_writer_properties(builder, file_path, file_schema)
+                .await?;
         }
         Ok(builder.build())
     }

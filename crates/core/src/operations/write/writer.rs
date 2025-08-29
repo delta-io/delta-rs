@@ -223,7 +223,8 @@ impl DeltaWriter {
                     config,
                     self.config.num_indexed_cols,
                     self.config.stats_columns.clone(),
-                )?;
+                )
+                .await?;
                 writer.write(&record_batch).await?;
                 let _ = self.partition_writers.insert(partition_key, writer);
             }
@@ -337,7 +338,7 @@ pub struct PartitionWriter {
 
 impl PartitionWriter {
     /// Create a new instance of [`PartitionWriter`] from [`PartitionWriterConfig`]
-    pub fn try_with_config(
+    pub async fn try_with_config(
         object_store: ObjectStoreRef,
         config: PartitionWriterConfig,
         num_indexed_cols: DataSkippingNumIndexedCols,
@@ -353,7 +354,8 @@ impl PartitionWriter {
         );
         let writer_properties = config
             .writer_properties_factory
-            .create_writer_properties(&data_path, &config.file_schema)?;
+            .create_writer_properties(&data_path, &config.file_schema)
+            .await?;
         let arrow_writer = AsyncArrowWriter::try_new(
             buffer.clone(),
             config.file_schema.clone(),
@@ -385,7 +387,7 @@ impl PartitionWriter {
         )
     }
 
-    fn reset_writer(
+    async fn reset_writer(
         &mut self,
     ) -> DeltaResult<(
         AsyncArrowWriter<AsyncShareableBuffer>,
@@ -397,7 +399,8 @@ impl PartitionWriter {
         let writer_properties = self
             .config
             .writer_properties_factory
-            .create_writer_properties(&new_path, &self.config.file_schema)?;
+            .create_writer_properties(&new_path, &self.config.file_schema)
+            .await?;
         let arrow_writer = AsyncArrowWriter::try_new(
             new_buffer.clone(),
             self.config.file_schema.clone(),
@@ -416,7 +419,7 @@ impl PartitionWriter {
 
     async fn flush_arrow_writer(&mut self) -> DeltaResult<()> {
         // replace counter / buffers and close the current writer
-        let (writer, buffer, path) = self.reset_writer()?;
+        let (writer, buffer, path) = self.reset_writer().await?;
         let metadata = writer.close().await?;
         // don't write empty file
         if metadata.num_rows == 0 {
@@ -545,7 +548,7 @@ mod tests {
         DeltaWriter::new(object_store, config)
     }
 
-    fn get_partition_writer(
+    async fn get_partition_writer(
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
@@ -567,6 +570,7 @@ mod tests {
             DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
             None,
         )
+        .await
         .unwrap()
     }
 
@@ -579,7 +583,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None).await;
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -613,7 +617,7 @@ mod tests {
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
         let mut writer =
-            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None);
+            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None).await;
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -640,7 +644,7 @@ mod tests {
             .unwrap()
             .object_store(None);
         // configure small target file size so we can observe multiple files written
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None).await;
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -668,7 +672,8 @@ mod tests {
             .object_store(None);
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
+        let mut writer =
+            get_partition_writer(object_store, &batch, None, Some(9000), Some(10000)).await;
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();

@@ -189,7 +189,8 @@ impl RecordBatchWriter {
                     next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
                 let writer_properties = self
                     .writer_properties_factory
-                    .create_writer_properties(&path, &arrow_schema)?;
+                    .create_writer_properties(&path, &arrow_schema)
+                    .await?;
                 let mut writer = PartitionWriter::new(
                     arrow_schema,
                     partition_values.clone(),
