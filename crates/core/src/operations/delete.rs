@@ -263,6 +263,7 @@ async fn execute_non_empty_expr(
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
+            false,
         )
         .await?;
 
@@ -299,6 +300,7 @@ async fn execute_non_empty_expr(
             None,
             writer_properties,
             writer_stats_config,
+            false,
         )
         .await?;
         actions.extend(cdc_actions)

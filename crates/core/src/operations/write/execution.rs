@@ -54,6 +54,7 @@ pub(crate) async fn write_execution_plan_cdc(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    flush_per_batch: bool,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
 
@@ -67,6 +68,7 @@ pub(crate) async fn write_execution_plan_cdc(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        flush_per_batch,
     )
     .await?
     .into_iter()
@@ -101,6 +103,7 @@ pub(crate) async fn write_execution_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    flush_per_batch: bool,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         snapshot,
@@ -114,6 +117,7 @@ pub(crate) async fn write_execution_plan(
         writer_stats_config,
         None,
         false,
+        flush_per_batch,
     )
     .await?;
     Ok(actions)
@@ -173,6 +177,7 @@ pub(crate) async fn execute_non_empty_expr(
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
+            false,
         )
         .await?;
 
@@ -258,6 +263,7 @@ pub(crate) async fn write_execution_plan_v2(
     writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,
+    flush_per_batch: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -295,6 +301,7 @@ pub(crate) async fn write_execution_plan_v2(
                 write_batch_size,
                 writer_stats_config.num_indexed_cols,
                 writer_stats_config.stats_columns.clone(),
+                flush_per_batch,
             );
             let mut writer = DeltaWriter::new(object_store.clone(), config);
             let checker_stream = checker.clone();
@@ -361,6 +368,7 @@ pub(crate) async fn write_execution_plan_v2(
                 write_batch_size,
                 writer_stats_config.num_indexed_cols,
                 writer_stats_config.stats_columns.clone(),
+                flush_per_batch,
             );
 
             let cdf_config = WriterConfig::new(
@@ -371,6 +379,7 @@ pub(crate) async fn write_execution_plan_v2(
                 write_batch_size,
                 writer_stats_config.num_indexed_cols,
                 writer_stats_config.stats_columns.clone(),
+                flush_per_batch,
             );
 
             let mut writer = DeltaWriter::new(object_store.clone(), normal_config);
