@@ -50,7 +50,10 @@ impl DeltaFileSystemHandler {
         options: Option<HashMap<String, String>>,
         known_sizes: Option<HashMap<String, i64>>,
     ) -> PyResult<Self> {
-        let storage = DeltaTableBuilder::from_uri(&table_uri)
+        let table_url =
+            deltalake::table::builder::parse_table_uri(&table_uri).map_err(PythonError::from)?;
+        let storage = DeltaTableBuilder::from_uri(table_url)
+            .map_err(PythonError::from)?
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PythonError::from)?

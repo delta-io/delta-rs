@@ -9,7 +9,7 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
-    MultipartUpload, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -295,7 +295,7 @@ impl ObjectStore for SlowStore {
     async fn put_multipart_opts(
         &self,
         location: &StorePath,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }

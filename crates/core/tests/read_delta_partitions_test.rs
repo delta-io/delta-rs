@@ -1,3 +1,7 @@
+use std::path::PathBuf;
+use std::process::Command;
+use url::Url;
+
 #[allow(dead_code)]
 mod fs_common;
 
@@ -45,9 +49,11 @@ async fn read_null_partitions_from_checkpoint() {
     assert!(cp.exists());
 
     // verify that table loads from checkpoint and handles null partitions
-    let table = deltalake_core::open_table(&table.table_uri())
-        .await
-        .unwrap();
+    let table = deltalake_core::open_table(
+        url::Url::from_directory_path(std::path::Path::new(&table.table_uri())).unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(table.version(), Some(2));
 }
 
@@ -58,9 +64,12 @@ async fn load_from_delta_8_0_table_with_special_partition() {
     use deltalake_core::{DeltaOps, DeltaTable};
     use futures::{future, StreamExt};
 
-    let table = deltalake_core::open_table("../test/tests/data/delta-0.8.0-special-partition")
-        .await
-        .unwrap();
+    let path = "../test/tests/data/delta-0.8.0-special-partition";
+    let table = deltalake_core::open_table(
+        url::Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let (_, stream): (DeltaTable, SendableRecordBatchStream) = DeltaOps(table)
         .load()

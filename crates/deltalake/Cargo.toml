@@ -59,6 +59,7 @@ rustls = ["deltalake-core/rustls"]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 tracing = { workspace = true }
+url = { workspace = true }
 
 [[example]]
 name = "basic_operations"

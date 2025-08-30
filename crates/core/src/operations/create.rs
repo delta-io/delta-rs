@@ -269,7 +269,7 @@ impl CreateBuilder {
                 ensure_table_uri(self.location.clone().ok_or(CreateError::MissingLocation)?)?;
             (
                 storage_url.as_str().to_string(),
-                DeltaTableBuilder::from_uri(&storage_url)
+                DeltaTableBuilder::from_uri(storage_url)?
                     .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )
@@ -429,7 +429,11 @@ mod tests {
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
         );
-        let table = DeltaOps::try_from_uri(relative_path)
+        let table_path = std::path::Path::new(&relative_path).canonicalize().unwrap();
+        let table_url = url::Url::from_directory_path(table_path)
+            .map_err(|_| DeltaTableError::InvalidTableLocation(relative_path.clone()))
+            .unwrap();
+        let table = DeltaOps::try_from_uri(table_url)
             .await
             .unwrap()
             .create()

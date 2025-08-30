@@ -19,6 +19,7 @@ use deltalake_core::{
     },
     datafusion::prelude::{CsvReadOptions, SessionContext},
     delta_datafusion::{DeltaScanConfig, DeltaTableProvider},
+    ensure_table_uri,
     operations::merge::{MergeBuilder, MergeMetrics},
     DeltaOps, DeltaTable, DeltaTableBuilder, DeltaTableError, ObjectStore, Path,
 };
@@ -72,7 +73,8 @@ pub async fn convert_tpcds_web_returns(input_path: String, table_path: String) -
         .await
         .unwrap();
 
-    DeltaOps::try_from_uri(table_path)
+    let table_url = ensure_table_uri(&table_path).unwrap();
+    DeltaOps::try_from_uri(table_url)
         .await
         .unwrap()
         .write(table.collect().await.unwrap())
@@ -193,7 +195,8 @@ async fn benchmark_merge_tpcds(
     parameters: MergePerfParams,
     merge: fn(DataFrame, DeltaTable) -> Result<MergeBuilder, DeltaTableError>,
 ) -> Result<(core::time::Duration, MergeMetrics), DataFusionError> {
-    let table = DeltaTableBuilder::from_uri(path).load().await?;
+    let table_url = ensure_table_uri(&path)?;
+    let table = DeltaTableBuilder::from_uri(table_url)?.load().await?;
 
     let provider = DeltaTableProvider::try_new(
         table.snapshot()?.clone(),
@@ -562,7 +565,8 @@ async fn main() {
             )
             .unwrap();
 
-            DeltaOps::try_from_uri(output)
+            let output_url = ensure_table_uri(&output).unwrap();
+            DeltaOps::try_from_uri(output_url)
                 .await
                 .unwrap()
                 .write(vec![batch])
@@ -576,11 +580,15 @@ async fn main() {
             after_path,
             after_group_id,
         }) => {
-            let before_table = DeltaTableBuilder::from_uri(before_path)
+            let before_url = ensure_table_uri(&before_path).unwrap();
+            let before_table = DeltaTableBuilder::from_uri(before_url)
+                .unwrap()
                 .load()
                 .await
                 .unwrap();
-            let after_table = DeltaTableBuilder::from_uri(after_path)
+            let after_url = ensure_table_uri(&after_path).unwrap();
+            let after_table = DeltaTableBuilder::from_uri(after_url)
+                .unwrap()
                 .load()
                 .await
                 .unwrap();
@@ -637,7 +645,12 @@ async fn main() {
                 .unwrap();
         }
         Command::Show(Show { path }) => {
-            let stats = DeltaTableBuilder::from_uri(path).load().await.unwrap();
+            let table_url = ensure_table_uri(&path).unwrap();
+            let stats = DeltaTableBuilder::from_uri(table_url)
+                .unwrap()
+                .load()
+                .await
+                .unwrap();
             let ctx = SessionContext::new();
             ctx.register_table("stats", Arc::new(stats)).unwrap();
 

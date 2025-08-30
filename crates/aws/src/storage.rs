@@ -11,7 +11,7 @@ use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
     config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
@@ -352,7 +352,7 @@ impl ObjectStore for S3StorageBackend {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }

@@ -608,7 +608,8 @@ mod tests {
             .unwrap_or_else(|e| {
                 panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
             });
-        open_table(temp_dir).await.expect("Failed to open table")
+        let table_uri = url::Url::from_directory_path(std::path::Path::new(temp_dir)).unwrap();
+        open_table(table_uri).await.expect("Failed to open table")
     }
 
     fn assert_delta_table(

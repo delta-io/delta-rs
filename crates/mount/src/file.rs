@@ -9,7 +9,7 @@ use object_store::{
     GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };
-use object_store::{MultipartUpload, PutMode, PutMultipartOpts, PutPayload};
+use object_store::{MultipartUpload, PutMode, PutMultipartOptions, PutPayload};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -235,7 +235,7 @@ impl ObjectStore for MountFileStorageBackend {
     async fn put_multipart_opts(
         &self,
         location: &ObjectStorePath,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }
