@@ -258,7 +258,7 @@ impl TablePropertiesExt for TableProperties {
 
     fn checkpoint_interval(&self) -> NonZero<u64> {
         static DEFAULT_INTERVAL: LazyLock<NonZero<u64>> =
-            LazyLock::new(|| NonZero::new(10).unwrap());
+            LazyLock::new(|| NonZero::new(100).unwrap());
         self.checkpoint_interval
             .unwrap_or(DEFAULT_INTERVAL.to_owned())
     }

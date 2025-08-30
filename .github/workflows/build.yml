@@ -45,6 +45,9 @@ jobs:
       - name: Format
         run: cargo fmt -- --check
 
+      - name: Run Machete to check for unused dependencies
+        uses: bnjbvr/cargo-machete@main
+
       - name: Default build
         run: (cd crates/deltalake && cargo build --tests)
 

@@ -16,7 +16,6 @@ deltalake-core = { version = "0.28.0", path = "../core"}
 hdfs-native-object-store = "0.15"
 
 # workspace dependecies
-object_store = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 

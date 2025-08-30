@@ -12,24 +12,12 @@ edition = "2021"
 clap = { version = "4", features = [ "derive" ] }
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
-env_logger = "0"
 
 # arrow
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
-arrow-cast = { workspace = true }
-arrow-ord = { workspace = true }
-arrow-row = { workspace = true }
-arrow-schema = { workspace = true, features = ["serde"] }
-arrow-select = { workspace = true }
-parquet = { workspace = true, features = [
-    "async",
-    "object_store",
-] }
 
 # serde
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # datafusion
