@@ -222,7 +222,8 @@ impl ProtocolChecker {
 pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
     reader_features.insert(ReaderFeature::TimestampWithoutTimezone);
-    // reader_features.insert(ReaderFeature::ColumnMapping);
+    reader_features.insert(ReaderFeature::ColumnMapping);
+    reader_features.insert(ReaderFeature::DeletionVectors);
 
     let mut writer_features = HashSet::new();
     writer_features.insert(WriterFeature::AppendOnly);
