@@ -242,6 +242,10 @@ impl LogicalFileView {
             .map(|s| round_ms_datetimes(s, &ceil_datetime))
     }
 
+    pub fn deletion_vector_descriptor(&self) -> Option<DeletionVectorDescriptor> {
+        self.deletion_vector().map(|dv| dv.descriptor())
+    }
+
     /// Returns a view into the deletion vector for this file, if present.
     fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
         let dv_col = self
