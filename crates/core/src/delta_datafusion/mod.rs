@@ -109,6 +109,7 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 
+use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 pub use cdf::scan::DeltaCdfTableProvider;
 
 mod schema_adapter;
@@ -879,7 +880,6 @@ impl TableProvider for DeltaTable {
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store(), session.runtime_env().clone());
         if let Some(format_options) = &self.file_format_options {
-            // TODO: Move this into register_store and rename, to make sure it's used everywhere
             format_options.update_session(session)?;
         }
         let filter_expr = conjunction(filters.iter().cloned());
@@ -986,7 +986,7 @@ pub struct DeltaTableProvider {
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
     files: Option<Vec<Add>>,
-    parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<FileFormatRef>,
 }
 
 impl DeltaTableProvider {
@@ -1002,12 +1002,12 @@ impl DeltaTableProvider {
             log_store,
             config,
             files: None,
-            parquet_options: None,
+            file_format_options: None,
         })
     }
 
-    pub fn with_parquet_options(mut self, parquet_options: Option<TableParquetOptions>) -> Self {
-        self.parquet_options = parquet_options;
+    pub fn with_file_format_options(mut self, file_format_options: Option<FileFormatRef>) -> Self {
+        self.file_format_options = file_format_options;
         self
     }
 
@@ -1048,10 +1048,17 @@ impl TableProvider for DeltaTableProvider {
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store.clone(), session.runtime_env().clone());
+        if let Some(format_options) = &self.file_format_options {
+            format_options.update_session(session)?;
+        }
+
         let filter_expr = conjunction(filters.iter().cloned());
 
+        let table_parquet_options =
+            to_table_parquet_options_from_ffo(self.file_format_options.as_ref());
+
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
-            .with_parquet_options(self.parquet_options.clone())
+            .with_parquet_options(table_parquet_options)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)

@@ -26,7 +26,6 @@ use std::{
 
 use async_trait::async_trait;
 use datafusion::common::{Column, ScalarValue};
-use datafusion::config::TableParquetOptions;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::{
     case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
@@ -60,8 +59,7 @@ use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatRef,
-    WriterPropertiesFactory,
+    state_with_file_format_options, FileFormatRef, WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;
 use crate::{
@@ -257,7 +255,7 @@ async fn execute(
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
-    parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<FileFormatRef>,
     state: SessionState,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     mut commit_properties: CommitProperties,
@@ -287,7 +285,7 @@ async fn execute(
         .cloned()
         .collect();
 
-    let state = state_with_parquet_options(state, parquet_options.as_ref());
+    let state = state_with_file_format_options(state, file_format_options.as_ref())?;
 
     let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
         extension_planner: UpdateMetricExtensionPlanner {},
@@ -344,7 +342,7 @@ async fn execute(
     // to either compute the new value or obtain the old one then write these batches
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_parquet_options(parquet_options)
+            .with_file_format_options(file_format_options.clone())
             .with_files(candidates.candidates.clone()),
     );
 
@@ -406,6 +404,12 @@ async fn execute(
     );
 
     let tracker = CDCTracker::new(df, updated_df);
+
+    let writer_properties_factory = if writer_properties_factory.is_some() {
+        writer_properties_factory
+    } else {
+        build_writer_properties_factory_ffo(file_format_options.clone())
+    };
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
@@ -530,7 +534,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.updates,
                 this.log_store.clone(),
                 this.snapshot,
-                to_table_parquet_options_from_ffo(this.file_format_options.as_ref()),
+                this.file_format_options.clone(),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,

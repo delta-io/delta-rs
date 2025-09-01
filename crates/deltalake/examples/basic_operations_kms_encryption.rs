@@ -383,12 +383,12 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     let table_encryption = TableEncryption::new(encryption_factory, encryption_factory_options);
 
     create_table(uri, table_name, &table_encryption).await?;
-    //optimize_table_z_order(uri, &table_encryption).await?;
-    //optimize_table_compact(uri, &table_encryption).await?;
-    //checkpoint_table(uri, &table_encryption).await?;
-    //update_table(uri, &table_encryption).await?;
-    //delete_from_table(uri, &table_encryption).await?;
-    //merge_table(uri, &table_encryption).await?;
+    optimize_table_z_order(uri, &table_encryption).await?;
+    optimize_table_compact(uri, &table_encryption).await?;
+    checkpoint_table(uri, &table_encryption).await?;
+    update_table(uri, &table_encryption).await?;
+    delete_from_table(uri, &table_encryption).await?;
+    merge_table(uri, &table_encryption).await?;
     read_table(uri, &table_encryption).await?;
     Ok(())
 }

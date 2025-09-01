@@ -622,7 +622,6 @@ impl MergePlan {
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
-        let table_parquet_options = to_table_parquet_options_from_ffo(file_format_options.as_ref());
 
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
@@ -630,6 +629,8 @@ impl MergePlan {
                     futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
                 })
                 .map(|(partition, files)| {
+                    let table_parquet_options =
+                        to_table_parquet_options_from_ffo(file_format_options.as_ref());
                     debug!(
                         "merging a group of {} files in partition {partition:?}",
                         files.len(),
@@ -639,6 +640,7 @@ impl MergePlan {
                     }
 
                     let object_store_ref = log_store.object_store(Some(operation_id));
+                    // TODO: Need to use an encryption factory if set
                     let decrypt: Option<FileDecryptionProperties> =
                         table_parquet_options.as_ref().and_then(|tpo| {
                             tpo.crypto
@@ -704,7 +706,7 @@ impl MergePlan {
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
                 let log_store = log_store.clone();
-                let tpo = table_parquet_options.clone();
+                let file_format_options = file_format_options.clone();
                 futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
                         let dtp = DeltaTableProvider::try_new(
@@ -713,7 +715,7 @@ impl MergePlan {
                             scan_config.clone(),
                         )
                         .unwrap()
-                        .with_parquet_options(tpo.clone());
+                        .with_file_format_options(file_format_options.clone());
 
                         let batch_stream =
                             Self::read_zorder(files.clone(), exec_context.clone(), dtp);

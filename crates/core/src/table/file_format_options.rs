@@ -84,10 +84,13 @@ pub fn to_table_parquet_options_from_ffo(
 pub fn state_with_file_format_options(
     state: SessionState,
     file_format_options: Option<&FileFormatRef>,
-) -> SessionState {
+) -> DeltaResult<SessionState> {
+    if let Some(ffo) = file_format_options {
+        ffo.update_session(&state)?;
+    }
     // Convert file format options to parquet options and delegate to the common implementation
     let parquet_options = to_table_parquet_options_from_ffo(file_format_options);
-    state_with_parquet_options(state, parquet_options.as_ref())
+    Ok(state_with_parquet_options(state, parquet_options.as_ref()))
 }
 
 #[cfg(feature = "datafusion")]

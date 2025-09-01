@@ -206,7 +206,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 #[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
     snapshot: &DeltaTableState,
-    parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<FileFormatRef>,
     log_store: LogStoreRef,
     state: &SessionState,
     expression: &Expr,
@@ -236,7 +236,7 @@ async fn execute_non_empty_expr(
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_parquet_options(parquet_options)
+            .with_file_format_options(file_format_options)
             .with_files(rewrite.to_vec()),
     );
     let target_provider = provider_as_source(target_provider);
@@ -330,7 +330,7 @@ async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
-    parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<FileFormatRef>,
     state: SessionState,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     mut commit_properties: CommitProperties,
@@ -354,7 +354,7 @@ async fn execute(
         let write_start = Instant::now();
         let add = execute_non_empty_expr(
             &snapshot,
-            parquet_options,
+            file_format_options,
             log_store.clone(),
             &state,
             &predicate,
@@ -446,7 +446,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
-            let state = state_with_file_format_options(state, this.file_format_options.as_ref());
+            let state = state_with_file_format_options(state, this.file_format_options.as_ref())?;
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
@@ -462,7 +462,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 this.snapshot,
-                to_table_parquet_options_from_ffo(this.file_format_options.as_ref()),
+                this.file_format_options.clone(),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,

@@ -94,7 +94,7 @@ use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_parquet_options, to_table_parquet_options_from_ffo, FileFormatRef,
+    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatRef,
     WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;
@@ -741,7 +741,7 @@ async fn execute(
     mut source: DataFrame,
     log_store: LogStoreRef,
     snapshot: DeltaTableState,
-    parquet_options: Option<TableParquetOptions>,
+    file_format_options: Option<FileFormatRef>,
     state: SessionState,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     mut commit_properties: CommitProperties,
@@ -772,7 +772,7 @@ async fn execute(
         extension_planner: MergeMetricExtensionPlanner {},
     };
 
-    let state = state_with_parquet_options(state, parquet_options.as_ref());
+    let state = state_with_file_format_options(state, file_format_options.as_ref())?;
 
     let state = SessionStateBuilder::new_from_existing(state)
         .with_query_planner(Arc::new(merge_planner))
@@ -833,7 +833,7 @@ async fn execute(
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_parquet_options(parquet_options),
+            .with_file_format_options(file_format_options),
     );
 
     let target_provider = provider_as_source(target_provider);
@@ -1562,7 +1562,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.source,
                 this.log_store.clone(),
                 this.snapshot,
-                to_table_parquet_options_from_ffo(this.file_format_options.as_ref()),
+                this.file_format_options.clone(),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,
