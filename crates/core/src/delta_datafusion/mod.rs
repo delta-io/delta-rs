@@ -68,6 +68,7 @@ use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::DeltaScanWire;
+use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{
     Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
@@ -1217,11 +1218,11 @@ mod tests {
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use futures::{stream::BoxStream, StreamExt};
+    use object_store::ObjectMeta;
     use object_store::{
         path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
         PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
-    use object_store::{ObjectMeta, PutMultipartOptions};
     use serde_json::json;
     use std::fmt::{self, Debug, Display, Formatter};
     use std::ops::{Deref, Range};
