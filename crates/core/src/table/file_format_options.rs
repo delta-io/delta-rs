@@ -9,6 +9,7 @@ use arrow_schema::Schema as ArrowSchema;
 
 use crate::operations::encryption::TableEncryption;
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use object_store::path::Path;
 use parquet::basic::Compression;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -23,7 +24,13 @@ pub struct TableOptions {}
 // Top level trait for file format options used by a DeltaTable
 pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
     fn table_options(&self) -> TableOptions;
+
     fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory>;
+
+    fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
+        // Default implementation does nothing
+        Ok(())
+    }
 }
 
 /// Convenience alias for file format options reference used across the codebase

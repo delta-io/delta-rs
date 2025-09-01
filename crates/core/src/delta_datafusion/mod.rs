@@ -765,7 +765,25 @@ impl<'a> DeltaScanBuilder<'a> {
             .parquet_options
             .unwrap_or_else(|| self.session.table_options().parquet.clone());
 
+        // We have to set the encryption factory on the ParquetSource based on the Parquet options,
+        // as this is usually handled by the ParquetFormat type in DataFusion,
+        // which is not used in delta-rs.
+        let encryption_factory = parquet_options
+            .crypto
+            .factory_id
+            .as_ref()
+            .map(|factory_id| {
+                self.session
+                    .runtime_env()
+                    .parquet_encryption_factory(factory_id)
+            })
+            .transpose()?;
+
         let mut file_source = ParquetSource::new(parquet_options);
+
+        if let Some(encryption_factory) = encryption_factory {
+            file_source = file_source.with_encryption_factory(encryption_factory);
+        }
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
@@ -860,6 +878,10 @@ impl TableProvider for DeltaTable {
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store(), session.runtime_env().clone());
+        if let Some(format_options) = &self.file_format_options {
+            // TODO: Move this into register_store and rename, to make sure it's used everywhere
+            format_options.update_session(session)?;
+        }
         let filter_expr = conjunction(filters.iter().cloned());
 
         let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)

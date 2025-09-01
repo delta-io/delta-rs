@@ -35,7 +35,6 @@ deltalake-catalog-glue = { version = "0.12.0", path = "../catalog-glue", optiona
 deltalake-catalog-unity = { version = "0.12.0", path = "../catalog-unity", optional = true }
 delta_kernel = { workspace = true }
 
-
 [features]
 # All of these features are just reflected into the core crate until that
 # functionality is broken apart
@@ -63,6 +62,7 @@ object_store = { workspace = true }
 async-trait = { workspace = true }
 tempfile = "3.21.0"
 parquet-key-management = { version = "0.3.0", features = ["_test_utils"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [[example]]
 name = "basic_operations"

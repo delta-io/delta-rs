@@ -12,7 +12,7 @@ use datafusion::execution::parquet_encryption::EncryptionFactory;
 
 #[derive(Clone, Debug)]
 pub struct TableEncryption {
-    encryption_factory: Arc<dyn EncryptionFactory>,
+    pub encryption_factory: Arc<dyn EncryptionFactory>,
     pub configuration: EncryptionFactoryOptions,
 }
 

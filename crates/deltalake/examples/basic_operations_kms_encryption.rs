@@ -17,6 +17,7 @@ use deltalake::arrow::{
     datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
+use deltalake::datafusion::catalog::Session;
 use deltalake::datafusion::common::{extensions_options, DataFusionError};
 use deltalake::datafusion::config::{
     ConfigEntry, ConfigField, EncryptionFactoryOptions, ExtensionOptions, TableOptions,
@@ -40,8 +41,9 @@ use deltalake_core::table::file_format_options::{
 };
 use deltalake_core::{
     checkpoints, datafusion::common::test_util::format_batches, operations::optimize::OptimizeType,
-    DeltaTable, DeltaTableError,
+    DeltaResult, DeltaTable, DeltaTableError,
 };
+use uuid::Uuid;
 
 fn get_table_columns() -> Vec<StructField> {
     vec![
@@ -98,16 +100,19 @@ fn get_table_batches() -> RecordBatch {
 struct KmsFileFormatOptions {
     table_encryption: TableEncryption,
     writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    encryption_factory_id: String,
 }
 
 impl KmsFileFormatOptions {
     fn new(table_encryption: TableEncryption) -> Self {
+        let encryption_factory_id = format!("delta-{}", Uuid::new_v4().to_string());
         let writer_properties_factory = Arc::new(KMSWriterPropertiesFactory::with_encryption(
             table_encryption.clone(),
         ));
         Self {
             table_encryption,
             writer_properties_factory,
+            encryption_factory_id,
         }
     }
 }
@@ -121,16 +126,23 @@ impl Debug for KmsFileFormatOptions {
 
 impl FileFormatOptions for KmsFileFormatOptions {
     fn table_options(&self) -> TableOptions {
-        // TODO: Allow access to session when creating these?
         let mut table_options = TableOptions::default();
-        // TODO: Need to have random per-factory id somehow?
-        table_options.parquet.crypto.factory_id = Some("temp_id".to_owned());
+        table_options.parquet.crypto.factory_id = Some(self.encryption_factory_id.clone());
         table_options.parquet.crypto.factory_options = self.table_encryption.configuration.clone();
         table_options
     }
 
     fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
         Arc::clone(&self.writer_properties_factory)
+    }
+
+    fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
+        // Ensure DataFusion has the encryption factory registered
+        session.runtime_env().register_parquet_encryption_factory(
+            &self.encryption_factory_id,
+            Arc::clone(&self.table_encryption.encryption_factory),
+        );
+        Ok(())
     }
 }
 
