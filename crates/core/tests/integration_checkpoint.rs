@@ -11,6 +11,7 @@ use serde_json::json;
 use serial_test::serial;
 use std::time::Duration;
 use tokio::time::sleep;
+use url::Url;
 
 mod fs_common;
 
@@ -227,7 +228,8 @@ async fn test_v2_checkpoint_json() -> DeltaResult<()> {
 async fn test_checkpoint_with_domain_meta() -> DeltaResult<()> {
     let temp_table = fs_common::clone_table("table-with-domain-metadata");
     let table_path = temp_table.path().to_str().unwrap();
-    let table = deltalake_core::open_table(format!("file://{table_path}")).await?;
+    let table =
+        deltalake_core::open_table(Url::parse(&format!("file://{table_path}")).unwrap()).await?;
     assert_eq!(table.version(), Some(108));
     let metadata = table
         .snapshot()
