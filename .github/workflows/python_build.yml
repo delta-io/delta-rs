@@ -26,6 +26,13 @@ jobs:
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-python-builds"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:
@@ -57,8 +64,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-python-builds"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env
