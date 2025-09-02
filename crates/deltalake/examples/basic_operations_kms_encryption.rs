@@ -384,6 +384,8 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
 
     create_table(uri, table_name, &table_encryption).await?;
     optimize_table_z_order(uri, &table_encryption).await?;
+    // Re-create and append to table again so compact has work to do
+    create_table(uri, table_name, &table_encryption).await?;
     optimize_table_compact(uri, &table_encryption).await?;
     checkpoint_table(uri, &table_encryption).await?;
     update_table(uri, &table_encryption).await?;

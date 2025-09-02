@@ -27,6 +27,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use datafusion::error::DataFusionError;
+use datafusion::prelude::SessionContext;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -55,8 +57,8 @@ use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    to_table_parquet_options_from_ffo, FileFormatRef, WriterPropertiesFactory,
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatRef,
+    WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -629,8 +631,6 @@ impl MergePlan {
                     futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
                 })
                 .map(|(partition, files)| {
-                    let table_parquet_options =
-                        to_table_parquet_options_from_ffo(file_format_options.as_ref());
                     debug!(
                         "merging a group of {} files in partition {partition:?}",
                         files.len(),
@@ -640,20 +640,26 @@ impl MergePlan {
                     }
 
                     let object_store_ref = log_store.object_store(Some(operation_id));
-                    // TODO: Need to use an encryption factory if set
-                    let decrypt: Option<FileDecryptionProperties> =
-                        table_parquet_options.as_ref().and_then(|tpo| {
-                            tpo.crypto
-                                .file_decryption
-                                .as_ref()
-                                .map(|file_decryption| file_decryption.clone().into())
-                        });
+                    let file_format_options = file_format_options.clone();
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
-                            let decrypt = decrypt.clone();
                             let meta = ObjectMeta::try_from(file).unwrap();
+                            let file_format_options = file_format_options.clone();
                             async move {
+                                let decrypt: Option<FileDecryptionProperties> =
+                                    match &file_format_options {
+                                        Some(ffo) => {
+                                            get_file_decryption_properties(ffo, &meta.location)
+                                                .await
+                                                .map_err(|e| {
+                                                    ParquetError::General(format!(
+                                                "Error getting file decryption properties: {e}"
+                                            ))
+                                                })?
+                                        }
+                                        None => None,
+                                    };
                                 let file_reader =
                                     ParquetObjectReader::new(object_store_ref, meta.location)
                                         .with_file_size(meta.size);
@@ -1067,6 +1073,29 @@ async fn build_zorder_plan(
 
     let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files);
     Ok((operation, metrics))
+}
+
+async fn get_file_decryption_properties(
+    file_format_options: &FileFormatRef,
+    file_path: &object_store::path::Path,
+) -> Result<Option<FileDecryptionProperties>, DataFusionError> {
+    let parquet_options = file_format_options.table_options().parquet;
+    if let Some(props) = &parquet_options.crypto.file_decryption {
+        return Ok(Some(props.clone().into()));
+    }
+    if let Some(factory_id) = &parquet_options.crypto.factory_id {
+        // Create a temporary DataFusion session to access the encryption factory
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        file_format_options.update_session(&state)?;
+        let encryption_factory = state.runtime_env().parquet_encryption_factory(factory_id)?;
+        let config = &parquet_options.crypto.factory_options;
+        encryption_factory
+            .get_file_decryption_properties(config, file_path)
+            .await
+    } else {
+        Ok(None)
+    }
 }
 
 pub(super) mod util {
