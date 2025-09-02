@@ -128,7 +128,8 @@ impl FileFormatOptions for KmsFileFormatOptions {
     fn table_options(&self) -> TableOptions {
         let mut table_options = TableOptions::default();
         table_options.parquet.crypto.factory_id = Some(self.encryption_factory_id.clone());
-        table_options.parquet.crypto.factory_options = self.table_encryption.configuration.clone();
+        table_options.parquet.crypto.factory_options =
+            self.table_encryption.configuration().clone();
         table_options
     }
 
@@ -140,7 +141,7 @@ impl FileFormatOptions for KmsFileFormatOptions {
         // Ensure DataFusion has the encryption factory registered
         session.runtime_env().register_parquet_encryption_factory(
             &self.encryption_factory_id,
-            Arc::clone(&self.table_encryption.encryption_factory),
+            Arc::clone(self.table_encryption.encryption_factory()),
         );
         Ok(())
     }
@@ -372,15 +373,8 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     let decryption_config = DecryptionConfiguration::builder().build();
     let kms_options = KmsEncryptionFactoryOptions::new(encryption_config, decryption_config);
 
-    // TODO: Move this into TableEncryption ctor?
-    let mut encryption_factory_options = EncryptionFactoryOptions::default();
-    for entry in kms_options.entries() {
-        if let Some(value) = &entry.value {
-            encryption_factory_options.set(&entry.key, value)?;
-        }
-    }
-
-    let table_encryption = TableEncryption::new(encryption_factory, encryption_factory_options);
+    let table_encryption =
+        TableEncryption::new_with_extension_options(encryption_factory, &kms_options)?;
 
     create_table(uri, table_name, &table_encryption).await?;
     optimize_table_z_order(uri, &table_encryption).await?;
