@@ -34,6 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
         env:
@@ -49,6 +53,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
@@ -66,6 +74,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
       - name: Publish manylinux to pypi x86_64 (with sdist)
         uses: messense/maturin-action@v1
         env:
@@ -82,6 +94,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish manylinux to pypi aarch64 (without sdist)
         uses: messense/maturin-action@v1
@@ -103,6 +119,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
       - name: Publish manylinux to pypi aarch64 manylinux-2_28 (without sdist)
         uses: messense/maturin-action@v1
         env:
@@ -119,6 +139,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish manylinux to pypi x86_64 (with sdist)
         uses: messense/maturin-action@v1
