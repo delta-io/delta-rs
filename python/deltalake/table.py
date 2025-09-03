@@ -528,6 +528,31 @@ class DeltaTable:
             history.append(commit)
         return history
 
+    def count(self) -> int:
+        """
+        Get the row count based on the history of the DeltaTable.
+
+        Returns:
+            The number of rows for this specific table
+        """
+        total_rows = 0
+
+        for entry in sorted(self.history(), key=lambda x: x["version"]):
+            operation, metrics, parameters = (
+                entry.get("operation", "").upper(), entry.get("operationMetrics", {}),
+                entry.get("operationParameters", {})
+            )
+
+            if operation in ("WRITE", "COPY INTO", "CREATE TABLE AS SELECT", "REPLACE TABLE AS SELECT"):
+                mode = parameters.get("mode", "").upper()
+                affected_rows = int(metrics.get("numOutputRows") or metrics.get("num_added_rows"))
+                total_rows = total_rows + affected_rows if mode == "APPEND" else affected_rows
+
+            elif operation in ("DELETE", "TRUNCATE"):
+                total_rows -= int(metrics.get("numDeletedRows"))
+
+        return total_rows
+
     def vacuum(
         self,
         retention_hours: int | None = None,
