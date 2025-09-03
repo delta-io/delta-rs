@@ -28,8 +28,8 @@ use crate::models::{
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
-    DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError,
-    ObjectStoreError, Path,
+    ensure_table_uri, DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder,
+    DeltaTableError, ObjectStoreError, Path,
 };
 
 use crate::client::retry::*;
@@ -849,7 +849,8 @@ impl ObjectStoreFactory for UnityCatalogFactory {
 
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
-        let mut builder = DeltaTableBuilder::from_uri(&table_path);
+        let table_url = ensure_table_uri(&table_path)?;
+        let mut builder = DeltaTableBuilder::from_uri(table_url)?;
 
         if let Some(runtime) = &config.runtime {
             builder = builder.with_io_runtime(runtime.clone());

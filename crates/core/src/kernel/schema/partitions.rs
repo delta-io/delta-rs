@@ -2,7 +2,7 @@
 use std::convert::TryFrom;
 
 use delta_kernel::expressions::{Expression, JunctionPredicateOp, Predicate, Scalar};
-use delta_kernel::schema::{DataType, PrimitiveType, StructType};
+use delta_kernel::schema::StructType;
 use serde::{Serialize, Serializer};
 
 use crate::errors::{DeltaResult, DeltaTableError};

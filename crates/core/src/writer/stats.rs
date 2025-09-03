@@ -629,6 +629,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::LazyLock;
+    use url::Url;
 
     macro_rules! simple_parquet_stat {
         ($variant:expr, $value:expr) => {
@@ -814,9 +815,8 @@ mod tests {
         let table_path = temp_dir.path();
         create_temp_table(table_path);
 
-        let table = load_table(table_path.to_str().unwrap(), HashMap::new())
-            .await
-            .unwrap();
+        let table_uri = Url::from_directory_path(table_path).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
 
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
         writer = writer.with_writer_properties(
@@ -945,10 +945,12 @@ mod tests {
     }
 
     async fn load_table(
-        table_uri: &str,
+        table_uri: &Url,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
+        let table_uri = table_uri.clone();
         DeltaTableBuilder::from_uri(table_uri)
+            .unwrap()
             .with_storage_options(options)
             .load()
             .await

@@ -18,7 +18,9 @@ async fn test_exotic_tables() {
 
     for (name, should_error) in cases {
         let table_path = full.join(name);
-        let table = deltalake_core::open_table(&table_path.to_string_lossy()).await;
+        let table_url =
+            url::Url::from_directory_path(&table_path).expect("Failed to create URL from path");
+        let table = deltalake_core::open_table(table_url).await;
         if should_error {
             assert!(table.is_err());
         } else {
