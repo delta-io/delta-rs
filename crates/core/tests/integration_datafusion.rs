@@ -1137,14 +1137,7 @@ mod local {
         let expected_schema = ArrowSchema::new(vec![
             ArrowField::new("c3", ArrowDataType::Int32, true),
             ArrowField::new("c1", ArrowDataType::Int32, true),
-            ArrowField::new(
-                "c2",
-                ArrowDataType::Dictionary(
-                    Box::new(ArrowDataType::UInt16),
-                    Box::new(ArrowDataType::Utf8),
-                ),
-                true,
-            ),
+            ArrowField::new("c2", ArrowDataType::Utf8, true)
         ]);
 
         assert_eq!(

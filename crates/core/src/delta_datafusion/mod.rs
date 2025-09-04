@@ -135,7 +135,7 @@ impl DataFusionMixins for Snapshot {
         _arrow_schema(
             self.arrow_schema(),
             self.metadata().partition_columns(),
-            true,
+            false,
         )
     }
 
