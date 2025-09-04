@@ -19,9 +19,7 @@ use deltalake::arrow::{
 };
 use deltalake::datafusion::catalog::Session;
 use deltalake::datafusion::common::{extensions_options, DataFusionError};
-use deltalake::datafusion::config::{
-    ConfigEntry, ConfigField, EncryptionFactoryOptions, ExtensionOptions, TableOptions,
-};
+use deltalake::datafusion::config::{ConfigEntry, ConfigField, ConfigFileType, EncryptionFactoryOptions, ExtensionOptions, TableOptions, TableParquetOptions};
 use deltalake::datafusion::execution::parquet_encryption::EncryptionFactory;
 use deltalake::datafusion::{
     assert_batches_sorted_eq,
@@ -34,11 +32,9 @@ use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::encryption::{
     decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties,
 };
-use deltalake::{arrow, DeltaOps};
+use deltalake::{arrow, parquet, DeltaOps};
 use deltalake_core::operations::encryption::TableEncryption;
-use deltalake_core::table::file_format_options::{
-    FileFormatOptions, KMSWriterPropertiesFactory, WriterPropertiesFactory,
-};
+use deltalake_core::table::file_format_options::{FileFormatOptions, FileFormatRef, KMSWriterPropertiesFactory, SimpleFileFormatOptions, WriterPropertiesFactory};
 use deltalake_core::{
     checkpoints, datafusion::common::test_util::format_batches, operations::optimize::OptimizeType,
     DeltaResult, DeltaTable, DeltaTableError,
@@ -149,23 +145,22 @@ impl FileFormatOptions for KmsFileFormatOptions {
 
 async fn ops_with_crypto(
     uri: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<DeltaOps, DeltaTableError> {
     let prefix_uri = format!("file://{}", uri);
     let url = Url::parse(&*prefix_uri).unwrap();
     let ops = DeltaOps::try_from_uri(url).await?;
-    let file_format_options = Arc::new(KmsFileFormatOptions::new(table_encryption.clone()));
-    Ok(ops.with_file_format_options(file_format_options))
+    Ok(ops.with_file_format_options(file_format_options.clone()))
 }
 
 async fn create_table(
     uri: &str,
     table_name: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<DeltaTable, DeltaTableError> {
     fs::remove_dir_all(uri)?;
     fs::create_dir(uri)?;
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+    let ops = ops_with_crypto(uri, file_format_options).await?;
 
     // The operations module uses a builder pattern that allows specifying several options
     // on how the command behaves. The builders implement `Into<Future>`, so once
@@ -192,8 +187,8 @@ async fn create_table(
     Ok(table)
 }
 
-async fn read_table(uri: &str, table_encryption: &TableEncryption) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+async fn read_table(uri: &str, file_format_options: &FileFormatRef) -> Result<(), DeltaTableError> {
+    let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
@@ -207,9 +202,9 @@ async fn read_table(uri: &str, table_encryption: &TableEncryption) -> Result<(),
 
 async fn update_table(
     uri: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+    let ops = ops_with_crypto(uri, file_format_options).await?;
     let table: DeltaTable = ops.into();
     let version = table.version();
     let ops: DeltaOps = table.into();
@@ -228,9 +223,9 @@ async fn update_table(
 
 async fn delete_from_table(
     uri: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+    let ops = ops_with_crypto(uri, file_format_options).await?;
     let table: DeltaTable = ops.into();
     let version = table.version();
     let ops: DeltaOps = table.into();
@@ -270,8 +265,8 @@ fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
     ctx.read_batch(batch).unwrap()
 }
 
-async fn merge_table(uri: &str, table_encryption: &TableEncryption) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+async fn merge_table(uri: &str, file_format_options: &FileFormatRef) -> Result<(), DeltaTableError> {
+    let ops = ops_with_crypto(uri, file_format_options).await?;
 
     let schema = get_table_schema();
     let source = merge_source(schema);
@@ -305,9 +300,9 @@ async fn merge_table(uri: &str, table_encryption: &TableEncryption) -> Result<()
 
 async fn optimize_table_z_order(
     uri: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+    let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, metrics) = ops
         .optimize()
         .with_type(OptimizeType::ZOrder(vec![
@@ -321,9 +316,9 @@ async fn optimize_table_z_order(
 
 async fn optimize_table_compact(
     uri: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+    let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, metrics) = ops.optimize().with_type(OptimizeType::Compact).await?;
     println!("\nOptimize Compact:\n{metrics:?}\n");
     Ok(())
@@ -334,13 +329,13 @@ I guess this test isn't needed since checkpoints only summarize what files to us
  */
 async fn checkpoint_table(
     uri: &str,
-    table_encryption: &TableEncryption,
+    file_format_options: &FileFormatRef,
 ) -> Result<(), DeltaTableError> {
     let table_location = uri;
     let table_path = PathBuf::from(table_location);
     let log_path = table_path.join("_delta_log");
 
-    let ops = ops_with_crypto(uri, table_encryption).await?;
+    let ops = ops_with_crypto(uri, file_format_options).await?;
     let table: DeltaTable = ops.into();
     let version = table.version();
 
@@ -358,12 +353,50 @@ async fn checkpoint_table(
     Ok(())
 }
 
-async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
+async fn round_trip_test(file_format_options: Arc<dyn FileFormatOptions>) -> Result<(), deltalake::errors::DeltaTableError> {
     let temp_dir = TempDir::new()?;
     let uri = temp_dir.path().to_str().unwrap();
 
     let table_name = "roundtrip";
 
+    create_table(uri, table_name, &file_format_options).await?;
+    optimize_table_z_order(uri, &file_format_options).await?;
+    // Re-create and append to table again so compact has work to do
+    create_table(uri, table_name, &file_format_options).await?;
+    optimize_table_compact(uri, &file_format_options).await?;
+    checkpoint_table(uri, &file_format_options).await?;
+    update_table(uri, &file_format_options).await?;
+    delete_from_table(uri, &file_format_options).await?;
+    merge_table(uri, &file_format_options).await?;
+    read_table(uri, &file_format_options).await?;
+    Ok(())
+}
+
+fn plain_crypto_format() -> Result<Arc<dyn FileFormatOptions>, DeltaTableError> {
+    let key: Vec<_> = b"1234567890123450".to_vec();
+    let _wrong_key: Vec<_> = b"9234567890123450".to_vec(); // Can use to check encryption
+
+    let crypt = parquet::encryption::encrypt::FileEncryptionProperties::builder(key.clone())
+        .with_column_key("int", key.clone())
+        .with_column_key("string", key.clone())
+        .build()?;
+
+    let decrypt = FileDecryptionProperties::builder(key.clone())
+        .with_column_key("int", key.clone())
+        .with_column_key("string", key.clone())
+        .build()?;
+
+    let mut tpo: TableParquetOptions = TableParquetOptions::default();
+    tpo.crypto.file_encryption = Some((&crypt).into());
+    tpo.crypto.file_decryption = Some((&decrypt).into());
+    let mut tbl_options = TableOptions::new();
+    tbl_options.parquet = tpo;
+    tbl_options.current_format = Some(ConfigFileType::PARQUET);
+    let file_format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options)) as Arc<dyn FileFormatOptions>;
+    Ok(file_format_options)
+
+}
+fn kms_crypto_format() -> Result<Arc<dyn FileFormatOptions>, DeltaTableError> {
     let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
 
     let kms_connection_config = Arc::new(KmsConnectionConfig::default());
@@ -379,22 +412,28 @@ async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
     let table_encryption =
         TableEncryption::new_with_extension_options(encryption_factory, &kms_options)?;
 
-    create_table(uri, table_name, &table_encryption).await?;
-    optimize_table_z_order(uri, &table_encryption).await?;
-    // Re-create and append to table again so compact has work to do
-    create_table(uri, table_name, &table_encryption).await?;
-    optimize_table_compact(uri, &table_encryption).await?;
-    checkpoint_table(uri, &table_encryption).await?;
-    update_table(uri, &table_encryption).await?;
-    delete_from_table(uri, &table_encryption).await?;
-    merge_table(uri, &table_encryption).await?;
-    read_table(uri, &table_encryption).await?;
-    Ok(())
+    let file_format_options = Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as Arc<dyn FileFormatOptions>;
+    Ok(file_format_options)
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), DeltaTableError> {
-    round_trip_test().await?;
+    println!("====================");
+    println!("Begin KMS encryption test");
+    println!("");
+    let file_format_options = kms_crypto_format()?;
+    round_trip_test(file_format_options).await?;
+    println!("End KMS encryption test");
+    println!("====================");
+    println!("\n\n");
+    
+    println!("====================");
+    println!("Begin Plain encryption test");
+    println!("");
+    let file_format_options = plain_crypto_format()?;
+    round_trip_test(file_format_options).await?;
+    println!("End Plain encryption test");
+    println!("====================");
     Ok(())
 }
 
