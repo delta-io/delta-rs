@@ -81,11 +81,11 @@ fn get_table_batches() -> RecordBatch {
 }
 
 async fn ops_with_crypto(
-    uri_str: &str,
+    uri: &str,
     enc: Option<&FileEncryptionProperties>,
     dec: Option<&FileDecryptionProperties>,
 ) -> Result<DeltaOps, DeltaTableError> {
-    let prefix_uri = format!("file://{}", uri_str);
+    let prefix_uri = format!("file://{}", uri);
     let url = Url::parse(&*prefix_uri).unwrap();
     let ops = DeltaOps::try_from_uri(url).await?;
     let mut tpo: TableParquetOptions = TableParquetOptions::default();
@@ -107,7 +107,8 @@ async fn create_table(
     table_name: &str,
     crypt: &FileEncryptionProperties,
 ) -> Result<DeltaTable, DeltaTableError> {
-    // fs::remove_dir_all(uri)?;
+    fs::remove_dir_all(uri)?;
+    fs::create_dir(uri)?;
     let ops = ops_with_crypto(uri, Some(crypt), None).await?;
 
     // The operations module uses a builder pattern that allows specifying several options
