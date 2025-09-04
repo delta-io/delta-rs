@@ -199,19 +199,17 @@ pub fn cast_record_batch(
         ..Default::default()
     };
 
-    // Can be simplified with StructArray::try_new_with_length in arrow 55.1
-    let col_arrays = batch.columns().to_owned();
-    let s = if col_arrays.is_empty() {
-        StructArray::new_empty_fields(batch.num_rows(), None)
-    } else {
-        StructArray::new(batch.schema().as_ref().to_owned().fields, col_arrays, None)
-    };
-
-    let struct_array = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
+    let mut s = StructArray::try_new_with_length(
+        batch.schema().as_ref().to_owned().fields,
+        batch.columns().to_owned(),
+        None,
+        batch.num_rows(),
+    )?;
+    s = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
 
     Ok(RecordBatch::try_new_with_options(
         target_schema,
-        struct_array.columns().to_vec(),
+        s.columns().to_vec(),
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )?)
 }
@@ -656,6 +654,60 @@ mod tests {
             list_column.values().deref().as_string::<i32>(),
             new_empty_array(&DataType::Utf8).deref().as_string()
         )
+    }
+
+    #[test]
+    fn test_cast_struct_with_rows_and_empty_schema() {
+        let rb_rows_empty_schema = unsafe {
+            RecordBatch::new_unchecked(
+                Arc::new(Schema::empty()),
+                vec![],
+                10
+            )
+        };
+        let rb_rows_empty_rows_empty_schema = unsafe {
+            RecordBatch::new_unchecked(
+                Arc::new(Schema::empty()),
+                vec![],
+                0
+            )
+        };
+        let all_rbs = vec![
+            rb_rows_empty_schema,
+            rb_rows_empty_rows_empty_schema,
+        ];
+        for rb in all_rbs.iter() {
+            //incorrect casting, field is not nullable
+            {
+                let output_schema = Arc::new(Schema::new(vec![Field::new(
+                    "field1",
+                    DataType::Int32,
+                    false,
+                )]));
+                let result = cast_record_batch(rb, output_schema.clone(), false, true);
+                assert!(result.is_err(), "Could cast to non-nullable field");
+            }
+            // incorrect casting, dest field is nullable, but we don't have add_missing
+            {
+                let output_schema = Arc::new(Schema::new(vec![Field::new(
+                    "field1",
+                    DataType::Int32,
+                    true,
+                )]));
+                let result = cast_record_batch(rb, output_schema.clone(), false, false);
+                assert!(result.is_err(), "Could cast without add_missing");
+            }
+            // correct casting, dest field is nullable and we have add_missing
+            {
+                let output_schema = Arc::new(Schema::new(vec![Field::new(
+                    "field1",
+                    DataType::Int32,
+                    true,
+                )]));
+                let out_rb = cast_record_batch(rb, output_schema.clone(), false, true).unwrap();
+                assert!(out_rb.num_rows() == rb.num_rows(), "Correct output rows");
+            }
+        }
     }
 
     #[test]
