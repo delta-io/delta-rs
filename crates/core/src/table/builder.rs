@@ -121,6 +121,7 @@ impl DeltaTableBuilder {
             storage_options: None,
             allow_http: None,
             table_config: DeltaTableConfig::default(),
+            file_format_options: None,
         })
     }
 

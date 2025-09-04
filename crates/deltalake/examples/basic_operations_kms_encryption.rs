@@ -10,7 +10,7 @@ use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use std::{fs, path::PathBuf, sync::Arc};
 use tempfile::TempDir;
-
+use url::Url;
 use deltalake::arrow::datatypes::SchemaRef;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
@@ -151,7 +151,9 @@ async fn ops_with_crypto(
     uri: &str,
     table_encryption: &TableEncryption,
 ) -> Result<DeltaOps, DeltaTableError> {
-    let ops = DeltaOps::try_from_uri(uri).await?;
+    let prefix_uri = format!("file://{}", uri);
+    let url = Url::parse(&*prefix_uri).unwrap();
+    let ops = DeltaOps::try_from_uri(url).await?;
     let file_format_options = Arc::new(KmsFileFormatOptions::new(table_encryption.clone()));
     Ok(ops.with_file_format_options(file_format_options))
 }
@@ -162,6 +164,7 @@ async fn create_table(
     table_encryption: &TableEncryption,
 ) -> Result<DeltaTable, DeltaTableError> {
     fs::remove_dir_all(uri)?;
+    fs::create_dir(uri)?;
     let ops = ops_with_crypto(uri, table_encryption).await?;
 
     // The operations module uses a builder pattern that allows specifying several options

@@ -1,5 +1,6 @@
+use url::Url;
 use std::{fs, path::PathBuf, sync::Arc};
-
+use tempfile::TempDir;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
     datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
@@ -80,11 +81,13 @@ fn get_table_batches() -> RecordBatch {
 }
 
 async fn ops_with_crypto(
-    uri: &str,
+    uri_str: &str,
     enc: Option<&FileEncryptionProperties>,
     dec: Option<&FileDecryptionProperties>,
 ) -> Result<DeltaOps, DeltaTableError> {
-    let ops = DeltaOps::try_from_uri(uri).await?;
+    let prefix_uri = format!("file://{}", uri_str);
+    let url = Url::parse(&*prefix_uri).unwrap();
+    let ops = DeltaOps::try_from_uri(url).await?;
     let mut tpo: TableParquetOptions = TableParquetOptions::default();
     if let Some(enc) = enc {
         tpo.crypto.file_encryption = Some(enc.into());
@@ -104,7 +107,7 @@ async fn create_table(
     table_name: &str,
     crypt: &FileEncryptionProperties,
 ) -> Result<DeltaTable, DeltaTableError> {
-    fs::remove_dir_all(uri)?;
+    // fs::remove_dir_all(uri)?;
     let ops = ops_with_crypto(uri, Some(crypt), None).await?;
 
     // The operations module uses a builder pattern that allows specifying several options
@@ -311,7 +314,8 @@ async fn checkpoint_table(
 }
 
 async fn round_trip_test() -> Result<(), deltalake::errors::DeltaTableError> {
-    let uri = "/home/cjoy/src/delta-rs/crates/deltalake/examples/encrypted_roundtrip";
+    let temp_dir = TempDir::new()?;
+    let uri = temp_dir.path().to_str().unwrap();
     let table_name = "roundtrip";
     let key: Vec<_> = b"1234567890123450".to_vec();
     let _wrong_key: Vec<_> = b"9234567890123450".to_vec(); // Can use to check encryption
