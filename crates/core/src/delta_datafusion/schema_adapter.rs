@@ -35,7 +35,7 @@ pub(crate) struct DeltaSchemaAdapter {
 
 impl SchemaAdapter for DeltaSchemaAdapter {
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-        let field = self.table_schema.field(index);
+        let field = self.projected_table_schema.field(index);
         Some(file_schema.fields.find(field.name())?.0)
     }
 

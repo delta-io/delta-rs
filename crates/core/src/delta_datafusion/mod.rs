@@ -39,9 +39,10 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
-use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
+use datafusion::datasource::physical_plan::{wrap_partition_type_in_dict, FileScanConfig, FileScanConfigBuilder, FileSource, ParquetSource};
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::context::SessionContext;
+use datafusion::datasource::source::DataSourceExec;
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -89,6 +90,7 @@ mod table_provider;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use table_provider::DeltaScanBuilder;
 pub use table_provider::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
+use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -692,9 +694,37 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
+
+        let mut parquet_scan = (*inputs)[0].clone();
+        if let Some(ds_exec) = parquet_scan.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some(file_conf) = ds_exec
+                .data_source()
+                .as_any()
+                .downcast_ref::<FileScanConfig>()
+            {
+                if let Some(pq_source) = file_conf
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<ParquetSource>()
+                {
+                    let with_adapter_factory = pq_source
+                        .clone()
+                        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
+                    let config_with_source = FileScanConfigBuilder::from(file_conf.clone())
+                        .with_source(with_adapter_factory)
+                        .build();
+                    parquet_scan = Arc::new(
+                        ds_exec
+                            .clone()
+                            .with_data_source(Arc::new(config_with_source)),
+                    );
+                }
+            }
+        }
+
         let delta_scan = DeltaScan {
             table_uri: wire.table_uri,
-            parquet_scan: (*inputs)[0].clone(),
+            parquet_scan,
             config: wire.config,
             logical_schema: wire.logical_schema,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -1892,6 +1922,12 @@ mod tests {
 
         let _ = df.collect().await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_adapter_kept_after_codec_roundtrip() {
+        // different columns in nested struct
+        assert!(true == false, "IMPLEMENT ME");
     }
 
     /// Records operations made by the inner object store on a channel obtained at construction
