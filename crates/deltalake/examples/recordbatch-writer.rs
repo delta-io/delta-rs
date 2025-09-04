@@ -21,6 +21,7 @@ use deltalake::Path;
 use deltalake::*;
 use std::sync::Arc;
 use tracing::*;
+use url::Url;
 
 /*
  * The main function gets everything started, but does not contain any meaningful
@@ -33,11 +34,12 @@ async fn main() -> Result<(), DeltaTableError> {
     let table_uri = std::env::var("TABLE_URI").map_err(|e| DeltaTableError::GenericError {
         source: Box::new(e),
     })?;
+    let table_url = Url::parse(&table_uri).unwrap();
     info!("Using the location of: {table_uri:?}");
 
     let table_path = Path::parse(&table_uri)?;
 
-    let maybe_table = deltalake::open_table(&table_path).await;
+    let maybe_table = deltalake::open_table(table_url).await;
     let mut table = match maybe_table {
         Ok(table) => table,
         Err(DeltaTableError::NotATable(_)) => {
@@ -196,7 +198,8 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  * Table in an existing directory that doesn't currently contain a Delta table
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
-    DeltaOps::try_from_uri(table_path)
+    let table_url = Url::parse(&format!("file://{}", table_path.as_ref())).unwrap();
+    DeltaOps::try_from_uri(table_url)
         .await
         .unwrap()
         .create()

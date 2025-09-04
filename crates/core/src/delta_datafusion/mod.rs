@@ -8,7 +8,10 @@
 //!
 //! async {
 //!   let mut ctx = SessionContext::new();
-//!   let table = deltalake_core::open_table("./tests/data/simple_table")
+//!   let table = deltalake_core::open_table_with_storage_options(
+//!       url::Url::parse("memory://").unwrap(),
+//!       std::collections::HashMap::new()
+//!   )
 //!       .await
 //!       .unwrap();
 //!   ctx.register_table("demo", Arc::new(table)).unwrap();
@@ -20,16 +23,12 @@
 //! };
 //! ```
 
-use std::any::Any;
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug};
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow_array::types::UInt16Type;
-use arrow_array::{
-    Array, BooleanArray, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray,
-};
+use arrow_array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{
@@ -37,44 +36,26 @@ use arrow_schema::{
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use arrow_select::concat::concat_batches;
-use arrow_select::filter::filter_record_batch;
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{
-    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
-    TableReference, ToDFSchema,
+    Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
-use datafusion::config::TableParquetOptions;
-use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
-    FileSource, ParquetSource,
-};
-use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
+use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
+use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
-use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::utils::{conjunction, split_conjunction};
-use datafusion::logical_expr::{
-    col, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
-    Volatility,
-};
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::{col, Expr, Extension, LogicalPlan, Volatility};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
-    Statistics,
-};
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
@@ -83,19 +64,16 @@ use delta_kernel::table_configuration::TableConfiguration;
 use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
-use object_store::ObjectMeta;
-use serde::{Deserialize, Serialize};
-
 use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use crate::delta_datafusion::table_provider::DeltaScanWire;
+use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{
     Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
 };
 use crate::logstore::{LogStore, LogStoreRef};
-use crate::table::builder::ensure_table_uri;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
@@ -108,11 +86,14 @@ pub mod expr;
 pub mod logical;
 pub mod physical;
 pub mod planner;
+mod schema_adapter;
+mod table_provider;
 
 use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
-pub use cdf::scan::DeltaCdfTableProvider;
 
-mod schema_adapter;
+pub use cdf::scan::DeltaCdfTableProvider;
+pub(crate) use table_provider::DeltaScanBuilder;
+pub use table_provider::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -1253,56 +1234,6 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
     }
 }
 
-fn partitioned_file_from_action(
-    action: &Add,
-    partition_columns: &[String],
-    schema: &ArrowSchema,
-) -> PartitionedFile {
-    let partition_values = partition_columns
-        .iter()
-        .map(|part| {
-            action
-                .partition_values
-                .get(part)
-                .map(|val| {
-                    schema
-                        .field_with_name(part)
-                        .map(|field| match val {
-                            Some(value) => to_correct_scalar_value(
-                                &serde_json::Value::String(value.to_string()),
-                                field.data_type(),
-                            )
-                            .unwrap_or(Some(ScalarValue::Null))
-                            .unwrap_or(ScalarValue::Null),
-                            None => get_null_of_arrow_type(field.data_type())
-                                .unwrap_or(ScalarValue::Null),
-                        })
-                        .unwrap_or(ScalarValue::Null)
-                })
-                .unwrap_or(ScalarValue::Null)
-        })
-        .collect::<Vec<_>>();
-
-    let ts_secs = action.modification_time / 1000;
-    let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified = Utc.from_utc_datetime(
-        &DateTime::from_timestamp(ts_secs, ts_ns as u32)
-            .unwrap()
-            .naive_utc(),
-    );
-    PartitionedFile {
-        object_meta: ObjectMeta {
-            last_modified,
-            ..action.try_into().unwrap()
-        },
-        partition_values,
-        range: None,
-        extensions: None,
-        statistics: None,
-        metadata_size_hint: None,
-    }
-}
-
 fn parse_date(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
@@ -1694,9 +1625,11 @@ impl TableProviderFactory for DeltaTableFactory {
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let provider = if cmd.options.is_empty() {
-            open_table(cmd.to_owned().location).await?
+            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            open_table(table_url).await?
         } else {
-            open_table_with_storage_options(cmd.to_owned().location, cmd.to_owned().options).await?
+            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
         Ok(Arc::new(provider))
     }
@@ -2098,9 +2031,9 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow_array::cast::AsArray;
     use bytes::Bytes;
-    use chrono::{TimeZone, Utc};
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::datasource::physical_plan::FileScanConfig;
+    use datafusion::config::TableParquetOptions;
+    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
@@ -2109,12 +2042,13 @@ mod tests {
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use futures::{stream::BoxStream, StreamExt};
+    use object_store::ObjectMeta;
     use object_store::{
         path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use serde_json::json;
-    use std::fmt::{Debug, Display, Formatter};
+    use std::fmt::{self, Debug, Display, Formatter};
     use std::ops::{Deref, Range};
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -2192,48 +2126,6 @@ mod tests {
             let scalar = to_correct_scalar_value(raw, data_type).unwrap().unwrap();
             assert_eq!(*ref_scalar, scalar)
         }
-    }
-
-    #[test]
-    fn test_partitioned_file_from_action() {
-        let mut partition_values = std::collections::HashMap::new();
-        partition_values.insert("month".to_string(), Some("1".to_string()));
-        partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = Add {
-            path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
-            size: 10644,
-            partition_values,
-            modification_time: 1660497727833,
-            data_change: true,
-            stats: None,
-            deletion_vector: None,
-            tags: None,
-            base_row_id: None,
-            default_row_commit_version: None,
-            clustering_provider: None,
-        };
-        let schema = ArrowSchema::new(vec![
-            Field::new("year", ArrowDataType::Int64, true),
-            Field::new("month", ArrowDataType::Int64, true),
-        ]);
-
-        let part_columns = vec!["year".to_string(), "month".to_string()];
-        let file = partitioned_file_from_action(&action, &part_columns, &schema);
-        let ref_file = PartitionedFile {
-            object_meta: object_store::ObjectMeta {
-                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()),
-                last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
-                size: 10644,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
-            range: None,
-            extensions: None,
-            statistics: None,
-            metadata_size_hint: None,
-        };
-        assert_eq!(file.partition_values, ref_file.partition_values)
     }
 
     #[tokio::test]
@@ -2440,9 +2332,11 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table = crate::open_table("../test/tests/data/delta-2.2.0-partitioned-types")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         let config = DeltaScanConfigBuilder::new()
             .with_file_column_name(&"file_source")
             .build(table.snapshot().unwrap())
@@ -3014,9 +2908,11 @@ mod tests {
         //
         // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
         // datafusion rejected.
-        let table = crate::open_table("../test/tests/data/delta-2.2.0-partitioned-types")
-            .await
+        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
+            .canonicalize()
             .unwrap();
+        let table_url = url::Url::from_directory_path(table_path).unwrap();
+        let table = crate::open_table(table_url).await.unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
 
@@ -3210,7 +3106,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             location: &Path,
-            opts: PutMultipartOpts,
+            opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             self.inner.put_multipart_opts(location, opts).await
         }

@@ -2503,3 +2503,27 @@ def test_polars_write_array(tmp_path: pathlib.Path):
         df,
         mode="overwrite",
     )
+
+
+@pytest.mark.polars
+def test_tilde_path_works_with_writes():
+    import os
+    import shutil
+    import uuid
+
+    import polars as pl
+    import polars.testing as pl_testing
+
+    df = pl.DataFrame({"num": [1, 2, 3], "letter": ["a", "b", "c"]})
+
+    unique_id = str(uuid.uuid4())[:8]
+    tilde_path = f"~/tmp_delta_test_{unique_id}"
+
+    try:
+        df.write_delta(tilde_path)
+        df_read = pl.read_delta(tilde_path)
+        pl_testing.assert_frame_equal(df, df_read)
+    finally:
+        expanded_path = os.path.expanduser(tilde_path)
+        if os.path.exists(expanded_path):
+            shutil.rmtree(expanded_path)

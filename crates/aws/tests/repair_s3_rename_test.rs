@@ -15,6 +15,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use url::Url;
 
 mod common;
 use common::*;
@@ -115,7 +116,9 @@ fn create_s3_backend(
     pause_del: Option<Path>,
 ) -> (Arc<S3StorageBackend>, Arc<Mutex<bool>>) {
     let pause_until_true = Arc::new(Mutex::new(false));
-    let store = DeltaTableBuilder::from_uri(context.root_uri())
+    let table_uri = Url::parse(&context.root_uri()).unwrap();
+    let store = DeltaTableBuilder::from_uri(table_uri)
+        .unwrap()
         .with_allow_http(true)
         .build_storage()
         .unwrap()

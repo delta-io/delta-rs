@@ -36,3 +36,5 @@ runs:
         components: rustfmt, clippy
 
     - uses: Swatinem/rust-cache@v2
+      with:
+        cache-targets: false

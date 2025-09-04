@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.28.0"
+version = "0.28.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -63,6 +63,7 @@ async-trait = { workspace = true }
 tempfile = "3.21.0"
 parquet-key-management = { version = "0.3.0", features = ["_test_utils"] }
 uuid = { workspace = true, features = ["v4"] }
+url = { workspace = true }
 
 [[example]]
 name = "basic_operations"
@@ -82,3 +83,6 @@ required-features = ["datafusion"]
 
 [[example]]
 name = "recordbatch-writer"
+
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-glue"]

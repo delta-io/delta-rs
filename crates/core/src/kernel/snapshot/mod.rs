@@ -313,7 +313,8 @@ impl Snapshot {
             .as_str(),
         );
 
-        let dummy_url = url::Url::parse("memory:///").unwrap();
+        let dummy_url = url::Url::parse("memory:///")
+            .map_err(|e| DeltaTableError::InvalidTableLocation(format!("memory:///: {}", e)))?;
         let mut commit_files = Vec::new();
         for meta in store
             .list_with_offset(Some(&log_root), &start_from)
@@ -416,6 +417,25 @@ impl Snapshot {
             .await
             .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(version)
+    }
+
+    /// Fetch the [domainMetadata] for a specific domain in this snapshot.
+    ///
+    /// This returns the latest configuration for the domain, or None if the domain does not exist.
+    ///
+    /// [domainMetadata]: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#domain-metadata
+    pub async fn domain_metadata(
+        &self,
+        log_store: &dyn LogStore,
+        domain: impl ToString,
+    ) -> DeltaResult<Option<String>> {
+        let engine = log_store.engine(None);
+        let inner = self.inner.clone();
+        let domain = domain.to_string();
+        let metadata = spawn_blocking(move || inner.get_domain_metadata(&domain, engine.as_ref()))
+            .await
+            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        Ok(metadata)
     }
 }
 
@@ -553,12 +573,6 @@ impl EagerSnapshot {
         LogDataHandler::new(&self.files, self.snapshot.table_configuration())
     }
 
-    /// Get the number of files in the snapshot
-    #[deprecated = "Count any of the file-like iterators instead."]
-    pub fn files_count(&self) -> usize {
-        self.files.num_rows()
-    }
-
     /// Stream the active files in the snapshot
     ///
     /// This function returns a stream of [`LogicalFileView`] objects,
@@ -639,9 +653,7 @@ impl EagerSnapshot {
         } else {
             self.files.clone()
         };
-        let iter = (0..data.num_rows())
-            .into_iter()
-            .map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
+        let iter = (0..data.num_rows()).map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
         futures::stream::iter(iter).boxed()
     }
 
@@ -654,6 +666,14 @@ impl EagerSnapshot {
         self.snapshot
             .application_transaction_version(log_store, app_id.to_string())
             .await
+    }
+
+    pub async fn domain_metadata(
+        &self,
+        log_store: &dyn LogStore,
+        domain: impl ToString,
+    ) -> DeltaResult<Option<String>> {
+        self.snapshot.domain_metadata(log_store, domain).await
     }
 }
 
@@ -708,7 +728,7 @@ mod tests {
     // }
 
     async fn test_snapshot() -> TestResult {
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
         let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
 
@@ -751,7 +771,7 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
-        let log_store = TestTables::Checkpoints.table_builder().build_storage()?;
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
             let snapshot = Snapshot::try_new(&log_store, Default::default(), Some(version)).await?;
@@ -767,7 +787,7 @@ mod tests {
     }
 
     async fn test_eager_snapshot() -> TestResult {
-        let log_store = TestTables::Simple.table_builder().build_storage()?;
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
         let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
 
@@ -779,7 +799,7 @@ mod tests {
         let expected: StructType = serde_json::from_str(schema_string)?;
         assert_eq!(snapshot.schema(), &expected);
 
-        let log_store = TestTables::Checkpoints.table_builder().build_storage()?;
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
             let snapshot =

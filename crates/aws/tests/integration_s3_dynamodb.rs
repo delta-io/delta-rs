@@ -10,13 +10,13 @@ use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
+use deltalake_core::ensure_table_uri;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::{commit_uri_from_version, StorageConfig};
 use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::table::builder::ensure_table_uri;
 use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
 use object_store::path::Path;
@@ -361,7 +361,9 @@ pub struct Worker {
 
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
-        let table = DeltaTableBuilder::from_uri(path)
+        let table_uri = Url::parse(path).unwrap();
+        let table = DeltaTableBuilder::from_uri(table_uri)
+            .unwrap()
             .with_allow_http(true)
             .with_storage_options(OPTIONS.clone())
             .load()
@@ -452,7 +454,9 @@ async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestRe
         DataType::Primitive(PrimitiveType::Integer),
         true,
     )]);
-    let table = DeltaTableBuilder::from_uri(&table_uri)
+    let table_url = Url::parse(&table_uri).unwrap();
+    let table = DeltaTableBuilder::from_uri(table_url)
+        .unwrap()
         .with_allow_http(true)
         .with_storage_options(OPTIONS.clone())
         .build()?;

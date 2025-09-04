@@ -19,6 +19,7 @@ use tracing::debug;
 
 use super::async_utils::AsyncShareableBuffer;
 use crate::crate_version;
+
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
@@ -522,7 +523,7 @@ mod tests {
     use crate::logstore::tests::flatten_list_stream as list;
     use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::*;
-    use crate::DeltaTableBuilder;
+    use crate::{ensure_table_uri, DeltaTableBuilder};
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use std::sync::Arc;
@@ -576,7 +577,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_partition() {
-        let log_store = DeltaTableBuilder::from_uri("memory:///")
+        let log_store = DeltaTableBuilder::from_uri(url::Url::parse("memory:///").unwrap())
+            .unwrap()
             .build_storage()
             .unwrap();
         let object_store = log_store.object_store(None);
@@ -608,7 +610,8 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory:///")
+        let object_store = DeltaTableBuilder::from_uri(url::Url::parse("memory:///").unwrap())
+            .unwrap()
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -639,7 +642,8 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory:///")
+        let object_store = DeltaTableBuilder::from_uri(url::Url::parse("memory:///").unwrap())
+            .unwrap()
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -666,7 +670,8 @@ mod tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
 
-        let object_store = DeltaTableBuilder::from_uri("memory:///")
+        let object_store = DeltaTableBuilder::from_uri(url::Url::parse("memory:///").unwrap())
+            .unwrap()
             .build_storage()
             .unwrap()
             .object_store(None);
@@ -682,7 +687,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_mismatched_schema() {
-        let log_store = DeltaTableBuilder::from_uri("memory:///")
+        let log_store = DeltaTableBuilder::from_uri(url::Url::parse("memory:///").unwrap())
+            .unwrap()
             .build_storage()
             .unwrap();
         let object_store = log_store.object_store(None);

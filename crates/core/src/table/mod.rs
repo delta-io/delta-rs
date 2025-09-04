@@ -296,17 +296,6 @@ impl DeltaTable {
             .collect())
     }
 
-    /// Returns an iterator of file names present in the loaded state
-    #[inline]
-    #[deprecated = "Use `snapshot()?.file_paths_iter()` instead"]
-    pub fn get_files_iter(&self) -> DeltaResult<impl Iterator<Item = Path> + '_> {
-        Ok(self
-            .state
-            .as_ref()
-            .ok_or(DeltaTableError::NotInitialized)?
-            .file_paths_iter())
-    }
-
     /// Returns a URIs for all active files present in the current table version.
     pub fn get_file_uris(&self) -> DeltaResult<impl Iterator<Item = String> + '_> {
         Ok(self
@@ -315,12 +304,6 @@ impl DeltaTable {
             .ok_or(DeltaTableError::NotInitialized)?
             .file_paths_iter()
             .map(|path| self.log_store.to_uri(&path)))
-    }
-
-    /// Get the number of files in the table - returns 0 if no metadata is loaded
-    #[deprecated = "Count any of the file-like iterators on `snapshot()` instead."]
-    pub fn get_files_count(&self) -> usize {
-        self.state.as_ref().map(|s| s.files_count()).unwrap_or(0)
     }
 
     /// Returns the currently loaded state snapshot.

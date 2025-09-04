@@ -775,6 +775,7 @@ impl std::future::IntoFuture for WriteBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ensure_table_uri;
     use crate::logstore::get_actions;
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::{collect_sendable_stream, DeltaOps};
@@ -1426,9 +1427,11 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
             .unwrap();
 
-        let ops = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
-            .await
-            .unwrap();
+        let ops = DeltaOps::try_from_uri(
+            ensure_table_uri(tmp_path.as_os_str().to_str().unwrap()).unwrap(),
+        )
+        .await
+        .unwrap();
 
         let _table = ops
             .write([batch.clone()])
@@ -1438,9 +1441,8 @@ mod tests {
         let write_metrics: WriteMetrics = get_write_metrics(_table.clone()).await;
         assert_common_write_metrics(write_metrics);
 
-        let table = crate::open_table(tmp_path.as_os_str().to_str().unwrap())
-            .await
-            .unwrap();
+        let table_uri = url::Url::from_directory_path(&tmp_path).unwrap();
+        let table = crate::open_table(table_uri).await.unwrap();
         let (_table, stream) = DeltaOps(table).load().await.unwrap();
         let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
 

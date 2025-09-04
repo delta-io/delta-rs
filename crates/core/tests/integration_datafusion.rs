@@ -31,7 +31,7 @@ use deltalake_core::operations::write::SchemaMode;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
-    open_table,
+    ensure_table_uri, open_table,
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
@@ -128,7 +128,7 @@ mod local {
         let table_uri = table_path.to_str().unwrap().to_string();
         let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
-        let mut table = DeltaOps::try_from_uri(table_uri)
+        let mut table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
             .await
             .unwrap()
             .create()
@@ -183,9 +183,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-0.8.0-partitioned")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0-partitioned")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx
@@ -229,7 +236,15 @@ mod local {
     async fn test_datafusion_optimize_stats_partitioned_pushdown() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(2);
         let ctx = SessionContext::new_with_config(config);
-        let table = open_table("../test/tests/data/http_requests").await?;
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/http_requests")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
         ctx.register_table("http_requests", Arc::new(table.clone()))?;
 
         let sql = "SELECT COUNT(*) as num_events FROM http_requests WHERE date > '2023-04-13'";
@@ -258,7 +273,15 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_query_partitioned_pushdown() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-0.8.0-partitioned").await?;
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0-partitioned")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
         ctx.register_table("demo", Arc::new(table.clone()))?;
 
         let pruning_predicates = [
@@ -333,7 +356,15 @@ mod local {
         use datafusion::prelude::*;
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let table = open_table("../test/tests/data/delta-0.8.0").await?;
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
 
         // Simple Equality test, we only exercise the limit in this test
         let e = col("value").eq(lit(2));
@@ -361,7 +392,15 @@ mod local {
         // We want to emulate that this occurs on another node, so that all we have access to is the
         // plan byte serialization.
         let source_scan_bytes = {
-            let source_table = open_table("../test/tests/data/delta-0.8.0-date").await?;
+            let source_table = open_table(
+                url::Url::from_directory_path(
+                    std::path::Path::new("../test/tests/data/delta-0.8.0-date")
+                        .canonicalize()
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .await?;
 
             let target_provider = provider_as_source(Arc::new(source_table));
             let source =
@@ -421,9 +460,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-0.8.0-date")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0-date")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
@@ -443,7 +489,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
         // Validate a table that contains statistics for all files
-        let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Exact(4));
@@ -481,7 +536,16 @@ mod local {
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate a table that does not contain column statistics
-        let table = open_table("../test/tests/data/delta-0.2.0").await.unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.2.0")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Absent);
@@ -1041,9 +1105,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_partitioned_types() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-2.2.0-partitioned-types")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
@@ -1090,9 +1161,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_scan_timestamps() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/table_with_edge_timestamps")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/table_with_edge_timestamps")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
@@ -1115,9 +1193,16 @@ mod local {
     #[tokio::test]
     async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/http_requests")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/http_requests")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -1146,7 +1231,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test//tests/data/http_requests")
+        let table = open_table(ensure_table_uri("../test//tests/data/http_requests").unwrap())
             .await
             .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
@@ -1179,7 +1264,16 @@ mod local {
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/issue_1374").await.unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/issue_1374")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("t", Arc::new(table))?;
 
         let batches = ctx
@@ -1214,6 +1308,9 @@ mod local {
     #[tokio::test]
     async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
         let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
+
+        std::fs::create_dir_all("./tests/data/issue-1619").unwrap();
+
         let fields: Vec<StructField> = vec![StructField::new(
             "metadata".to_string(),
             DataType::Map(Box::new(MapType::new(
@@ -1224,14 +1321,29 @@ mod local {
             true,
         )];
         let schema = StructType::new(fields);
-        let table =
-            deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let table = deltalake_core::DeltaTableBuilder::from_uri(
+            url::Url::from_directory_path(
+                std::path::Path::new("./tests/data/issue-1619")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )?
+        .build()?;
         let _ = DeltaOps::from(table)
             .create()
             .with_columns(schema.fields().cloned())
             .await?;
 
-        let mut table = open_table("./tests/data/issue-1619").await?;
+        let mut table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("./tests/data/issue-1619")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
 
         let mut writer = JsonWriter::for_table(&table).unwrap();
         writer
@@ -1301,7 +1413,9 @@ mod local {
             .await
             .unwrap();
 
-        let table = open_table(path.to_str().unwrap()).await.unwrap();
+        let table = open_table(ensure_table_uri(path.to_str().unwrap()).unwrap())
+            .await
+            .unwrap();
         let prov: Arc<dyn TableProvider> = Arc::new(table);
         ctx.register_table("test", prov).unwrap();
         let mut batches = ctx
@@ -1369,7 +1483,7 @@ async fn test_schema_adapter_empty_batch() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     // Create table with a single column
-    let table = DeltaOps::try_from_uri(table_uri)
+    let table = DeltaOps::try_from_uri(ensure_table_uri(&table_uri).unwrap())
         .await
         .unwrap()
         .create()
@@ -1452,7 +1566,7 @@ mod date_partitions {
             ),
         ];
 
-        let dt = DeltaOps::try_from_uri(table_uri)
+        let dt = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
             .await?
             .create()
             .with_columns(columns)

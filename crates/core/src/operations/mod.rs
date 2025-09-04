@@ -36,10 +36,12 @@ use self::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
+use crate::table::builder::ensure_table_uri;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
 use crate::table::file_format_options::FileFormatRef;
 use crate::DeltaTable;
+use url::Url;
 
 pub mod add_column;
 pub mod add_feature;
@@ -130,17 +132,19 @@ pub(crate) trait Operation<State>: std::future::IntoFuture {
 pub struct DeltaOps(pub DeltaTable);
 
 impl DeltaOps {
-    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri.
+    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given URL.
     ///
     /// ```
     /// use deltalake_core::DeltaOps;
+    /// use url::Url;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri("memory:///").await.unwrap();
+    ///     let url = Url::parse("memory:///").unwrap();
+    ///     let ops = DeltaOps::try_from_uri(url).await.unwrap();
     /// };
     /// ```
-    pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri).build()?;
+    pub async fn try_from_uri(uri: Url) -> DeltaResult<Self> {
+        let mut table = DeltaTableBuilder::from_uri(uri)?.build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),
@@ -149,12 +153,27 @@ impl DeltaOps {
         }
     }
 
-    /// try from uri with storage options
+    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri string (deprecated).
+    ///
+    /// ```
+    /// use deltalake_core::DeltaOps;
+    ///
+    /// async {
+    ///     let ops = DeltaOps::try_from_uri_str("memory:///").await.unwrap();
+    /// };
+    /// ```
+    #[deprecated(note = "Use try_from_uri with url::Url instead")]
+    pub async fn try_from_uri_str(uri: impl AsRef<str>) -> DeltaResult<Self> {
+        let url = ensure_table_uri(uri)?;
+        Self::try_from_uri(url).await
+    }
+
+    /// Create a [`DeltaOps`] instance from URL with storage options
     pub async fn try_from_uri_with_storage_options(
-        uri: impl AsRef<str>,
+        uri: Url,
         storage_options: HashMap<String, String>,
     ) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri)
+        let mut table = DeltaTableBuilder::from_uri(uri)?
             .with_storage_options(storage_options)
             .build()?;
         // We allow for uninitialized locations, since we may want to create the table
@@ -171,6 +190,16 @@ impl DeltaOps {
         self
     }
 
+    /// Create a [`DeltaOps`] instance from uri string with storage options (deprecated)
+    #[deprecated(note = "Use try_from_uri_with_storage_options with url::Url instead")]
+    pub async fn try_from_uri_str_with_storage_options(
+        uri: impl AsRef<str>,
+        storage_options: HashMap<String, String>,
+    ) -> DeltaResult<Self> {
+        let url = ensure_table_uri(uri)?;
+        Self::try_from_uri_with_storage_options(url, storage_options).await
+    }
+
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
     ///
     /// Using this will not persist any changes beyond the lifetime of the table object.
@@ -183,7 +212,9 @@ impl DeltaOps {
     /// ```
     #[must_use]
     pub fn new_in_memory() -> Self {
-        DeltaTableBuilder::from_uri("memory:///")
+        let url = Url::parse("memory:///").unwrap();
+        DeltaTableBuilder::from_uri(url)
+            .unwrap()
             .build()
             .unwrap()
             .into()
@@ -195,7 +226,7 @@ impl DeltaOps {
     /// use deltalake_core::DeltaOps;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri("memory:///").await.unwrap();
+    ///     let ops = DeltaOps::try_from_uri(url::Url::parse("memory://").unwrap()).await.unwrap();
     ///     let table = ops.create().with_table_name("my_table").await.unwrap();
     ///     assert_eq!(table.version(), Some(0));
     /// };

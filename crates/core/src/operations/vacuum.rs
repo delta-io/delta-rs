@@ -524,12 +524,17 @@ mod tests {
     use object_store::{local::LocalFileSystem, memory::InMemory, PutPayload};
 
     use super::*;
-    use crate::{checkpoints::create_checkpoint, open_table};
+    use crate::{checkpoints::create_checkpoint, ensure_table_uri, open_table};
+    use std::path::Path;
     use std::{io::Read, time::SystemTime};
+    use url::Url;
 
     #[tokio::test]
     async fn test_vacuum_full() -> DeltaResult<()> {
-        let table = open_table("../test/tests/data/simple_commit").await?;
+        let table_path = Path::new("../test/tests/data/simple_commit");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = open_table(table_uri).await?;
 
         let (_table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
             .with_retention_period(Duration::hours(0))
@@ -569,7 +574,8 @@ mod tests {
     #[tokio::test]
     async fn test_vacuum_keep_version_sanity_check() -> DeltaResult<()> {
         let table_loc = "../test/tests/data/simple_table";
-        let table = open_table(table_loc).await?;
+        let table_uri = ensure_table_uri(table_loc).unwrap();
+        let table = open_table(table_uri).await?;
         let versions_to_keep = vec![3];
 
         // First, vacuum without keeping any particular versions
@@ -605,7 +611,8 @@ mod tests {
     #[tokio::test]
     async fn test_vacuum_keep_version_add_removes() -> DeltaResult<()> {
         let table_loc = "../test/tests/data/simple_table";
-        let table = open_table(table_loc).await?;
+        let table_uri = ensure_table_uri(table_loc).unwrap();
+        let table = open_table(table_uri).await?;
         let versions_to_keep = vec![2, 3];
 
         // First, vacuum without keeping any particular versions
@@ -656,56 +663,68 @@ mod tests {
     // that the table is still functional, can be read, checkpointed, etc.
     #[cfg(feature = "datafusion")]
     #[tokio::test]
-    async fn test_vacuum_keep_version_validity() -> DeltaResult<()> {
+    async fn test_vacuum_keep_version_validity() {
         use datafusion::prelude::SessionContext;
         use object_store::GetResultPayload;
         let store = InMemory::new();
-        let source = LocalFileSystem::new_with_prefix("../test/tests/data/simple_table")?;
+        let source = LocalFileSystem::new_with_prefix("../test/tests/data/simple_table").unwrap();
         let mut stream = source.list(None);
 
         while let Some(Ok(entity)) = stream.next().await {
             let mut contents = vec![];
-            match source.get(&entity.location).await?.payload {
+            match source.get(&entity.location).await.unwrap().payload {
                 GetResultPayload::File(mut fd, _path) => {
-                    fd.read_to_end(&mut contents)?;
+                    fd.read_to_end(&mut contents).unwrap();
                 }
                 _ => panic!("We should only be dealing in files!"),
             }
             let content = bytes::Bytes::from(contents);
             store
                 .put(&entity.location, PutPayload::from_bytes(content))
-                .await?;
+                .await
+                .unwrap();
         }
 
-        let mut table = crate::DeltaTableBuilder::from_valid_uri("memory:///")?
+        let mut table = crate::DeltaTableBuilder::from_valid_uri("memory:///")
+            .unwrap()
             .with_storage_backend(Arc::new(store), url::Url::parse("memory:///").unwrap())
-            .build()?;
-        table.load().await?;
+            .build()
+            .unwrap();
+        table.load().await.unwrap();
 
-        let (mut table, result) = VacuumBuilder::new(table.log_store(), table.snapshot()?.clone())
-            .with_retention_period(Duration::hours(0))
-            .with_keep_versions(&[2, 3])
-            .with_mode(VacuumMode::Full)
-            .with_enforce_retention_duration(false)
-            .await?;
+        let (mut table, result) =
+            VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())
+                .with_retention_period(Duration::hours(0))
+                .with_keep_versions(&[2, 3])
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .await
+                .unwrap();
         // Our simple_table has 32 data files in it, and we shouldn't have deleted them all!
         assert_ne!(32, result.files_deleted.len());
 
         // Can we checkpoint it?
-        create_checkpoint(&table, None).await?;
-        table.load().await?;
+        create_checkpoint(&table, None).await.unwrap();
+        table.load().await.unwrap();
         assert_eq!(Some(6), table.version());
 
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table))?;
-        let batches = ctx.sql("SELECT * FROM test").await?.collect().await?;
-
-        Ok(())
+        ctx.register_table("test", Arc::new(table)).unwrap();
+        let _batches = ctx
+            .sql("SELECT * FROM test")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn vacuum_delta_8_0_table() -> DeltaResult<()> {
-        let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
+        let table_path = Path::new("../test/tests/data/delta-0.8.0");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = open_table(table_uri).await.unwrap();
 
         let result = VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())
             .with_retention_period(Duration::hours(1))
@@ -714,7 +733,10 @@ mod tests {
 
         assert!(result.is_err());
 
-        let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
+        let table_path = Path::new("../test/tests/data/delta-0.8.0");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = open_table(table_uri).await.unwrap();
 
         let (table, result) =
             VacuumBuilder::new(table.log_store(), table.snapshot().unwrap().clone())

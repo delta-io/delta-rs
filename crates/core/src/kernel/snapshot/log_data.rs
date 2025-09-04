@@ -9,6 +9,7 @@ use indexmap::IndexMap;
 
 use super::super::scalars::ScalarExt;
 use super::iterators::LogicalFileView;
+
 use crate::kernel::arrow::extract::extract_and_cast;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -382,7 +383,7 @@ mod datafusion {
             };
             let evaluator = ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
-                expression,
+                expression.into(),
                 field.data_type().clone(),
             );
 
@@ -447,7 +448,7 @@ mod datafusion {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
                 ARROW_HANDLER.new_expression_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column(["add", "stats_parsed", "numRecords"]),
+                    Expression::column(["add", "stats_parsed", "numRecords"]).into(),
                     DataType::Primitive(PrimitiveType::Long),
                 )
             });
@@ -519,8 +520,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {
-        let table_uri = "../test/tests/data/delta-1.2.1-only-struct-stats";
-        let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
+        let table_uri =
+            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_from_struct_stats = crate::open_table(table_uri.clone()).await.unwrap();
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
         let log_store = table_from_struct_stats.log_store();
 
@@ -576,7 +579,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
     async fn df_stats_delta_1_2_1_struct_stats_table() {
-        let table_uri = "../test/tests/data/delta-1.2.1-only-struct-stats";
+        let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
+        let table_uri =
+            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
 
         let file_stats = table_from_struct_stats
