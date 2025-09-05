@@ -70,10 +70,6 @@ name = "basic_operations"
 required-features = ["datafusion"]
 
 [[example]]
-name = "basic_operations_encryption"
-required-features = ["datafusion"]
-
-[[example]]
 name = "basic_operations_kms_encryption"
 required-features = ["datafusion"]
 

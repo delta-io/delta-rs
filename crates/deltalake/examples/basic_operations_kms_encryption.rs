@@ -93,56 +93,6 @@ fn get_table_batches() -> RecordBatch {
     .unwrap()
 }
 
-struct KmsFileFormatOptions {
-    table_encryption: TableEncryption,
-    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
-    encryption_factory_id: String,
-}
-
-impl KmsFileFormatOptions {
-    fn new(table_encryption: TableEncryption) -> Self {
-        let encryption_factory_id = format!("delta-{}", Uuid::new_v4().to_string());
-        let writer_properties_factory = Arc::new(KMSWriterPropertiesFactory::with_encryption(
-            table_encryption.clone(),
-        ));
-        Self {
-            table_encryption,
-            writer_properties_factory,
-            encryption_factory_id,
-        }
-    }
-}
-
-impl Debug for KmsFileFormatOptions {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KmsFileFormatOptions")
-            .finish_non_exhaustive()
-    }
-}
-
-impl FileFormatOptions for KmsFileFormatOptions {
-    fn table_options(&self) -> TableOptions {
-        let mut table_options = TableOptions::default();
-        table_options.parquet.crypto.factory_id = Some(self.encryption_factory_id.clone());
-        table_options.parquet.crypto.factory_options =
-            self.table_encryption.configuration().clone();
-        table_options
-    }
-
-    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
-        Arc::clone(&self.writer_properties_factory)
-    }
-
-    fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        // Ensure DataFusion has the encryption factory registered
-        session.runtime_env().register_parquet_encryption_factory(
-            &self.encryption_factory_id,
-            Arc::clone(self.table_encryption.encryption_factory()),
-        );
-        Ok(())
-    }
-}
-
 async fn ops_with_crypto(
     uri: &str,
     file_format_options: &FileFormatRef,
@@ -353,7 +303,7 @@ async fn checkpoint_table(
     Ok(())
 }
 
-async fn round_trip_test(file_format_options: Arc<dyn FileFormatOptions>) -> Result<(), deltalake::errors::DeltaTableError> {
+async fn round_trip_test(file_format_options: FileFormatRef) -> Result<(), deltalake::errors::DeltaTableError> {
     let temp_dir = TempDir::new()?;
     let uri = temp_dir.path().to_str().unwrap();
 
@@ -372,7 +322,7 @@ async fn round_trip_test(file_format_options: Arc<dyn FileFormatOptions>) -> Res
     Ok(())
 }
 
-fn plain_crypto_format() -> Result<Arc<dyn FileFormatOptions>, DeltaTableError> {
+fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let key: Vec<_> = b"1234567890123450".to_vec();
     let _wrong_key: Vec<_> = b"9234567890123450".to_vec(); // Can use to check encryption
 
@@ -392,11 +342,11 @@ fn plain_crypto_format() -> Result<Arc<dyn FileFormatOptions>, DeltaTableError> 
     let mut tbl_options = TableOptions::new();
     tbl_options.parquet = tpo;
     tbl_options.current_format = Some(ConfigFileType::PARQUET);
-    let file_format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options)) as Arc<dyn FileFormatOptions>;
+    let file_format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options)) as FileFormatRef;
     Ok(file_format_options)
 
 }
-fn kms_crypto_format() -> Result<Arc<dyn FileFormatOptions>, DeltaTableError> {
+fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
 
     let kms_connection_config = Arc::new(KmsConnectionConfig::default());
@@ -412,21 +362,12 @@ fn kms_crypto_format() -> Result<Arc<dyn FileFormatOptions>, DeltaTableError> {
     let table_encryption =
         TableEncryption::new_with_extension_options(encryption_factory, &kms_options)?;
 
-    let file_format_options = Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as Arc<dyn FileFormatOptions>;
+    let file_format_options = Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as FileFormatRef;
     Ok(file_format_options)
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), DeltaTableError> {
-    println!("====================");
-    println!("Begin KMS encryption test");
-    println!("");
-    let file_format_options = kms_crypto_format()?;
-    round_trip_test(file_format_options).await?;
-    println!("End KMS encryption test");
-    println!("====================");
-    println!("\n\n");
-    
     println!("====================");
     println!("Begin Plain encryption test");
     println!("");
@@ -434,7 +375,72 @@ async fn main() -> Result<(), DeltaTableError> {
     round_trip_test(file_format_options).await?;
     println!("End Plain encryption test");
     println!("====================");
+
+    println!("\n\n");
+    println!("====================");
+    println!("Begin KMS encryption test");
+    println!("");
+    let file_format_options = kms_crypto_format()?;
+    round_trip_test(file_format_options).await?;
+    println!("End KMS encryption test");
+    println!("====================");
+
     Ok(())
+}
+
+
+// -------------------------------------------------------------------------------------------------
+// An example of FileFormatOptions that uses the KMS encryption factory.
+// -------------------------------------------------------------------------------------------------
+
+struct KmsFileFormatOptions {
+    table_encryption: TableEncryption,
+    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    encryption_factory_id: String,
+}
+
+impl KmsFileFormatOptions {
+    fn new(table_encryption: TableEncryption) -> Self {
+        let encryption_factory_id = format!("delta-{}", Uuid::new_v4().to_string());
+        let writer_properties_factory = Arc::new(KMSWriterPropertiesFactory::with_encryption(
+            table_encryption.clone(),
+        ));
+        Self {
+            table_encryption,
+            writer_properties_factory,
+            encryption_factory_id,
+        }
+    }
+}
+
+impl Debug for KmsFileFormatOptions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KmsFileFormatOptions")
+            .finish_non_exhaustive()
+    }
+}
+
+impl FileFormatOptions for KmsFileFormatOptions {
+    fn table_options(&self) -> TableOptions {
+        let mut table_options = TableOptions::default();
+        table_options.parquet.crypto.factory_id = Some(self.encryption_factory_id.clone());
+        table_options.parquet.crypto.factory_options =
+            self.table_encryption.configuration().clone();
+        table_options
+    }
+
+    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
+        Arc::clone(&self.writer_properties_factory)
+    }
+
+    fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
+        // Ensure DataFusion has the encryption factory registered
+        session.runtime_env().register_parquet_encryption_factory(
+            &self.encryption_factory_id,
+            Arc::clone(self.table_encryption.encryption_factory()),
+        );
+        Ok(())
+    }
 }
 
 // -------------------------------------------------------------------------------------------------

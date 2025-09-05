@@ -270,8 +270,8 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// Set the parquet options to use when reading/writing parquet files in the table.
-    pub fn with_parquet_config(mut self, file_format_options: FileFormatRef) -> Self {
+    /// Set the file options to use when reading/writing individual files in the table.
+    pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
         self.file_format_options = Some(file_format_options);
         self
     }
