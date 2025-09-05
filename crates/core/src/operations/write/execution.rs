@@ -35,7 +35,9 @@ use datafusion::logical_expr::col;
 
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::{WriteError, WriterStatsConfig};
-use crate::table::file_format_options::WriterPropertiesFactory;
+use crate::table::file_format_options::{
+    FileFormatOptions, FileFormatRef, WriterPropertiesFactory,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {
@@ -204,13 +206,20 @@ pub(crate) async fn prepare_predicate_actions(
     snapshot: &DeltaTableState,
     state: SessionState,
     partition_columns: Vec<String>,
+    file_format_options: Option<&FileFormatRef>,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let candidates =
-        find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
+    let candidates = find_files(
+        snapshot,
+        log_store.clone(),
+        &state,
+        file_format_options,
+        Some(predicate.clone()),
+    )
+    .await?;
 
     let (mut actions, cdf_df) = execute_non_empty_expr(
         snapshot,

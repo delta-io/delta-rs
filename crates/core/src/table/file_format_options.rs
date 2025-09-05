@@ -88,26 +88,7 @@ pub fn state_with_file_format_options(
     if let Some(ffo) = file_format_options {
         ffo.update_session(&state)?;
     }
-    // Convert file format options to parquet options and delegate to the common implementation
-    let parquet_options = to_table_parquet_options_from_ffo(file_format_options);
-    Ok(state_with_parquet_options(state, parquet_options.as_ref()))
-}
-
-#[cfg(feature = "datafusion")]
-pub fn state_with_parquet_options(
-    state: SessionState,
-    parquet_options: Option<&TableParquetOptions>,
-) -> SessionState {
-    if let Some(parquet) = parquet_options {
-        let mut sb = SessionStateBuilder::new_from_existing(state.clone());
-        let mut tbl_opts = TableOptions::new();
-        tbl_opts.parquet = parquet.clone();
-        tbl_opts.set_config_format(ConfigFileType::PARQUET);
-        sb = sb.with_table_options(tbl_opts);
-        let state = sb.build();
-        return state;
-    }
-    state
+    Ok(state)
 }
 
 #[cfg(feature = "datafusion")]

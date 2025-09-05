@@ -667,6 +667,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 snapshot,
                                 state.clone(),
                                 partition_columns.clone(),
+                                this.file_format_options.as_ref(),
                                 this.writer_properties_factory.clone(),
                                 deletion_timestamp,
                                 writer_stats_config.clone(),
