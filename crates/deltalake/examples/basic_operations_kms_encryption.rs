@@ -1,29 +1,21 @@
 use async_trait::async_trait;
-use parquet_key_management::crypto_factory::{
-    CryptoFactory, DecryptionConfiguration, EncryptionConfiguration,
-};
-use parquet_key_management::kms::KmsConnectionConfig;
-use parquet_key_management::test_kms::TestKmsClientFactory;
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::time::Duration;
-use std::{fs, path::PathBuf, sync::Arc};
-use tempfile::TempDir;
-use url::Url;
-use deltalake::arrow::datatypes::SchemaRef;
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
-    datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
+    datatypes::{
+        DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, SchemaRef, TimeUnit,
+    },
     record_batch::RecordBatch,
 };
-use deltalake::datafusion::catalog::Session;
-use deltalake::datafusion::common::{extensions_options, DataFusionError};
-use deltalake::datafusion::config::{ConfigEntry, ConfigField, ConfigFileType, EncryptionFactoryOptions, ExtensionOptions, TableOptions, TableParquetOptions};
-use deltalake::datafusion::execution::parquet_encryption::EncryptionFactory;
 use deltalake::datafusion::{
     assert_batches_sorted_eq,
+    catalog::Session,
+    common::{extensions_options, DataFusionError},
+    config::{
+        ConfigEntry, ConfigFileType, EncryptionFactoryOptions, ExtensionOptions,
+        TableOptions, TableParquetOptions,
+    },
     dataframe::DataFrame,
+    execution::parquet_encryption::EncryptionFactory,
     logical_expr::{col, lit},
     prelude::SessionContext,
 };
@@ -34,11 +26,30 @@ use deltalake::parquet::encryption::{
 };
 use deltalake::{arrow, parquet, DeltaOps};
 use deltalake_core::operations::encryption::TableEncryption;
-use deltalake_core::table::file_format_options::{FileFormatOptions, FileFormatRef, KMSWriterPropertiesFactory, SimpleFileFormatOptions, WriterPropertiesFactory};
+use deltalake_core::table::file_format_options::{
+    FileFormatOptions, FileFormatRef, KMSWriterPropertiesFactory, SimpleFileFormatOptions,
+    WriterPropertiesFactory,
+};
 use deltalake_core::{
     checkpoints, datafusion::common::test_util::format_batches, operations::optimize::OptimizeType,
     DeltaResult, DeltaTable, DeltaTableError,
 };
+use parquet_key_management::{
+    crypto_factory::{CryptoFactory, DecryptionConfiguration, EncryptionConfiguration},
+    kms::KmsConnectionConfig,
+    test_kms::TestKmsClientFactory,
+};
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    fs,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
+use tempfile::TempDir;
+use url::Url;
 use uuid::Uuid;
 
 fn get_table_columns() -> Vec<StructField> {
@@ -215,7 +226,10 @@ fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
     ctx.read_batch(batch).unwrap()
 }
 
-async fn merge_table(uri: &str, file_format_options: &FileFormatRef) -> Result<(), DeltaTableError> {
+async fn merge_table(
+    uri: &str,
+    file_format_options: &FileFormatRef,
+) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, file_format_options).await?;
 
     let schema = get_table_schema();
@@ -303,7 +317,9 @@ async fn checkpoint_table(
     Ok(())
 }
 
-async fn round_trip_test(file_format_options: FileFormatRef) -> Result<(), deltalake::errors::DeltaTableError> {
+async fn round_trip_test(
+    file_format_options: FileFormatRef,
+) -> Result<(), deltalake::errors::DeltaTableError> {
     let temp_dir = TempDir::new()?;
     let uri = temp_dir.path().to_str().unwrap();
 
@@ -344,7 +360,6 @@ fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     tbl_options.current_format = Some(ConfigFileType::PARQUET);
     let file_format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options)) as FileFormatRef;
     Ok(file_format_options)
-
 }
 fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
@@ -362,7 +377,8 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let table_encryption =
         TableEncryption::new_with_extension_options(encryption_factory, &kms_options)?;
 
-    let file_format_options = Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as FileFormatRef;
+    let file_format_options =
+        Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as FileFormatRef;
     Ok(file_format_options)
 }
 
@@ -387,7 +403,6 @@ async fn main() -> Result<(), DeltaTableError> {
 
     Ok(())
 }
-
 
 // -------------------------------------------------------------------------------------------------
 // An example of FileFormatOptions that uses the KMS encryption factory.

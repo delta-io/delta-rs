@@ -49,9 +49,9 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::{Add, LogDataHandler};
 use crate::table::builder::ensure_table_uri;
+use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 use crate::DeltaTable;
 use crate::{logstore::LogStoreRef, table::state::DeltaTableState, DeltaResult, DeltaTableError};
-use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -618,7 +618,6 @@ impl DeltaTableProvider {
         self.file_format_options = file_format_options;
         self
     }
-
 
     /// Define which files to consider while building a scan, for advanced usecases
     pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
