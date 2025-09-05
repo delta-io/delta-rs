@@ -875,4 +875,9 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_delta_table_serde() {
+        assert!(true == false, "@atanase Implement me");
+    }
 }
