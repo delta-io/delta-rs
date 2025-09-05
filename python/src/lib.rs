@@ -1876,6 +1876,8 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                     // When a custom encoding is specified, dictionary encoding is automatically disabled.
                     // This is because dictionary encoding is not compatible with custom encodings.
                     properties =
+                        // When a custom encoding is specified, dictionary encoding is automatically disabled.
+                        // This is because dictionary encoding is not compatible with custom encodings.
                         properties.set_column_dictionary_enabled(column_name.clone().into(), false);
                 }
                 if let Some(bloom_filter_properties) = column_prop.bloom_filter_properties {
