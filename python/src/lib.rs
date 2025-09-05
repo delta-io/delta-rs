@@ -1873,6 +1873,8 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                         column_name.clone().into(),
                         Encoding::from_str(&encoding).map_err(|err| DeltaTableError::from(err))?,
                     );
+                    // When a custom encoding is specified, dictionary encoding is automatically disabled.
+                    // This is because dictionary encoding is not compatible with custom encodings.
                     properties =
                         properties.set_column_dictionary_enabled(column_name.clone().into(), false);
                 }

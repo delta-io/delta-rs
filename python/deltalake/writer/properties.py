@@ -144,7 +144,7 @@ class ColumnProperties:
         self.bloom_filter_properties = bloom_filter_properties
         if isinstance(encoding, str):
             if self.dictionary_enabled:
-                raise ValueError("Can not specify dictionary_enabled=True AND encoding")
+                raise ValueError("Cannot specify dictionary_enabled=True and encoding")
 
             encoding_enum = Encoding.from_str(encoding)
             if encoding_enum in [
@@ -152,7 +152,7 @@ class ColumnProperties:
                 Encoding.RLE_DICTIONARY,
             ]:
                 raise ValueError(
-                    f"Can not specify dictionary encoding {encoding}, use dictionary_enabled=True instead"
+                    f"Cannot specify dictionary encoding {encoding}, use dictionary_enabled=True instead"
                 )
             else:
                 self.encoding = encoding
