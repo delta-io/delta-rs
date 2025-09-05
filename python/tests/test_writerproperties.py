@@ -173,7 +173,7 @@ def test_column_properties_omitted_encoding_paths(
 
     dt = DeltaTable(tmp_path)
     read = dt.to_pyarrow_table()
-    # Just check if we was created or not with the column name existing
+    # Just check if it was created or not with the column name existing
     assert DeltaTable(tmp_path).version() >= 0
     assert len(DeltaTable(tmp_path).file_uris()) > 0
     assert "price" in read.column_names
