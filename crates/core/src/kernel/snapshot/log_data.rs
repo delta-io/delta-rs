@@ -242,8 +242,14 @@ mod datafusion {
                             .map(|sv| sv.to_array())
                             .collect::<Result<Vec<_>, DataFusionError>>()
                             .unwrap();
-                        let sa = StructArray::new(fields.clone(), arrays, None);
-                        Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                        // let sa = StructArray::new(fields.clone(), arrays, None);
+                        // Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                        if arrays.is_empty() {
+                            Precision::Absent
+                        } else {
+                            let sa = StructArray::new(fields.clone(), arrays, None);
+                            Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
+                        }
                     })
                     .unwrap_or(Precision::Absent),
                 _ => Precision::Absent,
