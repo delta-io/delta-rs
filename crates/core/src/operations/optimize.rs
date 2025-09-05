@@ -343,7 +343,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.optimize_type,
                 &this.snapshot,
                 this.filters,
-                this.target_size.to_owned(),
+                this.target_size,
                 this.writer_properties_factory,
             )
             .await?;
