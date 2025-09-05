@@ -51,7 +51,7 @@ use deltalake::operations::update_table_metadata::{
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
-use deltalake::parquet::basic::Compression;
+use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
@@ -1868,6 +1868,14 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                         enabled_statistics,
                     );
                 }
+                if let Some(encoding) = column_prop.encoding {
+                    properties = properties.set_column_encoding(
+                        column_name.clone().into(),
+                        Encoding::from_str(&encoding).map_err(|err| DeltaTableError::from(err))?,
+                    );
+                    properties =
+                        properties.set_column_dictionary_enabled(column_name.clone().into(), false);
+                }
                 if let Some(bloom_filter_properties) = column_prop.bloom_filter_properties {
                     if let Some(set_bloom_filter_enabled) =
                         bloom_filter_properties.set_bloom_filter_enabled
@@ -2200,6 +2208,7 @@ pub struct ColumnProperties {
     pub dictionary_enabled: Option<bool>,
     pub statistics_enabled: Option<String>,
     pub bloom_filter_properties: Option<BloomFilterProperties>,
+    pub encoding: Option<String>,
 }
 
 #[derive(FromPyObject)]
