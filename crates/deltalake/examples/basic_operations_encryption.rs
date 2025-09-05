@@ -52,6 +52,28 @@ use tempfile::TempDir;
 use url::Url;
 use uuid::Uuid;
 
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), DeltaTableError> {
+    println!("====================");
+    println!("Begin Plain encryption test");
+    println!("");
+    let file_format_options = plain_crypto_format()?;
+    round_trip_test(file_format_options).await?;
+    println!("End Plain encryption test");
+    println!("====================");
+
+    println!("\n\n");
+    println!("====================");
+    println!("Begin KMS encryption test");
+    println!("");
+    let file_format_options = kms_crypto_format()?;
+    round_trip_test(file_format_options).await?;
+    println!("End KMS encryption test");
+    println!("====================");
+
+    Ok(())
+}
+
 fn get_table_columns() -> Vec<StructField> {
     vec![
         StructField::new(
@@ -288,35 +310,6 @@ async fn optimize_table_compact(
     Ok(())
 }
 
-/*
-I guess this test isn't needed since checkpoints only summarize what files to use.
- */
-async fn checkpoint_table(
-    uri: &str,
-    file_format_options: &FileFormatRef,
-) -> Result<(), DeltaTableError> {
-    let table_location = uri;
-    let table_path = PathBuf::from(table_location);
-    let log_path = table_path.join("_delta_log");
-
-    let ops = ops_with_crypto(uri, file_format_options).await?;
-    let table: DeltaTable = ops.into();
-    let version = table.version();
-
-    // Write a checkpoint
-    checkpoints::create_checkpoint(&table, None).await.unwrap();
-
-    // checkpoint should exist
-    let filename = format!(
-        "00000000000000000{:03}.checkpoint.parquet",
-        version.unwrap()
-    );
-    let checkpoint_path = log_path.join(filename);
-    assert!(checkpoint_path.as_path().exists());
-
-    Ok(())
-}
-
 async fn round_trip_test(
     file_format_options: FileFormatRef,
 ) -> Result<(), deltalake::errors::DeltaTableError> {
@@ -330,7 +323,6 @@ async fn round_trip_test(
     // Re-create and append to table again so compact has work to do
     create_table(uri, table_name, &file_format_options).await?;
     optimize_table_compact(uri, &file_format_options).await?;
-    checkpoint_table(uri, &file_format_options).await?;
     update_table(uri, &file_format_options).await?;
     delete_from_table(uri, &file_format_options).await?;
     merge_table(uri, &file_format_options).await?;
@@ -382,27 +374,6 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     Ok(file_format_options)
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), DeltaTableError> {
-    println!("====================");
-    println!("Begin Plain encryption test");
-    println!("");
-    let file_format_options = plain_crypto_format()?;
-    round_trip_test(file_format_options).await?;
-    println!("End Plain encryption test");
-    println!("====================");
-
-    println!("\n\n");
-    println!("====================");
-    println!("Begin KMS encryption test");
-    println!("");
-    let file_format_options = kms_crypto_format()?;
-    round_trip_test(file_format_options).await?;
-    println!("End KMS encryption test");
-    println!("====================");
-
-    Ok(())
-}
 
 // -------------------------------------------------------------------------------------------------
 // An example of FileFormatOptions that uses the KMS encryption factory.
