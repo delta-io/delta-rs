@@ -237,9 +237,8 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
 }
 
 /// AI generated code to get builder from existing WriterProperties
-/// May not be right
-///
-/// Extension to construct a WriterPropertiesBuilder from existing WriterProperties
+/// Can be removed with PR to arrow-rs
+/// https://github.com/apache/arrow-rs/pull/8272
 pub trait WriterPropertiesExt {
     fn to_builder(&self) -> WriterPropertiesBuilder;
 }
