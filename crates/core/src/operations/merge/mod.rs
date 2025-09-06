@@ -37,7 +37,6 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
-use datafusion::config::TableParquetOptions;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
@@ -94,7 +93,7 @@ use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatRef,
+    state_with_file_format_options, FileFormatRef,
     WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;

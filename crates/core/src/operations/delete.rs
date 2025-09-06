@@ -32,7 +32,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
 
-use datafusion::config::TableParquetOptions;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -63,7 +62,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, to_table_parquet_options_from_ffo, FileFormatRef,
+    state_with_file_format_options, FileFormatRef,
     WriterPropertiesFactory,
 };
 use crate::table::state::DeltaTableState;

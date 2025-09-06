@@ -271,26 +271,6 @@ async fn optimize_table_compact(
     Ok(())
 }
 
-async fn round_trip_test(
-    file_format_options: FileFormatRef,
-) -> Result<(), deltalake::errors::DeltaTableError> {
-    let temp_dir = TempDir::new()?;
-    let uri = temp_dir.path().to_str().unwrap();
-
-    let table_name = "roundtrip";
-
-    create_table(uri, table_name, &file_format_options).await?;
-    optimize_table_z_order(uri, &file_format_options).await?;
-    // Re-create and append to table again so compact has work to do
-    create_table(uri, table_name, &file_format_options).await?;
-    optimize_table_compact(uri, &file_format_options).await?;
-    update_table(uri, &file_format_options).await?;
-    delete_from_table(uri, &file_format_options).await?;
-    merge_table(uri, &file_format_options).await?;
-    read_table(uri, &file_format_options).await?;
-    Ok(())
-}
-
 fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let key: Vec<_> = b"1234567890123450".to_vec();
     let _wrong_key: Vec<_> = b"9234567890123450".to_vec(); // Can use to check encryption
@@ -333,6 +313,26 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let file_format_options =
         Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as FileFormatRef;
     Ok(file_format_options)
+}
+
+async fn round_trip_test(
+    file_format_options: FileFormatRef,
+) -> Result<(), deltalake::errors::DeltaTableError> {
+    let temp_dir = TempDir::new()?;
+    let uri = temp_dir.path().to_str().unwrap();
+
+    let table_name = "roundtrip";
+
+    create_table(uri, table_name, &file_format_options).await?;
+    optimize_table_z_order(uri, &file_format_options).await?;
+    // Re-create and append to table again so compact has work to do
+    create_table(uri, table_name, &file_format_options).await?;
+    optimize_table_compact(uri, &file_format_options).await?;
+    update_table(uri, &file_format_options).await?;
+    delete_from_table(uri, &file_format_options).await?;
+    merge_table(uri, &file_format_options).await?;
+    read_table(uri, &file_format_options).await?;
+    Ok(())
 }
 
 #[tokio::main(flavor = "current_thread")]
