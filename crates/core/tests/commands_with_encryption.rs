@@ -293,6 +293,19 @@ fn full_table_data() -> Vec<&'static str> {
     ]
 }
 
+type ModifyFn = for<'a> fn(uri: &'a str, file_format_options: &'a FileFormatRef) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeltaTableError>> + Send + 'a>>;
+
+async fn run_modify_test(file_format_options: FileFormatRef, modifier: ModifyFn, expected: Vec<String>) {
+    let temp_dir = TempDir::new().unwrap();
+    let uri = temp_dir.path().to_str().unwrap();
+    let table_name = "test";
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    modifier(uri, &file_format_options).await.expect("Failed to modify encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
+    assert_batches_eq!(&expected_refs, &data);
+}
+
 async fn test_create_and_read(file_format_options: FileFormatRef) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
@@ -344,24 +357,15 @@ async fn test_optimize_kms() {
     test_optimize(file_format_options).await;
 }
 
+
+
 async fn test_update(file_format_options: FileFormatRef) {
-    let temp_dir = TempDir::new().unwrap();
-    let uri = temp_dir.path().to_str().unwrap();
-    let table_name = "test";
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    update_table(uri, &file_format_options).await.expect("Failed to update encrypted table");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
-    let base =  full_table_data();
-    let expected: Vec<String> = base.iter()
-        .map(|s| {
-            let str = s.to_string();
-            // The update replaces first column values of 1 with 100
-            let replaced = str.replace("| 1   |", "| 100 |");
-            replaced
-        })
+    let base = full_table_data();
+    let expected: Vec<String> = base
+        .iter()
+        .map(|s| s.to_string().replace("| 1   |", "| 100 |"))
         .collect();
-    let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
-    assert_batches_eq!(&expected_refs, &data);
+    run_modify_test(file_format_options, |uri, opts| Box::pin(update_table(uri, opts)), expected).await;
 }
 
 #[tokio::test]
@@ -377,24 +381,13 @@ async fn test_update_kms() {
 }
 
 async fn test_delete(file_format_options: FileFormatRef) {
-    let temp_dir = TempDir::new().unwrap();
-    let uri = temp_dir.path().to_str().unwrap();
-    let table_name = "test";
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    delete_from_table(uri, &file_format_options).await.expect("Failed to delete from encrypted table");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
-    let base =  full_table_data();
-    let expected: Vec<String> = base.iter()
-        .filter(|s| {
-            let str = s.to_string();
-            !str.contains("| 2   |") // Delete removes rows with 2 in first column
-        })
-        .map(|s| {
-            s.to_string()
-        })
+    let base = full_table_data();
+    let expected: Vec<String> = base
+        .iter()
+        .filter(|s| !s.contains("| 2   |"))
+        .map(|s| s.to_string())
         .collect();
-    let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
-    assert_batches_eq!(&expected_refs, &data);
+    run_modify_test(file_format_options, |uri, opts| Box::pin(delete_from_table(uri, opts)), expected).await;
 }
 
 #[tokio::test]
