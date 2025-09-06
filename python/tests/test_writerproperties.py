@@ -1,7 +1,5 @@
 import pathlib
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from arro3.core import Table
 
@@ -104,9 +102,12 @@ def test_write_with_writerproperties(
     assert metadata.to_dict()["row_groups"][0]["columns"][0]["compression"] == "GZIP"
 
 
+@pytest.mark.pyarrow
 def test_write_with_writerproperties_encoding(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
+    import pyarrow.parquet as pq
+
     writer_properties = WriterProperties(
         compression="ZSTD",
         column_properties={"price": ColumnProperties(encoding="DELTA_BINARY_PACKED")},
@@ -130,6 +131,7 @@ def test_write_with_writerproperties_encoding(
     assert "RLE_DICTIONARY" in sold_metadata["encodings"]
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("placement", ["per_column", "default"])
 @pytest.mark.parametrize(
     "col_props",
@@ -148,7 +150,7 @@ def test_write_with_writerproperties_encoding(
 )
 def test_column_properties_omitted_encoding_paths(
     tmp_path: pathlib.Path,
-    sample_table: pa.Table,
+    sample_table: Table,
     placement: str,
     col_props: ColumnProperties,
 ):
