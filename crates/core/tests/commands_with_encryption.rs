@@ -217,29 +217,13 @@ async fn merge_table(
     Ok(())
 }
 
-async fn optimize_table_z_order(
+async fn optimize_table(
     uri: &str,
     file_format_options: &FileFormatRef,
+    optimize_type: OptimizeType,
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, file_format_options).await?;
-    let (_table, metrics) = ops
-        .optimize()
-        .with_type(OptimizeType::ZOrder(vec![
-            "timestamp".to_string(),
-            "int".to_string(),
-        ]))
-        .await?;
-    // println!("\nOptimize Z-Order:\n{metrics:?}\n");
-    Ok(())
-}
-
-async fn optimize_table_compact(
-    uri: &str,
-    file_format_options: &FileFormatRef,
-) -> Result<(), DeltaTableError> {
-    let ops = ops_with_crypto(uri, file_format_options).await?;
-    let (_table, metrics) = ops.optimize().with_type(OptimizeType::Compact).await?;
-    // println!("\nOptimize Compact:\n{metrics:?}\n");
+    let (_table, _metrics) = ops.optimize().with_type(optimize_type).await?;
     Ok(())
 }
 
@@ -348,13 +332,13 @@ async fn test_optimize(file_format_options: FileFormatRef) {
     let table_name = "test";
     let expected = full_table_data();
     create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    optimize_table_z_order(uri, &file_format_options).await.expect("Failed to optimize encrypted table with z-order");
+    optimize_table(uri, &file_format_options, OptimizeType::ZOrder(vec!["timestamp".to_string(), "int".to_string()])).await.expect("Failed to optimize encrypted table with z-order");
     let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
     assert_batches_sorted_eq!(&expected, &data); // Data resorted on first column
 
     // Re-create and append to table again so compact has work to do
     create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    optimize_table_compact(uri, &file_format_options).await.expect("Failed to optimize encrypted table with regular compaction");
+    optimize_table(uri, &file_format_options, OptimizeType::Compact).await.expect("Failed to optimize encrypted table with regular compaction");
     let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
     assert_batches_eq!(&expected, &data);
 }
@@ -443,7 +427,6 @@ async fn test_merge(file_format_options: FileFormatRef) {
     create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
     merge_table(uri, &file_format_options).await.expect("Failed to merge with encrypted table");
     let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
-    let base =  full_table_data();
     let expected = vec![
         "+-----+--------+----------------------------+",
         "| int | string | timestamp                  |",
