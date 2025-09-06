@@ -4,7 +4,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::{
-    assert_batches_eq, assert_batches_sorted_eq,
+    assert_batches_sorted_eq,
     config::{ConfigFileType, TableOptions, TableParquetOptions},
     dataframe::DataFrame,
     logical_expr::{col, lit},
@@ -82,6 +82,7 @@ fn get_table_batches() -> RecordBatch {
     .unwrap()
 }
 
+// Create a DeltaOps instance with the specified file_format_options to apply crypto settings.
 async fn ops_with_crypto(
     uri: &str,
     file_format_options: &FileFormatRef,
@@ -177,6 +178,7 @@ async fn delete_from_table(
     Ok(())
 }
 
+// Secondary table to merge with primary data
 fn merge_source() -> DataFrame {
     let ctx = SessionContext::new();
     let schema = get_table_schema();
@@ -194,6 +196,7 @@ fn merge_source() -> DataFrame {
     ctx.read_batch(batch).unwrap()
 }
 
+// Apply merge operation to the primary table
 async fn merge_table(
     uri: &str,
     file_format_options: &FileFormatRef,
@@ -202,7 +205,7 @@ async fn merge_table(
 
     let source = merge_source();
 
-    let (table, _metrics) = ops
+    let (_table, _metrics) = ops
         .merge(source, col("target.int").eq(col("source.int")))
         .with_source_alias("source")
         .with_target_alias("target")
@@ -322,6 +325,7 @@ type ModifyFn = for<'a> fn(
     Box<dyn std::future::Future<Output = Result<(), DeltaTableError>> + Send + 'a>,
 >;
 
+// Create the table, modify it, and read it back. Verify that the final data is as expected.
 async fn run_modify_test(
     file_format_options: FileFormatRef,
     modifier: ModifyFn,
@@ -399,6 +403,7 @@ async fn test_update(file_format_options: FileFormatRef) {
     let base = full_table_data();
     let expected: Vec<String> = base
         .iter()
+        // If the value of the int column is 1, so we expect the value to be updated to 100
         .map(|s| s.to_string().replace("| 1   |", "| 100 |"))
         .collect();
     run_modify_test(
@@ -425,6 +430,7 @@ async fn test_delete(file_format_options: FileFormatRef) {
     let base = full_table_data();
     let expected: Vec<String> = base
         .iter()
+        // If the value of the int column is 2, we expect the row to be deleted
         .filter(|s| !s.contains("| 2   |"))
         .map(|s| s.to_string())
         .collect();
@@ -449,14 +455,15 @@ async fn test_delete_kms() {
 }
 
 async fn test_merge(file_format_options: FileFormatRef) {
-    let expected = vec![
-        "+-----+--------+----------------------------+".to_string(),
-        "| int | string | timestamp                  |".to_string(),
-        "+-----+--------+----------------------------+".to_string(),
-        "| 10  | A      | 1970-01-01T00:08:20.012305 |".to_string(),
-        "| 10  | A      | 1970-01-01T00:08:20.012305 |".to_string(),
-        "+-----+--------+----------------------------+".to_string(),
+    let expected_str = vec![
+        "+-----+--------+----------------------------+",
+        "| int | string | timestamp                  |",
+        "+-----+--------+----------------------------+",
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
+        "+-----+--------+----------------------------+",
     ];
+    let expected: Vec<String> = expected_str.iter().map(|s| s.to_string()).collect();
     run_modify_test(
         file_format_options,
         |uri, opts| Box::pin(merge_table(uri, opts)),
