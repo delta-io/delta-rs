@@ -118,7 +118,7 @@ async fn create_table(
     assert_eq!(table.version(), Some(1));
 
     // Append records to the table
-    let table = DeltaOps(table).write(vec![batch.clone()]).await?;
+    let table = DeltaOps(table).write(vec![batch]).await?;
 
     assert_eq!(table.version(), Some(2));
 
@@ -129,7 +129,6 @@ async fn read_table(uri: &str, file_format_options: &FileFormatRef) -> Result<Ve
     let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-    // println!("Table data:\n{:?}", format_batches(&data));
     Ok(data)
 }
 
@@ -171,21 +170,14 @@ async fn delete_from_table(
 
     assert_eq!(table.version(), Some(version.unwrap() + 1));
 
-    if false {
-        println!("Table after delete:");
-        let (_table, stream) = DeltaOps(table).load().await?;
-        let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-
-        println!("{data:?}");
-    }
-
     Ok(())
 }
 
-fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
+fn merge_source() -> DataFrame {
     let ctx = SessionContext::new();
+    let schema = get_table_schema();
     let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
+        schema,
         vec![
             Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
             Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
@@ -204,8 +196,7 @@ async fn merge_table(
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, file_format_options).await?;
 
-    let schema = get_table_schema();
-    let source = merge_source(schema);
+    let source = merge_source();
 
     let (table, _metrics) = ops
         .merge(source, col("target.int").eq(col("source.int")))
@@ -229,7 +220,6 @@ async fn optimize_table(
 
 fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let key: Vec<_> = b"1234567890123450".to_vec();
-    let _wrong_key: Vec<_> = b"9234567890123450".to_vec(); // Can use to check encryption
 
     let crypt = parquet::encryption::encrypt::FileEncryptionProperties::builder(key.clone())
         .with_column_key("int", key.clone())
@@ -273,7 +263,7 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
 
 
 fn full_table_data() -> Vec<&'static str> {
-    let expected = vec![
+    vec![
         "+-----+--------+----------------------------+",
         "| int | string | timestamp                  |",
         "+-----+--------+----------------------------+",
@@ -300,16 +290,15 @@ fn full_table_data() -> Vec<&'static str> {
         "| 10  | A      | 1970-01-01T00:08:20.012305 |",
         "| 11  | A      | 1970-01-01T00:08:20.012305 |",
         "+-----+--------+----------------------------+"
-    ];
-    expected
+    ]
 }
 
 async fn test_create_and_read(file_format_options: FileFormatRef) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
     let table_name = "test";
-    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     let expected = full_table_data();
     assert_batches_eq!(&expected, &data);
 }
@@ -331,15 +320,15 @@ async fn test_optimize(file_format_options: FileFormatRef) {
     let uri = temp_dir.path().to_str().unwrap();
     let table_name = "test";
     let expected = full_table_data();
-    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
     optimize_table(uri, &file_format_options, OptimizeType::ZOrder(vec!["timestamp".to_string(), "int".to_string()])).await.expect("Failed to optimize encrypted table with z-order");
-    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     assert_batches_sorted_eq!(&expected, &data); // Data resorted on first column
 
     // Re-create and append to table again so compact has work to do
-    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
     optimize_table(uri, &file_format_options, OptimizeType::Compact).await.expect("Failed to optimize encrypted table with regular compaction");
-    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     assert_batches_eq!(&expected, &data);
 }
 
@@ -359,9 +348,9 @@ async fn test_update(file_format_options: FileFormatRef) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
     let table_name = "test";
-    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
     update_table(uri, &file_format_options).await.expect("Failed to update encrypted table");
-    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     let base =  full_table_data();
     let expected: Vec<String> = base.iter()
         .map(|s| {
@@ -391,9 +380,9 @@ async fn test_delete(file_format_options: FileFormatRef) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
     let table_name = "test";
-    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
     delete_from_table(uri, &file_format_options).await.expect("Failed to delete from encrypted table");
-    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     let base =  full_table_data();
     let expected: Vec<String> = base.iter()
         .filter(|s| {
@@ -424,9 +413,9 @@ async fn test_merge(file_format_options: FileFormatRef) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
     let table_name = "test";
-    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
     merge_table(uri, &file_format_options).await.expect("Failed to merge with encrypted table");
-    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     let expected = vec![
         "+-----+--------+----------------------------+",
         "| int | string | timestamp                  |",

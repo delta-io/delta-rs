@@ -1,7 +1,7 @@
 #[cfg(feature = "datafusion")]
 pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
-use datafusion::execution::{SessionState, SessionStateBuilder};
+use datafusion::execution::{SessionState};
 #[cfg(feature = "datafusion")]
 use datafusion::catalog::Session;
 use std::fmt::{Debug, Formatter};
