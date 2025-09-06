@@ -241,6 +241,10 @@ impl LogicalFileView {
             .map(|s| round_ms_datetimes(s, &ceil_datetime))
     }
 
+    /// Return the underlying [DeletionVectorDescriptor] if it exists.
+    ///
+    /// **NOTE**: THis API may be removed in the future without deprecation warnings as the
+    /// utilization of deletion vectors inside of delta-rs becomes more sophisticated.
     pub fn deletion_vector_descriptor(&self) -> Option<DeletionVectorDescriptor> {
         self.deletion_vector().map(|dv| dv.descriptor())
     }
