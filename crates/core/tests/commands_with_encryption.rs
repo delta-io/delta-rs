@@ -17,7 +17,7 @@ use deltalake_core::table::file_format_options::{
     FileFormatRef, KmsFileFormatOptions, SimpleFileFormatOptions,
 };
 use deltalake_core::{
-    datafusion::common::test_util::format_batches, operations::optimize::OptimizeType, DeltaTable,
+    operations::optimize::OptimizeType, DeltaTable,
     DeltaTableError,
 };
 use parquet_key_management::{
@@ -129,12 +129,7 @@ async fn read_table(uri: &str, file_format_options: &FileFormatRef) -> Result<Ve
     let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-
-    // println!("{data:?}");
-    let formatted = format_batches(&*data)?.to_string();
-    println!("Final table:");
-    println!("{}", formatted);
-
+    // println!("Table data:\n{:?}", format_batches(&data));
     Ok(data)
 }
 
@@ -218,24 +213,7 @@ async fn merge_table(
         .with_target_alias("target")
         .when_not_matched_by_source_delete(|delete| delete)
         .unwrap()
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+-----+--------+----------------------------+",
-        "| int | string | timestamp                  |",
-        "+-----+--------+----------------------------+",
-        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
-        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
-        "+-----+--------+----------------------------+",
-    ];
-
-    let (_table, stream) = DeltaOps(table).load().await?;
-    let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-
-    // println!("{data:?}");
-
-    assert_batches_sorted_eq!(&expected, &data);
+        .await?;
     Ok(())
 }
 
@@ -251,7 +229,7 @@ async fn optimize_table_z_order(
             "int".to_string(),
         ]))
         .await?;
-    println!("\nOptimize Z-Order:\n{metrics:?}\n");
+    // println!("\nOptimize Z-Order:\n{metrics:?}\n");
     Ok(())
 }
 
@@ -261,7 +239,7 @@ async fn optimize_table_compact(
 ) -> Result<(), DeltaTableError> {
     let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, metrics) = ops.optimize().with_type(OptimizeType::Compact).await?;
-    println!("\nOptimize Compact:\n{metrics:?}\n");
+    // println!("\nOptimize Compact:\n{metrics:?}\n");
     Ok(())
 }
 
@@ -309,25 +287,6 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     Ok(file_format_options)
 }
 
-async fn round_trip_test(
-    file_format_options: FileFormatRef,
-) -> Result<(), DeltaTableError> {
-    let temp_dir = TempDir::new()?;
-    let uri = temp_dir.path().to_str().unwrap();
-
-    let table_name = "roundtrip";
-
-    create_table(uri, table_name, &file_format_options).await?;
-    optimize_table_z_order(uri, &file_format_options).await?;
-    // Re-create and append to table again so compact has work to do
-    create_table(uri, table_name, &file_format_options).await?;
-    optimize_table_compact(uri, &file_format_options).await?;
-    update_table(uri, &file_format_options).await?;
-    delete_from_table(uri, &file_format_options).await?;
-    merge_table(uri, &file_format_options).await?;
-    read_table(uri, &file_format_options).await?;
-    Ok(())
-}
 
 fn full_table_data() -> Vec<&'static str> {
     let expected = vec![
@@ -444,23 +403,66 @@ async fn test_update_kms() {
     test_update(file_format_options).await;
 }
 
+async fn test_delete(file_format_options: FileFormatRef) {
+    let temp_dir = TempDir::new().unwrap();
+    let uri = temp_dir.path().to_str().unwrap();
+    let table_name = "test";
+    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    delete_from_table(uri, &file_format_options).await.expect("Failed to delete from encrypted table");
+    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let base =  full_table_data();
+    let expected: Vec<String> = base.iter()
+        .filter(|s| {
+            let str = s.to_string();
+            !str.contains("| 2   |") // Delete removes rows with 2 in first column
+        })
+        .map(|s| {
+            s.to_string()
+        })
+        .collect();
+    let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
+    assert_batches_eq!(&expected_refs, &data);
+}
 
 #[tokio::test]
-async fn main() -> Result<(), DeltaTableError> {
-    println!("====================");
-    println!("Begin Plain encryption test");
-    let file_format_options = plain_crypto_format()?;
-    round_trip_test(file_format_options).await?;
-    println!("End Plain encryption test");
-    println!("====================");
+async fn test_delete_plain_crypto() {
+    let file_format_options = plain_crypto_format().unwrap();
+    test_delete(file_format_options).await;
+}
 
-    println!("\n\n");
-    println!("====================");
-    println!("Begin KMS encryption test");
-    let file_format_options = kms_crypto_format()?;
-    round_trip_test(file_format_options).await?;
-    println!("End KMS encryption test");
-    println!("====================");
+#[tokio::test]
+async fn test_delete_kms() {
+    let file_format_options = kms_crypto_format().unwrap();
+    test_delete(file_format_options).await;
+}
 
-    Ok(())
+async fn test_merge(file_format_options: FileFormatRef) {
+    let temp_dir = TempDir::new().unwrap();
+    let uri = temp_dir.path().to_str().unwrap();
+    let table_name = "test";
+    create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
+    merge_table(uri, &file_format_options).await.expect("Failed to merge with encrypted table");
+    let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
+    let base =  full_table_data();
+    let expected = vec![
+        "+-----+--------+----------------------------+",
+        "| int | string | timestamp                  |",
+        "+-----+--------+----------------------------+",
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
+        "+-----+--------+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &data);
+}
+
+#[tokio::test]
+async fn test_merge_plain_crypto() {
+    let file_format_options = plain_crypto_format().unwrap();
+    test_merge(file_format_options).await;
+}
+
+#[tokio::test]
+async fn test_merge_kms() {
+    let file_format_options = kms_crypto_format().unwrap();
+    test_merge(file_format_options).await;
 }
