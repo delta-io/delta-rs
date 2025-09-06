@@ -419,8 +419,17 @@ async fn test_update(file_format_options: FileFormatRef) {
     create_table(&*uri, &*table_name, &file_format_options).await.expect("Failed to create encrypted table");
     update_table(uri, &file_format_options).await.expect("Failed to update encrypted table");
     let data = read_table(&*uri, &file_format_options).await.expect("Failed to read encrypted table");
-    let expected =  full_table_data();
-    assert_batches_eq!(&expected, &data);
+    let base =  full_table_data();
+    let expected: Vec<String> = base.iter()
+        .map(|s| {
+            let str = s.to_string();
+            // The update replaces first column values of 1 with 100
+            let replaced = str.replace("| 1   |", "| 100 |");
+            replaced
+        })
+        .collect();
+    let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
+    assert_batches_eq!(&expected_refs, &data);
 }
 
 #[tokio::test]
