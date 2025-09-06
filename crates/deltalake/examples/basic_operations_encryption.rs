@@ -1,8 +1,6 @@
 use deltalake::arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
-    datatypes::{
-        DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit,
-    },
+    datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
 use deltalake::datafusion::{
