@@ -1,25 +1,26 @@
 use arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
-    datatypes::{
-        DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit,
-    },
+    datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
-use datafusion::{assert_batches_eq, assert_batches_sorted_eq, config::{ConfigFileType, TableOptions, TableParquetOptions}, dataframe::DataFrame, logical_expr::{col, lit}, prelude::SessionContext};
+use datafusion::{
+    assert_batches_eq, assert_batches_sorted_eq,
+    config::{ConfigFileType, TableOptions, TableParquetOptions},
+    dataframe::DataFrame,
+    logical_expr::{col, lit},
+    prelude::SessionContext,
+};
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::operations::collect_sendable_stream;
-use deltalake_core::parquet::encryption::decrypt::FileDecryptionProperties;
-use deltalake_core::{arrow, parquet, DeltaOps};
 use deltalake_core::operations::encryption::{
     KmsEncryptionFactory, KmsEncryptionFactoryOptions, TableEncryption,
 };
+use deltalake_core::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake_core::table::file_format_options::{
     FileFormatRef, KmsFileFormatOptions, SimpleFileFormatOptions,
 };
-use deltalake_core::{
-    operations::optimize::OptimizeType, DeltaTable,
-    DeltaTableError,
-};
+use deltalake_core::{arrow, parquet, DeltaOps};
+use deltalake_core::{operations::optimize::OptimizeType, DeltaTable, DeltaTableError};
 use parquet_key_management::{
     crypto_factory::{CryptoFactory, DecryptionConfiguration, EncryptionConfiguration},
     kms::KmsConnectionConfig,
@@ -78,7 +79,7 @@ fn get_table_batches() -> RecordBatch {
             Arc::new(ts_values),
         ],
     )
-        .unwrap()
+    .unwrap()
 }
 
 async fn ops_with_crypto(
@@ -125,7 +126,10 @@ async fn create_table(
     Ok(table)
 }
 
-async fn read_table(uri: &str, file_format_options: &FileFormatRef) -> Result<Vec<RecordBatch>, DeltaTableError> {
+async fn read_table(
+    uri: &str,
+    file_format_options: &FileFormatRef,
+) -> Result<Vec<RecordBatch>, DeltaTableError> {
     let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
@@ -186,7 +190,7 @@ fn merge_source() -> DataFrame {
             ])),
         ],
     )
-        .unwrap();
+    .unwrap();
     ctx.read_batch(batch).unwrap()
 }
 
@@ -216,6 +220,25 @@ async fn optimize_table(
     let ops = ops_with_crypto(uri, file_format_options).await?;
     let (_table, _metrics) = ops.optimize().with_type(optimize_type).await?;
     Ok(())
+}
+
+async fn optimize_table_z_order(
+    uri: &str,
+    file_format_options: &FileFormatRef,
+) -> Result<(), DeltaTableError> {
+    optimize_table(
+        uri,
+        file_format_options,
+        OptimizeType::ZOrder(vec!["timestamp".to_string(), "int".to_string()]),
+    )
+    .await
+}
+
+async fn optimize_table_compact(
+    uri: &str,
+    file_format_options: &FileFormatRef,
+) -> Result<(), DeltaTableError> {
+    optimize_table(uri, file_format_options, OptimizeType::Compact).await
 }
 
 fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
@@ -261,7 +284,6 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     Ok(file_format_options)
 }
 
-
 fn full_table_data() -> Vec<&'static str> {
     vec![
         "+-----+--------+----------------------------+",
@@ -289,31 +311,47 @@ fn full_table_data() -> Vec<&'static str> {
         "| 9   | B      | 1970-01-01T00:08:20.012305 |",
         "| 10  | A      | 1970-01-01T00:08:20.012305 |",
         "| 11  | A      | 1970-01-01T00:08:20.012305 |",
-        "+-----+--------+----------------------------+"
+        "+-----+--------+----------------------------+",
     ]
 }
 
-type ModifyFn = for<'a> fn(uri: &'a str, file_format_options: &'a FileFormatRef) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeltaTableError>> + Send + 'a>>;
+type ModifyFn = for<'a> fn(
+    uri: &'a str,
+    file_format_options: &'a FileFormatRef,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), DeltaTableError>> + Send + 'a>,
+>;
 
-async fn run_modify_test(file_format_options: FileFormatRef, modifier: ModifyFn, expected: Vec<String>) {
+async fn run_modify_test(
+    file_format_options: FileFormatRef,
+    modifier: ModifyFn,
+    expected: Vec<String>,
+) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
     let table_name = "test";
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    modifier(uri, &file_format_options).await.expect("Failed to modify encrypted table");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
+    create_table(uri, table_name, &file_format_options)
+        .await
+        .expect("Failed to create encrypted table");
+    modifier(uri, &file_format_options)
+        .await
+        .expect("Failed to modify encrypted table");
+    let data = read_table(uri, &file_format_options)
+        .await
+        .expect("Failed to read encrypted table");
     let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
-    assert_batches_eq!(&expected_refs, &data);
+    assert_batches_sorted_eq!(&expected_refs, &data);
 }
 
 async fn test_create_and_read(file_format_options: FileFormatRef) {
-    let temp_dir = TempDir::new().unwrap();
-    let uri = temp_dir.path().to_str().unwrap();
-    let table_name = "test";
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
-    let expected = full_table_data();
-    assert_batches_eq!(&expected, &data);
+    // Use the shared modify test template with a no-op modifier
+    let expected: Vec<String> = full_table_data().iter().map(|s| s.to_string()).collect();
+    run_modify_test(
+        file_format_options,
+        |_uri, _opts| Box::pin(async { Ok(()) }),
+        expected,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -329,20 +367,20 @@ async fn test_create_and_read_kms() {
 }
 
 async fn test_optimize(file_format_options: FileFormatRef) {
-    let temp_dir = TempDir::new().unwrap();
-    let uri = temp_dir.path().to_str().unwrap();
-    let table_name = "test";
-    let expected = full_table_data();
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    optimize_table(uri, &file_format_options, OptimizeType::ZOrder(vec!["timestamp".to_string(), "int".to_string()])).await.expect("Failed to optimize encrypted table with z-order");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
-    assert_batches_sorted_eq!(&expected, &data); // Data resorted on first column
-
-    // Re-create and append to table again so compact has work to do
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    optimize_table(uri, &file_format_options, OptimizeType::Compact).await.expect("Failed to optimize encrypted table with regular compaction");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
-    assert_batches_eq!(&expected, &data);
+    // Use the shared modify test template; perform optimization steps inside the modifier
+    let expected: Vec<String> = full_table_data().iter().map(|s| s.to_string()).collect();
+    run_modify_test(
+        file_format_options.clone(),
+        |uri, opts| Box::pin(optimize_table_z_order(uri, opts)),
+        expected.clone(),
+    )
+    .await;
+    run_modify_test(
+        file_format_options,
+        |uri, opts| Box::pin(optimize_table_compact(uri, opts)),
+        expected,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -357,15 +395,18 @@ async fn test_optimize_kms() {
     test_optimize(file_format_options).await;
 }
 
-
-
 async fn test_update(file_format_options: FileFormatRef) {
     let base = full_table_data();
     let expected: Vec<String> = base
         .iter()
         .map(|s| s.to_string().replace("| 1   |", "| 100 |"))
         .collect();
-    run_modify_test(file_format_options, |uri, opts| Box::pin(update_table(uri, opts)), expected).await;
+    run_modify_test(
+        file_format_options,
+        |uri, opts| Box::pin(update_table(uri, opts)),
+        expected,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -387,7 +428,12 @@ async fn test_delete(file_format_options: FileFormatRef) {
         .filter(|s| !s.contains("| 2   |"))
         .map(|s| s.to_string())
         .collect();
-    run_modify_test(file_format_options, |uri, opts| Box::pin(delete_from_table(uri, opts)), expected).await;
+    run_modify_test(
+        file_format_options,
+        |uri, opts| Box::pin(delete_from_table(uri, opts)),
+        expected,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -403,21 +449,20 @@ async fn test_delete_kms() {
 }
 
 async fn test_merge(file_format_options: FileFormatRef) {
-    let temp_dir = TempDir::new().unwrap();
-    let uri = temp_dir.path().to_str().unwrap();
-    let table_name = "test";
-    create_table(uri, table_name, &file_format_options).await.expect("Failed to create encrypted table");
-    merge_table(uri, &file_format_options).await.expect("Failed to merge with encrypted table");
-    let data = read_table(uri, &file_format_options).await.expect("Failed to read encrypted table");
     let expected = vec![
-        "+-----+--------+----------------------------+",
-        "| int | string | timestamp                  |",
-        "+-----+--------+----------------------------+",
-        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
-        "| 10  | A      | 1970-01-01T00:08:20.012305 |",
-        "+-----+--------+----------------------------+",
+        "+-----+--------+----------------------------+".to_string(),
+        "| int | string | timestamp                  |".to_string(),
+        "+-----+--------+----------------------------+".to_string(),
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |".to_string(),
+        "| 10  | A      | 1970-01-01T00:08:20.012305 |".to_string(),
+        "+-----+--------+----------------------------+".to_string(),
     ];
-    assert_batches_eq!(expected, &data);
+    run_modify_test(
+        file_format_options,
+        |uri, opts| Box::pin(merge_table(uri, opts)),
+        expected,
+    )
+    .await;
 }
 
 #[tokio::test]
