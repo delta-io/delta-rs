@@ -86,6 +86,7 @@ maplit = "1"
 sqlparser = { version = "0.56.0" }
 humantime = { version = "2.1.0" }
 validator = { version = "0.19", features = ["derive"] }
+parquet-key-management = "0.3.0"
 
 [dev-dependencies]
 criterion = "0.5"

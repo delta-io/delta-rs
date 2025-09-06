@@ -2,7 +2,7 @@
 pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 #[cfg(feature = "datafusion")]
 use datafusion::execution::{SessionState, SessionStateBuilder};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 
 use crate::{crate_version, DeltaResult};
 use arrow_schema::Schema as ArrowSchema;
@@ -16,6 +16,7 @@ use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
 use tracing::info;
+use uuid::Uuid;
 
 #[cfg(not(feature = "datafusion"))]
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -214,6 +215,59 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
                 .await?;
         }
         Ok(builder.build())
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// FileFormatOptions for KMS encryption based on settings in TableEncryption
+// -------------------------------------------------------------------------------------------------
+pub struct KmsFileFormatOptions {
+    table_encryption: TableEncryption,
+    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    encryption_factory_id: String,
+}
+
+impl KmsFileFormatOptions {
+    pub fn new(table_encryption: TableEncryption) -> Self {
+        let encryption_factory_id = format!("delta-{}", Uuid::new_v4().to_string());
+        let writer_properties_factory = Arc::new(KMSWriterPropertiesFactory::with_encryption(
+            table_encryption.clone(),
+        ));
+        Self {
+            table_encryption,
+            writer_properties_factory,
+            encryption_factory_id,
+        }
+    }
+}
+
+impl Debug for KmsFileFormatOptions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KmsFileFormatOptions")
+            .finish_non_exhaustive()
+    }
+}
+
+impl FileFormatOptions for KmsFileFormatOptions {
+    fn table_options(&self) -> TableOptions {
+        let mut table_options = TableOptions::default();
+        table_options.parquet.crypto.factory_id = Some(self.encryption_factory_id.clone());
+        table_options.parquet.crypto.factory_options =
+            self.table_encryption.configuration().clone();
+        table_options
+    }
+
+    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
+        Arc::clone(&self.writer_properties_factory)
+    }
+
+    fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
+        // Ensure DataFusion has the encryption factory registered
+        session.runtime_env().register_parquet_encryption_factory(
+            &self.encryption_factory_id,
+            Arc::clone(self.table_encryption.encryption_factory()),
+        );
+        Ok(())
     }
 }
 
