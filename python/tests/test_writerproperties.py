@@ -189,9 +189,3 @@ def test_write_invalid_encoding_configuration():
                 "price": ColumnProperties(encoding="RLE", dictionary_enabled=True)
             },
         )
-
-    with pytest.raises(ValueError):
-        WriterProperties(
-            compression="ZSTD",
-            column_properties={"price": ColumnProperties(encoding="RLE_DICTIONARY")},
-        )

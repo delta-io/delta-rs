@@ -62,13 +62,13 @@ class Encoding(Enum):
     """
     Encoding types for Parquet columns.
     https://parquet.apache.org/docs/file-format/data-pages/encodings/
+    Dictionary encodings (PLAIN_DICTIONARY and RLE_DICTIONARY) are enabled via the `dictionary_enabled` flag
+    in `ColumnProperties` and should not be specified here.
+    BIT_PACKED is deprecated and not supported in delta-rs
     """
 
     PLAIN = "PLAIN"
-    PLAIN_DICTIONARY = "PLAIN_DICTIONARY"  # Deprecated
-    RLE_DICTIONARY = "RLE_DICTIONARY"
     RLE = "RLE"
-    BIT_PACKED = "BIT_PACKED"  # Deprecated
     DELTA_BINARY_PACKED = "DELTA_BINARY_PACKED"
     DELTA_LENGTH_BYTE_ARRAY = "DELTA_LENGTH_BYTE_ARRAY"
     DELTA_BYTE_ARRAY = "DELTA_BYTE_ARRAY"
@@ -123,7 +123,6 @@ class ColumnProperties:
         encoding: Literal[
             "PLAIN",
             "RLE",
-            "BIT_PACKED",
             "DELTA_BINARY_PACKED",
             "DELTA_LENGTH_BYTE_ARRAY",
             "DELTA_BYTE_ARRAY",
@@ -142,22 +141,10 @@ class ColumnProperties:
         self.dictionary_enabled = dictionary_enabled
         self.statistics_enabled = statistics_enabled
         self.bloom_filter_properties = bloom_filter_properties
+        self.encoding = encoding
         if isinstance(encoding, str):
             if self.dictionary_enabled:
                 raise ValueError("Cannot specify dictionary_enabled=True and encoding")
-
-            encoding_enum = Encoding.from_str(encoding)
-            if encoding_enum in [
-                Encoding.PLAIN_DICTIONARY,
-                Encoding.RLE_DICTIONARY,
-            ]:
-                raise ValueError(
-                    f"Cannot specify dictionary encoding {encoding}, use dictionary_enabled=True instead"
-                )
-            else:
-                self.encoding = encoding
-        else:
-            self.encoding = encoding
 
     def __str__(self) -> str:
         return (
