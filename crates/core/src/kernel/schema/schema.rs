@@ -4,8 +4,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 pub use delta_kernel::schema::{
-    ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, PrimitiveType, StructField,
-    StructType,
+    ArrayType, ColumnMetadataKey, DataType, DecimalType, MapType, MetadataValue, PrimitiveType,
+    StructField, StructType,
 };
 use serde_json::Value;
 
