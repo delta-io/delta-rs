@@ -21,17 +21,14 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-#[cfg(not(feature = "datafusion"))]
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct TableOptions {}
-
 // Top level trait for file format options used by a DeltaTable
-#[cfg(feature = "datafusion")]
 pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
+    #[cfg(feature = "datafusion")]
     fn table_options(&self) -> TableOptions;
 
     fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory>;
 
+    #[cfg(feature = "datafusion")]
     fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
         // Default implementation does nothing
         Ok(())
@@ -41,11 +38,13 @@ pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
 /// Convenience alias for file format options reference used across the codebase
 pub type FileFormatRef = Arc<dyn FileFormatOptions>;
 
+#[cfg(feature = "datafusion")]
 #[derive(Clone, Debug, Default)]
 pub struct SimpleFileFormatOptions {
     table_options: TableOptions,
 }
 
+#[cfg(feature = "datafusion")]
 impl SimpleFileFormatOptions {
     pub fn new(table_options: TableOptions) -> Self {
         Self { table_options }
@@ -63,14 +62,12 @@ impl FileFormatOptions for SimpleFileFormatOptions {
     }
 }
 
-#[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_ffo(
     file_format_options: Option<FileFormatRef>,
 ) -> Option<Arc<dyn WriterPropertiesFactory>> {
     file_format_options.map(|ffo| ffo.writer_properties_factory())
 }
 
-#[cfg(feature = "datafusion")]
 pub fn build_writer_properties_factory_or_default_ffo(
     file_format_options: Option<FileFormatRef>,
 ) -> Arc<dyn WriterPropertiesFactory> {

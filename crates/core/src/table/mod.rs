@@ -32,8 +32,8 @@ pub mod state;
 mod columns;
 pub mod file_format_options;
 
-// Re-exposing for backwards compatibility
 use crate::table::file_format_options::FileFormatRef;
+// Re-exposing for backwards compatibility
 pub use columns::*;
 
 /// In memory representation of a Delta Table
