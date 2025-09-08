@@ -537,8 +537,9 @@ class DeltaTable:
         """
         total_rows = 0
 
-        for file in self.file_uris():
-            total_rows += pyarrow.parquet.ParquetFile(file).metadata.num_rows
+        for value in self.get_add_actions().column("num_records").to_pylist():
+            total_rows += value
+
         return total_rows
 
     def vacuum(
