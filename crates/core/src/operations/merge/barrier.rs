@@ -10,14 +10,15 @@
 //! they can be removed from the delta log.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::{Context, Poll},
 };
 
-use arrow_array::{builder::UInt64Builder, ArrayRef, RecordBatch};
-use arrow_schema::SchemaRef;
+use arrow::array::{builder::UInt64Builder, ArrayRef, RecordBatch};
+use arrow::datatypes::SchemaRef;
+use dashmap::DashSet;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::physical_expr::{Distribution, PhysicalExpr};
@@ -32,7 +33,7 @@ use crate::{
     DeltaTableError,
 };
 
-pub(crate) type BarrierSurvivorSet = Arc<Mutex<HashSet<String>>>;
+pub(crate) type BarrierSurvivorSet = Arc<DashSet<String>>;
 
 #[derive(Debug)]
 /// Physical Node for the MergeBarrier
@@ -55,7 +56,7 @@ impl MergeBarrierExec {
         MergeBarrierExec {
             input,
             file_column,
-            survivors: Arc::new(Mutex::new(HashSet::new())),
+            survivors: Arc::new(DashSet::new()),
             expr,
         }
     }
@@ -359,17 +360,12 @@ impl Stream for MergeBarrierStream {
                     }
 
                     {
-                        let mut lock = self.survivors.lock().map_err(|_| {
-                            DataFusionError::External(Box::new(DeltaTableError::Generic(
-                                "MergeBarrier mutex is poisoned".to_string(),
-                            )))
-                        })?;
                         for part in &self.file_partitions {
                             match part.state {
                                 PartitionBarrierState::Closed => {}
                                 PartitionBarrierState::Open => {
                                     if let Some(file_name) = &part.file_name {
-                                        lock.insert(file_name.to_owned());
+                                        self.survivors.insert(file_name.to_owned());
                                     }
                                 }
                             }
@@ -532,11 +528,10 @@ mod tests {
         ];
         assert_batches_sorted_eq!(&expected, &actual);
 
-        let s = survivors.lock().unwrap();
-        assert!(!s.contains(&"file0".to_string()));
-        assert!(s.contains(&"file1".to_string()));
-        assert!(s.contains(&"file2".to_string()));
-        assert_eq!(s.len(), 2);
+        assert!(!survivors.contains(&"file0".to_string()));
+        assert!(survivors.contains(&"file1".to_string()));
+        assert!(survivors.contains(&"file2".to_string()));
+        assert_eq!(survivors.len(), 2);
     }
 
     #[tokio::test]
