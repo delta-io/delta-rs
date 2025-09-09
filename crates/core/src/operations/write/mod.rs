@@ -556,9 +556,18 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let schema = Arc::new(source.schema().as_arrow().clone());
 
-            // Maybe create schema action
-            if this.schema_mode == Some(SchemaMode::Merge) && schema_drift {
-                if let Some(snapshot) = &this.snapshot {
+            // Maybe create schema action based on schema_mode
+            if let Some(snapshot) = &this.snapshot {
+                let should_update_schema = match this.schema_mode {
+                    Some(SchemaMode::Merge) if schema_drift => true,
+                    Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
+                        let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
+                        &delta_schema != snapshot.schema()
+                    }
+                    _ => false,
+                };
+
+                if should_update_schema {
                     let schema_struct: StructType = schema.clone().try_into_kernel()?;
                     // Verify if delta schema changed
                     if &schema_struct != snapshot.schema() {
@@ -620,26 +629,6 @@ impl std::future::IntoFuture for WriteBuilder {
             // Collect remove actions if we are overwriting the table
             if let Some(snapshot) = &this.snapshot {
                 if matches!(this.mode, SaveMode::Overwrite) {
-                    let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
-                    // Update metadata with new schema if there is a change
-                    if &delta_schema != snapshot.schema() {
-                        let mut metadata = snapshot.metadata().clone();
-
-                        metadata = metadata.with_schema(&delta_schema)?;
-                        actions.push(Action::Metadata(metadata));
-
-                        let configuration = snapshot.metadata().configuration().clone();
-                        let current_protocol = snapshot.protocol();
-                        let new_protocol = current_protocol
-                            .clone()
-                            .apply_column_metadata_to_protocol(&delta_schema)?
-                            .move_table_properties_into_features(&configuration);
-
-                        if current_protocol != &new_protocol {
-                            actions.push(new_protocol.into())
-                        }
-                    }
-
                     let deletion_timestamp = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
@@ -2004,5 +1993,85 @@ mod tests {
 
             Ok(())
         }
+    }
+    
+    #[tokio::test]
+    async fn test_preserve_nullability_on_overwrite() -> TestResult {
+        // Test that nullability constraints are preserved when overwriting with mode=overwrite, schema_mode=None
+        use arrow_array::{BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        use std::sync::Arc;
+        
+        // Create initial table with non-nullable columns
+        let initial_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false),  // non-nullable
+            Field::new("name", DataType::Utf8, true),   // nullable
+            Field::new("active", DataType::Boolean, false), // non-nullable
+            Field::new("count", DataType::Int32, false), // non-nullable
+        ]));
+        
+        let initial_batch = RecordBatch::try_new(
+            initial_schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("Alice"), Some("Bob"), None])),
+                Arc::new(BooleanArray::from(vec![true, false, true])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        )?;
+        
+        // Create initial table
+        let table = DeltaOps::try_from_uri("memory://").await?
+            .write(vec![initial_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await?;
+        
+        // Verify initial schema has correct nullability
+        let initial_metadata = table.metadata()?;
+        let schema_fields = initial_metadata.schema.fields();
+        assert!(!schema_fields[0].is_nullable(), "id should be non-nullable");
+        assert!(schema_fields[1].is_nullable(), "name should be nullable");
+        assert!(!schema_fields[2].is_nullable(), "active should be non-nullable");
+        assert!(!schema_fields[3].is_nullable(), "count should be non-nullable");
+        
+        // Create new data with all nullable fields (simulating data from sources like Pandas)
+        let new_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, true),    // nullable in new data
+            Field::new("name", DataType::Utf8, true),   // nullable in new data
+            Field::new("active", DataType::Boolean, true), // nullable in new data
+            Field::new("count", DataType::Int32, true), // nullable in new data
+        ]));
+        
+        let new_batch = RecordBatch::try_new(
+            new_schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(4), Some(5), Some(6)])),
+                Arc::new(StringArray::from(vec![Some("David"), Some("Eve"), Some("Frank")])),
+                Arc::new(BooleanArray::from(vec![Some(false), Some(true), Some(false)])),
+                Arc::new(Int32Array::from(vec![Some(40), Some(50), Some(60)])),
+            ],
+        )?;
+        
+        // Overwrite with schema_mode=None (default) - should preserve nullability
+        let table = DeltaOps(table)
+            .write(vec![new_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            // schema_mode is None by default
+            .await?;
+        
+        // Verify that nullability constraints are preserved
+        let final_metadata = table.metadata()?;
+        let final_fields = final_metadata.schema.fields();
+        assert!(!final_fields[0].is_nullable(), "id should remain non-nullable after overwrite");
+        assert!(final_fields[1].is_nullable(), "name should remain nullable after overwrite");
+        assert!(!final_fields[2].is_nullable(), "active should remain non-nullable after overwrite");
+        assert!(!final_fields[3].is_nullable(), "count should remain non-nullable after overwrite");
+        
+        // Verify the data was actually overwritten
+        let batches = collect_sendable_stream(table.scan(None, None, None).await?).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3); // Only new data
+        
+        Ok(())
     }
 }
