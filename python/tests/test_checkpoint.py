@@ -95,8 +95,9 @@ def test_cleanup_metadata(tmp_path: pathlib.Path, sample_table: Table):
     )
     third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
 
-    assert not first_log_path.exists()
-    assert not first_failed_log_path.exists()
+    # These first two files are kept because there is no safe checkpoint to make them obsolete
+    assert first_log_path.exists()
+    assert first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
     assert second_failed_log_path.exists()
@@ -119,8 +120,9 @@ def test_cleanup_metadata_log_cleanup_hook(tmp_path: pathlib.Path, sample_table:
     )
     third_log_path = tmp_table_path / "_delta_log" / "00000000000000000002.json"
 
-    assert not first_log_path.exists()
-    assert not first_failed_log_path.exists()
+    # These first two files are kept because there is no safe checkpoint to make them obsolete
+    assert first_log_path.exists()
+    assert first_failed_log_path.exists()
     assert second_log_path.exists()
     assert third_log_path.exists()
     assert second_failed_log_path.exists()
