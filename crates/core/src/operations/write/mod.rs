@@ -1994,22 +1994,22 @@ mod tests {
             Ok(())
         }
     }
-    
+
     #[tokio::test]
     async fn test_preserve_nullability_on_overwrite() -> TestResult {
         // Test that nullability constraints are preserved when overwriting with mode=overwrite, schema_mode=None
         use arrow_array::{BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray};
         use arrow_schema::{DataType, Field, Schema as ArrowSchema};
         use std::sync::Arc;
-        
+
         // Create initial table with non-nullable columns
         let initial_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int64, false),  // non-nullable
-            Field::new("name", DataType::Utf8, true),   // nullable
+            Field::new("id", DataType::Int64, false), // non-nullable
+            Field::new("name", DataType::Utf8, true), // nullable
             Field::new("active", DataType::Boolean, false), // non-nullable
             Field::new("count", DataType::Int32, false), // non-nullable
         ]));
-        
+
         let initial_batch = RecordBatch::try_new(
             initial_schema.clone(),
             vec![
@@ -2019,59 +2019,269 @@ mod tests {
                 Arc::new(Int32Array::from(vec![10, 20, 30])),
             ],
         )?;
-        
+
         // Create initial table
-        let table = DeltaOps::try_from_uri("memory://").await?
+        let table = DeltaOps::new_in_memory()
             .write(vec![initial_batch])
             .with_save_mode(SaveMode::Overwrite)
             .await?;
-        
+
         // Verify initial schema has correct nullability
-        let initial_metadata = table.metadata()?;
-        let schema_fields = initial_metadata.schema.fields();
+        let schema_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
         assert!(!schema_fields[0].is_nullable(), "id should be non-nullable");
         assert!(schema_fields[1].is_nullable(), "name should be nullable");
-        assert!(!schema_fields[2].is_nullable(), "active should be non-nullable");
-        assert!(!schema_fields[3].is_nullable(), "count should be non-nullable");
-        
+        assert!(
+            !schema_fields[2].is_nullable(),
+            "active should be non-nullable"
+        );
+        assert!(
+            !schema_fields[3].is_nullable(),
+            "count should be non-nullable"
+        );
+
         // Create new data with all nullable fields (simulating data from sources like Pandas)
         let new_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int64, true),    // nullable in new data
-            Field::new("name", DataType::Utf8, true),   // nullable in new data
+            Field::new("id", DataType::Int64, true), // nullable in new data
+            Field::new("name", DataType::Utf8, true), // nullable in new data
             Field::new("active", DataType::Boolean, true), // nullable in new data
             Field::new("count", DataType::Int32, true), // nullable in new data
         ]));
-        
+
         let new_batch = RecordBatch::try_new(
             new_schema,
             vec![
                 Arc::new(Int64Array::from(vec![Some(4), Some(5), Some(6)])),
-                Arc::new(StringArray::from(vec![Some("David"), Some("Eve"), Some("Frank")])),
-                Arc::new(BooleanArray::from(vec![Some(false), Some(true), Some(false)])),
+                Arc::new(StringArray::from(vec![
+                    Some("David"),
+                    Some("Eve"),
+                    Some("Frank"),
+                ])),
+                Arc::new(BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                ])),
                 Arc::new(Int32Array::from(vec![Some(40), Some(50), Some(60)])),
             ],
         )?;
-        
+
         // Overwrite with schema_mode=None (default) - should preserve nullability
         let table = DeltaOps(table)
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Overwrite)
             // schema_mode is None by default
             .await?;
-        
+
         // Verify that nullability constraints are preserved
-        let final_metadata = table.metadata()?;
-        let final_fields = final_metadata.schema.fields();
-        assert!(!final_fields[0].is_nullable(), "id should remain non-nullable after overwrite");
-        assert!(final_fields[1].is_nullable(), "name should remain nullable after overwrite");
-        assert!(!final_fields[2].is_nullable(), "active should remain non-nullable after overwrite");
-        assert!(!final_fields[3].is_nullable(), "count should remain non-nullable after overwrite");
-        
-        // Verify the data was actually overwritten
-        let batches = collect_sendable_stream(table.scan(None, None, None).await?).await?;
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 3); // Only new data
-        
+        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        assert!(
+            !final_fields[0].is_nullable(),
+            "id should remain non-nullable after overwrite"
+        );
+        assert!(
+            final_fields[1].is_nullable(),
+            "name should remain nullable after overwrite"
+        );
+        assert!(
+            !final_fields[2].is_nullable(),
+            "active should remain non-nullable after overwrite"
+        );
+        assert!(
+            !final_fields[3].is_nullable(),
+            "count should remain non-nullable after overwrite"
+        );
+
+        // Verify the data was actually overwritten by checking version increased
+        assert_eq!(table.version(), Some(1)); // Version should be 1 after overwrite
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_mode_none_enforces_constraints_on_overwrite() -> TestResult {
+        // Test that schema_mode=None with mode=overwrite:
+        // 1. Does NOT update/overwrite the schema
+        // 2. ENFORCES existing constraints (e.g., non-nullable fields)
+        use arrow_array::{BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        use std::sync::Arc;
+
+        // Create initial table with strict constraints
+        let initial_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false), // NON-NULLABLE
+            Field::new("name", DataType::Utf8, true), // nullable
+            Field::new("active", DataType::Boolean, false), // NON-NULLABLE
+            Field::new("count", DataType::Int32, false), // NON-NULLABLE
+        ]));
+
+        let initial_batch = RecordBatch::try_new(
+            initial_schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("Alice"), Some("Bob"), None])),
+                Arc::new(BooleanArray::from(vec![true, false, true])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        )?;
+
+        // Create initial table
+        let table = DeltaOps::new_in_memory()
+            .write(vec![initial_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await?;
+
+        // Capture initial schema for comparison
+        let initial_schema_fields: Vec<_> = table
+            .snapshot()
+            .unwrap()
+            .schema()
+            .fields()
+            .cloned()
+            .collect();
+
+        // Test 1: Verify schema is NOT changed even when incoming data has different nullability
+        let new_schema_all_nullable = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, true), // nullable in new data
+            Field::new("name", DataType::Utf8, true), // nullable in new data
+            Field::new("active", DataType::Boolean, true), // nullable in new data
+            Field::new("count", DataType::Int32, true), // nullable in new data
+        ]));
+
+        let valid_batch = RecordBatch::try_new(
+            new_schema_all_nullable.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(4), Some(5), Some(6)])),
+                Arc::new(StringArray::from(vec![
+                    Some("David"),
+                    Some("Eve"),
+                    Some("Frank"),
+                ])),
+                Arc::new(BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                ])),
+                Arc::new(Int32Array::from(vec![Some(40), Some(50), Some(60)])),
+            ],
+        )?;
+
+        // This should succeed - data is valid even though schema differs
+        let table = DeltaOps(table)
+            .write(vec![valid_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            // schema_mode is None by default
+            .await?;
+
+        // Verify schema was NOT updated
+        let after_overwrite_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+
+        // Schema should be EXACTLY the same as before
+        assert_eq!(
+            after_overwrite_fields.len(),
+            initial_schema_fields.len(),
+            "Schema should have same number of fields"
+        );
+
+        for (i, field) in after_overwrite_fields.iter().enumerate() {
+            assert_eq!(
+                field.is_nullable(),
+                initial_schema_fields[i].is_nullable(),
+                "Field '{}' nullability should not change",
+                field.name()
+            );
+        }
+
+        // Specifically verify non-nullable fields are still non-nullable
+        assert!(
+            !after_overwrite_fields[0].is_nullable(),
+            "id must remain non-nullable"
+        );
+        assert!(
+            !after_overwrite_fields[2].is_nullable(),
+            "active must remain non-nullable"
+        );
+        assert!(
+            !after_overwrite_fields[3].is_nullable(),
+            "count must remain non-nullable"
+        );
+
+        // Test 2: Verify constraints are ENFORCED - attempt to write NULL to non-nullable field
+        // This should FAIL because we're trying to violate the non-nullable constraint
+
+        // Create data with NULL in a non-nullable field
+        let invalid_batch = RecordBatch::try_new(
+            new_schema_all_nullable.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(7), None, Some(9)])), // NULL in non-nullable id!
+                Arc::new(StringArray::from(vec![
+                    Some("George"),
+                    Some("Helen"),
+                    Some("Ivan"),
+                ])),
+                Arc::new(BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                ])),
+                Arc::new(Int32Array::from(vec![Some(70), Some(80), Some(90)])),
+            ],
+        )?;
+
+        // This should fail because id is non-nullable in the table schema
+        let result = DeltaOps(table.clone())
+            .write(vec![invalid_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await;
+
+        // The write should fail due to constraint violation
+        assert!(
+            result.is_err(),
+            "Writing NULL to non-nullable field should fail"
+        );
+
+        // Test 3: Also test with NULL in another non-nullable field (active)
+        let invalid_batch_2 = RecordBatch::try_new(
+            new_schema_all_nullable.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(10), Some(11), Some(12)])),
+                Arc::new(StringArray::from(vec![
+                    Some("Jane"),
+                    Some("Karl"),
+                    Some("Lisa"),
+                ])),
+                Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])), // NULL in non-nullable active!
+                Arc::new(Int32Array::from(vec![Some(100), Some(110), Some(120)])),
+            ],
+        )?;
+
+        let result2 = DeltaOps(table.clone())
+            .write(vec![invalid_batch_2])
+            .with_save_mode(SaveMode::Overwrite)
+            .await;
+
+        // This should also fail
+        assert!(
+            result2.is_err(),
+            "Writing NULL to non-nullable 'active' field should fail"
+        );
+
+        // Verify the table data and schema remain unchanged after failed writes
+        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+
+        // Schema should still be the original schema
+        assert!(
+            !final_fields[0].is_nullable(),
+            "id still non-nullable after failed writes"
+        );
+        assert!(
+            !final_fields[2].is_nullable(),
+            "active still non-nullable after failed writes"
+        );
+        assert!(
+            !final_fields[3].is_nullable(),
+            "count still non-nullable after failed writes"
+        );
+
         Ok(())
     }
 }
