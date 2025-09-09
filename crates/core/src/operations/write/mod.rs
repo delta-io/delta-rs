@@ -2284,4 +2284,111 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_schema_preserved_with_replace_where() -> TestResult {
+        // Test that schema is preserved when using overwrite with predicate (replaceWhere)
+        use arrow_array::{BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        use std::sync::Arc;
+
+        // Create initial table with mixed nullability
+        let initial_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false), // non-nullable
+            Field::new("name", DataType::Utf8, true), // nullable
+            Field::new("active", DataType::Boolean, false), // non-nullable
+            Field::new("count", DataType::Int32, false), // non-nullable
+        ]));
+
+        let initial_batch = RecordBatch::try_new(
+            initial_schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(StringArray::from(vec![
+                    Some("Alice"),
+                    Some("Bob"),
+                    None,
+                    Some("David"),
+                    Some("Eve"),
+                ])),
+                Arc::new(BooleanArray::from(vec![true, false, true, false, true])),
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50])),
+            ],
+        )?;
+
+        let table = DeltaOps::new_in_memory()
+            .write(vec![initial_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await?;
+
+        // Capture initial schema
+        let initial_fields: Vec<_> = table
+            .snapshot()
+            .unwrap()
+            .schema()
+            .fields()
+            .cloned()
+            .collect();
+
+        // Create new data with all nullable fields (typical from Pandas)
+        let new_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, true), // nullable in new data
+            Field::new("name", DataType::Utf8, true), // nullable
+            Field::new("active", DataType::Boolean, true), // nullable
+            Field::new("count", DataType::Int32, true), // nullable
+        ]));
+
+        let replacement_batch = RecordBatch::try_new(
+            new_schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(2), Some(4)])), // Replace ids 2 and 4
+                Arc::new(StringArray::from(vec![Some("Bob2"), Some("David2")])),
+                Arc::new(BooleanArray::from(vec![Some(true), Some(true)])),
+                Arc::new(Int32Array::from(vec![Some(200), Some(400)])),
+            ],
+        )?;
+
+        // Use replaceWhere to selectively overwrite
+        let table = DeltaOps(table)
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("id = 2 OR id = 4")
+            .await?;
+
+        // Verify schema is preserved
+        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+
+        for (i, field) in final_fields.iter().enumerate() {
+            assert_eq!(
+                field.is_nullable(),
+                initial_fields[i].is_nullable(),
+                "Field '{}' nullability should be preserved with replaceWhere",
+                field.name()
+            );
+        }
+
+        // Now test that constraints are still enforced with replaceWhere
+        let invalid_batch = RecordBatch::try_new(
+            new_schema,
+            vec![
+                Arc::new(Int64Array::from(vec![None, Some(3)])), // NULL in non-nullable id!
+                Arc::new(StringArray::from(vec![Some("Invalid"), Some("Valid")])),
+                Arc::new(BooleanArray::from(vec![Some(false), Some(false)])),
+                Arc::new(Int32Array::from(vec![Some(999), Some(333)])),
+            ],
+        )?;
+
+        let result = DeltaOps(table)
+            .write(vec![invalid_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("id = 1 OR id = 3")
+            .await;
+
+        assert!(
+            result.is_err(),
+            "replaceWhere should still enforce non-nullable constraints"
+        );
+
+        Ok(())
+    }
 }
