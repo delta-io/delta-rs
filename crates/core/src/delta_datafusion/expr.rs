@@ -52,7 +52,7 @@ use crate::{DeltaResult, DeltaTableError};
 
 /// This struct is like Datafusion's MakeArray but ensures that `element` is used rather than `item
 /// as the field name within the list.
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 struct MakeParquetArray {
     /// The actual upstream UDF, which we're just totally cheating and using
     actual: MakeArray,
