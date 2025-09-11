@@ -12,7 +12,7 @@ use deltalake_core::logstore::{
     StorageConfig,
 };
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
-use reqwest::Url;
+use reqwest::{StatusCode, Url};
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
@@ -120,6 +120,9 @@ pub enum UnityCatalogError {
         /// Error message
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    #[error("Non-200 returned on token acquisition: {0}")]
+    InvalidAzureCredentials(StatusCode),
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
