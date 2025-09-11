@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderValue, ACCEPT};
-use reqwest::{Method, Response, StatusCode};
+use reqwest::{Method, Response};
 use reqwest_middleware::ClientWithMiddleware;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -69,11 +69,11 @@ pub struct WorkspaceOAuthProvider {
 
 async fn non200_or_json<T: DeserializeOwned>(response: Response) -> Result<T, UnityCatalogError> {
     if !response.status().is_success() {
-        Err(UnityCatalogError::InvalidAzureCredentials(
-            response.status(),
+        Err(UnityCatalogError::InvalidCredentials(
+            response.json().await?,
         ))
     } else {
-        response.json().await.map_err(UnityCatalogError::from)
+        Ok(response.json().await?)
     }
 }
 
@@ -523,7 +523,14 @@ mod tests {
         server
             .mock_async(|when, then| {
                 when.path("/oidc/v1/token");
-                then.status(403);
+                then.status(401).body(
+                    r#"{
+                        "error":"invalid_client",
+                        "error_id":"abc123",
+                        "error_description":
+                        "Client authentication failed"
+                    }"#,
+                );
             })
             .await;
 
@@ -535,7 +542,7 @@ mod tests {
         assert!(token.is_err());
         assert_eq!(
             token.unwrap_err().to_string(),
-            "Non-200 returned on token acquisition: 403 Forbidden"
+            "Non-200 returned on token acquisition: invalid_client: [abc123] Client authentication failed"
         );
     }
 

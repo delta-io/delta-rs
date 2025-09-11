@@ -12,7 +12,7 @@ use deltalake_core::logstore::{
     StorageConfig,
 };
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
-use reqwest::{StatusCode, Url};
+use reqwest::Url;
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
@@ -24,6 +24,7 @@ use crate::credential::{
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
     ListTableSummariesResponse, TableTempCredentialsResponse, TemporaryTableCredentialsRequest,
+    TokenErrorResponse,
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
@@ -122,7 +123,7 @@ pub enum UnityCatalogError {
     },
 
     #[error("Non-200 returned on token acquisition: {0}")]
-    InvalidAzureCredentials(StatusCode),
+    InvalidCredentials(TokenErrorResponse),
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
