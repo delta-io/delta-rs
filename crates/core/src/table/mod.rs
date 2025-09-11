@@ -134,6 +134,19 @@ impl DeltaTable {
         }
     }
 
+    /// Update the current [`DeltaTable`] with an updated [`LogStore`]
+    ///
+    /// NOTE: This is for advanced users and allows swapping settings like AZURE_PROXY_URL
+    /// before passing the table to Datafusion, allowing for example to conditionally change or
+    /// remove proxy usage for metadata and data
+    pub fn with_new_store(&self, log_store: LogStoreRef) -> Self {
+        Self {
+            state: self.state.clone(),
+            log_store,
+            config: self.config.clone(),
+        }
+    }
+
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> ObjectStoreRef {
         self.log_store.object_store(None)
