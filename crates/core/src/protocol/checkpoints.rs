@@ -213,13 +213,6 @@ pub async fn cleanup_expired_logs_for(
     let object_store = log_store.object_store(None);
     let log_path = log_store.log_path();
 
-    // Step 0: require presence of _last_checkpoint for safety
-    let maybe_last_checkpoint = read_last_checkpoint(&object_store, log_path).await?;
-    let Some(last_checkpoint) = maybe_last_checkpoint else {
-        debug!("no last checkpoint. Exiting cleanup_expired_logs_for");
-        return Ok(0);
-    };
-
     // List all log entries under _delta_log
     let log_entries: Vec<Result<crate::ObjectMeta, _>> =
         object_store.list(Some(log_path)).collect().await;
@@ -266,22 +259,13 @@ pub async fn cleanup_expired_logs_for(
         .filter(|ver| *ver <= keep_version)
         .max();
 
-    // Allow use of _last_checkpoint if no safe_checkpoint file was found.
-    let safe_checkpoint_version = if let Some(v) = safe_checkpoint_version_opt {
-        v
-    } else {
-        // If _last_checkpoint exists and its version is <= keep_version, use it as the safe boundary.
-        // This aligns cleanup to an existing checkpoint as hinted by _last_checkpoint.
-        let last_cp_ver = last_checkpoint.version as i64;
-        if last_cp_ver as i64 <= keep_version {
-            last_cp_ver
-        } else {
-            debug!(
-                "Not cleaning metadata files, could not find a checkpoint with version <= keep_version ({})",
-                keep_version
-            );
-            return Ok(0);
-        }
+    // Exit if no safe_checkpoint file was found.
+    let Some(safe_checkpoint_version) = safe_checkpoint_version_opt else {
+        debug!(
+            "Not cleaning metadata files, could not find a checkpoint with version <= keep_version ({})",
+            keep_version
+        );
+        return Ok(0);
     };
 
     debug!("safe_checkpoint_version: {}", safe_checkpoint_version);
@@ -323,29 +307,6 @@ pub async fn cleanup_expired_logs_for(
     Ok(deleted.len())
 }
 
-/// Try reading the `_last_checkpoint` file.
-///
-/// Note that we typically want to ignore a missing/invalid `_last_checkpoint` file without failing
-/// the read. Thus, the semantics of this function are to return `None` if the file is not found or
-/// is invalid JSON. Unexpected/unrecoverable errors are returned as `Err` case and are assumed to
-/// cause failure.
-async fn read_last_checkpoint(
-    storage: &dyn ObjectStore,
-    log_path: &Path,
-) -> DeltaResult<Option<LastCheckpointHint>> {
-    const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
-    let file_path = log_path.child(LAST_CHECKPOINT_FILE_NAME);
-    let maybe_data = storage.get(&file_path).await;
-    let data = match maybe_data {
-        Ok(data) => data.bytes().await?,
-        Err(Error::NotFound { .. }) => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    Ok(serde_json::from_slice(&data)
-        .inspect_err(|e| warn!("invalid _last_checkpoint JSON: {e}"))
-        .ok())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -363,6 +324,29 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
     use crate::DeltaResult;
+
+    /// Try reading the `_last_checkpoint` file.
+    ///
+    /// Note that we typically want to ignore a missing/invalid `_last_checkpoint` file without failing
+    /// the read. Thus, the semantics of this function are to return `None` if the file is not found or
+    /// is invalid JSON. Unexpected/unrecoverable errors are returned as `Err` case and are assumed to
+    /// cause failure.
+    async fn read_last_checkpoint(
+        storage: &dyn ObjectStore,
+        log_path: &Path,
+    ) -> DeltaResult<Option<LastCheckpointHint>> {
+        const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
+        let file_path = log_path.child(LAST_CHECKPOINT_FILE_NAME);
+        let maybe_data = storage.get(&file_path).await;
+        let data = match maybe_data {
+            Ok(data) => data.bytes().await?,
+            Err(Error::NotFound { .. }) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        Ok(serde_json::from_slice(&data)
+            .inspect_err(|e| warn!("invalid _last_checkpoint JSON: {e}"))
+            .ok())
+    }
 
     #[tokio::test]
     async fn test_create_checkpoint_for() {
