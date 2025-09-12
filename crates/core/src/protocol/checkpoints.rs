@@ -215,10 +215,10 @@ pub async fn cleanup_expired_logs_for(
 
     // Step 0: require presence of _last_checkpoint for safety
     let maybe_last_checkpoint = read_last_checkpoint(&object_store, log_path).await?;
-    if maybe_last_checkpoint.is_none() {
+    let Some(last_checkpoint) = maybe_last_checkpoint else {
         debug!("no last checkpoint. Exiting cleanup_expired_logs_for");
         return Ok(0);
-    }
+    };
 
     // List all log entries under _delta_log
     let log_entries: Vec<Result<crate::ObjectMeta, _>> =
@@ -248,7 +248,8 @@ pub async fn cleanup_expired_logs_for(
 
     let min_retention_version = min_retention_version.unwrap_or(keep_version);
 
-    // Step 2: keep_version = min(keep_version, min_retention_version)
+    // Step 2: Move keep_version down to the minimum version inside the retention period to make sure
+    // every version inside the retention period is kept.
     keep_version = keep_version.min(min_retention_version);
 
     // Step 3: Find safe checkpoint with checkpoint_version <= keep_version (no ts restriction)
@@ -271,7 +272,7 @@ pub async fn cleanup_expired_logs_for(
     } else {
         // If _last_checkpoint exists and its version is <= keep_version, use it as the safe boundary.
         // This aligns cleanup to an existing checkpoint as hinted by _last_checkpoint.
-        let last_cp_ver = maybe_last_checkpoint.unwrap().version as i64;
+        let last_cp_ver = last_checkpoint.version as i64;
         if last_cp_ver as i64 <= keep_version {
             last_cp_ver
         } else {
