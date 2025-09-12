@@ -150,10 +150,10 @@ def test_load_as_version_datetime(date_value: str, expected_version):
 @pytest.mark.parametrize(
     ["date_value", "expected_version", "log_mtime_pairs"],
     [
-        ("2020-05-01T00:47:31-07:00", 0, [("00000000000000000000.json", 158839841.0)]),
+        ("2020-05-01T00:47:31-07:00", 1, [("00000000000000000000.json", 158839841.0)]),
         (
             "2020-05-02T22:47:31-07:00",
-            1,
+            2,
             [
                 ("00000000000000000000.json", 158839841.0),
                 ("00000000000000000001.json", 1588484851.0),
@@ -184,8 +184,7 @@ def test_load_as_version_datetime_with_logs_removed(
     dt.cleanup_metadata()
 
     file = log_path / f"0000000000000000000{expected_version - 1}.json"
-    if expected_version > 0:
-        assert file.exists()
+    assert not file.exists()
     dt = DeltaTable(tmp_path)
     dt.load_as_version(date_value)
     assert dt.version() == expected_version
