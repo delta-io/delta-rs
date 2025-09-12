@@ -17,6 +17,26 @@ pub struct ErrorResponse {
     pub details: Vec<ErrorDetails>,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct TokenErrorResponse {
+    /// The error code
+    pub error: String,
+    /// The error message
+    pub error_id: String,
+    /// The details of the error that happens
+    pub error_description: String,
+}
+
+impl fmt::Display for TokenErrorResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: [{}] {}",
+            self.error, self.error_id, self.error_description
+        )
+    }
+}
+
 #[derive(Deserialize, Default, Debug)]
 #[serde(default)]
 pub struct ErrorDetails {
