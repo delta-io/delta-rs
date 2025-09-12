@@ -4,8 +4,9 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderValue, ACCEPT};
-use reqwest::Method;
+use reqwest::{Method, Response};
 use reqwest_middleware::ClientWithMiddleware;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use super::UnityCatalogError;
@@ -66,6 +67,16 @@ pub struct WorkspaceOAuthProvider {
     client_secret: String,
 }
 
+async fn non200_or_json<T: DeserializeOwned>(response: Response) -> Result<T, UnityCatalogError> {
+    if !response.status().is_success() {
+        Err(UnityCatalogError::InvalidCredentials(
+            response.json().await?,
+        ))
+    } else {
+        Ok(response.json().await?)
+    }
+}
+
 impl WorkspaceOAuthProvider {
     pub fn new(
         client_id: impl Into<String>,
@@ -86,7 +97,7 @@ impl TokenCredential for WorkspaceOAuthProvider {
         &self,
         client: &ClientWithMiddleware,
     ) -> Result<TemporaryToken<String>, UnityCatalogError> {
-        let response: TokenResponse = client
+        let response = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
             .form(&[
@@ -97,10 +108,9 @@ impl TokenCredential for WorkspaceOAuthProvider {
             ])
             .send()
             .await
-            .map_err(UnityCatalogError::from)?
-            .json()
-            .await
             .map_err(UnityCatalogError::from)?;
+
+        let response: TokenResponse = non200_or_json(response).await?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -147,7 +157,7 @@ impl TokenCredential for ClientSecretOAuthProvider {
         &self,
         client: &ClientWithMiddleware,
     ) -> Result<TemporaryToken<String>, UnityCatalogError> {
-        let response: TokenResponse = client
+        let response = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
             .form(&[
@@ -158,10 +168,9 @@ impl TokenCredential for ClientSecretOAuthProvider {
             ])
             .send()
             .await
-            .map_err(UnityCatalogError::from)?
-            .json()
-            .await
             .map_err(UnityCatalogError::from)?;
+
+        let response: TokenResponse = non200_or_json(response).await?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -329,7 +338,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
             .map_err(|_| UnityCatalogError::FederatedTokenFile)?;
 
         // https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#third-case-access-token-request-with-a-federated-credential
-        let response: TokenResponse = client
+        let response = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
             .form(&[
@@ -344,10 +353,9 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
             ])
             .send()
             .await
-            .map_err(UnityCatalogError::from)?
-            .json()
-            .await
             .map_err(UnityCatalogError::from)?;
+
+        let response: TokenResponse = non200_or_json(response).await?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -356,7 +364,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
     }
 }
 
-fn expires_in_string<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+fn expires_in_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
@@ -445,13 +453,9 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             builder = builder.header("x-identity-header", val);
         };
 
-        let response: MsiTokenResponse = builder
-            .send()
-            .await
-            .map_err(UnityCatalogError::from)?
-            .json()
-            .await
-            .map_err(UnityCatalogError::from)?;
+        let response = builder.send().await.map_err(UnityCatalogError::from)?;
+
+        let response: MsiTokenResponse = non200_or_json(response).await?;
 
         Ok(TemporaryToken {
             token: response.access_token,
@@ -509,6 +513,37 @@ mod tests {
         let token = credential.fetch_token(&client).await.unwrap();
 
         assert_eq!(&token.token, "TOKEN");
+    }
+
+    #[tokio::test]
+    async fn test_invalid_response_code() {
+        let server = MockServer::start_async().await;
+        let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
+
+        server
+            .mock_async(|when, then| {
+                when.path("/oidc/v1/token");
+                then.status(401).body(
+                    r#"{
+                        "error":"invalid_client",
+                        "error_id":"abc123",
+                        "error_description":
+                        "Client authentication failed"
+                    }"#,
+                );
+            })
+            .await;
+
+        let credential =
+            WorkspaceOAuthProvider::new("client_id", "client_secret", server.base_url());
+
+        let token = credential.fetch_token(&client).await;
+
+        assert!(token.is_err());
+        assert_eq!(
+            token.unwrap_err().to_string(),
+            "Non-200 returned on token acquisition: invalid_client: [abc123] Client authentication failed"
+        );
     }
 
     #[tokio::test]
