@@ -528,6 +528,20 @@ class DeltaTable:
             history.append(commit)
         return history
 
+    def count(self) -> int:
+        """
+        Get the row count based on the history of the DeltaTable.
+
+        Returns:
+            The number of rows for this specific table
+        """
+        total_rows = 0
+
+        for value in self.get_add_actions().column("num_records").to_pylist():
+            total_rows += value
+
+        return total_rows
+
     def vacuum(
         self,
         retention_hours: int | None = None,
