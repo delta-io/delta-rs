@@ -1111,7 +1111,7 @@ pub(super) mod zorder {
         }
 
         // DataFusion UDF impl for zorder_key
-        #[derive(Debug)]
+        #[derive(Debug, Hash, PartialEq, Eq)]
         pub struct ZOrderUDF;
 
         impl ScalarUDFImpl for ZOrderUDF {
