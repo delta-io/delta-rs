@@ -147,7 +147,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Microsoft OneLake    | ![done] | ![done] |                                                                  |
 | Google Cloud Storage | ![done] | ![done] |                                                                  |
 | HDFS                 | ![done] | ![done] |                                                                  |
-| LakeFS               | ![done] | ![done] |   Python: Rust engine writer only supported                      |
+| LakeFS               | ![done] | ![done] |                                                                  |
 
 ### Supported Operations
 
