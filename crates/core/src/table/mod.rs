@@ -229,7 +229,10 @@ impl DeltaTable {
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
     /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
     /// it returns all commits from the earliest commit.
-    pub async fn history(&self, limit: Option<usize>) -> Result<Vec<CommitInfo>, DeltaTableError> {
+    pub async fn history(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
         let infos = self
             .snapshot()?
             .snapshot
@@ -238,7 +241,18 @@ impl DeltaTable {
             .await?
             .try_collect::<Vec<_>>()
             .await?;
-        Ok(infos.into_iter().flatten().collect())
+        Ok(infos.into_iter().flatten())
+    }
+
+    #[cfg(test)]
+    /// We have enough internal tests that just need to check the last commit of the table.
+    ///
+    /// This is a silly convenience function to reduce some copy-paste in tests
+    pub(crate) async fn last_commit(&self) -> Result<CommitInfo, DeltaTableError> {
+        let mut infos: Vec<_> = self.history(Some(1)).await?.collect();
+        infos.pop().ok_or(DeltaTableError::Generic(
+            "Somehow there is nothing in the history!".into(),
+        ))
     }
 
     /// Stream all logical files matching the provided `PartitionFilter`s.

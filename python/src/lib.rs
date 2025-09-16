@@ -1041,8 +1041,7 @@ impl RawDeltaTable {
             }
         })?;
         Ok(history
-            .iter()
-            .map(|c| serde_json::to_string(c).unwrap())
+            .map(|c| serde_json::to_string(&c).unwrap())
             .collect())
     }
 
