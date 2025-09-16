@@ -149,7 +149,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let context = setup_test(table_uri).await?;
     let table = context.table;
-    let history = table.history(Some(10)).await?;
+    let history: Vec<_> = table.history(Some(10)).await?.collect();
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
 

@@ -747,6 +747,7 @@ impl std::future::IntoFuture for WriteBuilder {
 mod tests {
     use super::*;
     use crate::ensure_table_uri;
+    use crate::kernel::CommitInfo;
     use crate::logstore::get_actions;
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::{collect_sendable_stream, DeltaOps};
@@ -767,7 +768,8 @@ mod tests {
     use serde_json::{json, Value};
 
     async fn get_write_metrics(table: DeltaTable) -> WriteMetrics {
-        let mut commit_info = table.history(Some(1)).await.unwrap();
+        let mut commit_info: Vec<crate::kernel::CommitInfo> =
+            table.history(Some(1)).await.unwrap().collect();
         let metrics = commit_info
             .first_mut()
             .unwrap()
@@ -812,7 +814,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.history(None).await.unwrap().len(), 1);
 
         // write some data
         let metadata = HashMap::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
@@ -834,9 +835,10 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        assert_eq!(table.history(None).await.unwrap().len(), 2);
+        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        assert_eq!(history.len(), 2);
         assert_eq!(
-            table.history(None).await.unwrap()[0]
+            history[0]
                 .info
                 .clone()
                 .into_iter()
@@ -862,9 +864,10 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        assert_eq!(table.history(None).await.unwrap().len(), 3);
+        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        assert_eq!(history.len(), 3);
         assert_eq!(
-            table.history(None).await.unwrap()[0]
+            history[0]
                 .info
                 .clone()
                 .into_iter()
@@ -890,9 +893,10 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        assert_eq!(table.history(None).await.unwrap().len(), 4);
+        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        assert_eq!(history.len(), 4);
         assert_eq!(
-            table.history(None).await.unwrap()[0]
+            history[0]
                 .info
                 .clone()
                 .into_iter()

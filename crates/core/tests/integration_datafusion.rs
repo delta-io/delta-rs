@@ -1750,7 +1750,7 @@ mod insert_into_tests {
         assert_eq!(partition_columns.len(), 1);
         assert_eq!(partition_columns[0], "part");
 
-        let history = final_table.history(None).await?;
+        let history: Vec<_> = final_table.history(None).await?.collect();
         assert_eq!(history.len(), 2); // CREATE + SQL INSERT
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
 
@@ -1903,7 +1903,7 @@ mod insert_into_tests {
 
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         assert_eq!(final_table.version(), Some(2));
-        let history = final_table.history(None).await?;
+        let history: Vec<_> = final_table.history(None).await?.collect();
 
         assert_eq!(history.len(), 3); // CREATE + 2 INSERTTs
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
@@ -2020,7 +2020,7 @@ mod insert_into_tests {
 
         assert_eq!(final_table.version(), Some(1)); // CREATE + OVERWRITE = version 1 (the initial append might not commit separately)
 
-        let history = final_table.history(None).await?;
+        let history: Vec<_> = final_table.history(None).await?.collect();
         assert_eq!(history.len(), 2); // CREATE + OVERWRITE
 
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
@@ -2140,7 +2140,7 @@ mod insert_into_tests {
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         assert_eq!(final_table.version(), Some(1)); // CREATE + SQL INSERT = version 1
 
-        let history = final_table.history(None).await?;
+        let history: Vec<_> = final_table.history(None).await?.collect();
         assert_eq!(history.len(), 2); // CREATE + SQL INSERT
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
 
