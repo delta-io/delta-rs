@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.11.0"
+version = "0.12.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 # path dependencies
-deltalake-core = { version = "0.28.0", path = "../core" , features = ["cloud"]}
+deltalake-core = { version = "0.29.0", path = "../core" , features = ["cloud"]}
 
 # workspace dependencies
 async-trait = { workspace = true }
