@@ -258,8 +258,7 @@ mod tests {
     }
 
     async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         last_commit
             .operation_parameters
             .as_ref()

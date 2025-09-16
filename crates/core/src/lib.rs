@@ -590,18 +590,24 @@ mod tests {
 
         let table = crate::open_table_with_version(table_url, 1).await.unwrap();
 
-        let history1 = table.history(None).await.expect("Cannot get table history");
-        let history2 = latest_table
+        let history1: Vec<_> = table
             .history(None)
             .await
-            .expect("Cannot get table history");
+            .expect("Cannot get table history")
+            .collect();
+        let history2: Vec<_> = latest_table
+            .history(None)
+            .await
+            .expect("Cannot get table history")
+            .collect();
 
         assert_eq!(history1, history2);
 
-        let history3 = latest_table
+        let history3: Vec<_> = latest_table
             .history(Some(5))
             .await
-            .expect("Cannot get table history");
+            .expect("Cannot get table history")
+            .collect();
         assert_eq!(history3.len(), 5);
     }
 
@@ -666,18 +672,20 @@ mod tests {
         let table = crate::open_table(table_url).await.unwrap();
 
         // load history for table version with available log file
-        let history = table
+        let history: Vec<_> = table
             .history(Some(5))
             .await
-            .expect("Cannot get table history");
+            .expect("Cannot get table history")
+            .collect();
 
         assert_eq!(history.len(), 5);
 
         // load history for table version without log file
-        let history = table
+        let history: Vec<_> = table
             .history(Some(10))
             .await
-            .expect("Cannot get table history");
+            .expect("Cannot get table history")
+            .collect();
 
         assert_eq!(history.len(), 8);
     }
@@ -729,14 +737,16 @@ mod tests {
 
         let version_0_table = crate::open_table_with_version(table_url, 0).await.unwrap();
 
-        let version_0_history = version_0_table
+        let version_0_history: Vec<_> = version_0_table
             .history(None)
             .await
-            .expect("Cannot get table history");
-        let latest_table_history = latest_table
+            .expect("Cannot get table history")
+            .collect();
+        let latest_table_history: Vec<_> = latest_table
             .history(None)
             .await
-            .expect("Cannot get table history");
+            .expect("Cannot get table history")
+            .collect();
 
         assert_eq!(latest_table_history, version_0_history);
     }
