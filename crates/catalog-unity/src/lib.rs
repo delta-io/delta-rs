@@ -24,6 +24,7 @@ use crate::credential::{
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
     ListTableSummariesResponse, TableTempCredentialsResponse, TemporaryTableCredentialsRequest,
+    TokenErrorResponse,
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
@@ -120,6 +121,9 @@ pub enum UnityCatalogError {
         /// Error message
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    #[error("Non-200 returned on token acquisition: {0}")]
+    InvalidCredentials(TokenErrorResponse),
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
