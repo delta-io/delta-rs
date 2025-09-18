@@ -37,7 +37,7 @@ aws-config = { version = "1.5", default-features = false, features = [
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-dynamodb = { version = "=1.79.0", default-features = false, features = [
+aws-sdk-dynamodb = { version = "=1.93.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
