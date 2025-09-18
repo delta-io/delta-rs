@@ -127,9 +127,10 @@ impl DeltaTableBuilder {
         }
 
         debug!("creating table builder with {table_url}");
+        let actual_table_url = parse_table_uri(&table_url)?;
 
         Ok(Self {
-            table_url,
+            table_url: actual_table_url,
             storage_backend: None,
             version: DeltaVersion::default(),
             storage_options: None,
@@ -264,6 +265,7 @@ impl DeltaTableBuilder {
     /// Build a delta storage backend for the given config
     pub fn build_storage(&self) -> DeltaResult<LogStoreRef> {
         debug!("build_storage() with {}", self.table_url);
+        let location = self.table_url.clone();
 
         let mut storage_config = StorageConfig::parse_options(self.storage_options())?;
         if let Some(io_runtime) = self.table_config.io_runtime.clone() {
@@ -272,14 +274,11 @@ impl DeltaTableBuilder {
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), self.table_url.clone(), storage_config)
+            crate::logstore::logstore_with(store.clone(), location, storage_config)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
-            debug!(
-                "Loading a logstore based off the location: {:?}",
-                self.table_url
-            );
-            crate::logstore::logstore_for(self.table_url.clone(), storage_config)
+            debug!("Loading a logstore based off the location: {location:?}");
+            crate::logstore::logstore_for(location, storage_config)
         }
     }
 
@@ -589,6 +588,13 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
+    }
+
+    #[test]
+    fn test_invalid_uri() {
+        // Urls should round trips as-is
+        DeltaTableBuilder::from_uri(Url::parse("this://is.nonsense").unwrap())
+            .expect_err("this should be an error");
     }
 
     #[test]
