@@ -299,7 +299,6 @@ pub fn str_is_truthy(val: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maplit::hashmap;
     use std::time::Duration;
 
     // Test retry config parsing
@@ -307,13 +306,13 @@ mod tests {
     #[test]
     fn test_retry_config_from_options() {
         use object_store::RetryConfig;
-        let options = hashmap! {
-            "max_retries".to_string() => "100".to_string() ,
-            "retry_timeout".to_string()  => "300s".to_string() ,
-            "backoff_config.init_backoff".to_string()  => "20s".to_string() ,
-            "backoff_config.max_backoff".to_string()  => "1h".to_string() ,
-            "backoff_config.base".to_string()  =>  "50.0".to_string() ,
-        };
+        let options = HashMap::from([
+            ("max_retries".to_string(), "100".to_string()),
+            ("retry_timeout".to_string(), "300s".to_string()),
+            ("backoff_config.init_backoff".to_string(), "20s".to_string()),
+            ("backoff_config.max_backoff".to_string(), "1h".to_string()),
+            ("backoff_config.base".to_string(), "50.0".to_string()),
+        ]);
         let (retry_config, remainder): (RetryConfig, _) = super::try_parse_impl(options).unwrap();
         assert!(remainder.is_empty());
 
@@ -329,11 +328,11 @@ mod tests {
     #[test]
     fn test_parse_result_handling() {
         use object_store::RetryConfig;
-        let options = hashmap! {
-            "retry_timeout".to_string() => "300s".to_string(),
-            "max_retries".to_string() => "not_a_number".to_string(),
-            "unknown_key".to_string() => "value".to_string(),
-        };
+        let options = HashMap::from([
+            ("retry_timeout".to_string(), "300s".to_string()),
+            ("max_retries".to_string(), "not_a_number".to_string()),
+            ("unknown_key".to_string(), "value".to_string()),
+        ]);
 
         let result: ParseResult<RetryConfig> = options.into_iter().collect();
         println!("result: {result:?}");
@@ -348,11 +347,11 @@ mod tests {
     #[cfg(feature = "cloud")]
     #[test]
     fn test_storage_config_parsing() {
-        let options = hashmap! {
-            "max_retries".to_string() => "5".to_string(),
-            "retry_timeout".to_string() => "10s".to_string(),
-            "unknown_prop".to_string() => "value".to_string(),
-        };
+        let options = HashMap::from([
+            ("max_retries".to_string(), "5".to_string()),
+            ("retry_timeout".to_string(), "10s".to_string()),
+            ("unknown_prop".to_string(), "value".to_string()),
+        ]);
 
         let config = StorageConfig::parse_options(options).unwrap();
         assert_eq!(config.retry.max_retries, 5);
