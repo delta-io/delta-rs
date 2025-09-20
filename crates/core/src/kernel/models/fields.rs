@@ -1,5 +1,5 @@
 //! Schema definitions for action types
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
 
@@ -270,9 +270,10 @@ fn deletion_vector_field() -> StructField {
     )
 }
 
-pub(crate) fn log_schema_ref() -> &'static Arc<StructType> {
-    static LOG_SCHEMA_REF: LazyLock<Arc<StructType>> =
-        LazyLock::new(|| Arc::new(LOG_SCHEMA.clone()));
+#[cfg(feature = "datafusion")]
+pub(crate) fn log_schema_ref() -> &'static std::sync::Arc<StructType> {
+    static LOG_SCHEMA_REF: LazyLock<std::sync::Arc<StructType>> =
+        LazyLock::new(|| std::sync::Arc::new(LOG_SCHEMA.clone()));
 
     &LOG_SCHEMA_REF
 }

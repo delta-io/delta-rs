@@ -677,6 +677,7 @@ impl EagerSnapshot {
     }
 }
 
+#[cfg(any(test, feature = "integration_test"))]
 pub(crate) fn partitions_schema(
     schema: &StructType,
     partition_columns: &[String],
