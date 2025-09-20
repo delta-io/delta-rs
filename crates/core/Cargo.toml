@@ -83,7 +83,7 @@ percent-encoding = "2"
 tracing = { workspace = true }
 rand = "0.8"
 sqlparser = { version = "0.56.0" }
-humantime = { version = "2.1.0" }
+humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
 [dev-dependencies]
@@ -108,7 +108,7 @@ json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 native-tls = ["delta_kernel/default-engine-native-tls"]
 rustls = ["delta_kernel/default-engine-rustls"]
-cloud = ["object_store/cloud"]
+cloud = ["object_store/cloud", "dep:humantime"]
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
