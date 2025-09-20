@@ -262,6 +262,7 @@ pub fn parse_f64(value: &str) -> DeltaResult<f64> {
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as f64")))
 }
 
+#[cfg(feature = "cloud")]
 pub fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
     humantime::parse_duration(value)
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
@@ -369,15 +370,19 @@ mod tests {
         assert_eq!(parse_f64("3.14").unwrap(), 3.14);
         assert!(parse_f64("not_a_number").is_err());
 
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert!(parse_duration("invalid").is_err());
-
         assert!(parse_bool("true").unwrap());
         assert!(parse_bool("1").unwrap());
         assert!(!parse_bool("false").unwrap());
         assert!(!parse_bool("0").unwrap());
 
         assert_eq!(parse_string("test").unwrap(), "test");
+    }
+
+    #[cfg(feature = "cloud")]
+    #[test]
+    fn test_parsing_duration() {
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+        assert!(parse_duration("invalid").is_err());
     }
 
     // Test str_is_truthy function
