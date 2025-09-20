@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_array::{Array, RecordBatch, StringArray, StructArray};
+use arrow_array::RecordBatch;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
@@ -9,14 +9,6 @@ use indexmap::IndexMap;
 
 use super::super::scalars::ScalarExt;
 use super::iterators::LogicalFileView;
-
-use crate::kernel::arrow::extract::extract_and_cast;
-use crate::{DeltaResult, DeltaTableError};
-
-const COL_NUM_RECORDS: &str = "numRecords";
-const COL_MIN_VALUES: &str = "minValues";
-const COL_MAX_VALUES: &str = "maxValues";
-const COL_NULL_COUNT: &str = "nullCount";
 
 pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
@@ -134,6 +126,7 @@ mod datafusion {
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
     use arrow_arith::aggregate::sum;
+    use arrow_array::{Array, RecordBatch, StringArray, StructArray};
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
     use delta_kernel::expressions::Expression;
@@ -143,7 +136,15 @@ mod datafusion {
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
+    use crate::{DeltaResult, DeltaTableError};
+
+    use crate::kernel::arrow::extract::extract_and_cast;
     use crate::kernel::ARROW_HANDLER;
+
+    const COL_NUM_RECORDS: &str = "numRecords";
+    const COL_MIN_VALUES: &str = "minValues";
+    const COL_MAX_VALUES: &str = "maxValues";
+    const COL_NULL_COUNT: &str = "nullCount";
 
     #[derive(Debug, Default, Clone)]
     enum AccumulatorType {

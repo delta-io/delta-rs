@@ -406,6 +406,7 @@ pub fn get_num_idx_cols_and_stats_columns(
 /// Get the target_file_size from the table configuration in the sates
 /// If table_config does not exist (only can occur in the first write action) it takes
 /// the configuration that was passed to the writerBuilder.
+#[cfg(feature = "datafusion")]
 pub(crate) fn get_target_file_size(
     config: Option<&TableProperties>,
     configuration: &HashMap<String, Option<String>>,
