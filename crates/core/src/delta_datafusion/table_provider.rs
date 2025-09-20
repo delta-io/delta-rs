@@ -57,7 +57,7 @@ use crate::delta_datafusion::{
     LogDataHandler,
 };
 use crate::kernel::schema::cast::cast_record_batch;
-use crate::kernel::transaction::CommitBuilder;
+use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
 use crate::kernel::{Action, Add, Remove};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
@@ -451,6 +451,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub async fn build(self) -> DeltaResult<DeltaScan> {
+        PROTOCOL.can_read_from(self.snapshot)?;
         let config = match self.config {
             Some(config) => config,
             None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
