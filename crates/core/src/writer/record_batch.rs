@@ -29,7 +29,6 @@ use super::utils::{
     ShareableBuffer,
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
-use crate::ensure_table_uri;
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::MetadataExt as _;
