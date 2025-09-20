@@ -166,7 +166,6 @@ impl ProvideCredentials for OptionsCredentialsProvider {
 #[cfg(test)]
 mod options_tests {
     use super::*;
-    use maplit::hashmap;
 
     #[test]
     fn test_empty_options_error() {
@@ -181,10 +180,10 @@ mod options_tests {
 
     #[test]
     fn test_uppercase_options_resolve() {
-        let options = hashmap! {
-            "AWS_ACCESS_KEY_ID".into() => "key".into(),
-            "AWS_SECRET_ACCESS_KEY".into() => "secret".into(),
-        };
+        let options = HashMap::from([
+            ("AWS_ACCESS_KEY_ID".into(), "key".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "secret".into()),
+        ]);
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
         assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
@@ -195,10 +194,10 @@ mod options_tests {
 
     #[test]
     fn test_lowercase_options_resolve() {
-        let options = hashmap! {
-            "aws_access_key_id".into() => "key".into(),
-            "aws_secret_access_key".into() => "secret".into(),
-        };
+        let options = HashMap::from([
+            ("AWS_ACCESS_KEY_ID".into(), "key".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "secret".into()),
+        ]);
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
         assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
@@ -295,17 +294,21 @@ pub async fn resolve_credentials(options: &HashMap<String, String>) -> DeltaResu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants;
-    use maplit::hashmap;
     use serial_test::serial;
 
     #[tokio::test]
     #[serial]
     async fn test_options_credentials_provider() {
-        let options = hashmap! {
-            constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-            constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        };
+        let options = HashMap::from([
+            (
+                constants::AWS_ACCESS_KEY_ID.to_string(),
+                "test_id".to_string(),
+            ),
+            (
+                constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                "test_secret".to_string(),
+            ),
+        ]);
 
         let config = resolve_credentials(&options).await;
         assert!(config.is_ok(), "{config:?}");
@@ -334,11 +337,20 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_options_credentials_provider_session_token() {
-        let options = hashmap! {
-            constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-            constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-            constants::AWS_SESSION_TOKEN.to_string() => "test_token".to_string(),
-        };
+        let options = HashMap::from([
+            (
+                constants::AWS_ACCESS_KEY_ID.to_string(),
+                "test_id".to_string(),
+            ),
+            (
+                constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                "test_secret".to_string(),
+            ),
+            (
+                constants::AWS_SESSION_TOKEN.to_string(),
+                "test_token".to_string(),
+            ),
+        ]);
 
         let config = resolve_credentials(&options)
             .await
@@ -362,10 +374,16 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_object_store_credential_provider() -> DeltaResult<()> {
-        let options = hashmap! {
-            constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-            constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        };
+        let options = HashMap::from([
+            (
+                constants::AWS_ACCESS_KEY_ID.to_string(),
+                "test_id".to_string(),
+            ),
+            (
+                constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                "test_secret".to_string(),
+            ),
+        ]);
         let sdk_config = resolve_credentials(&options)
             .await
             .expect("Failed to resolve credentials for the test");
@@ -386,10 +404,16 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_object_store_credential_provider_consistency() -> DeltaResult<()> {
-        let options = hashmap! {
-            constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-            constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-        };
+        let options = HashMap::from([
+            (
+                constants::AWS_ACCESS_KEY_ID.to_string(),
+                "test_id".to_string(),
+            ),
+            (
+                constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                "test_secret".to_string(),
+            ),
+        ]);
         let sdk_config = resolve_credentials(&options)
             .await
             .expect("Failed to resolve credentijals for the test");

@@ -324,10 +324,16 @@ impl DynamoDbLockClient {
     }
 
     fn get_primary_key(&self, version: i64, table_path: &str) -> HashMap<String, AttributeValue> {
-        maplit::hashmap! {
-            constants::ATTR_TABLE_PATH.to_owned()  => string_attr(table_path),
-            constants::ATTR_FILE_NAME.to_owned()   => string_attr(format!("{version:020}.json")),
-        }
+        HashMap::from([
+            (
+                constants::ATTR_TABLE_PATH.to_owned(),
+                string_attr(table_path),
+            ),
+            (
+                constants::ATTR_FILE_NAME.to_owned(),
+                string_attr(format!("{version:020}.json")),
+            ),
+        ])
     }
 
     /// Read a log entry from DynamoDb.
@@ -434,9 +440,10 @@ impl DynamoDbLockClient {
                         .limit(limit.try_into().unwrap_or(i32::MAX))
                         .scan_index_forward(false)
                         .key_condition_expression(format!("{} = :tn", constants::ATTR_TABLE_PATH))
-                        .set_expression_attribute_values(Some(
-                            maplit::hashmap!(":tn".into() => string_attr(table_path)),
-                        ))
+                        .set_expression_attribute_values(Some(HashMap::from([(
+                            ":tn".into(),
+                            string_attr(table_path),
+                        )])))
                         .send()
                         .await
                 },
@@ -483,11 +490,11 @@ impl DynamoDbLockClient {
                         .table_name(self.get_lock_table_name())
                         .set_key(Some(self.get_primary_key(version, table_path)))
                         .update_expression("SET complete = :c, expireTime = :e".to_owned())
-                        .set_expression_attribute_values(Some(maplit::hashmap! {
-                            ":c".to_owned() => string_attr("true"),
-                            ":e".to_owned() => num_attr(seconds_since_epoch),
-                            ":f".into() => string_attr("false"),
-                        }))
+                        .set_expression_attribute_values(Some(HashMap::from([
+                            (":c".to_owned(), string_attr("true")),
+                            (":e".to_owned(), num_attr(seconds_since_epoch)),
+                            (":f".into(), string_attr("false")),
+                        ])))
                         .condition_expression(constants::CONDITION_UPDATE_INCOMPLETE)
                         .send()
                         .await?;
@@ -529,9 +536,10 @@ impl DynamoDbLockClient {
                     .delete_item()
                     .table_name(self.get_lock_table_name())
                     .set_key(Some(self.get_primary_key(version, table_path)))
-                    .set_expression_attribute_values(Some(maplit::hashmap! {
-                        ":f".into() => string_attr("false"),
-                    }))
+                    .set_expression_attribute_values(Some(HashMap::from([(
+                        ":f".into(),
+                        string_attr("false"),
+                    )])))
                     .condition_expression(constants::CONDITION_DELETE_INCOMPLETE.as_str())
                     .send()
                     .await?;
@@ -627,12 +635,25 @@ fn create_value_map(
 ) -> HashMap<String, AttributeValue> {
     // cut off `_delta_log` part: temp_path in DynamoDb is relative to `_delta_log` not table root.
     let temp_path = Path::from_iter(commit_entry.temp_path.parts().skip(1));
-    let mut value_map = maplit::hashmap! {
-        constants::ATTR_TABLE_PATH.to_owned()  => string_attr(table_path),
-        constants::ATTR_FILE_NAME.to_owned()   => string_attr(format!("{:020}.json", commit_entry.version)),
-        constants::ATTR_TEMP_PATH.to_owned()   => string_attr(temp_path),
-        constants::ATTR_COMPLETE.to_owned()    => string_attr(if commit_entry.complete { "true" } else { "false" }),
-    };
+    let mut value_map = HashMap::from([
+        (
+            constants::ATTR_TABLE_PATH.to_owned(),
+            string_attr(table_path),
+        ),
+        (
+            constants::ATTR_FILE_NAME.to_owned(),
+            string_attr(format!("{:020}.json", commit_entry.version)),
+        ),
+        (constants::ATTR_TEMP_PATH.to_owned(), string_attr(temp_path)),
+        (
+            constants::ATTR_COMPLETE.to_owned(),
+            string_attr(if commit_entry.complete {
+                "true"
+            } else {
+                "false"
+            }),
+        ),
+    ]);
     commit_entry.expire_time.as_ref().map(|t| {
         value_map.insert(
             constants::ATTR_EXPIRE_TIME.to_owned(),
