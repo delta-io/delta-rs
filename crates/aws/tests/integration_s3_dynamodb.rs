@@ -25,7 +25,6 @@ use serial_test::serial;
 use tracing::log::*;
 use uuid::Uuid;
 
-use maplit::hashmap;
 use object_store::{PutOptions, PutPayload};
 use url::Url;
 
@@ -34,11 +33,8 @@ use common::*;
 
 pub type TestResult<T> = Result<T, Box<dyn std::error::Error + 'static>>;
 
-static OPTIONS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    hashmap! {
-        "allow_http".to_owned() => "true".to_owned(),
-    }
-});
+static OPTIONS: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| HashMap::from([("allow_http".to_owned(), "true".to_owned())]));
 static S3_OPTIONS: LazyLock<S3StorageOptions> =
     LazyLock::new(|| S3StorageOptions::from_map(&OPTIONS).unwrap());
 
@@ -101,12 +97,21 @@ async fn test_create_s3_table() -> TestResult<()> {
         DataType::Primitive(PrimitiveType::Integer),
         true,
     )]);
-    let storage_options: HashMap<String, String> = hashmap! {
-        deltalake_aws::constants::AWS_ALLOW_HTTP.into() => "true".into(),
+    let storage_options: HashMap<String, String> = HashMap::from([
+        (
+            deltalake_aws::constants::AWS_ALLOW_HTTP.into(),
+            "true".into(),
+        ),
         // Despite not being in AWS, we should force credential resolution
-        deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into() => "true".into(),
-        deltalake_aws::constants::AWS_ENDPOINT_URL.into()  => "http://localhost:4566".into(),
-    };
+        (
+            deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into(),
+            "true".into(),
+        ),
+        (
+            deltalake_aws::constants::AWS_ENDPOINT_URL.into(),
+            "http://localhost:4566".into(),
+        ),
+    ]);
     let storage_config = StorageConfig::parse_options(storage_options)?;
     let log_store = logstore_for(Url::parse(&table_uri)?, storage_config)?;
 
@@ -385,10 +390,10 @@ impl Worker {
 
     async fn commit_file(&mut self, seq_no: i64) -> (i64, String) {
         let name = format!("{}-{seq_no}", self.name);
-        let metadata = Some(maplit::hashmap! {
-            "worker".to_owned() => Value::String(self.name.clone()),
-            "current_version".to_owned() => Value::Number( seq_no.into() ),
-        });
+        let metadata = Some(HashMap::from([
+            ("worker".to_owned(), Value::String(self.name.clone())),
+            ("current_version".to_owned(), Value::Number(seq_no.into())),
+        ]));
         let committed_as = append_to_table(&name, &self.table, metadata).await.unwrap();
 
         self.table.update().await.unwrap();

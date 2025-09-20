@@ -29,34 +29,33 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
 
 # crates.io dependencies
-aws-smithy-runtime-api = { version = "1.7" }
-aws-smithy-runtime = { version = "1.7", optional = true }
+aws-smithy-runtime-api = { version = "1.8" }
+aws-smithy-runtime = { version = "1.8", optional = true }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
-aws-config = { version = "1.5", default-features = false, features = [
+aws-config = { version = "1.8", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-dynamodb = { version = "=1.79.0", default-features = false, features = [
+aws-sdk-dynamodb = { version = "1.93.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "=1.73.0", default-features = false, features = [
+aws-sdk-sts = { version = "1.86.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
 backon = { version = "1", default-features = false, features = ["tokio-sleep"] }
 hyper-tls = { version = "0.5", optional = true }
-maplit = "1"
 
 [dev-dependencies]
-deltalake-core = { path = "../core" }
 chrono = { workspace = true }
-serial_test = "3"
+deltalake-core = { path = "../core" }
 deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
 rand = "0.8"
 serde_json = { workspace = true }
+serial_test = "3"
 
 [features]
 default = ["rustls"]
