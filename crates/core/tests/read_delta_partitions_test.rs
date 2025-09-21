@@ -8,8 +8,8 @@ mod fs_common;
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
     use deltalake_core::kernel::Add;
-    use maplit::hashmap;
     use serde_json::json;
+    use std::collections::HashMap;
 
     let mut table = fs_common::create_table_from_json(
         "../test/tests/data/read_null_partitions_from_checkpoint",
@@ -28,9 +28,7 @@ async fn read_null_partitions_from_checkpoint() {
     let delta_log = std::path::Path::new(&table.table_uri()).join("_delta_log");
 
     let add = |partition: Option<String>| Add {
-        partition_values: hashmap! {
-            "color".to_string() => partition
-        },
+        partition_values: HashMap::from([("color".to_string(), partition)]),
         ..fs_common::add(0)
     };
 

@@ -20,11 +20,11 @@ pub async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult 
 async fn prepare_table(
     context: &IntegrationContext,
 ) -> Result<(DeltaTable, String), Box<dyn std::error::Error + 'static>> {
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "Id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
+    )])?;
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
 

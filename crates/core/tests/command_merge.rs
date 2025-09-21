@@ -31,7 +31,7 @@ async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTab
 }
 
 fn get_delta_schema() -> StructType {
-    StructType::new(vec![
+    StructType::try_new(vec![
         StructField::new(
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
@@ -48,6 +48,7 @@ fn get_delta_schema() -> StructType {
             true,
         ),
     ])
+    .unwrap()
 }
 
 fn get_arrow_schema() -> Arc<ArrowSchema> {
