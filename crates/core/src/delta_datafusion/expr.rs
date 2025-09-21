@@ -605,7 +605,7 @@ mod test {
     }
 
     async fn setup_table() -> DeltaTable {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new(
                 "id".to_string(),
                 DataType::Primitive(PrimitiveType::String),
@@ -668,18 +668,24 @@ mod test {
             ),
             StructField::new(
                 "_struct".to_string(),
-                DataType::Struct(Box::new(StructType::new(vec![
-                    StructField::new("a", DataType::Primitive(PrimitiveType::Integer), true),
-                    StructField::new(
-                        "nested",
-                        DataType::Struct(Box::new(StructType::new(vec![StructField::new(
-                            "b",
-                            DataType::Primitive(PrimitiveType::Integer),
+                DataType::Struct(Box::new(
+                    StructType::try_new(vec![
+                        StructField::new("a", DataType::Primitive(PrimitiveType::Integer), true),
+                        StructField::new(
+                            "nested",
+                            DataType::Struct(Box::new(
+                                StructType::try_new(vec![StructField::new(
+                                    "b",
+                                    DataType::Primitive(PrimitiveType::Integer),
+                                    true,
+                                )])
+                                .unwrap(),
+                            )),
                             true,
-                        )]))),
-                        true,
-                    ),
-                ]))),
+                        ),
+                    ])
+                    .unwrap(),
+                )),
                 true,
             ),
             StructField::new(
@@ -690,7 +696,8 @@ mod test {
                 ))),
                 true,
             ),
-        ]);
+        ])
+        .unwrap();
 
         let table = DeltaOps::new_in_memory()
             .create()

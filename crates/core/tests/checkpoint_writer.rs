@@ -180,6 +180,7 @@ mod simple_checkpoint {
 
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
+    use std::collections::HashMap;
     use std::fs::{FileTimes, OpenOptions};
     use std::ops::Sub;
     use std::time::{Duration, SystemTime};

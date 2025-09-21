@@ -74,12 +74,13 @@ impl ActionFactory {
             HashMap::new()
         };
 
-        let data_schema = StructType::new(
+        let data_schema = StructType::try_new(
             schema
                 .fields()
                 .filter(|f| !partition_columns.contains(f.name()))
                 .cloned(),
-        );
+        )
+        .unwrap();
 
         let batch = DataFactory::record_batch(&data_schema, 10, &bounds).unwrap();
         let stats = DataFactory::file_stats(&batch).unwrap();
