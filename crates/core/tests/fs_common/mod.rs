@@ -90,11 +90,12 @@ pub async fn create_table(
     fs::create_dir_all(&log_dir).unwrap();
     cleanup_dir_except(log_dir, vec![]);
 
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
+    )])
+    .unwrap();
 
     create_test_table(path, schema, Vec::new(), config.unwrap_or_default()).await
 }

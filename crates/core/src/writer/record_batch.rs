@@ -969,7 +969,7 @@ mod tests {
                 DataType as DeltaDataType, PrimitiveType, StructField, StructType,
             };
 
-            let table_schema = StructType::new(vec![
+            let table_schema = StructType::try_new(vec![
                 StructField::new(
                     "id".to_string(),
                     DeltaDataType::Primitive(PrimitiveType::String),
@@ -985,7 +985,8 @@ mod tests {
                     DeltaDataType::Primitive(PrimitiveType::String),
                     true,
                 ),
-            ]);
+            ])
+            .unwrap();
             let table_dir = tempfile::tempdir().unwrap();
             let table_path = table_dir.path();
 
