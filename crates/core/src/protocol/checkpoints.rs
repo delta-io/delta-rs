@@ -22,10 +22,13 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::logstore::{LogStore, LogStoreExt};
+use crate::logstore::{LogStore, LogStoreExt, DELTA_LOG_REGEX};
 use crate::table::config::TablePropertiesExt as _;
 use crate::{open_table_with_version, DeltaTable};
 use crate::{DeltaResult, DeltaTableError};
+
+static CHECKPOINT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
 
 /// Creates checkpoint for a given table version, table state and object store
 pub(crate) async fn create_checkpoint_for(
@@ -204,13 +207,7 @@ pub async fn cleanup_expired_logs_for(
     operation_id: Option<Uuid>,
 ) -> DeltaResult<usize> {
     debug!("called cleanup_expired_logs_for");
-    static DELTA_LOG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint|json.tmp).*$").unwrap()
-    });
-    static CHECKPOINT_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
-
-    let object_store = log_store.object_store(None);
+    let object_store = log_store.object_store(operation_id);
     let log_path = log_store.log_path();
 
     // List all log entries under _delta_log
@@ -271,8 +268,6 @@ pub async fn cleanup_expired_logs_for(
     debug!("safe_checkpoint_version: {}", safe_checkpoint_version);
 
     // Step 4: Delete DELTA_LOG files where log_ver < safe_checkpoint_version && ts <= cutoff_timestamp
-    let object_store = log_store.object_store(operation_id);
-
     let locations = futures::stream::iter(log_entries.into_iter())
         .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
             let meta = match meta {
