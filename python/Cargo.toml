@@ -20,7 +20,7 @@ doc = false
 [dependencies]
 delta_kernel.workspace = true
 
-pyo3-arrow = { version = "0.11.0", default-features = false }
+pyo3-arrow = { version = "0.12.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
