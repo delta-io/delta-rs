@@ -508,6 +508,7 @@ mod tests {
     use super::*;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::*;
+    use crate::{DeltaOps, DeltaResult};
     use arrow::json::ReaderBuilder;
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -572,8 +573,6 @@ mod tests {
      */
     #[tokio::test]
     async fn test_divide_record_batch_with_map_single_partition() {
-        use crate::DeltaOps;
-
         let table = crate::writer::test_utils::create_bare_table();
         let partition_cols = ["modified".to_string()];
         let delta_schema = r#"
@@ -631,6 +630,62 @@ mod tests {
             let partition_key = result.partition_values.hive_partition_path();
             assert!(expected_keys.contains(&partition_key));
         }
+    }
+
+    /// This test reproduces an issue where the [RecordBatchWriter] can have its schema "reordered"
+    /// by differently ordered JSON objects that were deserialized and written by arrow's [Decoder]
+    #[tokio::test]
+    async fn test_writer_schema_mutation() -> DeltaResult<()> {
+        use pretty_assertions::*;
+        let delta_schema = r#"
+        {"type" : "struct",
+        "fields" : [
+            {"name" : "id", "type" : "string", "nullable" : false, "metadata" : {}},
+            {"name" : "value", "type" : "integer", "nullable" : false, "metadata" : {}},
+            {"name" : "modified", "type" : "string", "nullable" : false, "metadata" : {}},
+            {"name" : "metadata", "type" :
+                {"type" : "map", "keyType" : "string", "valueType" : "string", "valueContainsNull" : true},
+                "nullable" : false, "metadata" : {}}
+            ]
+        }"#;
+
+        let delta_schema: StructType =
+            serde_json::from_str(delta_schema).expect("Failed to parse schema");
+
+        let mut table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(vec!["modified"])
+            .await
+            .unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let original_schema = writer.arrow_schema().clone();
+
+        for data in &[
+            r#"{"id" : "0xdeadbeef", "value" : 1, "modified" : "2021-02-01",
+                "metadata" : {"some-key" : "some-value"}}"#,
+        ] {
+            let data = data.as_bytes();
+
+            // Using a batch size of two since the buf above only has two records
+            let mut decoder = ReaderBuilder::new(writer.arrow_schema())
+                .with_batch_size(1)
+                .build_decoder()
+                .expect("Failed to build decoder");
+
+            decoder
+                .decode(data)
+                .expect("Failed to deserialize the JSON in the buffer");
+
+            if let Some(batch) = decoder.flush().unwrap() {
+                assert_eq!(batch.schema(), original_schema);
+                writer.write(batch).await?;
+            }
+
+            pretty_assertions::assert_eq!(writer.arrow_schema(), original_schema)
+        }
+        writer.flush_and_commit(&mut table).await?;
+        Ok(())
     }
 
     #[tokio::test]
