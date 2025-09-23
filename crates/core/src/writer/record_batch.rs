@@ -177,8 +177,6 @@ impl RecordBatchWriter {
         partition_values: &IndexMap<String, Scalar>,
         mode: WriteMode,
     ) -> Result<ArrowSchemaRef, DeltaTableError> {
-        let arrow_schema =
-            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
         let partition_key = partition_values.hive_partition_path();
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
@@ -187,16 +185,26 @@ impl RecordBatchWriter {
             Some(writer) => writer.write(&record_batch, mode)?,
             None => {
                 let mut writer = PartitionWriter::new(
-                    arrow_schema,
+                    arrow_schema_without_partitions(
+                        &self.arrow_schema_ref,
+                        &self.partition_columns,
+                    ),
                     partition_values.clone(),
                     self.writer_properties.clone(),
                 )?;
                 let schema = writer.write(&record_batch, mode)?;
+                // Currently schema evolution is not supported with partition columns which means
+                // the schema returned here is equivalent to `arrow_schema_without_partitions`
+                // which can cause problems see #3783
                 let _ = self.arrow_writers.insert(partition_key, writer);
                 schema
             }
         };
-        Ok(written_schema)
+        if mode == WriteMode::MergeSchema {
+            Ok(written_schema)
+        } else {
+            Ok(self.arrow_schema_ref.clone())
+        }
     }
 
     /// Sets the writer properties for the underlying arrow writer.
@@ -241,10 +249,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         self.should_evolve = mode == WriteMode::MergeSchema;
 
         for result in self.divide_by_partition_values(&values)? {
-            let schema = self
+            let maybe_evolved_schema = self
                 .write_partition(result.record_batch, &result.partition_values, mode)
                 .await?;
-            self.arrow_schema_ref = schema;
+            self.arrow_schema_ref = maybe_evolved_schema;
         }
         Ok(())
     }
@@ -636,7 +644,6 @@ mod tests {
     /// by differently ordered JSON objects that were deserialized and written by arrow's [Decoder]
     #[tokio::test]
     async fn test_writer_schema_mutation() -> DeltaResult<()> {
-        use pretty_assertions::*;
         let delta_schema = r#"
         {"type" : "struct",
         "fields" : [
@@ -678,7 +685,7 @@ mod tests {
                 .expect("Failed to deserialize the JSON in the buffer");
 
             if let Some(batch) = decoder.flush().unwrap() {
-                assert_eq!(batch.schema(), original_schema);
+                pretty_assertions::assert_eq!(batch.schema(), original_schema);
                 writer.write(batch).await?;
             }
 
