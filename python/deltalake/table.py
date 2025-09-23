@@ -530,15 +530,24 @@ class DeltaTable:
 
     def count(self) -> int:
         """
-        Get the row count based on the history of the DeltaTable.
+        Get the approximate row count based on file statistics added to the Delta table.
+
+        This requires that add actions have been added to the Delta table with
+        per-file statistics enabled. Because this is an optional field this
+        "count" will be less than or equal to the true row count of the table.
+        In order to get an exact number of rows a full table scan must happen
 
         Returns:
-            The number of rows for this specific table
+            The approximate number of rows for this specific table
         """
         total_rows = 0
 
         for value in self.get_add_actions().column("num_records").to_pylist():
-            total_rows += value
+            # Add action file statistics are optional and so while most modern
+            # tables are _likely_ to have this information it is not
+            # guaranteed.
+            if value is not None:
+                total_rows += value
 
         return total_rows
 
