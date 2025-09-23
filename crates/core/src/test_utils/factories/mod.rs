@@ -43,7 +43,7 @@ impl TestSchemas {
     /// - modified: string
     pub fn simple() -> &'static StructType {
         static SIMPLE: LazyLock<StructType> = LazyLock::new(|| {
-            StructType::new(vec![
+            StructType::try_new(vec![
                 StructField::new(
                     "id".to_string(),
                     DataType::Primitive(PrimitiveType::String),
@@ -60,6 +60,7 @@ impl TestSchemas {
                     true,
                 ),
             ])
+            .expect("Failed to construct StructType")
         });
 
         &SIMPLE

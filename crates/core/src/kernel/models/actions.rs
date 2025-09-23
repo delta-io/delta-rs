@@ -4,7 +4,6 @@ use std::str::FromStr;
 
 use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
-use maplit::hashset;
 use serde::{Deserialize, Serialize};
 
 use crate::kernel::{error::Error, DeltaResult};
@@ -497,7 +496,7 @@ impl ProtocolInner {
                             }
                             None => {
                                 self.writer_features =
-                                    Some(hashset! {WriterFeature::ChangeDataFeed})
+                                    Some(HashSet::from([WriterFeature::ChangeDataFeed]))
                             }
                         }
                     } else if self.min_writer_version <= 3 {
@@ -520,14 +519,14 @@ impl ProtocolInner {
                             features.insert(WriterFeature::DeletionVectors);
                             features
                         }
-                        None => hashset! {WriterFeature::DeletionVectors},
+                        None => HashSet::from([WriterFeature::DeletionVectors]),
                     };
                     let reader_features = match self.reader_features {
                         Some(mut features) => {
                             features.insert(ReaderFeature::DeletionVectors);
                             features
                         }
-                        None => hashset! {ReaderFeature::DeletionVectors},
+                        None => HashSet::from([ReaderFeature::DeletionVectors]),
                     };
                     self.min_reader_version = 3;
                     self.min_writer_version = 7;

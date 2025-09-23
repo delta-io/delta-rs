@@ -224,7 +224,7 @@ mod tests {
             "size",
             "fileConstantValues",
         ])?;
-        let partition_schema = StructType::new(vec![StructField::nullable(
+        let partition_schema = StructType::try_new(vec![StructField::nullable(
             "Company Very Short",
             DataType::STRING,
         )
@@ -237,13 +237,14 @@ mod tests {
                 "delta.columnMapping.physicalName".to_string(),
                 MetadataValue::String(physical_partition_name.clone()),
             ),
-        ])]);
+        ])])
+        .unwrap();
 
         let partition_values = MapType::new(DataType::STRING, DataType::STRING, true);
-        let file_constant_values: SchemaRef = Arc::new(StructType::new([StructField::nullable(
-            "partitionValues",
-            partition_values,
-        )]));
+        let file_constant_values: SchemaRef = Arc::new(
+            StructType::try_new([StructField::nullable("partitionValues", partition_values)])
+                .unwrap(),
+        );
         // Inspecting the schema of file_constant_values:
         let _: ArrowSchema = file_constant_values.as_ref().try_into_arrow()?;
 

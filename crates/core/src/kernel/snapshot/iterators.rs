@@ -24,8 +24,6 @@ const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
-const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
-const FIELD_NAME_PARTITION_VALUES: &str = "partitionValues";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
 
