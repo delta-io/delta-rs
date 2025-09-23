@@ -265,7 +265,9 @@ impl DeltaTable {
                 Err(DeltaTableError::NotInitialized)
             }));
         };
-        state.get_active_add_actions_by_partitions(&self.log_store, filters)
+        state
+            .snapshot()
+            .file_views_by_partitions(&self.log_store, filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided

@@ -34,6 +34,10 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    pub fn new(snapshot: EagerSnapshot) -> Self {
+        Self { snapshot }
+    }
+
     /// Create a new DeltaTableState
     pub async fn try_new(
         log_store: &dyn LogStore,
@@ -218,6 +222,10 @@ impl DeltaTableState {
     /// ## Returns
     ///
     /// A stream of logical file views that match the partition filters.
+    #[deprecated(
+        since = "0.30.0",
+        note = "Use `.snapshpt().files(log_store, predicate)` with a kernel predicate instead."
+    )]
     pub fn get_active_add_actions_by_partitions(
         &self,
         log_store: &dyn LogStore,
@@ -263,6 +271,41 @@ impl DeltaTableState {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        self.snapshot.add_actions_table(flatten)
+    }
+}
+
+impl EagerSnapshot {
+    /// Get an [arrow::record_batch::RecordBatch] containing add action data.
+    ///
+    /// # Arguments
+    ///
+    /// * `flatten` - whether to flatten the schema. Partition values columns are
+    ///   given the prefix `partition.`, statistics (null_count, min, and max) are
+    ///   given the prefix `null_count.`, `min.`, and `max.`, and tags the
+    ///   prefix `tags.`. Nested field names are concatenated with `.`.
+    ///
+    /// # Data schema
+    ///
+    /// Each row represents a file that is a part of the selected tables state.
+    ///
+    /// * `path` (String): relative or absolute to a file.
+    /// * `size_bytes` (Int64): size of file in bytes.
+    /// * `modification_time` (Millisecond Timestamp): time the file was created.
+    /// * `null_count.{col_name}` (Int64): number of null values for column in
+    ///   this file.
+    /// * `num_records.{col_name}` (Int64): number of records for column in
+    ///   this file.
+    /// * `min.{col_name}` (matches column type): minimum value of column in file
+    ///   (if available).
+    /// * `max.{col_name}` (matches column type): maximum value of column in file
+    ///   (if available).
+    /// * `partition.{partition column name}` (matches column type): value of
+    ///   partition the file corresponds to.
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let mut expressions = vec![
             column_expr_ref!("path"),
             column_expr_ref!("size"),
@@ -274,7 +317,7 @@ impl DeltaTableState {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot.snapshot().inner.stats_schema()?;
+        let stats_schema = self.snapshot().inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
             .ok_or_else(|| DeltaTableError::SchemaMismatch {
@@ -303,7 +346,7 @@ impl DeltaTableState {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
+        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,
@@ -314,9 +357,9 @@ impl DeltaTableState {
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
 
-        let input_schema = self.snapshot.files.schema();
+        let input_schema = self.files.schema();
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-        let actions = self.snapshot.files.clone();
+        let actions = self.files.clone();
 
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
