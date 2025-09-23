@@ -257,7 +257,7 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// Allows unsecure connections via http.
+    /// Allows insecure connections via http.
     ///
     /// This setting is most useful for testing / development when connecting to emulated services.
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
