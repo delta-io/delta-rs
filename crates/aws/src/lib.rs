@@ -263,7 +263,7 @@ impl DynamoDbLockClient {
     ///
     /// Transparently handles the case where that table already exists, so it's safe to call.
     /// After `create_table` operation is executed, the table state in DynamoDb is `creating`, and
-    /// it's not immediately useable. This method does not wait for the table state to become
+    /// it's not immediately usable. This method does not wait for the table state to become
     /// `active`, so transient failures might occur when immediately using the lock client.
     pub async fn try_create_lock_table(&self) -> Result<CreateLockTableResult, LockClientError> {
         let attribute_definitions = vec![
