@@ -577,6 +577,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_column_mapping_table() -> crate::DeltaResult<()> {
+        let table = crate::open_table(
+                "../test/tests/data/table_with_column_mapping"
+        ).await?;
+        let file_stats = table
+            .snapshot()
+            .unwrap()
+            .snapshot
+            .log_data();
+        Ok(())
+    }
+
+    #[tokio::test]
     #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
     async fn df_stats_delta_1_2_1_struct_stats_table() {
         let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
