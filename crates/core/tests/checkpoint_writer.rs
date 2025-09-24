@@ -188,7 +188,6 @@ mod delete_expired_delta_log_in_checkpoint {
     use ::object_store::path::Path as ObjectStorePath;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
-    use maplit::hashmap;
 
     #[tokio::test]
     async fn test_delete_expired_logs() {
@@ -276,10 +275,16 @@ mod delete_expired_delta_log_in_checkpoint {
         // let _ = pretty_env_logger::try_init();
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/expired_with_checkpoint",
-            Some(hashmap! {
-                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
-                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
-            }),
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 10 minute".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("true".to_string()),
+                ),
+            ])),
         )
             .await;
 
