@@ -92,11 +92,11 @@ async fn test_create_s3_table() -> TestResult<()> {
     let table_name = format!("{}_{}", "create_test", Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
 
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
+    )])?;
     let storage_options: HashMap<String, String> = HashMap::from([
         (
             deltalake_aws::constants::AWS_ALLOW_HTTP.into(),
@@ -454,11 +454,11 @@ fn add_action(name: &str) -> Action {
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {
     let table_name = format!("{table_name}_{}", Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "Id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
+    )])?;
     let table_url = Url::parse(&table_uri).unwrap();
     let table = DeltaTableBuilder::from_uri(table_url)
         .unwrap()

@@ -29,7 +29,6 @@ use super::utils::{
     ShareableBuffer,
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
-use crate::ensure_table_uri;
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::MetadataExt as _;
@@ -970,7 +969,7 @@ mod tests {
                 DataType as DeltaDataType, PrimitiveType, StructField, StructType,
             };
 
-            let table_schema = StructType::new(vec![
+            let table_schema = StructType::try_new(vec![
                 StructField::new(
                     "id".to_string(),
                     DeltaDataType::Primitive(PrimitiveType::String),
@@ -986,7 +985,8 @@ mod tests {
                     DeltaDataType::Primitive(PrimitiveType::String),
                     true,
                 ),
-            ]);
+            ])
+            .unwrap();
             let table_dir = tempfile::tempdir().unwrap();
             let table_path = table_dir.path();
 

@@ -1321,7 +1321,7 @@ mod local {
             ))),
             true,
         )];
-        let schema = StructType::new(fields);
+        let schema = StructType::try_new(fields).unwrap();
         let table = deltalake_core::DeltaTableBuilder::from_uri(
             url::Url::from_directory_path(
                 std::path::Path::new("./tests/data/issue-1619")

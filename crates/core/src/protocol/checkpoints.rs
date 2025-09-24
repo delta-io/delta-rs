@@ -1,6 +1,6 @@
 //! Implementation for writing delta checkpoints.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use url::Url;
 
@@ -45,11 +45,13 @@ pub(crate) async fn create_checkpoint_for(
     let engine = log_store.engine(operation_id);
 
     let task_engine = engine.clone();
-    let snapshot =
-        spawn_blocking(move || Snapshot::try_new(table_root, task_engine.as_ref(), Some(version)))
-            .await
-            .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-    let snapshot = Arc::new(snapshot);
+    let snapshot = spawn_blocking(move || {
+        Snapshot::builder_for(table_root)
+            .at_version(version)
+            .build(task_engine.as_ref())
+    })
+    .await
+    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
     let cp_writer = snapshot.checkpoint()?;
 

@@ -1193,7 +1193,7 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let table_path = tmp_dir.path().to_str().unwrap();
 
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new(
                 "id".to_string(),
                 DataType::Primitive(PrimitiveType::Long),
@@ -1204,7 +1204,7 @@ mod tests {
                 DataType::Primitive(PrimitiveType::String),
                 false,
             ),
-        ]);
+        ])?;
 
         CreateBuilder::new()
             .with_location(table_path)
