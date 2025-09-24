@@ -390,6 +390,8 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         )),
         //Unsupported types...
         ArrowDataType::Float16
+        | ArrowDataType::Decimal32(_, _)
+        | ArrowDataType::Decimal64(_, _)
         | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::Union(_, _)
         | ArrowDataType::LargeList(_)
@@ -2197,10 +2199,10 @@ mod tests {
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
         let expected = vec![
-            ObjectStoreOperation::GetRange(LocationType::Data, 4952..4960),
-            ObjectStoreOperation::GetRange(LocationType::Data, 2399..4952),
+            ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
+            ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
             #[expect(clippy::single_range_in_vec_init)]
-            ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..58]),
+            ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..46]),
         ];
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;

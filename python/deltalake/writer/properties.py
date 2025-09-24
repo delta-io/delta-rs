@@ -58,6 +58,32 @@ class Compression(Enum):
             return True
 
 
+class Encoding(Enum):
+    """
+    Encoding types for Parquet columns.
+    https://parquet.apache.org/docs/file-format/data-pages/encodings/
+    Dictionary encodings (PLAIN_DICTIONARY and RLE_DICTIONARY) are enabled via the `dictionary_enabled` flag
+    in `ColumnProperties` and should not be specified here.
+    BIT_PACKED is deprecated and not supported in delta-rs
+    """
+
+    PLAIN = "PLAIN"
+    RLE = "RLE"
+    DELTA_BINARY_PACKED = "DELTA_BINARY_PACKED"
+    DELTA_LENGTH_BYTE_ARRAY = "DELTA_LENGTH_BYTE_ARRAY"
+    DELTA_BYTE_ARRAY = "DELTA_BYTE_ARRAY"
+    BYTE_STREAM_SPLIT = "BYTE_STREAM_SPLIT"
+
+    @classmethod
+    def from_str(cls, value: str) -> "Encoding":
+        try:
+            return cls(value.upper())
+        except ValueError:
+            raise ValueError(
+                f"{value} is not a valid Encoding. Valid values are: {[item.value for item in Encoding]}"
+            )
+
+
 @dataclass(init=True)
 class BloomFilterProperties:
     """The Bloom Filter Properties instance for the Rust parquet writer."""
@@ -94,6 +120,15 @@ class ColumnProperties:
         dictionary_enabled: bool | None = None,
         statistics_enabled: Literal["NONE", "CHUNK", "PAGE"] | None = None,
         bloom_filter_properties: BloomFilterProperties | None = None,
+        encoding: Literal[
+            "PLAIN",
+            "RLE",
+            "DELTA_BINARY_PACKED",
+            "DELTA_LENGTH_BYTE_ARRAY",
+            "DELTA_BYTE_ARRAY",
+            "BYTE_STREAM_SPLIT",
+        ]
+        | None = None,
     ) -> None:
         """Create a Column Properties instance for the Rust parquet writer:
 
@@ -101,15 +136,20 @@ class ColumnProperties:
             dictionary_enabled: Enable dictionary encoding for the column.
             statistics_enabled: Statistics level for the column.
             bloom_filter_properties: Bloom Filter Properties for the column.
+            encoding: Encoding for the column if *NOT* using dictionary encoding.
         """
         self.dictionary_enabled = dictionary_enabled
         self.statistics_enabled = statistics_enabled
         self.bloom_filter_properties = bloom_filter_properties
+        self.encoding = encoding
+        if isinstance(encoding, str):
+            if self.dictionary_enabled:
+                raise ValueError("Cannot specify dictionary_enabled=True and encoding")
 
     def __str__(self) -> str:
         return (
             f"dictionary_enabled: {self.dictionary_enabled}, statistics_enabled: {self.statistics_enabled}, "
-            f"bloom_filter_properties: {self.bloom_filter_properties}"
+            f"bloom_filter_properties: {self.bloom_filter_properties}, encoding: {self.encoding}"
         )
 
 

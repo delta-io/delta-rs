@@ -133,7 +133,7 @@ fn data_without_null() -> (Int32Array, StringArray, StringArray) {
 }
 
 pub fn get_delta_schema() -> StructType {
-    StructType::new(vec![
+    StructType::try_new(vec![
         StructField::new(
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
@@ -150,6 +150,7 @@ pub fn get_delta_schema() -> StructType {
             true,
         ),
     ])
+    .unwrap()
 }
 
 pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
@@ -247,7 +248,7 @@ pub fn get_record_batch_with_nested_struct() -> RecordBatch {
 }
 
 pub fn get_delta_schema_with_nested_struct() -> StructType {
-    StructType::new(vec![
+    StructType::try_new(vec![
         StructField::new(
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
@@ -265,14 +266,18 @@ pub fn get_delta_schema_with_nested_struct() -> StructType {
         ),
         StructField::new(
             String::from("nested"),
-            DeltaDataType::Struct(Box::new(StructType::new(vec![StructField::new(
-                String::from("count"),
-                DeltaDataType::Primitive(PrimitiveType::Integer),
-                true,
-            )]))),
+            DeltaDataType::Struct(Box::new(
+                StructType::try_new(vec![StructField::new(
+                    String::from("count"),
+                    DeltaDataType::Primitive(PrimitiveType::Integer),
+                    true,
+                )])
+                .unwrap(),
+            )),
             true,
         ),
     ])
+    .unwrap()
 }
 
 pub async fn setup_table_with_configuration(

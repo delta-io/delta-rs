@@ -777,8 +777,7 @@ mod tests {
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 2);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("modified = '2021-02-03'"));
 
@@ -891,7 +890,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_case_sensitive() {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new(
                 "Id".to_string(),
                 DeltaDataType::Primitive(PrimitiveType::String),
@@ -907,7 +906,8 @@ mod tests {
                 DeltaDataType::Primitive(PrimitiveType::String),
                 true,
             ),
-        ]);
+        ])
+        .unwrap();
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("Id", DataType::Utf8, true),
@@ -1008,8 +1008,7 @@ mod tests {
         assert_eq!(metrics.num_updated_rows, 2);
         assert_eq!(metrics.num_copied_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let extra_info = last_commit.info.clone();
         assert_eq!(
             extra_info["operationMetrics"],
@@ -1115,7 +1114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_with_array() {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new(
                 "id".to_string(),
                 DeltaDataType::Primitive(PrimitiveType::Integer),
@@ -1134,7 +1133,8 @@ mod tests {
                 ))),
                 true,
             ),
-        ]);
+        ])
+        .unwrap();
         let arrow_schema: ArrowSchema = (&schema).try_into_arrow().unwrap();
 
         // Create the first batch
@@ -1185,7 +1185,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_with_array_that_must_be_coerced() {
         let _ = pretty_env_logger::try_init();
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new(
                 "id".to_string(),
                 DeltaDataType::Primitive(PrimitiveType::Integer),
@@ -1204,7 +1204,8 @@ mod tests {
                 ))),
                 true,
             ),
-        ]);
+        ])
+        .unwrap();
         let arrow_schema: ArrowSchema = (&schema).try_into_arrow().unwrap();
 
         // Create the first batch

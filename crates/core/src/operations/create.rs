@@ -315,7 +315,7 @@ impl CreateBuilder {
             })
             .unwrap_or_else(|| current_protocol);
 
-        let schema = StructType::new(self.columns);
+        let schema = StructType::try_new(self.columns)?;
 
         let protocol = protocol
             .apply_properties_to_protocol(&configuration, self.raise_if_key_not_exists)?

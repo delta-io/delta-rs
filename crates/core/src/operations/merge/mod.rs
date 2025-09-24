@@ -1801,9 +1801,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -1822,6 +1820,108 @@ mod tests {
 
         assert_merge(table, metrics).await;
     }
+    #[tokio::test]
+    async fn test_merge_preserves_nullability_without_schema_merge() {
+        // Test that nullability constraints are preserved when merge_schema is false (default)
+        let delta_schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                false, // non-nullable
+            ),
+            StructField::new(
+                "value".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false, // non-nullable
+            ),
+            StructField::new(
+                "modified".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true, // nullable
+            ),
+        ];
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(delta_schema)
+            .await
+            .unwrap();
+
+        // Verify initial schema nullability
+        let initial_fields: Vec<_> = table
+            .snapshot()
+            .unwrap()
+            .schema()
+            .fields()
+            .cloned()
+            .collect();
+        assert!(
+            !initial_fields[0].is_nullable(),
+            "id should be non-nullable"
+        );
+        assert!(
+            !initial_fields[1].is_nullable(),
+            "value should be non-nullable"
+        );
+        assert!(
+            initial_fields[2].is_nullable(),
+            "modified should be nullable"
+        );
+
+        // Source data with all nullable fields (typical from external sources)
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true), // nullable in source
+            Field::new("value", ArrowDataType::Int32, true), // nullable in source
+            Field::new("modified", ArrowDataType::Utf8, true), // nullable in source
+        ]));
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            source_schema,
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![Some("A"), Some("B")])),
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("2021-02-02"),
+                    None,
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (merged_table, _) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            // merge_schema is false by default
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        // Verify schema nullability is preserved after merge
+        let final_fields: Vec<_> = merged_table.snapshot().unwrap().schema().fields().collect();
+        assert!(
+            !final_fields[0].is_nullable(),
+            "id should remain non-nullable after merge"
+        );
+        assert!(
+            !final_fields[1].is_nullable(),
+            "value should remain non-nullable after merge"
+        );
+        assert!(
+            final_fields[2].is_nullable(),
+            "modified should remain nullable after merge"
+        );
+    }
+
     #[tokio::test]
     async fn test_merge_with_schema_merge_no_change_of_schema() {
         let (table, _) = setup().await;
@@ -1874,8 +1974,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = after_table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = after_table.last_commit().await.unwrap();
 
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
@@ -2160,9 +2259,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         let expected = vec![
@@ -2224,8 +2321,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2281,8 +2377,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -2489,8 +2584,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 6);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(
@@ -2559,8 +2653,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(
             parameters["predicate"],
@@ -2629,8 +2722,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         let predicate = parameters["predicate"].as_str().unwrap();
         let re = Regex::new(r"^id = '(C|X|B)' OR id = '(C|X|B)' OR id = '(C|X|B)'$").unwrap();
@@ -2733,8 +2825,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 6);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(
@@ -2807,8 +2898,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         let extra_info = last_commit.info.clone();
         assert_eq!(
@@ -2877,8 +2967,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2946,8 +3035,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -3011,8 +3099,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -3081,8 +3168,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -3146,8 +3232,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -3228,8 +3313,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
 
         assert_eq!(
@@ -3312,8 +3396,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
 
         assert_eq!(

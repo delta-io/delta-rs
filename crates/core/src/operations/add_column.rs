@@ -83,7 +83,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let fields_right = &StructType::new(fields.clone());
+            let fields_right = &StructType::try_new(fields.clone())?;
 
             if !fields_right
                 .get_generated_columns()

@@ -250,6 +250,8 @@ impl ScalarExt for Scalar {
                 ))
             }
             Float16
+            | Decimal32(_, _)
+            | Decimal64(_, _)
             | Decimal256(_, _)
             | List(_)
             | LargeList(_)

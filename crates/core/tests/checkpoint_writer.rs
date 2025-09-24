@@ -180,6 +180,7 @@ mod simple_checkpoint {
 
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
+    use std::collections::HashMap;
     use std::fs::{FileTimes, OpenOptions};
     use std::ops::Sub;
     use std::time::{Duration, SystemTime};
@@ -187,16 +188,21 @@ mod delete_expired_delta_log_in_checkpoint {
     use ::object_store::path::Path as ObjectStorePath;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
-    use maplit::hashmap;
 
     #[tokio::test]
     async fn test_delete_expired_logs() {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/expired",
-            Some(hashmap! {
-                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
-                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
-            }),
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 10 minute".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("true".to_string()),
+                ),
+            ])),
         )
         .await;
 
@@ -265,10 +271,16 @@ mod delete_expired_delta_log_in_checkpoint {
     async fn test_not_delete_expired_logs() {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/not_delete_expired",
-            Some(hashmap! {
-                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 1 second".to_string()),
-                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("false".to_string())
-            }),
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 1 second".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("false".to_string()),
+                ),
+            ])),
         )
         .await;
 
@@ -322,16 +334,20 @@ mod checkpoints_with_tombstones {
     use deltalake_core::kernel::*;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
-    use maplit::hashmap;
     use pretty_assertions::assert_eq;
     use std::collections::{HashMap, HashSet};
 
     #[tokio::test]
     #[ignore]
     async fn test_expired_tombstones() {
-        let mut table = fs_common::create_table("../test/tests/data/checkpoints_tombstones/expired", Some(hashmap! {
-            TableProperty::DeletedFileRetentionDuration.as_ref().into() => Some("interval 1 minute".to_string())
-        })).await;
+        let mut table = fs_common::create_table(
+            "../test/tests/data/checkpoints_tombstones/expired",
+            Some(HashMap::from([(
+                TableProperty::DeletedFileRetentionDuration.as_ref().into(),
+                Some("interval 1 minute".to_string()),
+            )])),
+        )
+        .await;
 
         let a1 = fs_common::add(3 * 60 * 1000); // 3 mins ago,
         let a2 = fs_common::add(2 * 60 * 1000); // 2 mins ago,

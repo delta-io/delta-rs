@@ -32,6 +32,7 @@ use tracing::log;
 
 use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
+use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Action, Add, AddCDCFile, CommitInfo};
 use crate::logstore::{get_actions, LogStoreRef};
 use crate::table::state::DeltaTableState;
@@ -328,6 +329,8 @@ impl CdfLoadBuilder {
         session_sate: &SessionState,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+        PROTOCOL.can_read_from(&self.snapshot)?;
+
         let (cdc, add, remove) = self.determine_files_to_read().await?;
         register_store(self.log_store.clone(), session_sate.runtime_env().clone());
 

@@ -262,7 +262,7 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// Allows unsecure connections via http.
+    /// Allows insecure connections via http.
     ///
     /// This setting is most useful for testing / development when connecting to emulated services.
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
@@ -377,28 +377,42 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
         .map(|v| v.key().scheme().to_owned())
         .collect();
 
-    if let Ok(url) = Url::parse(table_uri) {
-        let scheme = url.scheme().to_string();
-        if url.scheme() == "file" {
-            Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
-                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
-                DeltaTableError::InvalidTableLocation(msg)
-            })?))
-        // NOTE this check is required to support absolute windows paths which may properly parse as url
-        } else if known_schemes.contains(&scheme) {
-            Ok(UriType::Url(url))
-        // NOTE this check is required to support absolute windows paths which may properly parse as url
-        // we assume here that a single character scheme is a windows drive letter
-        } else if scheme.len() == 1 {
-            Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
-        } else {
-            Err(DeltaTableError::InvalidTableLocation(format!(
-                "Unknown scheme: {scheme}. Known schemes: {}",
-                known_schemes.join(",")
-            )))
+    match Url::parse(table_uri) {
+        Ok(url) => {
+            let scheme = url.scheme().to_string();
+            if url.scheme() == "file" {
+                Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
+                    let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
+                    DeltaTableError::InvalidTableLocation(msg)
+                })?))
+            // NOTE this check is required to support absolute windows paths which may properly parse as url
+            } else if known_schemes.contains(&scheme) {
+                Ok(UriType::Url(url))
+            // NOTE this check is required to support absolute windows paths which may properly parse as url
+            // we assume here that a single character scheme is a windows drive letter
+            } else if scheme.len() == 1 {
+                Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
+            } else {
+                Err(DeltaTableError::InvalidTableLocation(format!(
+                    "Unknown scheme: {scheme}. Known schemes: {}",
+                    known_schemes.join(",")
+                )))
+            }
         }
-    } else {
-        Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
+        Err(url_error) => {
+            match url_error {
+                // The RelativeUrlWithoutBase error _usually_ means this function has been called
+                // with a file path looking thing.
+                url::ParseError::RelativeUrlWithoutBase => {
+                    Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
+                }
+                // All other parse errors are likely an actually broken URL that should not be
+                // interpreted as anything but
+                _others => Err(DeltaTableError::InvalidTableLocation(format!(
+                    "Could not parse {table_uri} as a URL: {url_error}"
+                ))),
+            }
+        }
     }
 }
 
@@ -709,6 +723,18 @@ mod tests {
             }
             _ => panic!("Expected LocalPath"),
         }
+    }
+
+    #[test]
+    fn test_invalid_url_but_invalid_file_path_too() -> DeltaResult<()> {
+        for wrong in &["s3://arn:aws:s3:::something", "hdfs://"] {
+            let result = ensure_table_uri(wrong);
+            assert!(
+                result.is_err(),
+                "Expected {wrong} parsed into {result:#?} to return an error because I gave it something URLish"
+            );
+        }
+        Ok(())
     }
 
     #[test]

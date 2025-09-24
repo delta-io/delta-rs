@@ -264,20 +264,22 @@ mod tests {
     fn test_merge_delta_schema_with_meta() {
         let mut left_meta = HashMap::new();
         left_meta.insert("a".to_string(), "a1".to_string());
-        let left_schema = DeltaStructType::new(vec![DeltaStructField::new(
+        let left_schema = DeltaStructType::try_new(vec![DeltaStructField::new(
             "f",
             DeltaDataType::STRING,
             false,
         )
-        .with_metadata(left_meta)]);
+        .with_metadata(left_meta)])
+        .unwrap();
         let mut right_meta = HashMap::new();
         right_meta.insert("b".to_string(), "b2".to_string());
-        let right_schema = DeltaStructType::new(vec![DeltaStructField::new(
+        let right_schema = DeltaStructType::try_new(vec![DeltaStructField::new(
             "f",
             DeltaDataType::STRING,
             true,
         )
-        .with_metadata(right_meta)]);
+        .with_metadata(right_meta)])
+        .unwrap();
 
         let result = merge_delta_struct(&left_schema, &right_schema).unwrap();
         let fields = result.fields().collect_vec();

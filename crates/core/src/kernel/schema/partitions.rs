@@ -348,10 +348,11 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_equal() {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new("name", DataType::Primitive(PrimitiveType::String), true),
             StructField::new("age", DataType::Primitive(PrimitiveType::Integer), true),
-        ]);
+        ])
+        .unwrap();
         let filter = PartitionFilter {
             key: "name".to_string(),
             value: PartitionValue::Equal("Alice".to_string()),
@@ -365,11 +366,12 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_not_equal() {
-        let schema = StructType::new(vec![StructField::new(
+        let schema = StructType::try_new(vec![StructField::new(
             "status",
             DataType::Primitive(PrimitiveType::String),
             true,
-        )]);
+        )])
+        .unwrap();
         let filter = PartitionFilter {
             key: "status".to_string(),
             value: PartitionValue::NotEqual("inactive".to_string()),
@@ -383,10 +385,11 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_comparisons() {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new("score", DataType::Primitive(PrimitiveType::Integer), true),
             StructField::new("price", DataType::Primitive(PrimitiveType::Long), true),
-        ]);
+        ])
+        .unwrap();
 
         // Test less than
         let filter = PartitionFilter {
@@ -427,11 +430,12 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_in_operations() {
-        let schema = StructType::new(vec![StructField::new(
+        let schema = StructType::try_new(vec![StructField::new(
             "category",
             DataType::Primitive(PrimitiveType::String),
             true,
-        )]);
+        )])
+        .unwrap();
 
         let column = Expression::column(["category"]);
         let categories = [
@@ -469,11 +473,12 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_empty_in_list() {
-        let schema = StructType::new(vec![StructField::new(
+        let schema = StructType::try_new(vec![StructField::new(
             "tag",
             DataType::Primitive(PrimitiveType::String),
             true,
-        )]);
+        )])
+        .unwrap();
 
         let filter = PartitionFilter {
             key: "tag".to_string(),
@@ -485,11 +490,12 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_field_not_found() {
-        let schema = StructType::new(vec![StructField::new(
+        let schema = StructType::try_new(vec![StructField::new(
             "existing_field",
             DataType::Primitive(PrimitiveType::String),
             true,
-        )]);
+        )])
+        .unwrap();
 
         let filter = PartitionFilter {
             key: "nonexistent_field".to_string(),
@@ -506,16 +512,18 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_non_primitive_field() {
-        let nested_struct = StructType::new(vec![StructField::new(
+        let nested_struct = StructType::try_new(vec![StructField::new(
             "inner",
             DataType::Primitive(PrimitiveType::String),
             true,
-        )]);
-        let schema = StructType::new(vec![StructField::new(
+        )])
+        .unwrap();
+        let schema = StructType::try_new(vec![StructField::new(
             "nested",
             DataType::Struct(Box::new(nested_struct)),
             true,
-        )]);
+        )])
+        .unwrap();
 
         let filter = PartitionFilter {
             key: "nested".to_string(),
@@ -532,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_different_data_types() {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new(
                 "bool_field",
                 DataType::Primitive(PrimitiveType::Boolean),
@@ -554,7 +562,8 @@ mod tests {
                 DataType::Primitive(PrimitiveType::Float),
                 true,
             ),
-        ]);
+        ])
+        .unwrap();
 
         // Test boolean field
         let filter = PartitionFilter {
@@ -580,11 +589,12 @@ mod tests {
 
     #[test]
     fn test_filter_to_kernel_predicate_invalid_scalar_value() {
-        let schema = StructType::new(vec![StructField::new(
+        let schema = StructType::try_new(vec![StructField::new(
             "number",
             DataType::Primitive(PrimitiveType::Integer),
             true,
-        )]);
+        )])
+        .unwrap();
 
         let filter = PartitionFilter {
             key: "number".to_string(),

@@ -391,7 +391,7 @@ impl ConvertToDeltaBuilder {
                     match field.data_type() {
                         DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
                         _ => Err(delta_kernel::Error::Generic(format!(
-                            "Exprected primitive type, found: {:?}",
+                            "Expected primitive type, found: {:?}",
                             field.data_type()
                         ))),
                     }

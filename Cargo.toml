@@ -5,7 +5,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.85"
+rust-version = "1.86"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
 edition = "2021"
@@ -26,32 +26,32 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.15.1", features = [
-    "arrow-55",
+delta_kernel = { version = "0.16.0", features = [
+    "arrow-56",
     "default-engine-rustls",
     "internal-api",
 ] }
 
 
 # arrow
-arrow = { version = "55.2.0" }
-arrow-arith = { version = "55.2.0" }
-arrow-array = { version = "55.2.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "55.2.0" }
-arrow-cast = { version = "55.2.0" }
-arrow-ipc = { version = "55.2.0" }
-arrow-json = { version = "55.2.0" }
-arrow-ord = { version = "55.2.0" }
-arrow-row = { version = "55.2.0" }
-arrow-schema = { version = "55.2.0" }
-arrow-select = { version = "55.2.0" }
+arrow = { version = "56.0.0" }
+arrow-arith = { version = "56.0.0" }
+arrow-array = { version = "56.0.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "56.0.0" }
+arrow-cast = { version = "56.0.0" }
+arrow-ipc = { version = "56.0.0" }
+arrow-json = { version = "56.0.0" }
+arrow-ord = { version = "56.0.0" }
+arrow-row = { version = "56.0.0" }
+arrow-schema = { version = "56.0.0" }
+arrow-select = { version = "56.0.0" }
 object_store = { version = "0.12.1" }
-parquet = { version = "55.2.0" , features=["encryption"]}
+parquet = { version = "56.0.0" }
 
 # datafusion
-datafusion = { git = "https://github.com/G-Research/datafusion.git", branch = "49-encryption-factory", features = ["parquet_encryption"] }
-datafusion-ffi = { git = "https://github.com/G-Research/datafusion.git", branch = "49-encryption-factory" }
-datafusion-proto = { git = "https://github.com/G-Research/datafusion.git", branch = "49-encryption-factory" }
+datafusion = "50.0.0"
+datafusion-ffi = "50.0.0"
+datafusion-proto = "50.0.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

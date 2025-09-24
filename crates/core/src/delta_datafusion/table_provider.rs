@@ -3,6 +3,9 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use futures::StreamExt;
+
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
@@ -18,10 +21,13 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileSource,
 };
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::TableType;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::ExecutionProps;
+use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{BinaryExpr, LogicalPlan, Operator};
@@ -29,7 +35,8 @@ use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+    stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    PlanProperties,
 };
 use datafusion::{
     catalog::Session,
@@ -41,19 +48,226 @@ use datafusion::{
 };
 use futures::TryStreamExt;
 use object_store::ObjectMeta;
+
 use serde::{Deserialize, Serialize};
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, register_store, to_correct_scalar_value, DataFusionMixins as _,
+    LogDataHandler,
 };
-use crate::kernel::{Add, LogDataHandler};
-use crate::table::builder::ensure_table_uri;
+use crate::kernel::schema::cast::cast_record_batch;
+use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
+use crate::kernel::{Action, Add, Remove, LogDataHandler};
+use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::operations::write::WriterStatsConfig;
+use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
-use crate::DeltaTable;
+use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, table::state::DeltaTableState, DeltaResult, DeltaTableError};
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
+
+/// Get the session state from the session
+fn session_state_from_session(session: &dyn Session) -> Result<&SessionState> {
+    session
+        .as_any()
+        .downcast_ref::<SessionState>()
+        .ok_or_else(|| {
+            DataFusionError::Plan("Failed to downcast Session to SessionState".to_string())
+        })
+}
+
+/// DataSink implementation for delta lake
+/// This uses DataSinkExec to handle the insert operation
+/// Implements writing streams of RecordBatches to delta.
+#[derive(Debug)]
+pub struct DeltaDataSink {
+    /// The log store
+    log_store: LogStoreRef,
+    /// The snapshot
+    snapshot: DeltaTableState,
+    /// The save mode
+    save_mode: SaveMode,
+    /// The schema
+    schema: SchemaRef,
+    /// Metrics for monitoring throughput
+    metrics: ExecutionPlanMetricsSet,
+}
+
+/// A [`DataSink`] implementation for writing to Delta Lake.
+///
+/// `DeltaDataSink` is used by [`DataSinkExec`] during query execution to
+/// stream [`RecordBatch`]es into a Delta table. It encapsulates everything
+/// needed to perform an insert/append/overwrite operation, including
+/// transaction log access, snapshot state, and session configuration.
+impl DeltaDataSink {
+    /// Create a new `DeltaDataSink`
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        save_mode: SaveMode,
+        session_state: Arc<SessionState>,
+    ) -> datafusion::common::Result<Self> {
+        let schema = snapshot
+            .arrow_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(Self {
+            log_store,
+            snapshot,
+            save_mode,
+            schema,
+            metrics: ExecutionPlanMetricsSet::new(),
+        })
+    }
+
+    /// Create a streaming transformed version of the input that converts dictionary columns
+    /// This is used to convert dictionary columns to their native types
+    fn create_converted_stream(
+        &self,
+        input: SendableRecordBatchStream,
+        target_schema: SchemaRef,
+    ) -> SendableRecordBatchStream {
+        use futures::StreamExt;
+
+        let schema_for_closure = Arc::clone(&target_schema);
+        let converted_stream = input.map(move |batch_result| {
+            batch_result.and_then(|batch| {
+                cast_record_batch(&batch, Arc::clone(&schema_for_closure), false, true)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
+            })
+        });
+
+        Box::pin(RecordBatchStreamAdapter::new(
+            target_schema,
+            converted_stream,
+        ))
+    }
+}
+
+/// Implementation of the `DataSink` trait for `DeltaDataSink`
+/// This is used to write the data to the delta table
+/// It implements the `DataSink` trait and is used by the `DataSinkExec` node
+/// to write the data to the delta table
+#[async_trait]
+impl DataSink for DeltaDataSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// Write the data to the delta table
+    /// This is used for insert into operation
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> datafusion::common::Result<u64> {
+        let target_schema = self
+            .snapshot
+            .input_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let mut stream = self.create_converted_stream(data, target_schema.clone());
+        let partition_columns = self.snapshot.metadata().partition_columns();
+        let object_store = self.log_store.object_store(None);
+        let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
+        let stats_config = WriterStatsConfig::new(DataSkippingNumIndexedCols::AllColumns, None);
+        let config = WriterConfig::new(
+            self.snapshot
+                .arrow_schema()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            partition_columns.clone(),
+            None,
+            None,
+            None,
+            stats_config.num_indexed_cols,
+            stats_config.stats_columns,
+        );
+
+        let mut writer = DeltaWriter::new(object_store, config);
+        let mut total_rows = 0u64;
+
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result?;
+            let batch_rows = batch.num_rows() as u64;
+            total_rows += batch_rows;
+            total_rows_metric.add(batch_rows as usize);
+            writer
+                .write(&batch)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        }
+
+        let add_actions = writer
+            .close()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let mut actions = if self.save_mode == SaveMode::Overwrite {
+            let current_files = self
+                .snapshot
+                .file_actions(&*self.log_store)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            current_files
+                .into_iter()
+                .map(|add| {
+                    Action::Remove(Remove {
+                        path: add.path,
+                        deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
+                        data_change: true,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(add.partition_values),
+                        size: Some(add.size),
+                        tags: add.tags,
+                        base_row_id: None,
+                        default_row_commit_version: None,
+                        deletion_vector: None,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        actions.extend(add_actions.into_iter().map(Action::Add));
+
+        let operation = DeltaOperation::Write {
+            mode: self.save_mode,
+            partition_by: if partition_columns.is_empty() {
+                None
+            } else {
+                Some(partition_columns.clone())
+            },
+            predicate: None,
+        };
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(&self.snapshot), self.log_store.clone(), operation)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(total_rows)
+    }
+}
+
+/// Implementation of the `DisplayAs` trait for `DeltaDataSink`
+impl DisplayAs for DeltaDataSink {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DeltaDataSink")
+    }
+}
 
 #[derive(Debug, Clone)]
 /// Used to specify if additional metadata columns are exposed to the user
@@ -245,6 +459,7 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 
     pub async fn build(self) -> DeltaResult<DeltaScan> {
+        PROTOCOL.can_read_from(self.snapshot)?;
         let config = match self.config {
             Some(config) => config,
             None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
@@ -691,6 +906,42 @@ impl TableProvider for DeltaTableProvider {
     fn statistics(&self) -> Option<Statistics> {
         self.snapshot.datafusion_table_statistics()
     }
+
+    /// Insert the data into the delta table
+    /// Insert operation is only supported for Append and Overwrite
+    /// Return the execution plan
+    async fn insert_into(
+        &self,
+        state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let session_state = session_state_from_session(state)?.clone();
+        register_store(self.log_store.clone(), session_state.runtime_env().clone());
+
+        let save_mode = match insert_op {
+            InsertOp::Append => SaveMode::Append,
+            InsertOp::Overwrite => SaveMode::Overwrite,
+            InsertOp::Replace => {
+                return Err(DataFusionError::Plan(format!(
+                    "Replace operation is not supported for DeltaTableProvider"
+                )))
+            }
+        };
+
+        let data_sink = DeltaDataSink::new(
+            self.log_store.clone(),
+            self.snapshot.clone(),
+            save_mode,
+            Arc::new(session_state),
+        )?;
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            None,
+        )))
+    }
 }
 
 // TODO: this will likely also need to perform column mapping later when we support reader protocol v2
@@ -966,11 +1217,104 @@ fn partitioned_file_from_action(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{Field, Schema};
+    use crate::kernel::{DataType, PrimitiveType, StructField, StructType};
+    use crate::operations::create::CreateBuilder;
+    use crate::protocol::SaveMode;
+    use crate::{DeltaTable, DeltaTableError};
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use chrono::{TimeZone, Utc};
+    use datafusion::common::ScalarValue;
+    use datafusion::datasource::listing::PartitionedFile;
+    use datafusion::datasource::MemTable;
+    use datafusion::execution::context::SessionState;
+    use datafusion::logical_expr::dml::InsertOp;
     use object_store::path::Path;
+    use std::sync::Arc;
 
     use super::*;
+
+    async fn create_test_table() -> Result<DeltaTable, DeltaTableError> {
+        use tempfile::TempDir;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_path = tmp_dir.path().to_str().unwrap();
+
+        let schema = StructType::try_new(vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Long),
+                false,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+        ])?;
+
+        CreateBuilder::new()
+            .with_location(table_path)
+            .with_columns(schema.fields().cloned())
+            .await
+    }
+
+    fn create_test_session_state() -> Arc<SessionState> {
+        use datafusion::execution::SessionStateBuilder;
+        use datafusion::prelude::SessionConfig;
+        let config = SessionConfig::new();
+        Arc::new(SessionStateBuilder::new().with_config(config).build())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_simple() {
+        let table = create_test_table().await.unwrap();
+        let session_state = create_test_session_state();
+
+        let scan_config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap())
+            .unwrap();
+        let table_provider = DeltaTableProvider::try_new(
+            table.snapshot().unwrap().clone(),
+            table.log_store(),
+            scan_config,
+        )
+        .unwrap();
+
+        let schema = table_provider.schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["test1", "test2"])),
+            ],
+        )
+        .unwrap();
+
+        let mem_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap());
+        let logical_plan = mem_table
+            .scan(&*session_state, None, &[], None)
+            .await
+            .unwrap();
+
+        let result_plan = table_provider
+            .insert_into(&*session_state, logical_plan, InsertOp::Append)
+            .await
+            .unwrap();
+
+        assert!(!result_plan.schema().fields().is_empty());
+
+        let result_schema = result_plan.schema();
+        assert_eq!(result_schema.fields().len(), 1);
+        assert_eq!(result_schema.field(0).name(), "count");
+        assert_eq!(
+            result_schema.field(0).data_type(),
+            &arrow::datatypes::DataType::UInt64
+        );
+        assert_eq!(result_plan.children().len(), 1);
+        assert!(result_plan.metrics().is_some());
+    }
 
     #[test]
     fn test_partitioned_file_from_action() {
@@ -991,8 +1335,8 @@ mod tests {
             clustering_provider: None,
         };
         let schema = Schema::new(vec![
-            Field::new("year", DataType::Int64, true),
-            Field::new("month", DataType::Int64, true),
+            Field::new("year", ArrowDataType::Int64, true),
+            Field::new("month", ArrowDataType::Int64, true),
         ]);
 
         let part_columns = vec!["year".to_string(), "month".to_string()];

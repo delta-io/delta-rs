@@ -92,7 +92,11 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
         let snapshot = match spawn_blocking(move || {
-            KernelSnapshot::try_new(table_root, engine.as_ref(), version)
+            let mut builder = KernelSnapshot::builder_for(table_root);
+            if let Some(version) = version {
+                builder = builder.at_version(version);
+            }
+            builder.build(engine.as_ref())
         })
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?
@@ -111,7 +115,7 @@ impl Snapshot {
         let schema = snapshot.table_configuration().schema();
 
         Ok(Self {
-            inner: Arc::new(snapshot),
+            inner: snapshot,
             config,
             schema,
             table_url: log_store.config().location.clone(),
@@ -142,12 +146,12 @@ impl Snapshot {
         );
 
         let engine = log_store.engine(None);
-        let snapshot = KernelSnapshot::try_new(table_url.clone(), engine.as_ref(), None)?;
+        let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
         let schema = snapshot.table_configuration().schema();
 
         Ok((
             Self {
-                inner: Arc::new(snapshot),
+                inner: snapshot,
                 config: Default::default(),
                 schema,
                 table_url,
@@ -175,7 +179,11 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let current = self.inner.clone();
         let snapshot = spawn_blocking(move || {
-            KernelSnapshot::try_new_from(current, engine.as_ref(), target_version)
+            let mut builder = KernelSnapshot::builder_from(current);
+            if let Some(version) = target_version {
+                builder = builder.at_version(version);
+            }
+            builder.build(engine.as_ref())
         })
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
@@ -354,13 +362,16 @@ impl Snapshot {
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<Remove>> {
         static TOMBSTONE_SCHEMA: LazyLock<Arc<StructType>> = LazyLock::new(|| {
-            Arc::new(StructType::new(vec![
-                ActionType::Remove.schema_field().clone(),
-                ActionType::Sidecar.schema_field().clone(),
-            ]))
+            Arc::new(
+                StructType::try_new(vec![
+                    ActionType::Remove.schema_field().clone(),
+                    ActionType::Sidecar.schema_field().clone(),
+                ])
+                .expect("Failed to create a StructType somehow"),
+            )
         });
 
-        // TODO: which capacity to choose?
+        // TODO: which capacity to choose
         let mut builder = RecordBatchReceiverStreamBuilder::new(100);
         let tx = builder.tx();
 
@@ -677,6 +688,7 @@ impl EagerSnapshot {
     }
 }
 
+#[cfg(any(test, feature = "integration_test"))]
 pub(crate) fn partitions_schema(
     schema: &StructType,
     partition_columns: &[String],
@@ -684,7 +696,7 @@ pub(crate) fn partitions_schema(
     if partition_columns.is_empty() {
         return Ok(None);
     }
-    Ok(Some(StructType::new(
+    Ok(Some(StructType::try_new(
         partition_columns
             .iter()
             .map(|col| {
@@ -693,7 +705,7 @@ pub(crate) fn partitions_schema(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
-    )))
+    )?))
 }
 
 #[cfg(test)]
@@ -813,11 +825,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_schema() {
-        let schema = StructType::new(vec![
+        let schema = StructType::try_new(vec![
             StructField::new("id", DataType::LONG, true),
             StructField::new("name", DataType::STRING, true),
             StructField::new("date", DataType::DATE, true),
-        ]);
+        ])
+        .unwrap();
 
         let partition_columns = vec!["date".to_string()];
         let metadata = ActionFactory::metadata(&schema, Some(&partition_columns), None);
@@ -839,11 +852,9 @@ mod tests {
 
         let (snapshot, _) = Snapshot::new_test(vec![&commit_data]).await.unwrap();
 
-        let expected = Arc::new(StructType::new(vec![StructField::new(
-            "date",
-            DataType::DATE,
-            true,
-        )]));
+        let expected = Arc::new(
+            StructType::try_new(vec![StructField::new("date", DataType::DATE, true)]).unwrap(),
+        );
         assert_eq!(snapshot.inner.partitions_schema().unwrap(), Some(expected));
 
         let metadata = ActionFactory::metadata(&schema, None::<Vec<&str>>, None);

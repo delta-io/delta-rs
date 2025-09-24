@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-hdfs"
-version = "0.12.0"
+version = "0.13.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,10 +12,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.28.0", path = "../core"}
+deltalake-core = { version = "0.29.0", path = "../core"}
 hdfs-native-object-store = "0.15"
 
-# workspace dependecies
+# workspace dependencies
 tokio = { workspace = true }
 url = { workspace = true }
 

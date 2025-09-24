@@ -39,7 +39,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
 
       - uses: Swatinem/rust-cache@v2
@@ -53,7 +53,7 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Run Machete to check for unused dependencies
-        uses: bnjbvr/cargo-machete@main
+        uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
 
       - name: Default build
         run: (cd crates/deltalake && cargo build --tests)
@@ -91,7 +91,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
 
       - uses: Swatinem/rust-cache@v2
@@ -132,7 +132,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
 
       - uses: Swatinem/rust-cache@v2
@@ -194,7 +194,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
 
       - uses: Swatinem/rust-cache@v2
@@ -241,7 +241,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
 
       - uses: Swatinem/rust-cache@v2
@@ -300,7 +300,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
 
       - uses: Swatinem/rust-cache@v2
