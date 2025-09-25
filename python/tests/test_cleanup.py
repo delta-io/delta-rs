@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
-import pathlib
-import pytest
-import sys
-from deltalake import DeltaTable, write_deltalake
-import pandas as pd
-import shutil
 import os
-import traceback
+import pathlib
+import shutil
+
+import pandas as pd
+import pytest
+
+from deltalake import DeltaTable, write_deltalake
 
 
 def clean_data_dir(data_path):
