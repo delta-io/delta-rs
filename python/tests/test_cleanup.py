@@ -9,6 +9,7 @@ import shutil
 import os
 import traceback
 
+
 def clean_data_dir(data_path):
     if os.path.exists(data_path):
         try:
@@ -25,6 +26,7 @@ def print_log_dir(path):
         for file in sorted(os.listdir(log_path)):
             print(f"  {file}")
 
+
 @pytest.mark.pandas
 def test_failed_cleanup(tmp_path: pathlib.Path):
     data_path = tmp_path
@@ -32,10 +34,15 @@ def test_failed_cleanup(tmp_path: pathlib.Path):
 
     # write 10 versions of the data
     for i in range(10):
-        ids = range(i*10, i*10+10)
+        ids = range(i * 10, i * 10 + 10)
         strings = [f"str_{i}" for i in range(10)]
         df = pd.DataFrame({"id": ids, "value": strings})
-        write_deltalake(data_path, df, mode="overwrite", configuration={"delta.logRetentionDuration": "interval 0 day"})
+        write_deltalake(
+            data_path,
+            df,
+            mode="overwrite",
+            configuration={"delta.logRetentionDuration": "interval 0 day"},
+        )
 
     # checkpoint final version
     table = DeltaTable(data_path)
