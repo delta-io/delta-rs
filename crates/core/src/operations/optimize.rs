@@ -354,6 +354,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size,
                 this.writer_properties_factory,
+                this.session_config,
             )
             .await?;
             let metrics = plan
@@ -849,6 +850,7 @@ pub async fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    session_config: Option<SessionConfig>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
         target_size.unwrap_or_else(|| snapshot.table_config().target_file_size().get());

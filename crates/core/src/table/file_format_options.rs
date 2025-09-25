@@ -29,7 +29,7 @@ pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
     fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory>;
 
     #[cfg(feature = "datafusion")]
-    fn update_session(&self, session: &dyn Session) -> DeltaResult<()> {
+    fn update_session(&self, _session: &dyn Session) -> DeltaResult<()> {
         // Default implementation does nothing
         Ok(())
     }

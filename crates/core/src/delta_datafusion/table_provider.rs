@@ -108,7 +108,7 @@ impl DeltaDataSink {
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
         save_mode: SaveMode,
-        session_state: Arc<SessionState>,
+        _session_state: Arc<SessionState>,
     ) -> datafusion::common::Result<Self> {
         let schema = snapshot
             .arrow_schema()
