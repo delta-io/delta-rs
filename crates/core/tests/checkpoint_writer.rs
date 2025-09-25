@@ -286,7 +286,7 @@ mod delete_expired_delta_log_in_checkpoint {
                 ),
             ])),
         )
-            .await;
+        .await;
 
         let table_path = table.table_uri();
         let set_file_last_modified = |version: usize, last_modified_millis: u64, suffix: &str| {
