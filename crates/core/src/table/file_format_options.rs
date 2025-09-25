@@ -320,13 +320,6 @@ impl WriterPropertiesExt for WriterProperties {
         // Default statistics setting
         builder = builder.set_statistics_enabled(self.statistics_enabled(&empty));
 
-        // Default max statistics size (deprecated in parquet, but preserve value if used)
-        #[allow(deprecated)]
-        {
-            let max_stats = self.max_statistics_size(&empty);
-            builder = builder.set_max_statistics_size(max_stats);
-        }
-
         // Default bloom filter settings
         if let Some(bfp) = self.bloom_filter_properties(&empty) {
             builder = builder

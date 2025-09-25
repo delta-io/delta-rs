@@ -49,7 +49,7 @@ object_store = { version = "0.12.1" }
 parquet = { version = "56.0.0" }
 
 # datafusion
-datafusion = "50.0.0"
+datafusion = { version = "50.0.0" , features = ["parquet_encryption", "default"]}
 datafusion-ffi = "50.0.0"
 datafusion-proto = "50.0.0"
 
