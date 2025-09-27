@@ -39,6 +39,7 @@ use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
+use crate::table::file_format_options::FileFormatRef;
 use crate::DeltaTable;
 use url::Url;
 
@@ -59,6 +60,8 @@ mod cdc;
 pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
+#[cfg(feature = "datafusion")]
+pub mod encryption;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
@@ -181,6 +184,12 @@ impl DeltaOps {
         }
     }
 
+    /// Set options for parquet files
+    pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
+        self.0.file_format_options = Some(file_format_options);
+        self
+    }
+
     /// Create a [`DeltaOps`] instance from uri string with storage options (deprecated)
     #[deprecated(note = "Use try_from_uri_with_storage_options with url::Url instead")]
     pub async fn try_from_uri_str_with_storage_options(
@@ -224,14 +233,22 @@ impl DeltaOps {
     /// ```
     #[must_use]
     pub fn create(self) -> CreateBuilder {
-        CreateBuilder::default().with_log_store(self.0.log_store)
+        let mut cb = CreateBuilder::default().with_log_store(self.0.log_store);
+        if let Some(file_format_options) = self.0.file_format_options {
+            cb = cb.with_file_format_options(file_format_options);
+        }
+        cb
     }
 
     /// Load data from a DeltaTable
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load(self) -> LoadBuilder {
-        LoadBuilder::new(self.0.log_store, self.0.state.unwrap())
+        LoadBuilder::new(
+            self.0.log_store,
+            self.0.state.unwrap(),
+            self.0.file_format_options,
+        )
     }
 
     /// Load a table with CDF Enabled
@@ -245,7 +262,8 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.log_store, self.0.state).with_input_batches(batches)
+        WriteBuilder::new(self.0.log_store, self.0.state, self.0.file_format_options)
+            .with_input_batches(batches)
     }
 
     /// Vacuum stale files from delta table
@@ -264,21 +282,33 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
-        OptimizeBuilder::new(self.0.log_store, self.0.state.unwrap())
+        OptimizeBuilder::new(
+            self.0.log_store,
+            self.0.state.unwrap(),
+            self.0.file_format_options,
+        )
     }
 
     /// Delete data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn delete(self) -> DeleteBuilder {
-        DeleteBuilder::new(self.0.log_store, self.0.state.unwrap())
+        DeleteBuilder::new(
+            self.0.log_store,
+            self.0.state.unwrap(),
+            self.0.file_format_options,
+        )
     }
 
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn update(self) -> UpdateBuilder {
-        UpdateBuilder::new(self.0.log_store, self.0.state.unwrap())
+        UpdateBuilder::new(
+            self.0.log_store,
+            self.0.state.unwrap(),
+            self.0.file_format_options,
+        )
     }
 
     /// Restore delta table to a specified version or datetime
@@ -298,6 +328,7 @@ impl DeltaOps {
         MergeBuilder::new(
             self.0.log_store,
             self.0.state.unwrap(),
+            self.0.file_format_options,
             predicate.into(),
             source,
         )
@@ -320,7 +351,11 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
-        DropConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
+        DropConstraintBuilder::new(
+            self.0.log_store,
+            self.0.state.unwrap(),
+            self.0.file_format_options,
+        )
     }
 
     /// Set table properties

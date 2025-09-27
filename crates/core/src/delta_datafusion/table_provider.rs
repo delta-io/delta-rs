@@ -62,6 +62,7 @@ use crate::kernel::{Action, Add, Remove};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
+use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, table::state::DeltaTableState, DeltaResult, DeltaTableError};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -107,7 +108,7 @@ impl DeltaDataSink {
         log_store: LogStoreRef,
         snapshot: DeltaTableState,
         save_mode: SaveMode,
-        session_state: Arc<SessionState>,
+        _session_state: Arc<SessionState>,
     ) -> datafusion::common::Result<Self> {
         let schema = snapshot
             .arrow_schema()
@@ -405,6 +406,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     limit: Option<usize>,
     files: Option<&'a [Add]>,
     config: Option<DeltaScanConfig>,
+    parquet_options: Option<TableParquetOptions>,
 }
 
 impl<'a> DeltaScanBuilder<'a> {
@@ -422,7 +424,13 @@ impl<'a> DeltaScanBuilder<'a> {
             limit: None,
             files: None,
             config: None,
+            parquet_options: None,
         }
+    }
+
+    pub fn with_parquet_options(mut self, parquet_options: Option<TableParquetOptions>) -> Self {
+        self.parquet_options = parquet_options;
+        self
     }
 
     pub fn with_filter(mut self, filter: Option<Expr>) -> Self {
@@ -657,12 +665,29 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
-        let parquet_options = TableParquetOptions {
-            global: self.session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
+        let parquet_options = self
+            .parquet_options
+            .unwrap_or_else(|| self.session.table_options().parquet.clone());
+
+        // We have to set the encryption factory on the ParquetSource based on the Parquet options,
+        // as this is usually handled by the ParquetFormat type in DataFusion,
+        // which is not used in delta-rs.
+        let encryption_factory = parquet_options
+            .crypto
+            .factory_id
+            .as_ref()
+            .map(|factory_id| {
+                self.session
+                    .runtime_env()
+                    .parquet_encryption_factory(factory_id)
+            })
+            .transpose()?;
 
         let mut file_source = ParquetSource::new(parquet_options);
+
+        if let Some(encryption_factory) = encryption_factory {
+            file_source = file_source.with_encryption_factory(encryption_factory);
+        }
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
@@ -743,9 +768,17 @@ impl TableProvider for DeltaTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store(), session.runtime_env().clone());
+        if let Some(format_options) = &self.file_format_options {
+            format_options.update_session(session)?;
+        }
         let filter_expr = conjunction(filters.iter().cloned());
 
         let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
+            .with_parquet_options(
+                crate::table::file_format_options::to_table_parquet_options_from_ffo(
+                    self.file_format_options.as_ref(),
+                ),
+            )
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -776,6 +809,7 @@ pub struct DeltaTableProvider {
     config: DeltaScanConfig,
     schema: Arc<Schema>,
     files: Option<Vec<Add>>,
+    file_format_options: Option<FileFormatRef>,
 }
 
 impl DeltaTableProvider {
@@ -791,7 +825,13 @@ impl DeltaTableProvider {
             log_store,
             config,
             files: None,
+            file_format_options: None,
         })
+    }
+
+    pub fn with_file_format_options(mut self, file_format_options: Option<FileFormatRef>) -> Self {
+        self.file_format_options = file_format_options;
+        self
     }
 
     /// Define which files to consider while building a scan, for advanced usecases
@@ -831,9 +871,17 @@ impl TableProvider for DeltaTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store.clone(), session.runtime_env().clone());
+        if let Some(format_options) = &self.file_format_options {
+            format_options.update_session(session)?;
+        }
+
         let filter_expr = conjunction(filters.iter().cloned());
 
+        let table_parquet_options =
+            to_table_parquet_options_from_ffo(self.file_format_options.as_ref());
+
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
+            .with_parquet_options(table_parquet_options)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)

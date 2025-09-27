@@ -9,6 +9,7 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
+use crate::table::file_format_options::FileFormatRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
@@ -23,6 +24,8 @@ pub struct DropConstraintBuilder {
     raise_if_not_exists: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
+    /// options to apply when operating on the table files
+    file_format_options: Option<FileFormatRef>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -39,12 +42,17 @@ impl super::Operation<()> for DropConstraintBuilder {
 
 impl DropConstraintBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(
+        log_store: LogStoreRef,
+        snapshot: DeltaTableState,
+        file_format_options: Option<FileFormatRef>,
+    ) -> Self {
         Self {
             name: None,
             raise_if_not_exists: true,
             snapshot,
             log_store,
+            file_format_options,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
         }
@@ -101,7 +109,11 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                         "Constraint with name '{name}' does not exist."
                     )));
                 }
-                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
+                return Ok(DeltaTable::new_with_state(
+                    this.log_store,
+                    this.snapshot,
+                    this.file_format_options,
+                ));
             }
 
             metadata = metadata.remove_config_key(&configuration_key)?;
@@ -121,6 +133,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
+                this.file_format_options.clone(),
             ))
         })
     }

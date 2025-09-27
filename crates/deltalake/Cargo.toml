@@ -35,7 +35,6 @@ deltalake-catalog-glue = { version = "0.13.0", path = "../catalog-glue", optiona
 deltalake-catalog-unity = { version = "0.13.0", path = "../catalog-unity", optional = true }
 delta_kernel = { workspace = true }
 
-
 [features]
 # All of these features are just reflected into the core crate until that
 # functionality is broken apart
@@ -59,10 +58,19 @@ rustls = ["deltalake-core/rustls"]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 tracing = { workspace = true }
+object_store = { workspace = true }
+async-trait = { workspace = true }
+tempfile = "3.21.0"
+parquet-key-management = { version = "0.4.0", features = ["_test_utils", "datafusion"] }
+uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 
 [[example]]
 name = "basic_operations"
+required-features = ["datafusion"]
+
+[[example]]
+name = "basic_operations_encryption"
 required-features = ["datafusion"]
 
 [[example]]

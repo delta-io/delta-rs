@@ -346,7 +346,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             let plan = this.create_vacuum_plan().await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, this.snapshot, None),
                     VacuumMetrics {
                         files_deleted: plan.files_to_delete.iter().map(|f| f.to_string()).collect(),
                         dry_run: true,
@@ -370,11 +370,11 @@ impl std::future::IntoFuture for VacuumBuilder {
 
             Ok(match result {
                 Some((snapshot, metrics)) => (
-                    DeltaTable::new_with_state(this.log_store, snapshot),
+                    DeltaTable::new_with_state(this.log_store, snapshot, None),
                     metrics,
                 ),
                 None => (
-                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, this.snapshot, None),
                     Default::default(),
                 ),
             })

@@ -1,12 +1,11 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -21,6 +20,7 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
+use crate::table::file_format_options::FileFormatRef;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -61,6 +61,7 @@ pub struct CreateBuilder {
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
+    file_format_options: Option<FileFormatRef>,
     configuration: HashMap<String, Option<String>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
@@ -98,6 +99,7 @@ impl CreateBuilder {
             storage_options: None,
             actions: Default::default(),
             log_store: None,
+            file_format_options: None,
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
@@ -238,6 +240,12 @@ impl CreateBuilder {
         self
     }
 
+    // Set format options for underlying table files
+    pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
+        self.file_format_options = Some(file_format_options);
+        self
+    }
+
     /// Set a custom execute handler, for pre and post execution
     pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
@@ -262,7 +270,11 @@ impl CreateBuilder {
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
                 ensure_table_uri(log_store.root_uri())?.as_str().to_string(),
-                DeltaTable::new(log_store, Default::default()),
+                DeltaTable::new(
+                    log_store,
+                    Default::default(),
+                    self.file_format_options.clone(),
+                ),
             )
         } else {
             let storage_url =

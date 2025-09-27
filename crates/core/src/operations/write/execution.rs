@@ -10,7 +10,6 @@ use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::StreamExt;
 use object_store::prefix::PrefixStore;
-use parquet::file::properties::WriterProperties;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -36,6 +35,7 @@ use datafusion::logical_expr::col;
 
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::{WriteError, WriterStatsConfig};
+use crate::table::file_format_options::{FileFormatRef, WriterPropertiesFactory};
 
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {
@@ -52,7 +52,7 @@ pub(crate) async fn write_execution_plan_cdc(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
@@ -65,7 +65,7 @@ pub(crate) async fn write_execution_plan_cdc(
         cdc_store,
         target_file_size,
         write_batch_size,
-        writer_properties,
+        writer_properties_factory,
         writer_stats_config,
     )
     .await?
@@ -99,7 +99,7 @@ pub(crate) async fn write_execution_plan(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
@@ -110,7 +110,7 @@ pub(crate) async fn write_execution_plan(
         object_store,
         target_file_size,
         write_batch_size,
-        writer_properties,
+        writer_properties_factory,
         writer_stats_config,
         None,
         false,
@@ -127,7 +127,7 @@ pub(crate) async fn execute_non_empty_expr(
     partition_columns: Vec<String>,
     expression: &Expr,
     rewrite: &[Add],
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
@@ -171,7 +171,7 @@ pub(crate) async fn execute_non_empty_expr(
             log_store.object_store(Some(operation_id)),
             Some(snapshot.table_config().target_file_size().get() as usize),
             None,
-            writer_properties.clone(),
+            writer_properties_factory.clone(),
             writer_stats_config.clone(),
         )
         .await?;
@@ -204,13 +204,20 @@ pub(crate) async fn prepare_predicate_actions(
     snapshot: &DeltaTableState,
     state: SessionState,
     partition_columns: Vec<String>,
-    writer_properties: Option<WriterProperties>,
+    file_format_options: Option<&FileFormatRef>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let candidates =
-        find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
+    let candidates = find_files(
+        snapshot,
+        log_store.clone(),
+        &state,
+        file_format_options,
+        Some(predicate.clone()),
+    )
+    .await?;
 
     let (mut actions, cdf_df) = execute_non_empty_expr(
         snapshot,
@@ -219,7 +226,7 @@ pub(crate) async fn prepare_predicate_actions(
         partition_columns,
         &predicate,
         &candidates.candidates,
-        writer_properties,
+        writer_properties_factory,
         writer_stats_config,
         candidates.partition_scan,
         operation_id,
@@ -254,7 +261,7 @@ pub(crate) async fn write_execution_plan_v2(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,
@@ -290,7 +297,7 @@ pub(crate) async fn write_execution_plan_v2(
             let config = WriterConfig::new(
                 inner_schema.clone(),
                 partition_columns.clone(),
-                writer_properties.clone(),
+                writer_properties_factory.clone(),
                 target_file_size,
                 write_batch_size,
                 writer_stats_config.num_indexed_cols,
@@ -356,7 +363,7 @@ pub(crate) async fn write_execution_plan_v2(
             let normal_config = WriterConfig::new(
                 write_schema.clone(),
                 partition_columns.clone(),
-                writer_properties.clone(),
+                writer_properties_factory.clone(),
                 target_file_size,
                 write_batch_size,
                 writer_stats_config.num_indexed_cols,
@@ -366,7 +373,7 @@ pub(crate) async fn write_execution_plan_v2(
             let cdf_config = WriterConfig::new(
                 cdf_schema.clone(),
                 partition_columns.clone(),
-                writer_properties.clone(),
+                writer_properties_factory.clone(),
                 target_file_size,
                 write_batch_size,
                 writer_stats_config.num_indexed_cols,

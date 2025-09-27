@@ -79,7 +79,7 @@ impl PyMergeBuilder {
             ctx.read_table(table_provider).unwrap()
         };
 
-        let mut cmd = MergeBuilder::new(log_store, snapshot, predicate, source_df)
+        let mut cmd = MergeBuilder::new(log_store, snapshot, None, predicate, source_df)
             .with_safe_cast(safe_cast)
             .with_streaming(streamed_exec);
 

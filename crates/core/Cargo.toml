@@ -93,6 +93,7 @@ datatest-stable = "0.2"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
+parquet-key-management = { version = "0.4.0", features = ["_test_utils", "datafusion"] }
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }
@@ -141,6 +142,10 @@ required-features = ["datafusion"]
 
 [[test]]
 name = "command_vacuum"
+required-features = ["datafusion"]
+
+[[test]]
+name = "commands_with_encryption"
 required-features = ["datafusion"]
 
 [[test]]

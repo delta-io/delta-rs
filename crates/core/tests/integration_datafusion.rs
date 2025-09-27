@@ -434,6 +434,7 @@ mod local {
         let target_table = WriteBuilder::new(
             target_table.log_store(),
             target_table.snapshot().ok().cloned(),
+            None,
         )
         .with_input_execution_plan(source_scan)
         .with_input_session_state(state)
@@ -1406,7 +1407,7 @@ mod local {
                 .logical_plan()
                 .clone(),
         );
-        let write_builder = WriteBuilder::new(log_store, tbl.state);
+        let write_builder = WriteBuilder::new(log_store, tbl.state, None);
         let _ = write_builder
             .with_input_execution_plan(plan)
             .with_save_mode(SaveMode::Overwrite)

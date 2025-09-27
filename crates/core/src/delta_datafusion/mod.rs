@@ -89,6 +89,7 @@ pub mod planner;
 mod schema_adapter;
 mod table_provider;
 
+use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use table_provider::DeltaScanBuilder;
 pub use table_provider::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
@@ -940,6 +941,7 @@ pub(crate) async fn find_files_scan(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
+    file_format_options: Option<&FileFormatRef>,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
@@ -965,10 +967,13 @@ pub(crate) async fn find_files_scan(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
+    let table_parquet_options = to_table_parquet_options_from_ffo(file_format_options);
+
     let scan = DeltaScanBuilder::new(snapshot, log_store, state)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
+        .with_parquet_options(table_parquet_options)
         .build()
         .await?;
     let scan = Arc::new(scan);
@@ -1055,6 +1060,7 @@ pub async fn find_files(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
+    file_format_options: Option<&FileFormatRef>,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
@@ -1078,8 +1084,14 @@ pub async fn find_files(
                     partition_scan: true,
                 })
             } else {
-                let candidates =
-                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
+                let candidates = find_files_scan(
+                    snapshot,
+                    log_store,
+                    state,
+                    file_format_options,
+                    predicate.to_owned(),
+                )
+                .await?;
 
                 Ok(FindFiles {
                     candidates,

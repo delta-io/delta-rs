@@ -171,7 +171,7 @@ async fn execute(
     {
         return Err(DeltaTableError::from(RestoreError::InvalidRestoreParameter));
     }
-    let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+    let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default(), None);
 
     let version = match datetime_to_restore {
         Some(datetime) => {
@@ -364,7 +364,7 @@ impl std::future::IntoFuture for RestoreBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot, None);
             table.update().await?;
             Ok((table, metrics))
         })
@@ -373,7 +373,6 @@ impl std::future::IntoFuture for RestoreBuilder {
 
 #[cfg(test)]
 mod tests {
-
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult};
 
