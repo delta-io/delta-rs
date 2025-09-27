@@ -196,7 +196,7 @@ mod delete_expired_delta_log_in_checkpoint {
             Some(HashMap::from([
                 (
                     TableProperty::LogRetentionDuration.as_ref().into(),
-                    Some("interval 10 minute".to_string()),
+                    Some("interval 0 minute".to_string()),
                 ),
                 (
                     TableProperty::EnableExpiredLogCleanup.as_ref().into(),
@@ -225,8 +225,8 @@ mod delete_expired_delta_log_in_checkpoint {
 
         // set last_modified
         set_file_last_modified(0, 25 * 60 * 1000); // 25 mins ago, should be deleted
-        set_file_last_modified(1, 15 * 60 * 1000); // 25 mins ago, should be deleted
-        set_file_last_modified(2, 5 * 60 * 1000); // 25 mins ago, should be kept
+        set_file_last_modified(1, 15 * 60 * 1000); // 15 mins ago, should be deleted
+        set_file_last_modified(2, 5 * 60 * 1000); // 5 mins ago, should be kept as last safe checkpoint
 
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");
@@ -265,6 +265,104 @@ mod delete_expired_delta_log_in_checkpoint {
             .expect_err("Should not load version 1");
         // log file 2 is kept
         table.load_version(2).await.expect("Cannot load version 2");
+    }
+
+    // Test to verify that intermediate versions can still be loaded after the checkpoint is created.
+    // This is to verify the behavior of `cleanup_expired_logs_for` and its use of safe checkpoints.
+    #[tokio::test]
+    async fn test_delete_expired_logs_safe_checkpoint() {
+        // For additional tracing:
+        // let _ = pretty_env_logger::try_init();
+        let mut table = fs_common::create_table(
+            "../test/tests/data/checkpoints_with_expired_logs/expired_with_checkpoint",
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 10 minute".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("true".to_string()),
+                ),
+            ])),
+        )
+        .await;
+
+        let table_path = table.table_uri();
+        let set_file_last_modified = |version: usize, last_modified_millis: u64, suffix: &str| {
+            let path = format!("{table_path}_delta_log/{version:020}.{suffix}");
+            let file = OpenOptions::new().write(true).open(path).unwrap();
+            let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
+            let times = FileTimes::new()
+                .set_modified(last_modified)
+                .set_accessed(last_modified);
+            file.set_times(times).unwrap();
+        };
+
+        // create 4 commits
+        let a1 = fs_common::add(0);
+        let a2 = fs_common::add(0);
+        let a3 = fs_common::add(0);
+        let a4 = fs_common::add(0);
+        assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
+        assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
+        assert_eq!(3, fs_common::commit_add(&mut table, &a3).await);
+        assert_eq!(4, fs_common::commit_add(&mut table, &a4).await);
+
+        // set last_modified
+        set_file_last_modified(0, 25 * 60 * 1000, "json"); // 25 mins ago, should be deleted
+        set_file_last_modified(1, 20 * 60 * 1000, "json"); // 20 mins ago, last safe checkpoint, should be kept
+        set_file_last_modified(2, 15 * 60 * 1000, "json"); // 15 mins ago, fails retention cutoff, but needed by v3
+        set_file_last_modified(3, 6 * 60 * 1000, "json"); // 6 mins ago, should be kept by retention cutoff
+        set_file_last_modified(4, 5 * 60 * 1000, "json"); // 5 mins ago, should be kept by retention cutoff
+
+        table.load_version(0).await.expect("Cannot load version 0");
+        table.load_version(1).await.expect("Cannot load version 1");
+        table.load_version(2).await.expect("Cannot load version 2");
+        table.load_version(3).await.expect("Cannot load version 3");
+        table.load_version(4).await.expect("Cannot load version 4");
+
+        // Create checkpoint for version 1
+        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
+            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
+            1,
+            Some(false),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Update checkpoint time for version 1 to be just after version 1 data
+        set_file_last_modified(1, 20 * 60 * 1000 - 10, "checkpoint.parquet");
+
+        // Checkpoint final version
+        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
+            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
+            table.version().unwrap(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        table.update().await.unwrap(); // make table to read the checkpoint
+        assert_eq!(
+            table
+                .snapshot()
+                .unwrap()
+                .file_paths_iter()
+                .collect::<Vec<_>>(),
+            vec![
+                ObjectStorePath::from(a4.path.as_ref()),
+                ObjectStorePath::from(a3.path.as_ref()),
+                ObjectStorePath::from(a2.path.as_ref()),
+                ObjectStorePath::from(a1.path.as_ref()),
+            ]
+        );
+
+        // Without going back to a safe checkpoint, previously loading version 3 would fail.
+        table.load_version(3).await.expect("Cannot load version 3");
+        table.load_version(4).await.expect("Cannot load version 4");
     }
 
     #[tokio::test]

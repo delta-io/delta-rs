@@ -161,6 +161,9 @@ pub type LogStoreRef = Arc<dyn LogStore>;
 
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
+pub(crate) static DELTA_LOG_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
+
 /// Return the [LogStoreRef] for the provided [Url] location
 ///
 /// This will use the built-in process global [crate::storage::ObjectStoreRegistry] by default
@@ -636,9 +639,6 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
         deserializer.deserialize_seq(LogStoreConfigVisitor {})
     }
 }
-
-static DELTA_LOG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
 
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {
