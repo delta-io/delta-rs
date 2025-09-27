@@ -175,6 +175,10 @@ mod tests {
     }
 
     impl LazyBatchGenerator for TestBatchGenerator {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
         fn generate_next_batch(&mut self) -> DataFusionResult<Option<RecordBatch>> {
             if self.current_index < self.data.len() {
                 let batch = self.data[self.current_index].clone();

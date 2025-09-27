@@ -198,10 +198,13 @@ impl<'a> TransactionInfo<'a> {
 
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
-                files_matching_predicate(self.read_snapshot.clone(), &[predicate.clone()])
-                    .map_err(|err| CommitConflictError::Predicate {
-                        source: Box::new(err),
-                    })?,
+                files_matching_predicate(
+                    self.read_snapshot.clone(),
+                    std::slice::from_ref(predicate),
+                )
+                .map_err(|err| CommitConflictError::Predicate {
+                    source: Box::new(err),
+                })?,
             ))
         } else {
             Ok(Either::Right(

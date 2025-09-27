@@ -22,6 +22,7 @@ use pyo3_arrow::PySchema as PyArrow3Schema;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::error::SchemaMismatchError;
 use crate::utils::warn;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
@@ -636,7 +637,8 @@ impl StructType {
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
-        let inner_type = DeltaStructType::new(fields);
+        let inner_type =
+            DeltaStructType::try_new(fields).expect("Failed to construct a StructType");
         Self { inner_type }
     }
 
@@ -757,7 +759,8 @@ impl PySchema {
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
-        let inner_type = DeltaStructType::new(fields);
+        let inner_type = DeltaStructType::try_new(fields)
+            .map_err(|e| SchemaMismatchError::new_err(e.to_string()))?;
         Ok((Self {}, StructType { inner_type }))
     }
 

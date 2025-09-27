@@ -39,14 +39,21 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: "rust-cache-${{ matrix.os }}"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       - name: Format
         run: cargo fmt -- --check
 
       - name: Run Machete to check for unused dependencies
-        uses: bnjbvr/cargo-machete@main
+        uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
 
       - name: Default build
         run: (cd crates/deltalake && cargo build --tests)
@@ -84,8 +91,15 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: "rust-cache-${{ matrix.os }}"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       - name: Run tests
         run: |
@@ -118,8 +132,15 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-integration-tests"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -173,8 +194,15 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-integration-tests"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       # Install Java and Hadoop for HDFS integration tests
       - uses: actions/setup-java@v4
@@ -213,8 +241,15 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-integration-tests-hdfs"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -265,8 +300,15 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.85"
+          toolchain: "1.86"
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-integration-tests-lakefs"
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
+          cache-all-crates: true
+          cache-targets: false
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

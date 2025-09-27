@@ -11,7 +11,7 @@ use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
     config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
@@ -352,7 +352,7 @@ impl ObjectStore for S3StorageBackend {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }
@@ -484,7 +484,6 @@ mod tests {
     use super::*;
 
     use crate::constants;
-    use maplit::hashmap;
     use serial_test::serial;
 
     struct ScopedEnv {
@@ -601,11 +600,14 @@ mod tests {
             clear_env_of_aws_keys();
             std::env::remove_var(constants::AWS_ENDPOINT_URL);
 
-            let options = S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
-                constants::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
-                constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-            })
+            let options = S3StorageOptions::from_map(&HashMap::from([
+                (constants::AWS_REGION.to_string(), "eu-west-1".to_string()),
+                (constants::AWS_ACCESS_KEY_ID.to_string(), "test".to_string()),
+                (
+                    constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                    "test_secret".to_string(),
+                ),
+            ]))
             .unwrap();
 
             let mut expected = S3StorageOptions::try_default().unwrap();
@@ -623,21 +625,55 @@ mod tests {
     fn storage_options_from_map_test() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            let options = S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
-                constants::AWS_REGION.to_string() => "us-west-2".to_string(),
-                constants::AWS_PROFILE.to_string() => "default".to_string(),
-                constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
-                constants::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
-                constants::AWS_IAM_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
-                constants::AWS_IAM_ROLE_SESSION_NAME.to_string() => "another_session_name".to_string(),
-                constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
-                constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
-                constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
-                constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
-                constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-                constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-            }).unwrap();
+            let options = S3StorageOptions::from_map(&HashMap::from([
+                (
+                    constants::AWS_ENDPOINT_URL.to_string(),
+                    "http://localhost:1234".to_string(),
+                ),
+                (constants::AWS_REGION.to_string(), "us-west-2".to_string()),
+                (constants::AWS_PROFILE.to_string(), "default".to_string()),
+                (
+                    constants::AWS_S3_ADDRESSING_STYLE.to_string(),
+                    "virtual".to_string(),
+                ),
+                (
+                    constants::AWS_S3_LOCKING_PROVIDER.to_string(),
+                    "another_locking_provider".to_string(),
+                ),
+                (
+                    constants::AWS_IAM_ROLE_ARN.to_string(),
+                    "arn:aws:iam::123456789012:role/another_role".to_string(),
+                ),
+                (
+                    constants::AWS_IAM_ROLE_SESSION_NAME.to_string(),
+                    "another_session_name".to_string(),
+                ),
+                (
+                    constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string(),
+                    "another_token_file".to_string(),
+                ),
+                (
+                    constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string(),
+                    "2".to_string(),
+                ),
+                (
+                    constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string(),
+                    "3".to_string(),
+                ),
+                (
+                    constants::AWS_ACCESS_KEY_ID.to_string(),
+                    "test_id".to_string(),
+                ),
+                (
+                    constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                    "test_secret".to_string(),
+                ),
+            ]))
+            .unwrap();
 
             assert_eq!(
                 Some("another_locking_provider"),
@@ -649,9 +685,10 @@ mod tests {
             assert!(options.virtual_hosted_style_request);
             assert!(!options.allow_unsafe_rename);
             assert_eq!(
-                hashmap! {
-                    constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
-                },
+                HashMap::from([(
+                    constants::AWS_S3_ADDRESSING_STYLE.to_string(),
+                    "virtual".to_string()
+                ),]),
                 options.extra_opts
             );
         });
@@ -662,22 +699,59 @@ mod tests {
     fn storage_options_from_map_with_dynamodb_endpoint_test() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            let options = S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
-                constants::AWS_ENDPOINT_URL_DYNAMODB.to_string() => "http://localhost:2345".to_string(),
-                constants::AWS_REGION.to_string() => "us-west-2".to_string(),
-                constants::AWS_PROFILE.to_string() => "default".to_string(),
-                constants::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
-                constants::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
-                constants::AWS_IAM_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
-                constants::AWS_IAM_ROLE_SESSION_NAME.to_string() => "another_session_name".to_string(),
-                constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
-                constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
-                constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
-                constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
-                constants::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
-                constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
-            }).unwrap();
+            let options = S3StorageOptions::from_map(&HashMap::from([
+                (
+                    constants::AWS_ENDPOINT_URL.to_string(),
+                    "http://localhost:1234".to_string(),
+                ),
+                (
+                    constants::AWS_ENDPOINT_URL_DYNAMODB.to_string(),
+                    "http://localhost:2345".to_string(),
+                ),
+                (constants::AWS_REGION.to_string(), "us-west-2".to_string()),
+                (constants::AWS_PROFILE.to_string(), "default".to_string()),
+                (
+                    constants::AWS_S3_ADDRESSING_STYLE.to_string(),
+                    "virtual".to_string(),
+                ),
+                (
+                    constants::AWS_S3_LOCKING_PROVIDER.to_string(),
+                    "another_locking_provider".to_string(),
+                ),
+                (
+                    constants::AWS_IAM_ROLE_ARN.to_string(),
+                    "arn:aws:iam::123456789012:role/another_role".to_string(),
+                ),
+                (
+                    constants::AWS_IAM_ROLE_SESSION_NAME.to_string(),
+                    "another_session_name".to_string(),
+                ),
+                (
+                    constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string(),
+                    "another_token_file".to_string(),
+                ),
+                (
+                    constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string(),
+                    "2".to_string(),
+                ),
+                (
+                    constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string(),
+                    "3".to_string(),
+                ),
+                (
+                    constants::AWS_ACCESS_KEY_ID.to_string(),
+                    "test_id".to_string(),
+                ),
+                (
+                    constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                    "test_secret".to_string(),
+                ),
+            ]))
+            .unwrap();
 
             assert_eq!(
                 Some("http://localhost:2345"),
@@ -711,12 +785,21 @@ mod tests {
             std::env::set_var(constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
             std::env::set_var(constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
             std::env::set_var(constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, "3");
-            let options = S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
-                constants::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
-                constants::AWS_REGION.to_string() => "us-west-2".to_string(),
-                "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string() => "3".to_string(),
-            })
+            let options = S3StorageOptions::from_map(&HashMap::from([
+                (
+                    constants::AWS_ACCESS_KEY_ID.to_string(),
+                    "test_id_mixed".to_string(),
+                ),
+                (
+                    constants::AWS_SECRET_ACCESS_KEY.to_string(),
+                    "test_secret_mixed".to_string(),
+                ),
+                (constants::AWS_REGION.to_string(), "us-west-2".to_string()),
+                (
+                    "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string(),
+                    "3".to_string(),
+                ),
+            ]))
             .unwrap();
 
             assert_eq!(
@@ -737,7 +820,7 @@ mod tests {
                     s3_pool_idle_timeout: Duration::from_secs(1),
                     sts_pool_idle_timeout: Duration::from_secs(2),
                     s3_get_internal_server_error_retries: 3,
-                    extra_opts: hashmap! {},
+                    extra_opts: HashMap::new(),
                     allow_unsafe_rename: false,
                 },
                 options
@@ -750,12 +833,22 @@ mod tests {
     fn storage_options_web_identity_test() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            let _options = S3StorageOptions::from_map(&hashmap! {
-                constants::AWS_REGION.to_string() => "eu-west-1".to_string(),
-                constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
-                constants::AWS_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/web_identity_role".to_string(),
-                constants::AWS_ROLE_SESSION_NAME.to_string() => "web_identity_session_name".to_string(),
-            }).unwrap();
+            let _options = S3StorageOptions::from_map(&HashMap::from([
+                (constants::AWS_REGION.to_string(), "eu-west-1".to_string()),
+                (
+                    constants::AWS_WEB_IDENTITY_TOKEN_FILE.to_string(),
+                    "web_identity_token_file".to_string(),
+                ),
+                (
+                    constants::AWS_ROLE_ARN.to_string(),
+                    "arn:aws:iam::123456789012:role/web_identity_role".to_string(),
+                ),
+                (
+                    constants::AWS_ROLE_SESSION_NAME.to_string(),
+                    "web_identity_session_name".to_string(),
+                ),
+            ]))
+            .unwrap();
 
             assert_eq!("eu-west-1", std::env::var(constants::AWS_REGION).unwrap());
 
@@ -781,7 +874,7 @@ mod tests {
     fn when_merging_with_env_unsupplied_options_are_added() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            let raw_options = hashmap! {};
+            let raw_options = HashMap::new();
             std::env::set_var(constants::AWS_ACCESS_KEY_ID, "env_key");
             std::env::set_var(constants::AWS_ENDPOINT_URL, "env_key");
             std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "env_key");
@@ -804,12 +897,15 @@ mod tests {
     async fn when_merging_with_env_supplied_options_take_precedence() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            let raw_options = hashmap! {
-                "AWS_ACCESS_KEY_ID".to_string() => "options_key".to_string(),
-                "AWS_ENDPOINT_URL".to_string() => "options_key".to_string(),
-                "AWS_SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
-                "AWS_REGION".to_string() => "options_key".to_string()
-            };
+            let raw_options = HashMap::from([
+                ("AWS_ACCESS_KEY_ID".to_string(), "options_key".to_string()),
+                ("AWS_ENDPOINT_URL".to_string(), "options_key".to_string()),
+                (
+                    "AWS_SECRET_ACCESS_KEY".to_string(),
+                    "options_key".to_string(),
+                ),
+                ("AWS_REGION".to_string(), "options_key".to_string()),
+            ]);
             std::env::set_var("aws_access_key_id", "env_key");
             std::env::set_var("aws_endpoint", "env_key");
             std::env::set_var("aws_secret_access_key", "env_key");
@@ -832,20 +928,23 @@ mod tests {
         let options = HashMap::default();
         assert!(is_aws(&options));
 
-        let minio: HashMap<String, String> = hashmap! {
-            constants::AWS_ENDPOINT_URL.to_string() => "http://minio:8080".to_string(),
-        };
+        let minio: HashMap<String, String> = HashMap::from([(
+            constants::AWS_ENDPOINT_URL.to_string(),
+            "http://minio:8080".to_string(),
+        )]);
         assert!(!is_aws(&minio));
 
-        let minio: HashMap<String, String> = hashmap! {
-            "aws_endpoint".to_string() => "http://minio:8080".to_string(),
-        };
+        let minio: HashMap<String, String> =
+            HashMap::from([("aws_endpoint".to_string(), "http://minio:8080".to_string())]);
         assert!(!is_aws(&minio));
 
-        let localstack: HashMap<String, String> = hashmap! {
-            constants::AWS_FORCE_CREDENTIAL_LOAD.to_string() => "true".to_string(),
-            "aws_endpoint".to_string() => "http://minio:8080".to_string(),
-        };
+        let localstack: HashMap<String, String> = HashMap::from([
+            (
+                constants::AWS_FORCE_CREDENTIAL_LOAD.to_string(),
+                "true".to_string(),
+            ),
+            ("aws_endpoint".to_string(), "http://minio:8080".to_string()),
+        ]);
         assert!(is_aws(&localstack));
     }
 }

@@ -5,7 +5,7 @@ use chrono::DateTime;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::commit_uri_from_version;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaOps, DeltaTable};
+use deltalake_core::{ensure_table_uri, DeltaOps, DeltaTable};
 use itertools::Itertools;
 use rand::Rng;
 use std::error::Error;
@@ -32,8 +32,9 @@ async fn setup_test(table_uri: &str) -> Result<Context, Box<dyn Error>> {
             true,
         ),
     ];
-    let table = DeltaOps::try_from_uri(table_uri)
-        .await?
+    let table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+        .await
+        .unwrap()
         .create()
         .with_columns(columns)
         .await?;
@@ -100,7 +101,9 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     assert_eq!(result.1.num_removed_file, 2);
     assert_eq!(result.0.snapshot()?.version(), 4);
 
-    let mut table = DeltaOps::try_from_uri(table_uri).await?;
+    let mut table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+        .await
+        .unwrap();
     table.0.load_version(1).await?;
     let curr_files = table.0.snapshot()?.file_paths_iter().collect_vec();
     let result_files = result.0.snapshot()?.file_paths_iter().collect_vec();
@@ -146,7 +149,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let context = setup_test(table_uri).await?;
     let table = context.table;
-    let history = table.history(Some(10)).await?;
+    let history: Vec<_> = table.history(Some(10)).await?.collect();
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
 
@@ -159,7 +162,9 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     assert!(result.is_err());
 
     // version too large
-    let ops = DeltaOps::try_from_uri(table_uri).await?;
+    let ops = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+        .await
+        .unwrap();
     let result = ops.restore().with_version_to_restore(5).await;
     assert!(result.is_err());
     Ok(())

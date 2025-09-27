@@ -112,7 +112,8 @@ pub(crate) fn merge_delta_struct(
                 }
             }
 
-            Ok(StructType::new(fields))
+            Ok(StructType::try_new(fields)
+                .map_err(|e| ArrowError::from_external_error(Box::new(e)))?)
         }
         Err(e) => {
             errors.push(e.to_string());

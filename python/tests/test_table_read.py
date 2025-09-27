@@ -57,6 +57,12 @@ def test_read_simple_table_to_dict():
     ).read_all()["id"].to_pylist() == [5, 7, 9]
 
 
+def test_table_count():
+    table_path = "../crates/test/tests/data/COVID-19_NYT"
+    dt = DeltaTable(table_path)
+    assert dt.count() == 1111930
+
+
 class _SerializableException(BaseException):
     pass
 

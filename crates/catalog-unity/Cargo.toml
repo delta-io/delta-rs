@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-catalog-unity"
-version = "0.12.0"
+version = "0.13.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -20,14 +20,14 @@ thiserror.workspace = true
 futures.workspace = true
 chrono.workspace = true
 tracing.workspace = true
-deltalake-core = { version = "0.28.0", path = "../core" }
-deltalake-aws = { version = "0.11.0", path = "../aws", optional = true }
-deltalake-azure = { version = "0.11.0", path = "../azure", optional = true }
-deltalake-gcp = { version = "0.12.0", path = "../gcp", optional = true }
+deltalake-core = { version = "0.29.0", path = "../core" }
+deltalake-aws = { version = "0.12.0", path = "../aws", optional = true }
+deltalake-azure = { version = "0.12.0", path = "../azure", optional = true }
+deltalake-gcp = { version = "0.13.0", path = "../gcp", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 reqwest-retry = "0.7"
 reqwest-middleware = { version = "0.4.0", features = ["json"] }
-rand = "0.8"
+rand = "0.9"
 dashmap = "6"
 datafusion = { workspace = true, optional = true }
 moka = { version = "0.12", optional = true, features = ["future"] }

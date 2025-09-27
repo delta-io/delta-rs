@@ -127,12 +127,12 @@ impl SnapshotExt for Snapshot {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
         let partition_columns = self.metadata().partition_columns();
         let column_mapping_mode = self.table_configuration().column_mapping_mode();
-        let physical_schema = StructType::new(
+        let physical_schema = StructType::try_new(
             self.schema()
                 .fields()
                 .filter(|field| !partition_columns.contains(field.name()))
                 .map(|field| field.make_physical(column_mapping_mode)),
-        );
+        )?;
         Ok(Arc::new(stats_schema(
             &physical_schema,
             self.table_properties(),
@@ -225,7 +225,7 @@ fn partitions_schema(
     if partition_columns.is_empty() {
         return Ok(None);
     }
-    Ok(Some(StructType::new(
+    Ok(Some(StructType::try_new(
         partition_columns
             .iter()
             .map(|col| {
@@ -234,7 +234,7 @@ fn partitions_schema(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
-    )))
+    )?))
 }
 
 /// Generates the expected schema for file statistics.
@@ -293,7 +293,7 @@ pub(crate) fn stats_schema(
         }
     }
 
-    StructType::new(fields)
+    StructType::try_new(fields).expect("Failed to construct StructType for stats_schema")
 }
 
 // Convert a min/max stats schema into a nullcount schema (all leaf fields are LONG)
@@ -424,7 +424,7 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
         self.path.pop();
 
         // exclude struct fields with no children
-        if matches!(field.data_type(), DataType::Struct(dt) if dt.fields.is_empty()) {
+        if matches!(field.data_type(), DataType::Struct(dt) if dt.num_fields() == 0) {
             None
         } else {
             Some(field)
@@ -610,15 +610,17 @@ mod tests {
     #[test]
     fn test_stats_schema_simple() {
         let properties: TableProperties = [("key", "value")].into();
-        let file_schema = StructType::new([StructField::nullable("id", DataType::LONG)]);
+        let file_schema =
+            StructType::try_new([StructField::nullable("id", DataType::LONG)]).unwrap();
 
         let stats_schema = stats_schema(&file_schema, &properties);
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", file_schema.clone()),
             StructField::nullable("minValues", file_schema.clone()),
             StructField::nullable("maxValues", file_schema),
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
@@ -636,46 +638,53 @@ mod tests {
 
         // Create array type for a field that's not eligible for data skipping
         let array_type = DataType::Array(Box::new(ArrayType::new(DataType::STRING, false)));
-        let metadata_struct = StructType::new([
+        let metadata_struct = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
             StructField::nullable("tags", array_type),
             StructField::nullable("score", DataType::DOUBLE),
-        ]);
-        let file_schema = StructType::new([
+        ])
+        .unwrap();
+        let file_schema = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable(
                 "metadata",
                 DataType::Struct(Box::new(metadata_struct.clone())),
             ),
-        ]);
+        ])
+        .unwrap();
 
         let stats_schema = stats_schema(&file_schema, &properties);
 
-        let expected_null_nested = StructType::new([
+        let expected_null_nested = StructType::try_new([
             StructField::nullable("name", DataType::LONG),
             StructField::nullable("tags", DataType::LONG),
             StructField::nullable("score", DataType::LONG),
-        ]);
-        let expected_null = StructType::new([
+        ])
+        .unwrap();
+        let expected_null = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("metadata", DataType::Struct(Box::new(expected_null_nested))),
-        ]);
+        ])
+        .unwrap();
 
-        let expected_nested = StructType::new([
+        let expected_nested = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
             StructField::nullable("score", DataType::DOUBLE),
-        ]);
-        let expected_fields = StructType::new([
+        ])
+        .unwrap();
+        let expected_fields = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("metadata", DataType::Struct(Box::new(expected_nested))),
-        ]);
+        ])
+        .unwrap();
 
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", expected_null),
             StructField::nullable("minValues", expected_fields.clone()),
             StructField::nullable("maxValues", expected_fields.clone()),
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
@@ -688,33 +697,38 @@ mod tests {
         )]
         .into();
 
-        let user_struct = StructType::new([
+        let user_struct = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
             StructField::nullable("age", DataType::INTEGER),
-        ]);
-        let file_schema = StructType::new([
+        ])
+        .unwrap();
+        let file_schema = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("user.info", DataType::Struct(Box::new(user_struct.clone()))),
-        ]);
+        ])
+        .unwrap();
 
         let stats_schema = stats_schema(&file_schema, &properties);
 
-        let expected_nested = StructType::new([StructField::nullable("name", DataType::STRING)]);
-        let expected_fields = StructType::new([StructField::nullable(
+        let expected_nested =
+            StructType::try_new([StructField::nullable("name", DataType::STRING)]).unwrap();
+        let expected_fields = StructType::try_new([StructField::nullable(
             "user.info",
             DataType::Struct(Box::new(expected_nested)),
-        )]);
+        )])
+        .unwrap();
         let null_count = NullCountStatsTransform
             .transform_struct(&expected_fields)
             .unwrap()
             .into_owned();
 
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", null_count),
             StructField::nullable("minValues", expected_fields.clone()),
             StructField::nullable("maxValues", expected_fields.clone()),
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
@@ -727,25 +741,28 @@ mod tests {
         )]
         .into();
 
-        let logical_schema = StructType::new([
+        let logical_schema = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
             StructField::nullable("age", DataType::INTEGER),
-        ]);
+        ])
+        .unwrap();
 
         let stats_schema = stats_schema(&logical_schema, &properties);
 
-        let expected_fields = StructType::new([StructField::nullable("name", DataType::STRING)]);
+        let expected_fields =
+            StructType::try_new([StructField::nullable("name", DataType::STRING)]).unwrap();
         let null_count = NullCountStatsTransform
             .transform_struct(&expected_fields)
             .unwrap()
             .into_owned();
 
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", null_count),
             StructField::nullable("minValues", expected_fields.clone()),
             StructField::nullable("maxValues", expected_fields.clone()),
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
@@ -758,30 +775,34 @@ mod tests {
         // - "id" (LONG) - eligible for both null count and min/max
         // - "is_active" (BOOLEAN) - eligible for null count but NOT for min/max
         // - "metadata" (BINARY) - eligible for null count but NOT for min/max
-        let file_schema = StructType::new([
+        let file_schema = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("is_active", DataType::BOOLEAN),
             StructField::nullable("metadata", DataType::BINARY),
-        ]);
+        ])
+        .unwrap();
 
         let stats_schema = stats_schema(&file_schema, &properties);
 
         // Expected nullCount schema: all fields converted to LONG
-        let expected_null_count = StructType::new([
+        let expected_null_count = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("is_active", DataType::LONG),
             StructField::nullable("metadata", DataType::LONG),
-        ]);
+        ])
+        .unwrap();
 
         // Expected minValues/maxValues schema: only eligible fields (no boolean, no binary)
-        let expected_min_max = StructType::new([StructField::nullable("id", DataType::LONG)]);
+        let expected_min_max =
+            StructType::try_new([StructField::nullable("id", DataType::LONG)]).unwrap();
 
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", expected_null_count),
             StructField::nullable("minValues", expected_min_max.clone()),
             StructField::nullable("maxValues", expected_min_max),
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
@@ -791,50 +812,57 @@ mod tests {
         let properties: TableProperties = [("key", "value")].into();
 
         // Create a nested schema where some nested fields are eligible for min/max and others aren't
-        let user_struct = StructType::new([
+        let user_struct = StructType::try_new([
             StructField::nullable("name", DataType::STRING), // eligible for min/max
             StructField::nullable("is_admin", DataType::BOOLEAN), // NOT eligible for min/max
             StructField::nullable("age", DataType::INTEGER), // eligible for min/max
             StructField::nullable("profile_pic", DataType::BINARY), // NOT eligible for min/max
-        ]);
+        ])
+        .unwrap();
 
-        let file_schema = StructType::new([
+        let file_schema = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("user", DataType::Struct(Box::new(user_struct.clone()))),
             StructField::nullable("is_deleted", DataType::BOOLEAN), // NOT eligible for min/max
-        ]);
+        ])
+        .unwrap();
 
         let stats_schema = stats_schema(&file_schema, &properties);
 
         // Expected nullCount schema: all fields converted to LONG, maintaining structure
-        let expected_null_user = StructType::new([
+        let expected_null_user = StructType::try_new([
             StructField::nullable("name", DataType::LONG),
             StructField::nullable("is_admin", DataType::LONG),
             StructField::nullable("age", DataType::LONG),
             StructField::nullable("profile_pic", DataType::LONG),
-        ]);
-        let expected_null_count = StructType::new([
+        ])
+        .unwrap();
+        let expected_null_count = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("user", DataType::Struct(Box::new(expected_null_user))),
             StructField::nullable("is_deleted", DataType::LONG),
-        ]);
+        ])
+        .unwrap();
 
         // Expected minValues/maxValues schema: only eligible fields
-        let expected_minmax_user = StructType::new([
+        let expected_minmax_user = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
             StructField::nullable("age", DataType::INTEGER),
-        ]);
-        let expected_min_max = StructType::new([
+        ])
+        .unwrap();
+        let expected_min_max = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("user", DataType::Struct(Box::new(expected_minmax_user))),
-        ]);
+        ])
+        .unwrap();
 
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", expected_null_count),
             StructField::nullable("minValues", expected_min_max.clone()),
             StructField::nullable("maxValues", expected_min_max),
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
@@ -844,41 +872,45 @@ mod tests {
         let properties: TableProperties = [("key", "value")].into();
 
         // Create a schema with only fields that are NOT eligible for min/max skipping
-        let file_schema = StructType::new([
+        let file_schema = StructType::try_new([
             StructField::nullable("is_active", DataType::BOOLEAN),
             StructField::nullable("metadata", DataType::BINARY),
             StructField::nullable(
                 "tags",
                 DataType::Array(Box::new(ArrayType::new(DataType::STRING, false))),
             ),
-        ]);
+        ])
+        .unwrap();
 
         let stats_schema = stats_schema(&file_schema, &properties);
 
         // Expected nullCount schema: all fields converted to LONG
-        let expected_null_count = StructType::new([
+        let expected_null_count = StructType::try_new([
             StructField::nullable("is_active", DataType::LONG),
             StructField::nullable("metadata", DataType::LONG),
             StructField::nullable("tags", DataType::LONG),
-        ]);
+        ])
+        .unwrap();
 
         // Expected minValues/maxValues schema: empty since no fields are eligible
         // Since there are no eligible fields, minValues and maxValues should not be present
-        let expected = StructType::new([
+        let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable("nullCount", expected_null_count),
             // No minValues or maxValues fields since no primitive fields are eligible
-        ]);
+        ])
+        .unwrap();
 
         assert_eq!(&expected, &stats_schema);
     }
 
     #[test]
     fn test_partitions_schema() -> DeltaResultLocal<()> {
-        let logical_schema = StructType::new([
+        let logical_schema = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
             StructField::nullable("age", DataType::INTEGER),
-        ]);
+        ])
+        .unwrap();
 
         let result = partitions_schema(&logical_schema, &[])?;
         assert_eq!(None, result);

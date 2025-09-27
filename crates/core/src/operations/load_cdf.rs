@@ -32,6 +32,7 @@ use tracing::log;
 
 use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
+use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Action, Add, AddCDCFile, CommitInfo};
 use crate::logstore::{get_actions, LogStoreRef};
 use crate::table::state::DeltaTableState;
@@ -328,6 +329,8 @@ impl CdfLoadBuilder {
         session_sate: &SessionState,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+        PROTOCOL.can_read_from(&self.snapshot)?;
+
         let (cdc, add, remove) = self.determine_files_to_read().await?;
         register_store(self.log_store.clone(), session_sate.runtime_env().clone());
 
@@ -487,11 +490,16 @@ pub(crate) mod tests {
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
     use crate::{DeltaOps, DeltaTable, TableProperty};
+    use std::path::Path;
+    use url::Url;
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
         let ctx: SessionContext = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table")
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -541,7 +549,10 @@ pub(crate) mod tests {
     async fn test_load_local_datetime() -> TestResult {
         let ctx = SessionContext::new();
         let starting_timestamp = NaiveDateTime::from_str("2023-12-22T17:10:21.675").unwrap();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table")
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -588,7 +599,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_local_non_partitioned() -> TestResult {
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+        let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -640,7 +654,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_bad_version_range() -> TestResult {
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+        let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(4)
@@ -660,7 +677,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_version_out_of_range() -> TestResult {
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+        let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(5)
@@ -679,7 +699,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_version_out_of_range_with_flag() -> TestResult {
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+        let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(5)
@@ -703,7 +726,10 @@ pub(crate) mod tests {
     async fn test_load_timestamp_out_of_range() -> TestResult {
         let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+        let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
@@ -723,7 +749,10 @@ pub(crate) mod tests {
     async fn test_load_timestamp_out_of_range_with_flag() -> TestResult {
         let ctx = SessionContext::new();
         let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
-        let table = DeltaOps::try_from_uri("../test/tests/data/cdf-table-non-partitioned")
+        let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
@@ -746,7 +775,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_non_cdf() -> TestResult {
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/simple_table")
+        let table_path = Path::new("../test/tests/data/simple_table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -766,7 +798,10 @@ pub(crate) mod tests {
     async fn test_load_vacuumed_table() -> TestResult {
         let ending_timestamp = NaiveDateTime::from_str("2024-01-06T15:44:59.570")?;
         let ctx = SessionContext::new();
-        let table = DeltaOps::try_from_uri("../test/tests/data/checkpoint-cdf-table")
+        let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())

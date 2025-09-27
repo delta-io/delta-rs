@@ -9,7 +9,7 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
-    MultipartUpload, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -90,11 +90,12 @@ pub async fn create_table(
     fs::create_dir_all(&log_dir).unwrap();
     cleanup_dir_except(log_dir, vec![]);
 
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
+    )])
+    .unwrap();
 
     create_test_table(path, schema, Vec::new(), config.unwrap_or_default()).await
 }
@@ -295,7 +296,7 @@ impl ObjectStore for SlowStore {
     async fn put_multipart_opts(
         &self,
         location: &StorePath,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }

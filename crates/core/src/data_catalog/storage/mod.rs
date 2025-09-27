@@ -117,8 +117,11 @@ impl SchemaProvider for ListingSchemaProvider {
         let Some(location) = self.tables.get(name).map(|t| t.clone()) else {
             return Ok(None);
         };
-        let provider =
-            open_table_with_storage_options(location, self.storage_options.raw.clone()).await?;
+        let provider = open_table_with_storage_options(
+            ensure_table_uri(location)?,
+            self.storage_options.raw.clone(),
+        )
+        .await?;
         Ok(Some(Arc::new(provider) as Arc<dyn TableProvider>))
     }
 

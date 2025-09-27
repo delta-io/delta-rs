@@ -27,7 +27,7 @@ async fn test_commit_info_engine_info() -> Result<(), Box<dyn Error>> {
         .await?;
     table.update().await?;
 
-    let commit_info = table.history(None).await?;
+    let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
     let last_commit = &commit_info[0];
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["mode"], json!("Append"));

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_array::{Array, RecordBatch, StringArray, StructArray};
+use arrow_array::RecordBatch;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
@@ -9,13 +9,6 @@ use indexmap::IndexMap;
 
 use super::super::scalars::ScalarExt;
 use super::iterators::LogicalFileView;
-use crate::kernel::arrow::extract::extract_and_cast;
-use crate::{DeltaResult, DeltaTableError};
-
-const COL_NUM_RECORDS: &str = "numRecords";
-const COL_MIN_VALUES: &str = "minValues";
-const COL_MAX_VALUES: &str = "maxValues";
-const COL_NULL_COUNT: &str = "nullCount";
 
 pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
@@ -133,6 +126,7 @@ mod datafusion {
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
     use arrow_arith::aggregate::sum;
+    use arrow_array::{Array, RecordBatch, StringArray, StructArray};
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
     use delta_kernel::expressions::Expression;
@@ -142,7 +136,15 @@ mod datafusion {
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
+    use crate::{DeltaResult, DeltaTableError};
+
+    use crate::kernel::arrow::extract::extract_and_cast;
     use crate::kernel::ARROW_HANDLER;
+
+    const COL_NUM_RECORDS: &str = "numRecords";
+    const COL_MIN_VALUES: &str = "minValues";
+    const COL_MAX_VALUES: &str = "maxValues";
+    const COL_NULL_COUNT: &str = "nullCount";
 
     #[derive(Debug, Default, Clone)]
     enum AccumulatorType {
@@ -519,8 +521,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {
-        let table_uri = "../test/tests/data/delta-1.2.1-only-struct-stats";
-        let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
+        let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
+        let table_uri =
+            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_from_struct_stats = crate::open_table(table_uri.clone()).await.unwrap();
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
         let log_store = table_from_struct_stats.log_store();
 
@@ -576,7 +580,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
     async fn df_stats_delta_1_2_1_struct_stats_table() {
-        let table_uri = "../test/tests/data/delta-1.2.1-only-struct-stats";
+        let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
+        let table_uri =
+            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
 
         let file_stats = table_from_struct_stats

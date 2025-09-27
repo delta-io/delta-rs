@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-catalog-glue"
-version = "0.12.0"
+version = "0.13.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,13 +13,13 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-aws-config = { version = "1.5", default-features = false, features = [
+aws-config = { version = "1.8", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-glue = "=1.78.0"
-deltalake-core = { version = "0.28.0", path = "../core" }
+aws-sdk-glue = "1.120"
+deltalake-core = { version = "0.29.0", path = "../core" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

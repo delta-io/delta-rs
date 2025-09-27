@@ -65,7 +65,9 @@ impl RecordBatchWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaTableError> {
-        let delta_table = DeltaTableBuilder::from_uri(table_uri)
+        let table_url = url::Url::parse(table_uri.as_ref())
+            .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
+        let delta_table = DeltaTableBuilder::from_uri(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
         // Initialize writer properties for the underlying arrow writer
@@ -967,7 +969,7 @@ mod tests {
                 DataType as DeltaDataType, PrimitiveType, StructField, StructType,
             };
 
-            let table_schema = StructType::new(vec![
+            let table_schema = StructType::try_new(vec![
                 StructField::new(
                     "id".to_string(),
                     DeltaDataType::Primitive(PrimitiveType::String),
@@ -983,7 +985,8 @@ mod tests {
                     DeltaDataType::Primitive(PrimitiveType::String),
                     true,
                 ),
-            ]);
+            ])
+            .unwrap();
             let table_dir = tempfile::tempdir().unwrap();
             let table_path = table_dir.path();
 

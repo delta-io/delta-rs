@@ -24,8 +24,6 @@ const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
-const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
-const FIELD_NAME_PARTITION_VALUES: &str = "partitionValues";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
 
@@ -462,7 +460,11 @@ mod tests {
     #[tokio::test]
     async fn test_logical_file_view_with_real_data() {
         // Use existing test table with real Delta log data
-        let log_store = TestTables::Simple.table_builder().build_storage().unwrap();
+        let log_store = TestTables::Simple
+            .table_builder()
+            .expect("Failed to create table builder")
+            .build_storage()
+            .expect("Failed to build storage");
         let snapshot =
             crate::kernel::snapshot::Snapshot::try_new(&log_store, Default::default(), None)
                 .await

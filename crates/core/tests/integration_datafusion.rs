@@ -24,14 +24,16 @@ use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPl
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
-use deltalake_core::delta_datafusion::{DeltaScan, DeltaTableFactory};
+use deltalake_core::delta_datafusion::{
+    DeltaScan, DeltaScanConfigBuilder, DeltaTableFactory, DeltaTableProvider,
+};
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::operations::write::SchemaMode;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
-    open_table,
+    ensure_table_uri, open_table,
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, DeltaTableError,
 };
@@ -128,7 +130,7 @@ mod local {
         let table_uri = table_path.to_str().unwrap().to_string();
         let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
-        let mut table = DeltaOps::try_from_uri(table_uri)
+        let mut table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
             .await
             .unwrap()
             .create()
@@ -183,9 +185,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-0.8.0-partitioned")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0-partitioned")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx
@@ -229,7 +238,15 @@ mod local {
     async fn test_datafusion_optimize_stats_partitioned_pushdown() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(2);
         let ctx = SessionContext::new_with_config(config);
-        let table = open_table("../test/tests/data/http_requests").await?;
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/http_requests")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
         ctx.register_table("http_requests", Arc::new(table.clone()))?;
 
         let sql = "SELECT COUNT(*) as num_events FROM http_requests WHERE date > '2023-04-13'";
@@ -258,7 +275,15 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_query_partitioned_pushdown() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-0.8.0-partitioned").await?;
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0-partitioned")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
         ctx.register_table("demo", Arc::new(table.clone()))?;
 
         let pruning_predicates = [
@@ -333,7 +358,15 @@ mod local {
         use datafusion::prelude::*;
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let table = open_table("../test/tests/data/delta-0.8.0").await?;
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
 
         // Simple Equality test, we only exercise the limit in this test
         let e = col("value").eq(lit(2));
@@ -361,7 +394,15 @@ mod local {
         // We want to emulate that this occurs on another node, so that all we have access to is the
         // plan byte serialization.
         let source_scan_bytes = {
-            let source_table = open_table("../test/tests/data/delta-0.8.0-date").await?;
+            let source_table = open_table(
+                url::Url::from_directory_path(
+                    std::path::Path::new("../test/tests/data/delta-0.8.0-date")
+                        .canonicalize()
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .await?;
 
             let target_provider = provider_as_source(Arc::new(source_table));
             let source =
@@ -420,9 +461,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-0.8.0-date")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0-date")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
@@ -442,7 +490,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_stats() -> Result<()> {
         // Validate a table that contains statistics for all files
-        let table = open_table("../test/tests/data/delta-0.8.0").await.unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.8.0")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Exact(4));
@@ -480,7 +537,16 @@ mod local {
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate a table that does not contain column statistics
-        let table = open_table("../test/tests/data/delta-0.2.0").await.unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-0.2.0")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         let statistics = table.snapshot()?.datafusion_table_statistics().unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Absent);
@@ -1040,9 +1106,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_partitioned_types() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/delta-2.2.0-partitioned-types")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
@@ -1089,9 +1162,16 @@ mod local {
     #[tokio::test]
     async fn test_datafusion_scan_timestamps() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/table_with_edge_timestamps")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/table_with_edge_timestamps")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
@@ -1114,9 +1194,16 @@ mod local {
     #[tokio::test]
     async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/http_requests")
-            .await
-            .unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/http_requests")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
 
         let batches = ctx
@@ -1145,7 +1232,7 @@ mod local {
     #[tokio::test]
     async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test//tests/data/http_requests")
+        let table = open_table(ensure_table_uri("../test//tests/data/http_requests").unwrap())
             .await
             .unwrap();
         ctx.register_table("http_requests", Arc::new(table))?;
@@ -1178,7 +1265,16 @@ mod local {
     #[tokio::test]
     async fn test_issue_1374() -> Result<()> {
         let ctx = SessionContext::new();
-        let table = open_table("../test/tests/data/issue_1374").await.unwrap();
+        let table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("../test/tests/data/issue_1374")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
         ctx.register_table("t", Arc::new(table))?;
 
         let batches = ctx
@@ -1213,6 +1309,9 @@ mod local {
     #[tokio::test]
     async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
         let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
+
+        std::fs::create_dir_all("./tests/data/issue-1619").unwrap();
+
         let fields: Vec<StructField> = vec![StructField::new(
             "metadata".to_string(),
             DataType::Map(Box::new(MapType::new(
@@ -1222,15 +1321,30 @@ mod local {
             ))),
             true,
         )];
-        let schema = StructType::new(fields);
-        let table =
-            deltalake_core::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let schema = StructType::try_new(fields).unwrap();
+        let table = deltalake_core::DeltaTableBuilder::from_uri(
+            url::Url::from_directory_path(
+                std::path::Path::new("./tests/data/issue-1619")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )?
+        .build()?;
         let _ = DeltaOps::from(table)
             .create()
             .with_columns(schema.fields().cloned())
             .await?;
 
-        let mut table = open_table("./tests/data/issue-1619").await?;
+        let mut table = open_table(
+            url::Url::from_directory_path(
+                std::path::Path::new("./tests/data/issue-1619")
+                    .canonicalize()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .await?;
 
         let mut writer = JsonWriter::for_table(&table).unwrap();
         writer
@@ -1300,7 +1414,9 @@ mod local {
             .await
             .unwrap();
 
-        let table = open_table(path.to_str().unwrap()).await.unwrap();
+        let table = open_table(ensure_table_uri(path.to_str().unwrap()).unwrap())
+            .await
+            .unwrap();
         let prov: Arc<dyn TableProvider> = Arc::new(table);
         ctx.register_table("test", prov).unwrap();
         let mut batches = ctx
@@ -1368,7 +1484,7 @@ async fn test_schema_adapter_empty_batch() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     // Create table with a single column
-    let table = DeltaOps::try_from_uri(table_uri)
+    let table = DeltaOps::try_from_uri(ensure_table_uri(&table_uri).unwrap())
         .await
         .unwrap()
         .create()
@@ -1451,7 +1567,7 @@ mod date_partitions {
             ),
         ];
 
-        let dt = DeltaOps::try_from_uri(table_uri)
+        let dt = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
             .await?
             .create()
             .with_columns(columns)
@@ -1519,6 +1635,537 @@ mod date_partitions {
         ];
 
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+}
+
+mod insert_into_tests {
+    use super::*;
+    use arrow_array::{types, Int64Array, PrimitiveArray, StringArray};
+    use datafusion::datasource::MemTable;
+    use datafusion::logical_expr::dml::InsertOp;
+    use deltalake_core::operations::create::CreateBuilder;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_sql_insert_into_partitioned_table() -> TestResult {
+        let table_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("value", ArrowDataType::Int64, false),
+            ArrowField::new("part", ArrowDataType::Utf8, false),
+        ]));
+
+        let storage = Box::<LocalStorageIntegration>::default();
+        let context = IntegrationContext::new(storage)?;
+        let table_uri = context.uri_for_table(TestTables::Simple);
+
+        let table = CreateBuilder::new()
+            .with_location(&table_uri)
+            .with_columns(vec![
+                StructField::new(
+                    "value".to_string(),
+                    DataType::Primitive(PrimitiveType::Long),
+                    false,
+                ),
+                StructField::new(
+                    "part".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+            ])
+            .with_partition_columns(vec!["part"])
+            .await?;
+
+        let values = Int64Array::from(vec![1, 2, 3, 4]);
+        let parts = StringArray::from(vec!["a", "b", "a", "b"]);
+        let batch = RecordBatch::try_new(
+            table_schema.clone(),
+            vec![Arc::new(values), Arc::new(parts)],
+        )?;
+
+        let ctx = SessionContext::new();
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
+            table.snapshot()?.clone(),
+            table.log_store(),
+            scan_config,
+        )?);
+        ctx.register_table("delta_table", table_provider)?;
+
+        let source_table = Arc::new(MemTable::try_new(table_schema, vec![vec![batch]])?);
+        ctx.register_table("source_data", source_table)?;
+
+        let insert_result = ctx
+            .sql("INSERT INTO delta_table SELECT * FROM source_data")
+            .await?
+            .collect()
+            .await?;
+
+        assert_eq!(insert_result.len(), 1);
+        let count_batch = &insert_result[0];
+        assert_eq!(count_batch.num_rows(), 1);
+        assert_eq!(count_batch.schema().field(0).name(), "count");
+
+        let count_array = arrow::array::UInt64Array::from(count_batch.column(0).to_data());
+        let inserted_count = count_array.value(0);
+        assert_eq!(inserted_count, 4); // Should match the number of rows inserted
+
+        ctx.deregister_table("delta_table")?;
+        let refreshed_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        let refreshed_table_provider: Arc<dyn TableProvider> = Arc::new(refreshed_table);
+        ctx.register_table("delta_table", refreshed_table_provider)?;
+
+        let df_a = ctx
+            .sql("SELECT value FROM delta_table WHERE part = 'a'")
+            .await?;
+        let result_a = df_a.collect().await?;
+        let expected_a = vec![
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 1     |",
+            "| 3     |",
+            "+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected_a, &result_a);
+
+        let df_b = ctx
+            .sql("SELECT value FROM delta_table WHERE part = 'b'")
+            .await?;
+        let result_b = df_b.collect().await?;
+        let expected_b = vec![
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 2     |",
+            "| 4     |",
+            "+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected_b, &result_b);
+
+        let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        assert_eq!(final_table.version(), Some(1)); // CREATE + SQL INSERT = version 1
+
+        let partition_columns = final_table.snapshot()?.metadata().partition_columns();
+        assert_eq!(partition_columns.len(), 1);
+        assert_eq!(partition_columns[0], "part");
+
+        let history: Vec<_> = final_table.history(None).await?.collect();
+        assert_eq!(history.len(), 2); // CREATE + SQL INSERT
+        assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
+
+        let commit_info = &history[0];
+        assert!(commit_info.operation_parameters.is_some());
+        let operation_params = commit_info.operation_parameters.as_ref().unwrap();
+        assert_eq!(
+            operation_params.get("mode"),
+            Some(&serde_json::Value::String("Append".to_string()))
+        );
+
+        if let Some(partition_by) = operation_params.get("partitionBy") {
+            if let serde_json::Value::Array(partition_array) = partition_by {
+                assert_eq!(partition_array.len(), 1);
+                assert_eq!(partition_array[0], "part");
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_mode() -> TestResult {
+        let table_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("name", ArrowDataType::Utf8, false),
+            ArrowField::new("age", ArrowDataType::Int64, false),
+        ]));
+
+        let storage = Box::<LocalStorageIntegration>::default();
+        let context = IntegrationContext::new(storage)?;
+        let table_uri = context.uri_for_table(TestTables::Simple);
+
+        let table = CreateBuilder::new()
+            .with_location(&table_uri)
+            .with_columns(vec![
+                StructField::new(
+                    "name".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+                StructField::new(
+                    "age".to_string(),
+                    DataType::Primitive(PrimitiveType::Long),
+                    false,
+                ),
+            ])
+            .await?;
+
+        let initial_names = StringArray::from(vec!["Thierry", "Bernard"]);
+        let initial_ages = Int64Array::from(vec![22, 24]);
+        let initial_batch = RecordBatch::try_new(
+            table_schema.clone(),
+            vec![Arc::new(initial_names), Arc::new(initial_ages)],
+        )?;
+
+        let ctx = SessionContext::new();
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
+            table.snapshot()?.clone(),
+            table.log_store(),
+            scan_config,
+        )?);
+        ctx.register_table("test_table", table_provider.clone())?;
+
+        let initial_mem_table = Arc::new(MemTable::try_new(
+            table_schema.clone(),
+            vec![vec![initial_batch]],
+        )?);
+        let initial_plan = initial_mem_table
+            .scan(&ctx.state(), None, &[], None)
+            .await?;
+
+        let initial_result_plan = table_provider
+            .insert_into(&ctx.state(), initial_plan, InsertOp::Append)
+            .await?;
+        let initial_results =
+            datafusion::physical_plan::collect(initial_result_plan, ctx.task_ctx()).await?;
+        assert_eq!(initial_results.len(), 1);
+        let initial_batch = &initial_results[0];
+        assert_eq!(initial_batch.num_rows(), 1);
+        let initial_count_array = initial_batch.column_by_name("count").unwrap();
+        let initial_count_val =
+            arrow::array::UInt64Array::from(initial_count_array.to_data()).value(0);
+        assert_eq!(initial_count_val, 2); // 2 initial rows inserted
+
+        let append_names = StringArray::from(vec!["Robert", "Ion", "Denny", "Tyler"]);
+        let append_ages = Int64Array::from(vec![25, 30, 35, 40]);
+        let append_batch = RecordBatch::try_new(
+            table_schema.clone(),
+            vec![Arc::new(append_names), Arc::new(append_ages)],
+        )?;
+
+        let append_mem_table = Arc::new(MemTable::try_new(
+            table_schema.clone(),
+            vec![vec![append_batch]],
+        )?);
+        let append_plan = append_mem_table.scan(&ctx.state(), None, &[], None).await?;
+
+        let result_plan = table_provider
+            .insert_into(&ctx.state(), append_plan, InsertOp::Append)
+            .await?;
+
+        let results = datafusion::physical_plan::collect(result_plan, ctx.task_ctx()).await?;
+        assert_eq!(results.len(), 1);
+        let batch = &results[0];
+        assert_eq!(batch.num_rows(), 1);
+        let count_array = batch.column_by_name("count").unwrap();
+        let count_val = arrow::array::UInt64Array::from(count_array.to_data()).value(0);
+        assert_eq!(count_val, 4); // 4 new rows appended
+
+        ctx.deregister_table("test_table")?;
+        let refreshed_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        let refreshed_scan_config =
+            DeltaScanConfigBuilder::new().build(refreshed_table.snapshot()?)?;
+        let refreshed_table_provider: Arc<dyn TableProvider> =
+            Arc::new(DeltaTableProvider::try_new(
+                refreshed_table.snapshot()?.clone(),
+                refreshed_table.log_store(),
+                refreshed_scan_config,
+            )?);
+        ctx.register_table("test_table", refreshed_table_provider)?;
+
+        let all_data = ctx
+            .sql("SELECT name, age FROM test_table ORDER BY age")
+            .await?
+            .collect()
+            .await?;
+
+        assert_eq!(all_data.len(), 1);
+        let data_batch = &all_data[0];
+        assert_eq!(data_batch.num_rows(), 6); // 2 initial + 4 appended = 6 total
+
+        let names_col = data_batch.column_by_name("name").unwrap();
+        let ages_col = data_batch.column_by_name("age").unwrap();
+        let names_array = arrow::array::StringArray::from(names_col.to_data());
+        let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
+
+        assert_eq!(names_array.value(0), "Thierry");
+        assert_eq!(ages_array.value(0), 22);
+        assert_eq!(names_array.value(1), "Bernard");
+        assert_eq!(ages_array.value(1), 24);
+        assert_eq!(names_array.value(2), "Robert");
+        assert_eq!(ages_array.value(2), 25);
+        assert_eq!(names_array.value(3), "Ion");
+        assert_eq!(ages_array.value(3), 30);
+        assert_eq!(names_array.value(4), "Denny");
+        assert_eq!(ages_array.value(4), 35);
+        assert_eq!(names_array.value(5), "Tyler");
+        assert_eq!(ages_array.value(5), 40);
+
+        let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        assert_eq!(final_table.version(), Some(2));
+        let history: Vec<_> = final_table.history(None).await?.collect();
+
+        assert_eq!(history.len(), 3); // CREATE + 2 INSERTTs
+        assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
+        assert_eq!(history[1].operation.as_ref().unwrap(), "WRITE");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_overwrite_mode() -> TestResult {
+        let table_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("name", ArrowDataType::Utf8, false),
+            ArrowField::new("age", ArrowDataType::Int64, false),
+        ]));
+
+        let storage = Box::<LocalStorageIntegration>::default();
+        let context = IntegrationContext::new(storage)?;
+        let table_uri = context.uri_for_table(TestTables::Simple);
+
+        let table = CreateBuilder::new()
+            .with_location(&table_uri)
+            .with_columns(vec![
+                StructField::new(
+                    "name".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+                StructField::new(
+                    "age".to_string(),
+                    DataType::Primitive(PrimitiveType::Long),
+                    false,
+                ),
+            ])
+            .await?;
+
+        let names1 = StringArray::from(vec!["Initial", "Data"]);
+        let ages1: PrimitiveArray<types::Int64Type> = Int64Array::from(vec![20, 21]);
+        let batch1 = RecordBatch::try_new(
+            table_schema.clone(),
+            vec![Arc::new(names1), Arc::new(ages1)],
+        )?;
+
+        let ctx = SessionContext::new();
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
+            table.snapshot()?.clone(),
+            table.log_store(),
+            scan_config,
+        )?);
+        ctx.register_table("test_table", table_provider.clone())?;
+
+        let mem_table1 = Arc::new(MemTable::try_new(table_schema.clone(), vec![vec![batch1]])?);
+        let plan1 = mem_table1.scan(&ctx.state(), None, &[], None).await?;
+
+        let _ = table_provider
+            .insert_into(&ctx.state(), plan1, InsertOp::Append)
+            .await?;
+
+        let names2 = StringArray::from(vec!["Robert", "Ion", "Denny", "Tyler"]);
+        let ages2 = Int64Array::from(vec![25, 30, 35, 40]);
+        let batch2 = RecordBatch::try_new(
+            table_schema.clone(),
+            vec![Arc::new(names2), Arc::new(ages2)],
+        )?;
+
+        let mem_table2 = Arc::new(MemTable::try_new(table_schema.clone(), vec![vec![batch2]])?);
+        let plan2 = mem_table2.scan(&ctx.state(), None, &[], None).await?;
+
+        let result_plan = table_provider
+            .insert_into(&ctx.state(), plan2, InsertOp::Overwrite)
+            .await?;
+
+        let results = datafusion::physical_plan::collect(result_plan, ctx.task_ctx()).await?;
+        assert_eq!(results.len(), 1);
+        let batch = &results[0];
+        assert_eq!(batch.num_rows(), 1);
+        let count_array = batch.column_by_name("count").unwrap();
+        let count_val = arrow::array::UInt64Array::from(count_array.to_data()).value(0);
+        assert_eq!(count_val, 4);
+
+        ctx.deregister_table("test_table")?;
+        let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        let final_scan_config = DeltaScanConfigBuilder::new().build(final_table.snapshot()?)?;
+        let final_table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
+            final_table.snapshot()?.clone(),
+            final_table.log_store(),
+            final_scan_config,
+        )?);
+        ctx.register_table("test_table", final_table_provider)?;
+
+        let all_data = ctx
+            .sql("SELECT name, age FROM test_table ORDER BY age")
+            .await?
+            .collect()
+            .await?;
+
+        assert_eq!(all_data.len(), 1);
+        let data_batch = &all_data[0];
+        assert_eq!(data_batch.num_rows(), 4); // Only 4 rows from overwrite, initial data should be gone
+
+        let names_col = data_batch.column_by_name("name").unwrap();
+        let ages_col = data_batch.column_by_name("age").unwrap();
+        let names_array = arrow::array::StringArray::from(names_col.to_data());
+        let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
+
+        assert_eq!(names_array.value(0), "Robert");
+        assert_eq!(ages_array.value(0), 25);
+        assert_eq!(names_array.value(1), "Ion");
+        assert_eq!(ages_array.value(1), 30);
+        assert_eq!(names_array.value(2), "Denny");
+        assert_eq!(ages_array.value(2), 35);
+        assert_eq!(names_array.value(3), "Tyler");
+        assert_eq!(ages_array.value(3), 40);
+
+        assert_eq!(final_table.version(), Some(1)); // CREATE + OVERWRITE = version 1 (the initial append might not commit separately)
+
+        let history: Vec<_> = final_table.history(None).await?.collect();
+        assert_eq!(history.len(), 2); // CREATE + OVERWRITE
+
+        assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
+
+        let commit_info = &history[0];
+        assert!(commit_info.operation_parameters.is_some());
+        let operation_params = commit_info.operation_parameters.as_ref().unwrap();
+        assert_eq!(
+            operation_params.get("mode"),
+            Some(&serde_json::Value::String("Overwrite".to_string()))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sql_insert_statement() -> TestResult {
+        let table_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("name", ArrowDataType::Utf8, false),
+            ArrowField::new("age", ArrowDataType::Int64, false),
+        ]));
+
+        let storage = Box::<LocalStorageIntegration>::default();
+        let context = IntegrationContext::new(storage)?;
+        let table_uri = context.uri_for_table(TestTables::Simple);
+
+        let table = CreateBuilder::new()
+            .with_location(&table_uri)
+            .with_columns(vec![
+                StructField::new(
+                    "name".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+                StructField::new(
+                    "age".to_string(),
+                    DataType::Primitive(PrimitiveType::Long),
+                    false,
+                ),
+            ])
+            .await?;
+
+        let names = StringArray::from(vec!["Robert", "Ion", "Denny", "Tyler"]);
+        let ages = Int64Array::from(vec![25, 30, 35, 40]);
+        let batch =
+            RecordBatch::try_new(table_schema.clone(), vec![Arc::new(names), Arc::new(ages)])?;
+
+        let ctx = SessionContext::new();
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
+            table.snapshot()?.clone(),
+            table.log_store(),
+            scan_config,
+        )?);
+        ctx.register_table("delta_table", table_provider)?;
+
+        let source_table = Arc::new(MemTable::try_new(table_schema, vec![vec![batch]])?);
+        ctx.register_table("source_data", source_table)?;
+
+        let insert_result = ctx
+            .sql("INSERT INTO delta_table SELECT * FROM source_data")
+            .await?
+            .collect()
+            .await?;
+
+        assert_eq!(insert_result.len(), 1);
+        let count_batch = &insert_result[0];
+        assert_eq!(count_batch.num_rows(), 1);
+        assert_eq!(count_batch.schema().field(0).name(), "count");
+
+        let count_array = arrow::array::UInt64Array::from(count_batch.column(0).to_data());
+        let inserted_count = count_array.value(0);
+        assert_eq!(inserted_count, 4); // 4 rows inserted
+
+        ctx.deregister_table("delta_table")?;
+        let refreshed_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        let refreshed_table_provider: Arc<dyn TableProvider> = Arc::new(refreshed_table);
+        ctx.register_table("delta_table", refreshed_table_provider)?;
+
+        let df = ctx
+            .sql("SELECT COUNT(*) as row_count FROM delta_table")
+            .await?;
+        let result = df.collect().await?;
+
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+        assert_eq!(batch.num_rows(), 1);
+
+        let count_array = arrow::array::Int64Array::from(batch.column(0).to_data());
+        let row_count = count_array.value(0);
+        assert_eq!(row_count, 4);
+
+        let content_result = ctx
+            .sql("SELECT name, age FROM delta_table ORDER BY age")
+            .await?
+            .collect()
+            .await?;
+
+        assert_eq!(content_result.len(), 1);
+        let content_batch = &content_result[0];
+        assert_eq!(content_batch.num_rows(), 4);
+
+        let names_col = content_batch.column_by_name("name").unwrap();
+        let ages_col = content_batch.column_by_name("age").unwrap();
+        let names_array = arrow::array::StringArray::from(names_col.to_data());
+        let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
+
+        assert_eq!(names_array.value(0), "Robert");
+        assert_eq!(ages_array.value(0), 25);
+        assert_eq!(names_array.value(1), "Ion");
+        assert_eq!(ages_array.value(1), 30);
+        assert_eq!(names_array.value(2), "Denny");
+        assert_eq!(ages_array.value(2), 35);
+        assert_eq!(names_array.value(3), "Tyler");
+        assert_eq!(ages_array.value(3), 40);
+
+        let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
+        assert_eq!(final_table.version(), Some(1)); // CREATE + SQL INSERT = version 1
+
+        let history: Vec<_> = final_table.history(None).await?.collect();
+        assert_eq!(history.len(), 2); // CREATE + SQL INSERT
+        assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
+
+        let commit_info = &history[0];
+        assert!(commit_info.operation_parameters.is_some());
+        let operation_params = commit_info.operation_parameters.as_ref().unwrap();
+        assert_eq!(
+            operation_params.get("mode"),
+            Some(&serde_json::Value::String("Append".to_string()))
+        );
+
+        if let Some(stats) = final_table.statistics() {
+            if let datafusion::common::stats::Precision::Exact(num_rows) = stats.num_rows {
+                assert_eq!(
+                    num_rows, 4,
+                    "Table should have exactly 4 rows from SQL INSERT"
+                );
+            }
+        }
+
+        let file_count = final_table.get_file_uris()?.count();
+        assert!(
+            file_count > 0,
+            "Table should have data files after SQL INSERT"
+        );
 
         Ok(())
     }

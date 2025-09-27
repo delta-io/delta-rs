@@ -391,7 +391,7 @@ impl ConvertToDeltaBuilder {
                     match field.data_type() {
                         DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
                         _ => Err(delta_kernel::Error::Generic(format!(
-                            "Exprected primitive type, found: {:?}",
+                            "Expected primitive type, found: {:?}",
                             field.data_type()
                         ))),
                     }
@@ -608,7 +608,8 @@ mod tests {
             .unwrap_or_else(|e| {
                 panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
             });
-        open_table(temp_dir).await.expect("Failed to open table")
+        let table_uri = url::Url::from_directory_path(std::path::Path::new(temp_dir)).unwrap();
+        open_table(table_uri).await.expect("Failed to open table")
     }
 
     fn assert_delta_table(

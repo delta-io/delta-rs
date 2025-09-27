@@ -1,6 +1,8 @@
 //! Implementation for writing delta checkpoints.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
+
+use url::Url;
 
 use arrow::compute::filter_record_batch;
 use arrow_array::{BooleanArray, RecordBatch};
@@ -40,11 +42,13 @@ pub(crate) async fn create_checkpoint_for(
     let engine = log_store.engine(operation_id);
 
     let task_engine = engine.clone();
-    let snapshot =
-        spawn_blocking(move || Snapshot::try_new(table_root, task_engine.as_ref(), Some(version)))
-            .await
-            .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-    let snapshot = Arc::new(snapshot);
+    let snapshot = spawn_blocking(move || {
+        Snapshot::builder_for(table_root)
+            .at_version(version)
+            .build(task_engine.as_ref())
+    })
+    .await
+    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
     let cp_writer = snapshot.checkpoint()?;
 
@@ -157,12 +161,12 @@ pub async fn cleanup_metadata(
 /// The `cleanup` param decides whether to run metadata cleanup of obsolete logs.
 /// If it's empty then the table's `enableExpiredLogCleanup` is used.
 pub async fn create_checkpoint_from_table_uri_and_cleanup(
-    table_uri: &str,
+    table_url: Url,
     version: i64,
     cleanup: Option<bool>,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let table = open_table_with_version(table_uri, version).await?;
+    let table = open_table_with_version(table_url, version).await?;
     let snapshot = table.snapshot()?;
     create_checkpoint_for(version as u64, table.log_store.as_ref(), operation_id).await?;
 
@@ -274,6 +278,7 @@ mod tests {
     use object_store::path::Path;
 
     use super::*;
+    use crate::ensure_table_uri;
     use crate::kernel::transaction::{CommitBuilder, TableReference};
     use crate::kernel::Action;
     use crate::operations::DeltaOps;
@@ -574,7 +579,8 @@ mod tests {
         let table_schema = get_delta_schema();
         let temp_dir = tempfile::tempdir()?;
         let table_path = temp_dir.path().to_str().unwrap();
-        let mut table = DeltaOps::try_from_uri(&table_path)
+        let table_uri = ensure_table_uri(table_path).unwrap();
+        let mut table = DeltaOps::try_from_uri(table_uri)
             .await?
             .create()
             .with_columns(table_schema.fields().cloned())
@@ -614,7 +620,9 @@ mod tests {
         let res = create_checkpoint(&table, None).await;
         assert!(res.is_ok(), "Failed to create the checkpoint! {res:#?}");
 
-        let table = crate::open_table(&table_path).await?;
+        let table =
+            crate::open_table(Url::from_directory_path(std::path::Path::new(table_path)).unwrap())
+                .await?;
         assert_eq!(
             before,
             table.version(),
@@ -653,7 +661,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+        let table_uri = Url::from_directory_path(&tmp_path).unwrap();
+        let mut table = DeltaOps::try_from_uri(table_uri)
             .await?
             .write(vec![batch])
             .await?;
@@ -672,7 +681,8 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+        let table_uri = Url::from_directory_path(&tmp_path).unwrap();
+        let table = DeltaOps::try_from_uri(table_uri)
             .await?
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)

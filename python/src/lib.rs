@@ -51,7 +51,7 @@ use deltalake::operations::update_table_metadata::{
 use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
-use deltalake::parquet::basic::Compression;
+use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
@@ -77,6 +77,7 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
 use writer::maybe_lazy_cast_reader;
 
 use crate::error::{DeltaError, DeltaProtocolError, PythonError};
@@ -189,7 +190,9 @@ impl RawDeltaTable {
         log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         py.allow_threads(|| {
-            let mut builder = deltalake::DeltaTableBuilder::from_valid_uri(table_uri)
+            let table_url = deltalake::table::builder::parse_table_uri(table_uri)
+                .map_err(error::PythonError::from)?;
+            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_url)
                 .map_err(error::PythonError::from)?
                 .with_io_runtime(IORuntime::default());
             let options = storage_options.clone().unwrap_or_default();
@@ -225,7 +228,10 @@ impl RawDeltaTable {
         table_uri: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<bool> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        let table_url = deltalake::table::builder::ensure_table_uri(table_uri)
+            .map_err(|_| PyErr::new::<PyValueError, _>("Invalid table URI"))?;
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_url)
+            .map_err(|_| PyErr::new::<PyValueError, _>("Failed to create table builder"))?;
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }
@@ -1035,8 +1041,7 @@ impl RawDeltaTable {
             }
         })?;
         Ok(history
-            .iter()
-            .map(|c| serde_json::to_string(c).unwrap())
+            .map(|c| serde_json::to_string(&c).unwrap())
             .collect())
     }
 
@@ -1862,6 +1867,14 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                         enabled_statistics,
                     );
                 }
+                if let Some(encoding) = column_prop.encoding {
+                    properties = properties.set_column_encoding(
+                        column_name.clone().into(),
+                        Encoding::from_str(&encoding).map_err(|err| DeltaTableError::from(err))?,
+                    );
+                    properties =
+                        properties.set_column_dictionary_enabled(column_name.clone().into(), false);
+                }
                 if let Some(bloom_filter_properties) = column_prop.bloom_filter_properties {
                     if let Some(set_bloom_filter_enabled) =
                         bloom_filter_properties.set_bloom_filter_enabled
@@ -2194,6 +2207,7 @@ pub struct ColumnProperties {
     pub dictionary_enabled: Option<bool>,
     pub statistics_enabled: Option<String>,
     pub bloom_filter_properties: Option<BloomFilterProperties>,
+    pub encoding: Option<String>,
 }
 
 #[derive(FromPyObject)]
@@ -2299,9 +2313,10 @@ fn write_to_deltalake(
 ) -> PyResult<()> {
     let raw_table: DeltaResult<RawDeltaTable> = py.allow_threads(|| {
         let options = storage_options.clone().unwrap_or_default();
+        let table_url = deltalake::table::builder::ensure_table_uri(&table_uri)?;
         let table = rt()
             .block_on(DeltaOps::try_from_uri_with_storage_options(
-                &table_uri,
+                table_url,
                 options.clone(),
             ))?
             .0;
@@ -2353,7 +2368,10 @@ fn create_deltalake(
 ) -> PyResult<()> {
     let schema = schema.as_ref().inner_type.clone();
     py.allow_threads(|| {
-        let table = DeltaTableBuilder::from_uri(table_uri.clone())
+        let table_url =
+            deltalake::table::builder::ensure_table_uri(&table_uri).map_err(PythonError::from)?;
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .map_err(PythonError::from)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;
@@ -2418,7 +2436,10 @@ fn create_table_with_add_actions(
     let schema = schema.as_ref().inner_type.clone();
 
     py.allow_threads(|| {
-        let table = DeltaTableBuilder::from_uri(table_uri.clone())
+        let table_url =
+            deltalake::table::builder::ensure_table_uri(&table_uri).map_err(PythonError::from)?;
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .map_err(PythonError::from)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;
@@ -2477,8 +2498,9 @@ fn convert_to_deltalake(
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
     let partition_schema = partition_schema.map(|s| s.as_ref().inner_type.clone());
+    let table_url = deltalake::table::builder::ensure_table_uri(&uri).map_err(PythonError::from)?;
     py.allow_threads(|| {
-        let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
+        let mut builder = ConvertToDeltaBuilder::new().with_location(table_url);
 
         if let Some(part_schema) = partition_schema {
             builder = builder.with_partition_schema(part_schema.fields().cloned());

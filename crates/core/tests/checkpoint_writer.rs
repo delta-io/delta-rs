@@ -25,7 +25,8 @@ mod simple_checkpoint {
         cleanup_checkpoint_files(log_path.as_path());
 
         // Load the delta table at version 5
-        let mut table = deltalake_core::open_table_with_version(table_location, 5)
+        let table_url = deltalake_core::table::builder::parse_table_uri(table_location).unwrap();
+        let mut table = deltalake_core::open_table_with_version(table_url.clone(), 5)
             .await
             .unwrap();
 
@@ -58,7 +59,7 @@ mod simple_checkpoint {
         assert_eq!(10, version);
 
         // delta table should load just fine with the checkpoint in place
-        let table_result = deltalake_core::open_table(table_location).await.unwrap();
+        let table_result = deltalake_core::open_table(table_url.clone()).await.unwrap();
         let table = table_result;
         let files = table.snapshot().unwrap().log_data().num_files();
         assert_eq!(12, files);
@@ -76,7 +77,8 @@ mod simple_checkpoint {
         cleanup_checkpoint_files(log_path.as_path());
 
         // Load the delta table
-        let base_table = deltalake_core::open_table(table_location).await.unwrap();
+        let table_url = deltalake_core::table::builder::parse_table_uri(table_location).unwrap();
+        let base_table = deltalake_core::open_table(table_url).await.unwrap();
 
         // Set the table properties to disable run length encoding
         // this alters table version and should be done in a more principled way
@@ -104,7 +106,10 @@ mod simple_checkpoint {
         assert_eq!(table.version(), Some(version));
 
         // delta table should load just fine with the checkpoint in place
-        let table_result = deltalake_core::open_table(table_location).await.unwrap();
+        let table_result =
+            deltalake_core::open_table(deltalake_core::ensure_table_uri(table_location).unwrap())
+                .await
+                .unwrap();
         let table = table_result;
         let files = table.snapshot().unwrap().file_paths_iter();
         assert_eq!(12, files.count());
@@ -175,6 +180,7 @@ mod simple_checkpoint {
 
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
+    use std::collections::HashMap;
     use std::fs::{FileTimes, OpenOptions};
     use std::ops::Sub;
     use std::time::{Duration, SystemTime};
@@ -182,16 +188,21 @@ mod delete_expired_delta_log_in_checkpoint {
     use ::object_store::path::Path as ObjectStorePath;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
-    use maplit::hashmap;
 
     #[tokio::test]
     async fn test_delete_expired_logs() {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/expired",
-            Some(hashmap! {
-                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 10 minute".to_string()),
-                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("true".to_string())
-            }),
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 10 minute".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("true".to_string()),
+                ),
+            ])),
         )
         .await;
 
@@ -222,7 +233,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(2).await.expect("Cannot load version 2");
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            &table.table_uri(),
+            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
             table.version().unwrap(),
             None,
             None,
@@ -260,10 +271,16 @@ mod delete_expired_delta_log_in_checkpoint {
     async fn test_not_delete_expired_logs() {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/not_delete_expired",
-            Some(hashmap! {
-                TableProperty::LogRetentionDuration.as_ref().into() => Some("interval 1 second".to_string()),
-                TableProperty::EnableExpiredLogCleanup.as_ref().into() => Some("false".to_string())
-            }),
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 1 second".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("false".to_string()),
+                ),
+            ])),
         )
         .await;
 
@@ -276,7 +293,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(1).await.expect("Cannot load version 1");
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            &table.table_uri(),
+            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
             table.version().unwrap(),
             None,
             None,
@@ -317,16 +334,20 @@ mod checkpoints_with_tombstones {
     use deltalake_core::kernel::*;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
-    use maplit::hashmap;
     use pretty_assertions::assert_eq;
     use std::collections::{HashMap, HashSet};
 
     #[tokio::test]
     #[ignore]
     async fn test_expired_tombstones() {
-        let mut table = fs_common::create_table("../test/tests/data/checkpoints_tombstones/expired", Some(hashmap! {
-            TableProperty::DeletedFileRetentionDuration.as_ref().into() => Some("interval 1 minute".to_string())
-        })).await;
+        let mut table = fs_common::create_table(
+            "../test/tests/data/checkpoints_tombstones/expired",
+            Some(HashMap::from([(
+                TableProperty::DeletedFileRetentionDuration.as_ref().into(),
+                Some("interval 1 minute".to_string()),
+            )])),
+        )
+        .await;
 
         let a1 = fs_common::add(3 * 60 * 1000); // 3 mins ago,
         let a2 = fs_common::add(2 * 60 * 1000); // 2 mins ago,

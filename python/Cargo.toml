@@ -20,7 +20,7 @@ doc = false
 [dependencies]
 delta_kernel.workspace = true
 
-pyo3-arrow = { version = "0.9.0", default-features = false }
+pyo3-arrow = { version = "0.11.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
@@ -63,7 +63,7 @@ jemallocator = { version = "0.5", features = [
 jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
-version = "0.24.0"
+version = "0.25.1"
 features = ["extension-module", "abi3", "abi3-py39"]
 
 [dependencies.deltalake]
