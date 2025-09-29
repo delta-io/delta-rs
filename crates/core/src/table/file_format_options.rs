@@ -18,7 +18,7 @@ use parquet::basic::Compression;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
-use tracing::{debug};
+use tracing::debug;
 use uuid::Uuid;
 
 // Top level trait for file format options used by a DeltaTable
@@ -232,7 +232,7 @@ pub struct KmsFileFormatOptions {
 #[cfg(feature = "datafusion")]
 impl KmsFileFormatOptions {
     pub fn new(table_encryption: TableEncryption) -> Self {
-        let encryption_factory_id = format!("delta-{}", Uuid::new_v4().to_string());
+        let encryption_factory_id = format!("delta-{}", Uuid::new_v4());
         let writer_properties_factory = Arc::new(KMSWriterPropertiesFactory::with_encryption(
             table_encryption.clone(),
         ));

@@ -923,9 +923,9 @@ impl TableProvider for DeltaTableProvider {
             InsertOp::Append => SaveMode::Append,
             InsertOp::Overwrite => SaveMode::Overwrite,
             InsertOp::Replace => {
-                return Err(DataFusionError::Plan(format!(
-                    "Replace operation is not supported for DeltaTableProvider"
-                )))
+                return Err(DataFusionError::Plan(
+                    "Replace operation is not supported for DeltaTableProvider".to_string(),
+                ))
             }
         };
 

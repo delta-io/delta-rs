@@ -40,6 +40,7 @@ use itertools::Itertools;
 use num_cpus;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::basic::{Compression, ZstdLevel};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
@@ -62,7 +63,7 @@ use crate::table::file_format_options::{
 };
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{DeltaTable, ObjectMeta, PartitionFilter};
+use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -244,8 +245,18 @@ impl<'a> OptimizeBuilder<'a> {
         snapshot: DeltaTableState,
         file_format_options: Option<FileFormatRef>,
     ) -> Self {
-        let writer_properties_factory =
-            build_writer_properties_factory_ffo(file_format_options.clone());
+        let writer_properties_factory = match file_format_options.as_ref() {
+            None => {
+                let wp = WriterProperties::builder()
+                    .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
+                    .set_created_by(format!("delta-rs version {}", crate_version()))
+                    .build();
+                let wpf = build_writer_properties_factory_wp(wp);
+                Some(wpf)
+            }
+            _ => build_writer_properties_factory_ffo(file_format_options.clone()),
+        };
+
         Self {
             snapshot,
             log_store,
@@ -505,6 +516,10 @@ pub struct OptimizeExecContext {
 /// A stream of record batches, with a ParquetError on failure.
 type ParquetReadStream = BoxStream<'static, Result<RecordBatch, ParquetError>>;
 
+/// A stream of optimization rewrites=
+type OptimizationStream =
+    BoxStream<'static, BoxFuture<'static, Result<(Vec<Action>, PartialMetrics), DeltaTableError>>>;
+
 impl MergePlan {
     /// Rewrites files in a single partition.
     ///
@@ -638,13 +653,7 @@ impl MergePlan {
         &mut self,
         operations: OptimizeOperations,
         ctx: &OptimizeExecContext,
-    ) -> Result<
-        BoxStream<
-            'static,
-            BoxFuture<'static, Result<(Vec<Action>, PartialMetrics), DeltaTableError>>,
-        >,
-        DeltaTableError,
-    > {
+    ) -> Result<OptimizationStream, DeltaTableError> {
         match operations {
             OptimizeOperations::Compact(bins) => {
                 let stream = futures::stream::iter(bins)
@@ -774,10 +783,7 @@ impl MergePlan {
     /// Process the stream of rewrite results, committing actions according to the interval and aggregating metrics.
     async fn process_commit_loop(
         &mut self,
-        stream: BoxStream<
-            'static,
-            BoxFuture<'static, Result<(Vec<Action>, PartialMetrics), DeltaTableError>>,
-        >,
+        stream: OptimizationStream,
         ctx: &OptimizeExecContext,
     ) -> Result<Metrics, DeltaTableError> {
         let mut stream = stream.buffer_unordered(ctx.max_concurrent_tasks);
