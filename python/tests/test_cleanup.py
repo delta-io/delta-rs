@@ -4,8 +4,9 @@ import os
 import pathlib
 import shutil
 
-import pandas as pd
 import pytest
+from arro3.core import Array, DataType, Table
+from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable, write_deltalake
 
@@ -27,21 +28,33 @@ def print_log_dir(path):
             print(f"  {file}")
 
 
+@pytest.fixture
+def valid_gc_data() -> Table:
+    id_col = ArrowField("id", DataType.int32(), nullable=True)
+    gc = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
+        {"delta.generationExpression": "10"}
+    )
+    data = Table.from_pydict(
+        {"id": Array([1, 2], type=id_col), "gc": Array([10, 10], type=gc)},
+    )
+    return data
+
+
 @pytest.mark.pandas
-def test_failed_cleanup(tmp_path: pathlib.Path):
+def test_failed_cleanup(tmp_path: pathlib.Path, valid_gc_data):
     data_path = tmp_path
     clean_data_dir(data_path)
 
     # write 10 versions of the data
     for i in range(10):
-        ids = range(i * 10, i * 10 + 10)
-        strings = [f"str_{i}" for i in range(10)]
-        df = pd.DataFrame({"id": ids, "value": strings})
         write_deltalake(
             data_path,
-            df,
             mode="overwrite",
-            configuration={"delta.logRetentionDuration": "interval 0 day"},
+            data=valid_gc_data,
+            configuration={
+                "delta.minWriterVersion": "7",
+                "delta.logRetentionDuration": "interval 0 day",
+            },
         )
 
     # checkpoint final version
