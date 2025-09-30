@@ -16,40 +16,43 @@ jobs:
       - name: Cleanup PR Caches
         run: |
           echo "Cleaning up caches for closed PR #${{ github.event.pull_request.number }}"
+          echo "Branch: $BRANCH"
 
-          # Get cache keys for this PR branch (limit to 100 to prevent timeout)
-          cacheKeysForPR=$(gh cache list --ref $BRANCH --limit 100 --json id --jq '.[].id' 2>/dev/null || echo "")
+          TOTAL_DELETED=0
+          BATCH=1
 
-          # Count the number of caches
-          cacheCount=$(echo "$cacheKeysForPR" | wc -w)
-          echo "Found $cacheCount cache entries for branch: $BRANCH"
-
-          if [ "$cacheCount" -eq 0 ]; then
-            echo "No caches found for this PR branch"
-            exit 0
-          fi
-
-          # Setting this to not fail the workflow while deleting cache keys
-          set +e
-
-          echo "Deleting caches..."
-          deletedCount=0
-          failedCount=0
-
-          for cacheKey in $cacheKeysForPR; do
-            if gh cache delete $cacheKey; then
-              deletedCount=$((deletedCount + 1))
-              echo "✅ Deleted cache: $cacheKey"
-            else
-              failedCount=$((failedCount + 1))
-              echo "❌ Failed to delete cache: $cacheKey"
+          while true; do
+            CACHE_IDS=$(gh cache list --ref "$BRANCH" --limit 100 --json id --jq '.[].id' 2>/dev/null || true)
+            
+            if [ -z "$CACHE_IDS" ]; then
+              echo "No more caches found"
+              break
             fi
+            
+            COUNT=$(echo "$CACHE_IDS" | wc -w)
+            
+            if [ "$COUNT" -eq 0 ]; then
+              echo "No more caches found"
+              break
+            fi
+            
+            echo "Batch $BATCH: Found $COUNT caches, deleting in parallel..."
+            
+            echo "$CACHE_IDS" | xargs -P 50 -I {} gh cache delete {} 2>/dev/null || true
+            
+            TOTAL_DELETED=$((TOTAL_DELETED + COUNT))
+            echo "✅ Batch $BATCH completed ($COUNT caches deleted)"
+            
+            BATCH=$((BATCH + 1))
+            
+            sleep 1
           done
 
-          echo "Cache cleanup completed:"
-          echo "  - Successfully deleted: $deletedCount"
-          echo "  - Failed to delete: $failedCount"
-          echo "  - Total processed: $((deletedCount + failedCount))"
+          if [ "$TOTAL_DELETED" -eq 0 ]; then
+            echo "No caches found for this PR branch"
+          else
+            echo "🎉 Cache cleanup completed: $TOTAL_DELETED total caches deleted"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
