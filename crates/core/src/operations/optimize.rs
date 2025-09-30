@@ -611,6 +611,7 @@ impl MergePlan {
 
     /// Perform the operations outlined in the plan.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(operation = "optimize", version = snapshot.version()))]
     pub async fn execute(
         mut self,
         log_store: LogStoreRef,
@@ -624,6 +625,7 @@ impl MergePlan {
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
+        info!("starting optimize execution");
 
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
@@ -804,6 +806,7 @@ impl MergePlan {
 }
 
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
+#[instrument(skip_all, fields(operation = "create_merge_plan", version = snapshot.version()))]
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
@@ -819,9 +822,11 @@ pub async fn create_merge_plan(
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {
+            info!("building compaction plan");
             build_compaction_plan(log_store, snapshot, filters, target_size).await?
         }
         OptimizeType::ZOrder(zorder_columns) => {
+            info!("building z-order plan");
             build_zorder_plan(
                 log_store,
                 zorder_columns,
@@ -833,6 +838,12 @@ pub async fn create_merge_plan(
             .await?
         }
     };
+
+    info!(
+        partitions_optimized = metrics.partitions_optimized,
+        total_considered_files = metrics.total_considered_files,
+        "merge plan created"
+    );
 
     let input_parameters = OptimizeInput {
         target_size,

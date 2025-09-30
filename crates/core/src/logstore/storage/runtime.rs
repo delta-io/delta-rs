@@ -15,6 +15,7 @@ use object_store::{
 use object_store::{MultipartUpload, PutMultipartOptions};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
+use tracing::*;
 
 /// Creates static IO Runtime with optional configuration
 fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
@@ -185,6 +186,7 @@ impl<T: ObjectStore + Clone> std::fmt::Display for DeltaIOStorageBackend<T> {
 
 #[async_trait::async_trait]
 impl<T: ObjectStore + Clone> ObjectStore for DeltaIOStorageBackend<T> {
+    #[instrument(skip(self, bytes), fields(path = %location, size = bytes.content_length()))]
     async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
         self.spawn_io_rt(
             |store, path| store.put(path, bytes),
@@ -208,6 +210,7 @@ impl<T: ObjectStore + Clone> ObjectStore for DeltaIOStorageBackend<T> {
         .await
     }
 
+    #[instrument(skip(self), fields(path = %location))]
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
         self.spawn_io_rt(|store, path| store.get(path), &self.inner, location.clone())
             .await
@@ -240,6 +243,7 @@ impl<T: ObjectStore + Clone> ObjectStore for DeltaIOStorageBackend<T> {
         .await
     }
 
+    #[instrument(skip(self), fields(path = %location))]
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
         self.spawn_io_rt(
             |store, path| store.delete(path),

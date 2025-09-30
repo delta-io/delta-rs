@@ -15,7 +15,7 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
-use tracing::debug;
+use tracing::*;
 
 use super::async_utils::AsyncShareableBuffer;
 use crate::crate_version;
@@ -385,6 +385,7 @@ impl PartitionWriter {
         Ok(self.arrow_writer.write(batch).await?)
     }
 
+    #[instrument(skip(self), fields(rows = 0, size = 0, path = field::Empty))]
     async fn flush_arrow_writer(&mut self) -> DeltaResult<()> {
         // replace counter / buffers and close the current writer
         let (writer, buffer) = self.reset_writer()?;
@@ -403,12 +404,17 @@ impl PartitionWriter {
         let path = self.next_data_path();
         let file_size = buffer.len() as i64;
 
+        Span::current().record("rows", metadata.num_rows);
+        Span::current().record("size", file_size);
+        Span::current().record("path", path.as_ref());
+
         // write file to object store
         let mut multi_part_upload = self.object_store.put_multipart(&path).await?;
         let part_size = upload_part_size();
         let mut tasks = JoinSet::new();
         let max_concurrent_tasks = 10; // TODO: make configurable
 
+        let mut part_count = 0;
         while buffer.len() > part_size {
             let part = buffer.split_to(part_size);
             let upload_future = multi_part_upload.put_part(part.into());
@@ -418,12 +424,16 @@ impl PartitionWriter {
                 tasks.join_next().await;
             }
             tasks.spawn(upload_future);
+            part_count += 1;
         }
 
         if !buffer.is_empty() {
             let upload_future = multi_part_upload.put_part(buffer.into());
             tasks.spawn(upload_future);
+            part_count += 1;
         }
+
+        debug!(parts = part_count, "uploading multipart file");
 
         // wait for all remaining tasks to complete
         while let Some(result) = tasks.join_next().await {
@@ -431,6 +441,7 @@ impl PartitionWriter {
         }
 
         multi_part_upload.complete().await?;
+        debug!("multipart upload completed successfully");
 
         self.files_written.push(
             create_add(
