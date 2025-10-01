@@ -531,7 +531,7 @@ mod tests {
         let json_adds: Vec<_> = table_from_json_stats
             .snapshot()
             .unwrap()
-            .snapshot
+            .snapshot()
             .files(&log_store, None)
             .try_collect()
             .await
@@ -548,7 +548,7 @@ mod tests {
         let struct_adds: Vec<_> = table_from_struct_stats
             .snapshot()
             .unwrap()
-            .snapshot
+            .snapshot()
             .files(&log_store, None)
             .try_collect()
             .await
@@ -588,7 +588,7 @@ mod tests {
         let file_stats = table_from_struct_stats
             .snapshot()
             .unwrap()
-            .snapshot
+            .snapshot()
             .log_data();
 
         let col_stats = file_stats.statistics();

@@ -10,6 +10,7 @@ use super::CustomExecuteHandler;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
+use crate::kernel::EagerSnapshot;
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -17,7 +18,7 @@ use crate::DeltaTable;
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
@@ -35,7 +36,7 @@ impl super::Operation<()> for LoadBuilder {
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,
@@ -58,12 +59,17 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_read_from(&this.snapshot.snapshot)?;
+            PROTOCOL.can_read_from(&this.snapshot)?;
             if !this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("reading".into()));
             }
 
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let table = DeltaTable::new_with_state(
+                this.log_store,
+                DeltaTableState {
+                    snapshot: this.snapshot,
+                },
+            );
             let schema = table.snapshot()?.arrow_schema()?;
             let projection = this
                 .columns
