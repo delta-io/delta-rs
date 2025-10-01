@@ -224,7 +224,7 @@ impl DeltaTableState {
     /// A stream of logical file views that match the partition filters.
     #[deprecated(
         since = "0.30.0",
-        note = "Use `.snapshpt().files(log_store, predicate)` with a kernel predicate instead."
+        note = "Use `.snapshot().files(log_store, predicate)` with a kernel predicate instead."
     )]
     pub fn get_active_add_actions_by_partitions(
         &self,
