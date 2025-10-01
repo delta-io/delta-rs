@@ -1197,7 +1197,7 @@ impl From<DeltaColumn> for Column {
     }
 }
 
-/// Create a column, resuing the existing datafusion column
+/// Create a column, reusing the existing datafusion column
 impl From<Column> for DeltaColumn {
     fn from(c: Column) -> Self {
         DeltaColumn { inner: c }
