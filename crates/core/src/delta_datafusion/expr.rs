@@ -478,7 +478,7 @@ macro_rules! format_option {
     }};
 }
 
-/// Epoch days from ce calander until 1970-01-01
+/// Epoch days from ce calendar until 1970-01-01
 pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
 struct ScalarValueFormat<'a> {

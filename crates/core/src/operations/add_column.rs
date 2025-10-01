@@ -9,16 +9,15 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
+use crate::kernel::{EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Add new columns and/or nested fields to a table
 pub struct AddColumnBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Fields to add/merge into schema
     fields: Option<Vec<StructField>>,
     /// Delta object store for handling data files
@@ -39,7 +38,7 @@ impl Operation<()> for AddColumnBuilder {
 
 impl AddColumnBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,

@@ -433,7 +433,7 @@ mod local {
         // Execute write to the target table with the proper state
         let target_table = WriteBuilder::new(
             target_table.log_store(),
-            target_table.snapshot().ok().cloned(),
+            target_table.snapshot().ok().map(|s| s.snapshot()).cloned(),
         )
         .with_input_execution_plan(source_scan)
         .with_input_session_state(state)
@@ -1406,7 +1406,7 @@ mod local {
                 .logical_plan()
                 .clone(),
         );
-        let write_builder = WriteBuilder::new(log_store, tbl.state);
+        let write_builder = WriteBuilder::new(log_store, tbl.state.map(|s| s.snapshot().clone()));
         let _ = write_builder
             .with_input_execution_plan(plan)
             .with_save_mode(SaveMode::Overwrite)
@@ -1684,9 +1684,9 @@ mod insert_into_tests {
         )?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
         let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.clone(),
+            table.snapshot()?.snapshot().clone(),
             table.log_store(),
             scan_config,
         )?);
@@ -1807,9 +1807,9 @@ mod insert_into_tests {
         )?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
         let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.clone(),
+            table.snapshot()?.snapshot().clone(),
             table.log_store(),
             scan_config,
         )?);
@@ -1864,10 +1864,10 @@ mod insert_into_tests {
         ctx.deregister_table("test_table")?;
         let refreshed_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         let refreshed_scan_config =
-            DeltaScanConfigBuilder::new().build(refreshed_table.snapshot()?)?;
+            DeltaScanConfigBuilder::new().build(refreshed_table.snapshot()?.snapshot())?;
         let refreshed_table_provider: Arc<dyn TableProvider> =
             Arc::new(DeltaTableProvider::try_new(
-                refreshed_table.snapshot()?.clone(),
+                refreshed_table.snapshot()?.snapshot().clone(),
                 refreshed_table.log_store(),
                 refreshed_scan_config,
             )?);
@@ -1947,9 +1947,9 @@ mod insert_into_tests {
         )?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
         let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.clone(),
+            table.snapshot()?.snapshot().clone(),
             table.log_store(),
             scan_config,
         )?);
@@ -1986,9 +1986,10 @@ mod insert_into_tests {
 
         ctx.deregister_table("test_table")?;
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
-        let final_scan_config = DeltaScanConfigBuilder::new().build(final_table.snapshot()?)?;
+        let final_scan_config =
+            DeltaScanConfigBuilder::new().build(final_table.snapshot()?.snapshot())?;
         let final_table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            final_table.snapshot()?.clone(),
+            final_table.snapshot()?.snapshot().clone(),
             final_table.log_store(),
             final_scan_config,
         )?);
@@ -2069,9 +2070,9 @@ mod insert_into_tests {
             RecordBatch::try_new(table_schema.clone(), vec![Arc::new(names), Arc::new(ages)])?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?)?;
+        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
         let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.clone(),
+            table.snapshot()?.snapshot().clone(),
             table.log_store(),
             scan_config,
         )?);

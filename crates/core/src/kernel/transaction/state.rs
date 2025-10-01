@@ -320,7 +320,7 @@ mod tests {
         )));
 
         let state = DeltaTableState::from_actions(actions).await.unwrap();
-        let files = files_matching_predicate(state.snapshot.log_data(), &[])
+        let files = files_matching_predicate(state.snapshot().log_data(), &[])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 3);
@@ -329,7 +329,7 @@ mod tests {
             .gt(lit::<i32>(10))
             .or(col("value").lt_eq(lit::<i32>(0)));
 
-        let files = files_matching_predicate(state.snapshot.log_data(), &[predictate])
+        let files = files_matching_predicate(state.snapshot().log_data(), &[predictate])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);
