@@ -114,7 +114,7 @@ mod tests {
             .expect("Failed to make a table");
         table.load().await.expect("Failed to reload table");
         let result =
-            should_write_cdc(&table.snapshot().unwrap().snapshot).expect("Failed to use table");
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(!result, "A default table should not create CDC files");
     }
 
@@ -139,7 +139,7 @@ mod tests {
         table.load().await.expect("Failed to reload table");
 
         let result =
-            should_write_cdc(&table.snapshot().unwrap().snapshot).expect("Failed to use table");
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(
             result,
             "A table with the EnableChangeDataFeed should create CDC files"
@@ -166,7 +166,7 @@ mod tests {
         table.load().await.expect("Failed to reload table");
 
         let result =
-            should_write_cdc(&table.snapshot().unwrap().snapshot).expect("Failed to use table");
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(
             !result,
             "A v7 table must not write CDC files unless the writer feature is set"
@@ -197,7 +197,7 @@ mod tests {
         table.load().await.expect("Failed to reload table");
 
         let result =
-            should_write_cdc(&table.snapshot().unwrap().snapshot).expect("Failed to use table");
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(
             result,
             "A v7 table must not write CDC files unless the writer feature is set"

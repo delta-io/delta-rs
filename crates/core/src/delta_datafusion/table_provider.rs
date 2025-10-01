@@ -749,7 +749,7 @@ impl TableProvider for DeltaTable {
         register_store(self.log_store(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(&self.snapshot()?.snapshot, self.log_store(), session)
+        let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
@@ -1227,7 +1227,7 @@ mod tests {
             .build(table.snapshot().unwrap().snapshot())
             .unwrap();
         let table_provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot.clone(),
+            table.snapshot().unwrap().snapshot().clone(),
             table.log_store(),
             scan_config,
         )

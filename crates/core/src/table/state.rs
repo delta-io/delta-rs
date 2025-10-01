@@ -24,7 +24,7 @@ use crate::kernel::{
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
-use crate::{to_kernel_predicate, DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,14 +231,7 @@ impl DeltaTableState {
         log_store: &dyn LogStore,
         filters: &[PartitionFilter],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if filters.is_empty() {
-            return self.snapshot().files(log_store, None);
-        }
-        let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
-            Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-        };
-        self.snapshot().files(log_store, Some(predicate))
+        self.snapshot().file_views_by_partitions(log_store, filters)
     }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.

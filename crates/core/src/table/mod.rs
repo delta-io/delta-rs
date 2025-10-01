@@ -235,7 +235,7 @@ impl DeltaTable {
     ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
         let infos = self
             .snapshot()?
-            .snapshot
+            .snapshot()
             .snapshot()
             .commit_infos(&self.log_store(), limit)
             .await?

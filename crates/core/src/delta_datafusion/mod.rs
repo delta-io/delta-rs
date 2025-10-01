@@ -1527,7 +1527,7 @@ mod tests {
 
         let log_store = table.log_store();
         let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot.clone(),
+            table.snapshot().unwrap().snapshot().clone(),
             log_store,
             config,
         )
@@ -1594,7 +1594,7 @@ mod tests {
 
         let log_store = table.log_store();
         let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot.clone(),
+            table.snapshot().unwrap().snapshot().clone(),
             log_store,
             config,
         )
@@ -1661,7 +1661,7 @@ mod tests {
         let log = table.log_store();
 
         let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot.clone(), log, config)
+            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
                 .unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
@@ -1754,7 +1754,7 @@ mod tests {
         let log = table.log_store();
 
         let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot.clone(), log, config)
+            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
                 .unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
@@ -1811,7 +1811,7 @@ mod tests {
         let log = table.log_store();
 
         let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot.clone(), log, config)
+            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
                 .unwrap();
 
         let mut cfg = SessionConfig::default();
@@ -1908,7 +1908,7 @@ mod tests {
         let log = table.log_store();
 
         let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot.clone(), log, config)
+            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
                 .unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
@@ -2183,7 +2183,7 @@ mod tests {
             table.log_store().config().clone(),
         );
         let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot.clone(),
+            table.snapshot().unwrap().snapshot().clone(),
             Arc::new(log_store),
             config,
         )

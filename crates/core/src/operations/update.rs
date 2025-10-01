@@ -482,7 +482,7 @@ async fn execute(
         .build(Some(&snapshot), log_store, operation)
         .await?;
 
-    Ok((commit.snapshot().snapshot, metrics))
+    Ok((commit.snapshot().snapshot().clone(), metrics))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {
@@ -530,7 +530,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                 metrics,
             ))
         })
