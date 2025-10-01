@@ -106,14 +106,14 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     writer.write(vec![json!({"id": 1})]).await?;
     writer.flush_and_commit(&mut table).await?; // v1
 
-    let ts = Utc::now(); // use this ts for log retention expiry
-    sleep(Duration::from_secs(1)).await;
-
     writer.write(vec![json!({"id": 2})]).await?;
     writer.flush_and_commit(&mut table).await?; // v2
     assert_eq!(table.version(), Some(2));
 
     create_checkpoint(&table, None).await.unwrap(); // v2.checkpoint.parquet
+
+    sleep(Duration::from_secs(1)).await;
+    let ts = Utc::now(); // use this ts for log retention expiry
 
     // Should delete v1 but not v2 or v2.checkpoint.parquet
     cleanup_expired_logs_for(
