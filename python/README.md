@@ -38,6 +38,34 @@ NOTE: official binary wheels are linked against openssl statically for remote
 objection store communication. Please file Github issue to request for critical
 openssl upgrade.
 
+## Tracing and Observability
+
+Delta-rs supports OpenTelemetry tracing for performance analysis and debugging.
+
+### Basic Example
+
+```python
+import os
+import deltalake
+from deltalake import write_deltalake, DeltaTable
+
+# Enable logging to see trace output in stdout
+os.environ["RUST_LOG"] = "deltalake=debug"
+
+# Initialize tracing
+deltalake.init_tracing("http://localhost:4317")
+
+# All Delta operations are now traced
+write_deltalake("my_table", data)
+dt = DeltaTable("my_table")
+df = dt.to_pandas()
+
+# Shutdown tracing when done
+deltalake.shutdown_tracing()
+```
+
+When you run this code, you'll see trace information in stdout showing operation timings and execution flow.
+
 ## Build custom wheels
 
 Sometimes you may wish to build custom wheels. Maybe you want to try out some
@@ -45,14 +73,14 @@ unreleased features. Or maybe you want to tweak the optimization of the Rust cod
 
 To compile the package, you will need the Rust compiler and [maturin](https://github.com/PyO3/maturin):
 
-```sh
+````sh
 curl https://sh.rustup.rs -sSf | sh -s
 
 Then you can build wheels for your own platform like so:
 
 ```sh
 uvx maturin build --release --out wheels
-```
+````
 
 Note:
 

@@ -94,6 +94,9 @@ pub mod test_utils;
 pub mod delta_datafusion;
 pub mod writer;
 
+#[cfg(feature = "otel")]
+pub mod tracing_otlp;
+
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use url::Url;

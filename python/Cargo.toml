@@ -77,12 +77,14 @@ features = [
     "unity-experimental",
     "hdfs",
     "lakefs",
+    "otel",
 ]
 
 [features]
 default = ["rustls"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
+otel = ["deltalake/otel"]
 
 [profile.release]
 opt-level = 3

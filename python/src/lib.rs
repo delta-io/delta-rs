@@ -59,6 +59,8 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
+#[cfg(feature = "otel")]
+use deltalake::tracing_otlp;
 use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
 use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -77,6 +79,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use writer::maybe_lazy_cast_reader;
@@ -2158,6 +2161,39 @@ fn rust_core_version() -> &'static str {
     deltalake::crate_version()
 }
 
+/// Initialize OpenTelemetry tracing with OTLP exporter
+#[pyfunction]
+#[pyo3(signature = (endpoint))]
+fn init_tracing(endpoint: String) -> PyResult<()> {
+    #[cfg(feature = "otel")]
+    {
+        let rt = Runtime::new().map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {}", e))
+        })?;
+        rt.block_on(async {
+            tracing_otlp::init_otlp_tracing(&endpoint).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to initialize tracing: {}", e))
+            })
+        })
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        Err(PyRuntimeError::new_err(
+            "OpenTelemetry support not compiled. Rebuild with `maturin develop` or `maturin build` to enable tracing.",
+        ))
+    }
+}
+
+/// Shutdown OpenTelemetry tracing and flush remaining spans
+#[pyfunction]
+fn shutdown_tracing() -> PyResult<()> {
+    #[cfg(feature = "otel")]
+    {
+        tracing_otlp::shutdown_tracing();
+    }
+    Ok(())
+}
+
 fn current_timestamp() -> i64 {
     let start = SystemTime::now();
     let since_the_epoch = start
@@ -2567,6 +2603,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(init_tracing, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
