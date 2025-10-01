@@ -7,13 +7,11 @@ use opentelemetry::global;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithTonicConfig};
 #[cfg(feature = "otel")]
-use opentelemetry_sdk::runtime;
-#[cfg(feature = "otel")]
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 #[cfg(feature = "otel")]
 use opentelemetry_sdk::Resource;
 #[cfg(feature = "otel")]
-use tracing_opentelemetry;
+use tracing_opentelemetry::layer;
 #[cfg(feature = "otel")]
 use tracing_subscriber::layer::SubscriberExt;
 #[cfg(feature = "otel")]
@@ -53,7 +51,7 @@ pub fn init_otlp_tracing(endpoint: &str) -> Result<(), Box<dyn std::error::Error
     global::set_tracer_provider(provider.clone());
 
     let tracer = global::tracer("delta-rs");
-    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    let telemetry = layer().with_tracer(tracer);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
