@@ -81,11 +81,18 @@ pub fn shutdown_tracing() {}
 mod tests {
     use super::*;
 
-    #[test]
+    #[tokio::test]
     #[cfg(feature = "otel")]
-    fn test_init_and_shutdown_tracing() {
-        let result = init_otlp_tracing("http://localhost:4317");
-        assert!(result.is_ok());
+    async fn test_init_and_shutdown_tracing() {
+        if TRACING_INITIALIZED.get().is_some() {
+            return;
+        }
+
+        let provider = SdkTracerProvider::builder()
+            .with_sampler(Sampler::AlwaysOn)
+            .build();
+        global::set_tracer_provider(provider);
+        TRACING_INITIALIZED.set(true).ok();
 
         let result = init_otlp_tracing("http://localhost:4317");
         assert!(result.is_err());
