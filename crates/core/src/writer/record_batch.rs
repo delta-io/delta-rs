@@ -176,6 +176,8 @@ impl RecordBatchWriter {
         partition_values: &IndexMap<String, Scalar>,
         mode: WriteMode,
     ) -> Result<ArrowSchemaRef, DeltaTableError> {
+        let arrow_schema =
+            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
         let partition_key = partition_values.hive_partition_path();
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
@@ -192,10 +194,7 @@ impl RecordBatchWriter {
                     .create_writer_properties(&path, &arrow_schema)
                     .await?;
                 let mut writer = PartitionWriter::new(
-                    arrow_schema_without_partitions(
-                        &self.arrow_schema_ref,
-                        &self.partition_columns,
-                    ),
+                    arrow_schema,
                     partition_values.clone(),
                     writer_properties,
                     path,
