@@ -18,18 +18,12 @@ env:
 jobs:
   test-minimal:
     runs-on: ubuntu-latest
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v4
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-python-builds"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
@@ -58,20 +52,13 @@ jobs:
   test:
     name: Python Build (Python 3.10 PyArrow latest)
     runs-on: ubuntu-latest
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-python-builds"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
