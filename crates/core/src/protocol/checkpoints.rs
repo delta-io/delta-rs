@@ -9,17 +9,16 @@ use arrow_array::{BooleanArray, RecordBatch};
 use chrono::{TimeZone, Utc};
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
-use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use delta_kernel::snapshot::Snapshot;
 use delta_kernel::FileMeta;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
-use object_store::{Error, ObjectStore};
+use object_store::ObjectStore;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use tokio::task::spawn_blocking;
-use tracing::{debug, error, warn};
+use tracing::*;
 use uuid::Uuid;
 
 use crate::logstore::{LogStore, LogStoreExt, DELTA_LOG_REGEX};
@@ -31,6 +30,7 @@ static CHECKPOINT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
 
 /// Creates checkpoint for a given table version, table state and object store
+#[tracing::instrument(skip(log_store), fields(operation = "checkpoint", version = version, table_uri = %log_store.root_uri()))]
 pub(crate) async fn create_checkpoint_for(
     version: u64,
     log_store: &dyn LogStore,
@@ -312,7 +312,9 @@ mod tests {
     use arrow_array::{ArrayRef, Int32Array, RecordBatch};
     use arrow_schema::Schema as ArrowSchema;
     use chrono::Duration;
+    use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
     use object_store::path::Path;
+    use object_store::Error;
 
     use super::*;
     use crate::ensure_table_uri;

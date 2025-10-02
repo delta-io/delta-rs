@@ -65,7 +65,7 @@ use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use tracing::log::*;
+use tracing::*;
 use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
@@ -724,6 +724,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_uri()))]
 async fn execute(
     predicate: Expression,
     mut source: DataFrame,
@@ -743,6 +744,12 @@ async fn execute(
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
 ) -> DeltaResult<(EagerSnapshot, MergeMetrics)> {
+    info!(
+        operation = "merge",
+        version = snapshot.version(),
+        "starting merge execution"
+    );
+
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can
@@ -753,6 +760,8 @@ async fn execute(
     if should_cdc {
         debug!("Executing a merge and I should write CDC!");
     }
+
+    info!(cdc_enabled = should_cdc, "merge execution details");
 
     let current_metadata = snapshot.metadata();
     let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {

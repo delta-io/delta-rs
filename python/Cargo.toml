@@ -47,6 +47,13 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
+# opentelemetry
+tracing-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+tracing-subscriber = { workspace = true }
+
 # Non-unix or emscripten os
 [target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
 mimalloc = { version = "0.1", default-features = false }

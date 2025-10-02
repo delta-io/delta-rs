@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 use object_store::ObjectStore;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use tracing::*;
 use url::{ParseError, Url};
 use uuid::Uuid;
 
@@ -153,15 +154,24 @@ impl FileSystemCheckBuilder {
         }
 
         let object_store = log_store.object_store(None);
-        let mut files = object_store.list(None);
+        let list_span = info_span!("list_files", operation = "filesystem_check");
+        let mut files = list_span.in_scope(|| object_store.list(None));
+
+        let mut file_count = 0;
         while let Some(result) = files.next().await {
             let file = result?;
+            file_count += 1;
             files_relative.remove(file.location.as_ref());
 
             if files_relative.is_empty() {
                 break;
             }
         }
+        info!(
+            files_scanned = file_count,
+            missing_files = files_relative.len(),
+            "filesystem check listing completed"
+        );
 
         let files_to_remove: Vec<Add> = files_relative
             .into_values()

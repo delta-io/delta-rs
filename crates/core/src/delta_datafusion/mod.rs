@@ -64,6 +64,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use either::Either;
 use futures::TryStreamExt;
 use itertools::Itertools;
+use tracing::*;
 use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
@@ -936,6 +937,14 @@ fn join_batches_with_add_actions(
 }
 
 /// Determine which files contain a record that satisfies the predicate
+#[instrument(
+    skip_all,
+    fields(
+        version = snapshot.version(),
+        total_files = field::Empty,
+        matching_files = field::Empty
+    )
+)]
 pub(crate) async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
@@ -948,6 +957,8 @@ pub(crate) async fn find_files_scan(
         .map(|f| f.add_action())
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
+
+    Span::current().record("total_files", candidate_map.len());
 
     let scan_config = DeltaScanConfigBuilder {
         include_file_column: true,
@@ -988,12 +999,20 @@ pub(crate) async fn find_files_scan(
     let task_ctx = Arc::new(TaskContext::from(state));
     let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
 
-    join_batches_with_add_actions(
+    let matching_files = join_batches_with_add_actions(
         path_batches,
         candidate_map,
         config.file_column_name.as_ref().unwrap(),
         true,
-    )
+    )?;
+
+    Span::current().record("matching_files", matching_files.len());
+    debug!(
+        matching_files = matching_files.len(),
+        "physical scan completed"
+    );
+
+    Ok(matching_files)
 }
 
 pub(crate) async fn scan_memory_table(
@@ -1056,6 +1075,15 @@ pub(crate) async fn scan_memory_table(
 }
 
 /// Finds files in a snapshot that match the provided predicate.
+#[instrument(
+    skip_all,
+    fields(
+        version = snapshot.version(),
+        has_predicate = predicate.is_some(),
+        partition_scan = field::Empty,
+        candidate_count = field::Empty
+    )
+)]
 pub async fn find_files(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
@@ -1077,25 +1105,52 @@ pub async fn find_files(
             expr_properties.result?;
 
             if expr_properties.partition_only {
+                Span::current().record("partition_scan", true);
+                debug!("using partition-only scan (memory table)");
                 let candidates = scan_memory_table(&log_store, snapshot, predicate).await?;
+                Span::current().record("candidate_count", candidates.len());
+                info!(
+                    candidates = candidates.len(),
+                    scan_type = "partition",
+                    "file pruning completed"
+                );
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
                 })
             } else {
+                Span::current().record("partition_scan", false);
+                debug!("using physical data scan");
                 let candidates =
                     find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
 
+                Span::current().record("candidate_count", candidates.len());
+                info!(
+                    candidates = candidates.len(),
+                    scan_type = "physical",
+                    "file pruning completed"
+                );
                 Ok(FindFiles {
                     candidates,
                     partition_scan: false,
                 })
             }
         }
-        None => Ok(FindFiles {
-            candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
-            partition_scan: true,
-        }),
+        None => {
+            Span::current().record("partition_scan", true);
+            debug!("no predicate, returning all files");
+            let candidates: Vec<_> = snapshot.log_data().iter().map(|f| f.add_action()).collect();
+            Span::current().record("candidate_count", candidates.len());
+            info!(
+                candidates = candidates.len(),
+                scan_type = "all",
+                "file pruning completed"
+            );
+            Ok(FindFiles {
+                candidates,
+                partition_scan: true,
+            })
+        }
     }
 }
 
@@ -2406,5 +2461,66 @@ mod tests {
         async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
             self.inner.rename_if_not_exists(from, to).await
         }
+    }
+
+    #[test]
+    fn test_find_files_tracing_span() {
+        let span = info_span!(
+            "find_files",
+            version = 10,
+            has_predicate = true,
+            partition_scan = field::Empty,
+            candidate_count = field::Empty
+        );
+
+        let metadata = span.metadata().expect("span should have metadata");
+        assert_eq!(metadata.name(), "find_files");
+        assert_eq!(metadata.level(), &Level::INFO);
+        assert!(metadata.is_span());
+
+        span.record("partition_scan", true);
+        span.record("candidate_count", 45);
+    }
+
+    #[test]
+    fn test_find_files_scan_tracing_span() {
+        let span = info_span!(
+            "find_files_scan",
+            version = 10,
+            total_files = field::Empty,
+            matching_files = field::Empty
+        );
+
+        let metadata = span.metadata().expect("span should have metadata");
+        assert_eq!(metadata.name(), "find_files_scan");
+        assert_eq!(metadata.level(), &Level::INFO);
+
+        span.record("total_files", 1000);
+        span.record("matching_files", 12);
+    }
+
+    #[test]
+    fn test_find_files_result_structure() {
+        use crate::kernel::Add;
+
+        let find_result = FindFiles {
+            candidates: vec![Add {
+                path: "test.parquet".to_string(),
+                size: 1000,
+                modification_time: 0,
+                data_change: true,
+                stats: None,
+                partition_values: Default::default(),
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+            }],
+            partition_scan: true,
+        };
+
+        assert_eq!(find_result.candidates.len(), 1);
+        assert!(find_result.partition_scan);
     }
 }
