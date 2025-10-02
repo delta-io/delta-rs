@@ -661,7 +661,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         _ => {
                             let remove_actions = snapshot
                                 .log_data()
-                                .iter()
+                                .into_iter()
                                 .map(|p| p.remove_action(true).into());
                             actions.extend(remove_actions);
                         }

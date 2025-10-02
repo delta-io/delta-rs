@@ -46,10 +46,8 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
-use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::ObjectMeta;
-
 use serde::{Deserialize, Serialize};
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
@@ -214,7 +212,7 @@ impl DataSink for DeltaDataSink {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut actions = if self.save_mode == SaveMode::Overwrite {
-            let current_files = self.snapshot.log_data().iter().map(|f| f.add_action());
+            let current_files = self.snapshot.log_data().into_iter().map(|f| f.add_action());
             current_files
                 .into_iter()
                 .map(|add| {
@@ -651,9 +649,21 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
             let es = self.snapshot.snapshot();
-            let pruned_stats =
-                filter_record_batch(&self.snapshot.files, &BooleanArray::from(mask))?;
-            LogDataHandler::new(&pruned_stats, es.table_configuration()).statistics()
+            let mut pruned_batches = Vec::new();
+            let mut mask_offset = 0;
+
+            for batch in &self.snapshot.files {
+                let batch_size = batch.num_rows();
+                let batch_mask = &mask[mask_offset..mask_offset + batch_size];
+                let batch_mask_array = BooleanArray::from(batch_mask.to_vec());
+                let pruned_batch = filter_record_batch(batch, &batch_mask_array)?;
+                if pruned_batch.num_rows() > 0 {
+                    pruned_batches.push(pruned_batch);
+                }
+                mask_offset += batch_size;
+            }
+
+            LogDataHandler::new(&pruned_batches, es.table_configuration()).statistics()
         } else {
             self.snapshot.log_data().statistics()
         };
