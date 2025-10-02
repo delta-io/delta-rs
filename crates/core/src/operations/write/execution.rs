@@ -19,11 +19,10 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{find_files, DeltaScanConfigBuilder, DeltaTableProvider};
 use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, Remove, StructType, StructTypeExt};
+use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::should_write_cdc;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::state::DeltaTableState;
 use crate::table::Constraint as DeltaConstraint;
 use crate::DeltaTableError;
 
@@ -45,7 +44,7 @@ pub(crate) struct WriteExecutionPlanMetrics {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
-    snapshot: Option<&DeltaTableState>,
+    snapshot: Option<&EagerSnapshot>,
     state: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -92,7 +91,7 @@ pub(crate) async fn write_execution_plan_cdc(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
-    snapshot: Option<&DeltaTableState>,
+    snapshot: Option<&EagerSnapshot>,
     state: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -121,7 +120,7 @@ pub(crate) async fn write_execution_plan(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_non_empty_expr(
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
     state: SessionState,
     partition_columns: Vec<String>,
@@ -169,7 +168,7 @@ pub(crate) async fn execute_non_empty_expr(
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size().get() as usize),
+            Some(snapshot.table_properties().target_file_size().get() as usize),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -201,7 +200,7 @@ pub(crate) async fn execute_non_empty_expr(
 pub(crate) async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     state: SessionState,
     partition_columns: Vec<String>,
     writer_properties: Option<WriterProperties>,
@@ -247,7 +246,7 @@ pub(crate) async fn prepare_predicate_actions(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
-    snapshot: Option<&DeltaTableState>,
+    snapshot: Option<&EagerSnapshot>,
     state: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,

@@ -235,7 +235,7 @@ impl DeltaTable {
     ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
         let infos = self
             .snapshot()?
-            .snapshot
+            .snapshot()
             .snapshot()
             .commit_infos(&self.log_store(), limit)
             .await?
@@ -265,7 +265,9 @@ impl DeltaTable {
                 Err(DeltaTableError::NotInitialized)
             }));
         };
-        state.get_active_add_actions_by_partitions(&self.log_store, filters)
+        state
+            .snapshot()
+            .file_views_by_partitions(&self.log_store, filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided

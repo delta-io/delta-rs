@@ -33,9 +33,8 @@ use tracing::log;
 use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo};
+use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
 use crate::logstore::{get_actions, LogStoreRef};
-use crate::table::state::DeltaTableState;
 use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
@@ -43,7 +42,7 @@ use crate::{delta_datafusion::cdf::*, kernel::Remove};
 #[derive(Clone, Debug)]
 pub struct CdfLoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    pub snapshot: DeltaTableState,
+    pub snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to read from
@@ -60,7 +59,7 @@ pub struct CdfLoadBuilder {
 
 impl CdfLoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,
