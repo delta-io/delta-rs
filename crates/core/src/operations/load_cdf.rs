@@ -55,6 +55,8 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
+    /// Datafusion session state relevant for executing the input plan
+    state: Option<SessionState>,
 }
 
 impl CdfLoadBuilder {
@@ -68,6 +70,7 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
+            state: None,
         }
     }
 
@@ -98,6 +101,12 @@ impl CdfLoadBuilder {
     /// Enable ending version or timestamp exceeding the last commit
     pub fn with_allow_out_of_range(mut self) -> Self {
         self.allow_out_of_range = true;
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, state: SessionState) -> Self {
+        self.state = Some(state);
         self
     }
 

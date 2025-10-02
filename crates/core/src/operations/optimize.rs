@@ -317,8 +317,8 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// A session state accompanying a given input plan, containing e.g. registered object stores
-    pub fn with_input_session_state(mut self, state: SessionState) -> Self {
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
         self
     }

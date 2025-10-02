@@ -247,7 +247,14 @@ impl WriteBuilder {
     }
 
     /// A session state accompanying a given input plan, containing e.g. registered object stores
+    #[deprecated(since = "0.29.0", note = "Use `with_session_state` instead")]
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
+        self.state = Some(state);
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
         self
     }

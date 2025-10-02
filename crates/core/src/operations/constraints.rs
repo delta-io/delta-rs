@@ -76,7 +76,7 @@ impl ConstraintBuilder {
         self
     }
 
-    /// Specify the datafusion session context
+    /// The Datafusion session state to use
     pub fn with_session_state(mut self, state: SessionState) -> Self {
         self.state = Some(state);
         self

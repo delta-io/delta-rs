@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::{TaskContext};
+use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
-use crate::delta_datafusion::DataFusionMixins as _;
+use crate::delta_datafusion::{DataFusionMixins as _, DeltaSessionConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::EagerSnapshot;
@@ -23,6 +24,8 @@ pub struct LoadBuilder {
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
+    /// Datafusion session state relevant for executing the input plan
+    state: Option<SessionState>,
 }
 
 impl super::Operation<()> for LoadBuilder {
@@ -41,12 +44,19 @@ impl LoadBuilder {
             snapshot,
             log_store,
             columns: None,
+            state: None,
         }
     }
 
     /// Specify column selection to load
     pub fn with_columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.columns = Some(columns.into_iter().map(|s| s.into()).collect());
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, state: SessionState) -> Self {
+        self.state = Some(state);
         self
     }
 }
@@ -86,12 +96,15 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            let ctx = SessionContext::new();
-            let scan_plan = table
-                .scan(&ctx.state(), projection.as_ref(), &[], None)
-                .await?;
+            let state = this.state.unwrap_or_else(|| {
+                SessionStateBuilder::new()
+                    .with_default_features()
+                    .with_config(DeltaSessionConfig::default().into())
+                    .build()
+            });
+            let scan_plan = table.scan(&state, projection.as_ref(), &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+            let task_ctx = Arc::new(TaskContext::from(&state));
             let stream = plan.execute(0, task_ctx)?;
 
             Ok((table, stream))

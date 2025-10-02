@@ -436,7 +436,7 @@ mod local {
             target_table.snapshot().ok().map(|s| s.snapshot()).cloned(),
         )
         .with_input_execution_plan(source_scan)
-        .with_input_session_state(state)
+        .with_session_state(state)
         .await?;
         ctx.register_table("target", Arc::new(target_table))?;
 
