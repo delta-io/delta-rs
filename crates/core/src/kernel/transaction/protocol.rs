@@ -9,7 +9,6 @@ use crate::kernel::{
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::state::DeltaTableState;
 
 static READER_V2: LazyLock<HashSet<ReaderFeature>> =
     LazyLock::new(|| HashSet::from_iter([ReaderFeature::ColumnMapping]));
@@ -95,7 +94,7 @@ impl ProtocolChecker {
     /// Check can write_timestamp_ntz
     pub fn check_can_write_timestamp_ntz(
         &self,
-        snapshot: &DeltaTableState,
+        snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         let contains_timestampntz = contains_timestampntz(schema.fields());

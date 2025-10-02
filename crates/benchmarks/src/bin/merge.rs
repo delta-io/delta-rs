@@ -199,7 +199,7 @@ async fn benchmark_merge_tpcds(
     let table = DeltaTableBuilder::from_uri(table_url)?.load().await?;
 
     let provider = DeltaTableProvider::try_new(
-        table.snapshot()?.clone(),
+        table.snapshot()?.snapshot().clone(),
         table.log_store(),
         DeltaScanConfig {
             file_column_name: Some("file_path".to_string()),

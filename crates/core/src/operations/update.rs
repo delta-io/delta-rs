@@ -51,7 +51,6 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
@@ -67,6 +66,10 @@ use crate::{
         DeltaTableProvider,
     },
     table::config::TablePropertiesExt,
+};
+use crate::{
+    delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
+    kernel::EagerSnapshot,
 };
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -85,7 +88,7 @@ pub struct UpdateBuilder {
     /// How to update columns in a record that match the predicate
     updates: HashMap<Column, Expression>,
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -128,7 +131,7 @@ impl super::Operation<()> for UpdateBuilder {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             predicate: None,
             updates: HashMap::new(),
@@ -240,14 +243,14 @@ async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(DeltaTableState, UpdateMetrics)> {
+) -> DeltaResult<(EagerSnapshot, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -380,9 +383,9 @@ async fn execute(
         .drop_columns(&[UPDATE_PREDICATE_COLNAME])?;
     let physical_plan = updated_df.clone().create_physical_plan().await?;
     let writer_stats_config = WriterStatsConfig::new(
-        snapshot.table_config().num_indexed_cols(),
+        snapshot.table_properties().num_indexed_cols(),
         snapshot
-            .table_config()
+            .table_properties()
             .data_skipping_stats_columns
             .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
@@ -396,7 +399,7 @@ async fn execute(
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
-        Some(snapshot.table_config().target_file_size().get() as usize),
+        Some(snapshot.table_properties().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -458,7 +461,7 @@ async fn execute(
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
-                    Some(snapshot.table_config().target_file_size().get() as usize),
+                    Some(snapshot.table_properties().target_file_size().get() as usize),
                     None,
                     writer_properties,
                     writer_stats_config,
@@ -479,7 +482,7 @@ async fn execute(
         .build(Some(&snapshot), log_store, operation)
         .await?;
 
-    Ok((commit.snapshot(), metrics))
+    Ok((commit.snapshot().snapshot().clone(), metrics))
 }
 
 impl std::future::IntoFuture for UpdateBuilder {
@@ -489,8 +492,8 @@ impl std::future::IntoFuture for UpdateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
-            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            PROTOCOL.check_append_only(&this.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot)?;
 
             if !&this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
@@ -527,7 +530,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, snapshot),
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                 metrics,
             ))
         })
