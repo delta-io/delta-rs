@@ -27,11 +27,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::error::DataFusionError;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
@@ -745,7 +745,7 @@ impl MergePlan {
                 let state = if let Some(state) = *state {
                     state
                 } else {
-                    let memory_pool = FairSpillPool::new(max_spill_size);
+                    let memory_pool = FairSpillPool::new(ctx.max_spill_size);
                     let runtime = RuntimeEnvBuilder::new()
                         .with_memory_pool(Arc::new(memory_pool))
                         .build_arc()?;
@@ -754,6 +754,9 @@ impl MergePlan {
                         .with_runtime_env(runtime)
                         .build()
                 };
+
+                let operation_id = ctx.operation_id;
+                let object_store = ctx.log_store.object_store(Some(operation_id));
 
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
@@ -776,7 +779,6 @@ impl MergePlan {
                 // to either compute the new value or obtain the old one then write these batches
                 let log_store = ctx.log_store.clone();
                 let file_format_options = ctx.file_format_options.clone();
-                let operation_id = ctx.operation_id;
                 let stream = futures::stream::iter(bins)
                     .map(move |(_, (partition, files))| {
                         let dtp = DeltaTableProvider::try_new(
