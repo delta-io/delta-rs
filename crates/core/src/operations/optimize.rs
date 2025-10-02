@@ -364,7 +364,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.optimize_type,
                 &this.snapshot,
                 this.filters,
-                this.target_size,
+                this.target_size.to_owned(),
                 this.writer_properties_factory,
                 this.session_config,
             )
@@ -504,7 +504,7 @@ pub struct MergeTaskParameters {
 #[derive(Clone)]
 pub struct OptimizeExecContext {
     pub log_store: LogStoreRef,
-    pub snapshot: DeltaTableState,
+    pub snapshot: EagerSnapshot,
     pub file_format_options: Option<FileFormatRef>,
     pub max_spill_size: usize,
     pub max_concurrent_tasks: usize,
@@ -884,7 +884,7 @@ impl MergePlan {
     pub async fn execute(
         mut self,
         log_store: LogStoreRef,
-        snapshot: &DeltaTableState,
+        snapshot: &EagerSnapshot,
         file_format_options: Option<FileFormatRef>,
         max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
