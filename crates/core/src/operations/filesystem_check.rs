@@ -247,7 +247,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                         DeltaTableState {
                             snapshot: this.snapshot,
                         },
-                        None
+                        None,
                     ),
                     FileSystemCheckMetrics {
                         files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),

@@ -1581,7 +1581,11 @@ impl std::future::IntoFuture for MergeBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }, this.file_format_options),
+                DeltaTable::new_with_state(
+                    this.log_store,
+                    DeltaTableState { snapshot },
+                    this.file_format_options,
+                ),
                 metrics,
             ))
         })

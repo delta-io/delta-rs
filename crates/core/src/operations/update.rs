@@ -560,7 +560,11 @@ impl std::future::IntoFuture for UpdateBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot), this.file_format_options),
+                DeltaTable::new_with_state(
+                    this.log_store,
+                    DeltaTableState::new(snapshot),
+                    this.file_format_options,
+                ),
                 metrics,
             ))
         })

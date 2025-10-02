@@ -1407,7 +1407,8 @@ mod local {
                 .logical_plan()
                 .clone(),
         );
-        let write_builder = WriteBuilder::new(log_store, tbl.state.map(|s| s.snapshot().clone()), None);
+        let write_builder =
+            WriteBuilder::new(log_store, tbl.state.map(|s| s.snapshot().clone()), None);
         let _ = write_builder
             .with_input_execution_plan(plan)
             .with_save_mode(SaveMode::Overwrite)

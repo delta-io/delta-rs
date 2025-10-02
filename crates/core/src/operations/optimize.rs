@@ -386,8 +386,11 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             if let Some(handler) = this.custom_execute_handler {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
-            let mut table =
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(this.snapshot), this.file_format_options);
+            let mut table = DeltaTable::new_with_state(
+                this.log_store,
+                DeltaTableState::new(this.snapshot),
+                this.file_format_options,
+            );
             table.update().await?;
             Ok((table, metrics))
         })

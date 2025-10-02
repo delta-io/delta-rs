@@ -1969,10 +1969,13 @@ mod tests {
                     .logical_plan()
                     .clone(),
             );
-            let writer =
-                WriteBuilder::new(table.log_store.clone(), table.state.map(|f| f.snapshot), None)
-                    .with_input_execution_plan(plan)
-                    .with_save_mode(SaveMode::Overwrite);
+            let writer = WriteBuilder::new(
+                table.log_store.clone(),
+                table.state.map(|f| f.snapshot),
+                None,
+            )
+            .with_input_execution_plan(plan)
+            .with_save_mode(SaveMode::Overwrite);
 
             let _ = writer.check_preconditions().await?;
             Ok(())
