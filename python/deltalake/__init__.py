@@ -1,4 +1,5 @@
 import atexit
+from typing import Optional
 
 from deltalake._internal import (
     TableFeatures,
@@ -25,38 +26,55 @@ from deltalake.writer import (
 )
 
 
-def init_tracing(otel_endpoint: str = "http://localhost:4317") -> None:
+def init_tracing(endpoint: Optional[str] = None) -> None:
     """
     Initialize OpenTelemetry tracing for delta-rs operations.
 
     Args:
-        otel_endpoint: The OTLP gRPC endpoint URL (default: http://localhost:4317)
+        endpoint: The OTLP HTTP endpoint URL. If not provided, uses the
+            OTEL_EXPORTER_OTLP_ENDPOINT environment variable or defaults to
+            "http://localhost:4318/v1/traces"
 
     Raises:
         RuntimeError: If tracing initialization fails
 
+    Note:
+        - Tracing will be automatically shut down when the Python process exits
+        - Use OTEL_EXPORTER_OTLP_HEADERS environment variable for authentication
+          (format: "key1=value1,key2=value2")
+        - Use RUST_LOG environment variable to control log level filtering
+          (e.g., "info", "debug", "deltalake=debug")
+
     Example:
+        Basic usage with defaults:
+        ```python
+        import deltalake
+
+        deltalake.init_tracing()
+        deltalake.write_deltalake("my_table", data)
+        dt = deltalake.DeltaTable("my_table")
+        ```
+
+        Using custom endpoint:
+        ```python
+        import deltalake
+
+        deltalake.init_tracing(endpoint="http://localhost:4318/v1/traces")
+        ```
+
+        Using environment variables for authentication:
         ```python
         import os
         import deltalake
 
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://api.honeycomb.io/v1/traces"
+        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = "x-honeycomb-team=your-api-key"
         os.environ["RUST_LOG"] = "deltalake=debug"
-
-        deltalake.init_tracing("http://localhost:4317")
-
-        deltalake.write_deltalake("my_table", data)
-        dt = deltalake.DeltaTable("my_table")
-
-        deltalake.shutdown_tracing()
+        deltalake.init_tracing()
         ```
     """
-    _init_tracing(otel_endpoint)
+    _init_tracing(endpoint)
     atexit.register(_shutdown_tracing)
-
-
-def shutdown_tracing() -> None:
-    """Shutdown OpenTelemetry tracing and flush remaining spans."""
-    _shutdown_tracing()
 
 
 __all__ = [
@@ -77,6 +95,5 @@ __all__ = [
     "convert_to_deltalake",
     "init_tracing",
     "rust_core_version",
-    "shutdown_tracing",
     "write_deltalake",
 ]

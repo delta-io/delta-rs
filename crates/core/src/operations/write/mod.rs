@@ -617,7 +617,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 let config = this
                     .snapshot
                     .as_ref()
-                    .map(|snapshot| snapshot.table_config());
+                    .map(|snapshot| snapshot.table_properties());
 
                 let target_file_size = this.target_file_size.or_else(|| {
                     Some(super::get_target_file_size(config, &this.configuration) as usize)

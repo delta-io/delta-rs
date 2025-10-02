@@ -52,16 +52,15 @@ from deltalake import write_deltalake, DeltaTable
 # Enable logging to see trace output in stdout
 os.environ["RUST_LOG"] = "deltalake=debug"
 
-# Initialize tracing
-deltalake.init_tracing("http://localhost:4317")
+# Initialize tracing (uses default HTTP endpoint or OTEL_EXPORTER_OTLP_ENDPOINT env var)
+# For authentication, set OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=your-api-key"
+# The HTTP exporter automatically reads OTEL_EXPORTER_OTLP_HEADERS for API keys
+deltalake.init_tracing()
 
 # All Delta operations are now traced
 write_deltalake("my_table", data)
 dt = DeltaTable("my_table")
 df = dt.to_pandas()
-
-# Shutdown tracing when done
-deltalake.shutdown_tracing()
 ```
 
 When you run this code, you'll see trace information in stdout showing operation timings and execution flow.

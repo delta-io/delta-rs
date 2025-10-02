@@ -1,9 +1,10 @@
+import os
 import pathlib
 
 import pytest
 from arro3.core import Array, DataType, Field, Table
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, init_tracing, write_deltalake
 
 
 @pytest.fixture(scope="function")
@@ -177,3 +178,29 @@ def test_tracing_with_attributes_and_events(memory_exporter, tmp_path: pathlib.P
     assert "preparing_data" in event_names
     assert "data_written" in event_names
     assert "operation_complete" in event_names
+
+
+@pytest.mark.opentelemetry
+def test_init_tracing_with_env_vars():
+    original_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    original_headers = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS")
+
+    try:
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://env-endpoint:4317"
+        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = (
+            "x-api-key=env-key,authorization=Bearer env-token"
+        )
+
+        init_tracing()
+        init_tracing()
+
+    finally:
+        if original_endpoint is not None:
+            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = original_endpoint
+        else:
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+
+        if original_headers is not None:
+            os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = original_headers
+        else:
+            os.environ.pop("OTEL_EXPORTER_OTLP_HEADERS", None)

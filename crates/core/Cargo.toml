@@ -86,13 +86,6 @@ sqlparser = { version = "0.59.0" }
 humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
-# opentelemetry (optional)
-tracing-opentelemetry = { workspace = true, optional = true }
-opentelemetry = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, optional = true }
-
 [dev-dependencies]
 criterion = "0.5"
 ctor = "0"
@@ -120,9 +113,6 @@ cloud = ["object_store/cloud", "dep:humantime"]
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
-
-# enable OpenTelemetry tracing with OTLP export
-otel = ["tracing-opentelemetry", "opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-subscriber"]
 
 integration_test = []
 

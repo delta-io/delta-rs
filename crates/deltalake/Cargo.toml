@@ -54,7 +54,6 @@ unity-experimental = ["deltalake-catalog-unity"]
 lakefs = ["deltalake-lakefs"]
 native-tls = ["deltalake-core/native-tls"]
 rustls = ["deltalake-core/rustls"]
-otel = ["deltalake-core/otel"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

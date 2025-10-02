@@ -6,6 +6,7 @@ mod merge;
 mod query;
 mod reader;
 mod schema;
+mod tracing_otlp;
 mod utils;
 mod writer;
 
@@ -59,8 +60,6 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
-#[cfg(feature = "otel")]
-use deltalake::tracing_otlp;
 use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
 use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -79,7 +78,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use writer::maybe_lazy_cast_reader;
@@ -2163,34 +2161,16 @@ fn rust_core_version() -> &'static str {
 
 /// Initialize OpenTelemetry tracing with OTLP exporter
 #[pyfunction]
-#[pyo3(signature = (endpoint))]
-fn init_tracing(endpoint: String) -> PyResult<()> {
-    #[cfg(feature = "otel")]
-    {
-        let rt = Runtime::new().map_err(|e| {
-            PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {}", e))
-        })?;
-        rt.block_on(async {
-            tracing_otlp::init_otlp_tracing(&endpoint).map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to initialize tracing: {}", e))
-            })
-        })
-    }
-    #[cfg(not(feature = "otel"))]
-    {
-        Err(PyRuntimeError::new_err(
-            "OpenTelemetry support not compiled. Rebuild with `maturin develop` or `maturin build` to enable tracing.",
-        ))
-    }
+#[pyo3(signature = (endpoint=None))]
+fn init_tracing(endpoint: Option<&str>) -> PyResult<()> {
+    tracing_otlp::init_otlp_tracing(endpoint)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize tracing: {}", e)))
 }
 
 /// Shutdown OpenTelemetry tracing and flush remaining spans
 #[pyfunction]
 fn shutdown_tracing() -> PyResult<()> {
-    #[cfg(feature = "otel")]
-    {
-        tracing_otlp::shutdown_tracing();
-    }
+    tracing_otlp::shutdown_tracing();
     Ok(())
 }
 
