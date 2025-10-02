@@ -27,6 +27,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use datafusion::execution::context::SessionState;
+use datafusion::execution::memory_pool::FairSpillPool;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::error::DataFusionError;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -224,8 +228,8 @@ pub struct OptimizeBuilder<'a> {
     max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
-    /// Optional [SessionConfig] for users that want more control over the Datafusion execution
-    session_config: Option<SessionConfig>,
+    /// Datafusion session state relevant for executing the input plan
+    state: Option<SessionState>,
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -271,7 +275,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
-            session_config: None,
+            state: None,
             custom_execute_handler: None,
         }
     }
@@ -320,6 +324,10 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Max spill size
+    #[deprecated(
+        since = "0.29.0",
+        note = "Pass in a `SessionState` configured with a `RuntimeEnv` and a `FairSpillPool`"
+    )]
     pub fn with_max_spill_size(mut self, max_spill_size: usize) -> Self {
         self.max_spill_size = max_spill_size;
         self
@@ -337,9 +345,9 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Add a custom [SessionConfig] to the optimize plan execution
-    pub fn with_session_config(mut self, config: SessionConfig) -> Self {
-        self.session_config = Some(config);
+    /// A session state accompanying a given input plan, containing e.g. registered object stores
+    pub fn with_input_session_state(mut self, state: SessionState) -> Self {
+        self.state = Some(state);
         self
     }
 }
@@ -366,7 +374,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 this.writer_properties_factory,
-                this.session_config,
+                this.state,
             )
             .await?;
             let metrics = plan
@@ -465,7 +473,7 @@ enum OptimizeOperations {
     ZOrder(
         Vec<String>,
         HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
-        Option<SessionConfig>,
+        Box<Option<SessionState>>,
     ),
     // TODO: Sort
 }
@@ -731,14 +739,26 @@ impl MergePlan {
                     .boxed();
                 Ok(stream)
             }
-            OptimizeOperations::ZOrder(zorder_columns, bins, session_config) => {
+            OptimizeOperations::ZOrder(zorder_columns, bins, state) => {
                 debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
+
+                let state = if let Some(state) = *state {
+                    state
+                } else {
+                    let memory_pool = FairSpillPool::new(max_spill_size);
+                    let runtime = RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::new(memory_pool))
+                        .build_arc()?;
+                    SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_runtime_env(runtime)
+                        .build()
+                };
 
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    ctx.log_store.object_store(Some(ctx.operation_id)),
-                    ctx.max_spill_size,
-                    session_config,
+                    state,
+                    object_store,
                 )?);
                 let task_parameters = self.task_parameters.clone();
 
@@ -926,7 +946,7 @@ pub async fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
-    session_config: Option<SessionConfig>,
+    state: Option<SessionState>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
         target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());
@@ -943,7 +963,7 @@ pub async fn create_merge_plan(
                 snapshot,
                 partitions_keys,
                 filters,
-                session_config,
+                state,
             )
             .await?
         }
@@ -1104,7 +1124,7 @@ async fn build_zorder_plan(
     snapshot: &EagerSnapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
-    session_config: Option<SessionConfig>,
+    state: Option<SessionState>,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1161,7 +1181,7 @@ async fn build_zorder_plan(
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
-    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, session_config);
+    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(state));
     Ok((operation, metrics))
 }
 
@@ -1231,10 +1251,7 @@ pub(super) mod zorder {
             ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
             Volatility,
         };
-        use ::datafusion::{
-            execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder},
-            prelude::{SessionConfig, SessionContext},
-        };
+        use ::datafusion::prelude::SessionContext;
         use arrow_schema::DataType;
         use itertools::Itertools;
         use std::any::Any;
@@ -1249,21 +1266,14 @@ pub(super) mod zorder {
         impl ZOrderExecContext {
             pub fn new(
                 columns: Vec<String>,
-                object_store: ObjectStoreRef,
-                max_spill_size: usize,
-                session_config: Option<SessionConfig>,
+                session_state: SessionState,
+                object_store_ref: ObjectStoreRef,
             ) -> Result<Self, DataFusionError> {
                 let columns = columns.into();
 
-                let memory_pool = FairSpillPool::new(max_spill_size);
-                let runtime = RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::new(memory_pool))
-                    .build_arc()?;
-                runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
-
-                let ctx =
-                    SessionContext::new_with_config_rt(session_config.unwrap_or_default(), runtime);
+                let ctx = SessionContext::new_with_state(session_state);
                 ctx.register_udf(ScalarUDF::from(datafusion::ZOrderUDF));
+                ctx.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store_ref);
                 Ok(Self { columns, ctx })
             }
         }
