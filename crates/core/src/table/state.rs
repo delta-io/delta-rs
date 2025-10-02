@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use arrow::compute::concat_batches;
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
@@ -181,7 +182,9 @@ impl DeltaTableState {
         note = "Simple object store paths are not meaningful once we support full urls."
     )]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.log_data().iter().map(|add| add.object_store_path())
+        self.log_data()
+            .into_iter()
+            .map(|add| add.object_store_path())
     }
 
     /// Get the transaction version for the given application ID.
@@ -351,13 +354,18 @@ impl EagerSnapshot {
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
 
-        let input_schema = self.files.schema();
+        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-        let actions = self.files.clone();
-
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
-        let result = evaluator.evaluate_arrow(actions)?;
+
+        let results = self
+            .files
+            .iter()
+            .map(|file| evaluator.evaluate_arrow(file.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let result = concat_batches(results[0].schema_ref(), &results)?;
 
         if flatten {
             Ok(result.normalize(".", None)?)
