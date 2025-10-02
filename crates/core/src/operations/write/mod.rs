@@ -36,7 +36,7 @@ pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
-use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
+use metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -425,9 +425,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut metrics = WriteMetrics::default();
             let exec_start = Instant::now();
 
-            let write_planner = DeltaPlanner::<WriteMetricExtensionPlanner> {
-                extension_planner: WriteMetricExtensionPlanner {},
-            };
+            let write_planner = DeltaPlanner::new();
 
             // Create table actions to initialize table in case it does not yet exist
             // and should be created
@@ -437,12 +435,12 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let state = match this.state {
                 Some(state) => SessionStateBuilder::new_from_existing(state.clone())
-                    .with_query_planner(Arc::new(write_planner))
+                    .with_query_planner(write_planner.clone())
                     .build(),
                 None => {
                     let state = SessionStateBuilder::new()
                         .with_default_features()
-                        .with_query_planner(Arc::new(write_planner))
+                        .with_query_planner(write_planner)
                         .build();
                     register_store(this.log_store.clone(), state.runtime_env().clone());
                     state
