@@ -7,17 +7,16 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, MetadataExt as _, ProtocolExt as _};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 use crate::DeltaTable;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Name of the property
     properties: HashMap<String, String>,
     /// Raise if property doesn't exist
@@ -40,7 +39,7 @@ impl super::Operation<()> for SetTablePropertiesBuilder {
 
 impl SetTablePropertiesBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             properties: HashMap::new(),
             raise_if_not_exists: true,

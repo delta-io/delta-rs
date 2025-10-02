@@ -53,7 +53,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Add, Remove};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::operations::write::WriterStatsConfig;
@@ -76,7 +76,7 @@ pub struct DeleteBuilder {
     /// Which records to delete
     predicate: Option<Expression>,
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Options to apply when operating on the table files
@@ -122,7 +122,7 @@ impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         file_format_options: Option<FileFormatRef>,
     ) -> Self {
         let writer_properties_factory =
@@ -203,7 +203,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     file_format_options: Option<FileFormatRef>,
     log_store: LogStoreRef,
     state: &SessionState,
@@ -251,9 +251,9 @@ async fn execute_non_empty_expr(
     let df = DataFrame::new(state.clone(), source);
 
     let writer_stats_config = WriterStatsConfig::new(
-        snapshot.table_config().num_indexed_cols(),
+        snapshot.table_properties().num_indexed_cols(),
         snapshot
-            .table_config()
+            .table_properties()
             .data_skipping_stats_columns
             .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
@@ -275,7 +275,7 @@ async fn execute_non_empty_expr(
             filter.clone(),
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size().get() as usize),
+            Some(snapshot.table_properties().target_file_size().get() as usize),
             None,
             writer_properties_factory.clone(),
             writer_stats_config.clone(),
@@ -311,7 +311,7 @@ async fn execute_non_empty_expr(
             cdc_filter,
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_config().target_file_size().get() as usize),
+            Some(snapshot.table_properties().target_file_size().get() as usize),
             None,
             writer_properties_factory,
             writer_stats_config,
@@ -327,14 +327,14 @@ async fn execute_non_empty_expr(
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     file_format_options: Option<FileFormatRef>,
     state: SessionState,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     mut commit_properties: CommitProperties,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(DeltaTableState, DeleteMetrics)> {
+) -> DeltaResult<(EagerSnapshot, DeleteMetrics)> {
     if !&snapshot.load_config().require_files {
         return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
     }
@@ -426,7 +426,7 @@ async fn execute(
     if let Some(handler) = handle {
         handler.post_execute(&log_store, operation_id).await?;
     }
-    Ok((commit.snapshot(), metrics))
+    Ok((commit.snapshot().snapshot, metrics))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -437,8 +437,8 @@ impl std::future::IntoFuture for DeleteBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot.snapshot)?;
-            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            PROTOCOL.check_append_only(&this.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot)?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -477,7 +477,13 @@ impl std::future::IntoFuture for DeleteBuilder {
             .await?;
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, new_snapshot, this.file_format_options),
+                DeltaTable::new_with_state(
+                    this.log_store,
+                    DeltaTableState {
+                        snapshot: new_snapshot,
+                    },
+                    this.file_format_options
+                ),
                 metrics,
             ))
         })

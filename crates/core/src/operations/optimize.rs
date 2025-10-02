@@ -53,6 +53,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
+use crate::kernel::EagerSnapshot;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
@@ -202,7 +203,7 @@ pub enum OptimizeType {
 /// table's configuration is read. Otherwise a default value is used.
 pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Options to apply when operating on the table files
@@ -242,7 +243,7 @@ impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         file_format_options: Option<FileFormatRef>,
     ) -> Self {
         let writer_properties_factory = match file_format_options.as_ref() {
@@ -351,7 +352,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot)?;
             if !&this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
             }
@@ -386,7 +387,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
             let mut table =
-                DeltaTable::new_with_state(this.log_store, this.snapshot, this.file_format_options);
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(this.snapshot), this.file_format_options);
             table.update().await?;
             Ok((table, metrics))
         })
@@ -790,7 +791,7 @@ impl MergePlan {
 
         let mut table = DeltaTable::new_with_state(
             ctx.log_store.clone(),
-            ctx.snapshot.clone(),
+            DeltaTableState::new(ctx.snapshot.clone()),
             ctx.file_format_options.clone(),
         );
 
@@ -856,7 +857,7 @@ impl MergePlan {
                         self.task_parameters.input_parameters.clone().into(),
                     )
                     .await?;
-                snapshot = commit.snapshot();
+                snapshot = commit.snapshot().snapshot;
                 commits_made += 1;
             }
 
@@ -873,7 +874,7 @@ impl MergePlan {
             total_metrics.files_removed.min = 0;
         }
 
-        table.state = Some(snapshot);
+        table.state = Some(DeltaTableState::new(snapshot));
 
         Ok(total_metrics)
     }
@@ -918,14 +919,14 @@ impl MergePlan {
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
     session_config: Option<SessionConfig>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
-        target_size.unwrap_or_else(|| snapshot.table_config().target_file_size().get());
+        target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());
     let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics) = match optimize_type {
@@ -961,9 +962,9 @@ pub async fn create_merge_plan(
             input_parameters,
             file_schema,
             writer_properties_factory,
-            num_indexed_cols: snapshot.table_config().num_indexed_cols(),
+            num_indexed_cols: snapshot.table_properties().num_indexed_cols(),
             stats_columns: snapshot
-                .table_config()
+                .table_properties()
                 .data_skipping_stats_columns
                 .as_ref()
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
@@ -1016,14 +1017,14 @@ impl IntoIterator for MergeBin {
 
 async fn build_compaction_plan(
     log_store: &dyn LogStore,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
     target_size: u64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    let mut file_stream = snapshot.get_active_add_actions_by_partitions(log_store, filters);
+    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         metrics.total_considered_files += 1;
@@ -1097,7 +1098,7 @@ async fn build_compaction_plan(
 async fn build_zorder_plan(
     log_store: &dyn LogStore,
     zorder_columns: Vec<String>,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
     session_config: Option<SessionConfig>,
@@ -1135,7 +1136,7 @@ async fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    let mut file_stream = snapshot.get_active_add_actions_by_partitions(log_store, filters);
+    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         let partition_values = file

@@ -71,7 +71,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{
-    new_metadata, Action, ActionType, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
+    new_metadata, Action, ActionType, EagerSnapshot, MetadataExt as _, ProtocolExt as _,
+    StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -79,7 +80,6 @@ use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatRef,
     WriterPropertiesFactory,
 };
-use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -134,7 +134,7 @@ impl FromStr for SchemaMode {
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: Option<DeltaTableState>,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Options to apply when operating on the table files
@@ -198,7 +198,7 @@ impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: Option<DeltaTableState>,
+        snapshot: Option<EagerSnapshot>,
         file_format_options: Option<FileFormatRef>,
     ) -> Self {
         let writer_properties_factory =
@@ -382,7 +382,7 @@ impl WriteBuilder {
         match &self.snapshot {
             Some(snapshot) => {
                 if self.mode == SaveMode::Overwrite {
-                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
+                    PROTOCOL.check_append_only(snapshot)?;
                     if !snapshot.load_config().require_files {
                         return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
                     }
@@ -625,7 +625,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let config = this
                 .snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.table_config());
+                .map(|snapshot| snapshot.table_properties());
 
             let target_file_size = this.target_file_size.or_else(|| {
                 Some(super::get_target_file_size(config, &this.configuration) as usize)
@@ -1969,9 +1969,10 @@ mod tests {
                     .logical_plan()
                     .clone(),
             );
-            let writer = WriteBuilder::new(table.log_store.clone(), table.state, None)
-                .with_input_execution_plan(plan)
-                .with_save_mode(SaveMode::Overwrite);
+            let writer =
+                WriteBuilder::new(table.log_store.clone(), table.state.map(|f| f.snapshot), None)
+                    .with_input_execution_plan(plan)
+                    .with_save_mode(SaveMode::Overwrite);
 
             let _ = writer.check_preconditions().await?;
             Ok(())

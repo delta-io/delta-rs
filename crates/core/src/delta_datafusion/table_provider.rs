@@ -43,10 +43,11 @@ use datafusion::{
     common::{HashMap, HashSet},
     datasource::listing::PartitionedFile,
     logical_expr::{utils::conjunction, TableProviderFilterPushDown},
-    prelude::{Expr, SessionContext},
+    prelude::Expr,
     scalar::ScalarValue,
 };
 use futures::TryStreamExt;
+use itertools::Itertools;
 use object_store::ObjectMeta;
 
 use serde::{Deserialize, Serialize};
@@ -58,13 +59,13 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
-use crate::kernel::{Action, Add, Remove};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 use crate::{ensure_table_uri, DeltaTable};
-use crate::{logstore::LogStoreRef, table::state::DeltaTableState, DeltaResult, DeltaTableError};
+use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
@@ -87,7 +88,7 @@ pub struct DeltaDataSink {
     /// The log store
     log_store: LogStoreRef,
     /// The snapshot
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// The save mode
     save_mode: SaveMode,
     /// The schema
@@ -106,7 +107,7 @@ impl DeltaDataSink {
     /// Create a new `DeltaDataSink`
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         save_mode: SaveMode,
         _session_state: Arc<SessionState>,
     ) -> datafusion::common::Result<Self> {
@@ -214,11 +215,7 @@ impl DataSink for DeltaDataSink {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut actions = if self.save_mode == SaveMode::Overwrite {
-            let current_files = self
-                .snapshot
-                .file_actions(&*self.log_store)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let current_files = self.snapshot.log_data().iter().map(|f| f.add_action());
             current_files
                 .into_iter()
                 .map(|add| {
@@ -340,7 +337,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             let input_schema = snapshot.input_schema()?;
             let mut column_names: HashSet<&String> = HashSet::new();
@@ -398,7 +395,7 @@ pub struct DeltaScanConfig {
 }
 
 pub(crate) struct DeltaScanBuilder<'a> {
-    snapshot: &'a DeltaTableState,
+    snapshot: &'a EagerSnapshot,
     log_store: LogStoreRef,
     filter: Option<Expr>,
     session: &'a dyn Session,
@@ -411,7 +408,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
 
 impl<'a> DeltaScanBuilder<'a> {
     pub fn new(
-        snapshot: &'a DeltaTableState,
+        snapshot: &'a EagerSnapshot,
         log_store: LogStoreRef,
         session: &'a dyn Session,
     ) -> Self {
@@ -496,13 +493,12 @@ impl<'a> DeltaScanBuilder<'a> {
             logical_schema
         };
 
-        let context = SessionContext::new();
         let df_schema = logical_schema.clone().to_dfschema()?;
 
         let logical_filter = self
             .filter
             .clone()
-            .map(|expr| simplify_expr(&context, &df_schema, expr));
+            .map(|expr| simplify_expr(self.session, &df_schema, expr));
         // only inexact filters should be pushed down to the data source, doing otherwise
         // will make stats inexact and disable datafusion optimizations like AggregateStatistics
         let pushdown_filter = self
@@ -524,7 +520,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     });
                 conjunction(filtered_predicates)
             })
-            .map(|expr| simplify_expr(&context, &df_schema, expr));
+            .map(|expr| simplify_expr(self.session, &df_schema, expr));
 
         // Perform Pruning of files to scan
         let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
@@ -536,7 +532,12 @@ impl<'a> DeltaScanBuilder<'a> {
             None => {
                 // early return in case we have no push down filters or limit
                 if logical_filter.is_none() && self.limit.is_none() {
-                    let files = self.snapshot.file_actions(&self.log_store).await?;
+                    let files = self
+                        .snapshot
+                        .log_data()
+                        .iter()
+                        .map(|f| f.add_action())
+                        .collect_vec();
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
                 } else {
@@ -558,9 +559,10 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     let file_actions: Vec<_> = self
                         .snapshot
-                        .file_actions_iter(&self.log_store)
-                        .try_collect()
-                        .await?;
+                        .log_data()
+                        .iter()
+                        .map(|f| f.add_action())
+                        .collect();
 
                     for (action, keep) in
                         file_actions.into_iter().zip(files_to_prune.iter().cloned())
@@ -657,10 +659,11 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
             let es = self.snapshot.snapshot();
-            let pruned_stats = filter_record_batch(&es.files, &BooleanArray::from(mask))?;
+            let pruned_stats =
+                filter_record_batch(&self.snapshot.files, &BooleanArray::from(mask))?;
             LogDataHandler::new(&pruned_stats, es.table_configuration()).statistics()
         } else {
-            self.snapshot.datafusion_table_statistics()
+            self.snapshot.log_data().statistics()
         };
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
@@ -737,7 +740,8 @@ impl<'a> DeltaScanBuilder<'a> {
     }
 }
 
-// TODO: implement this for Snapshot, not for DeltaTable
+// TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
+// the unwraps in the schema method are a dead giveaway ..
 #[async_trait::async_trait]
 impl TableProvider for DeltaTable {
     fn as_any(&self) -> &dyn Any {
@@ -773,7 +777,7 @@ impl TableProvider for DeltaTable {
         }
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let scan = DeltaScanBuilder::new(self.snapshot()?, self.log_store(), session)
+        let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_parquet_options(
                 crate::table::file_format_options::to_table_parquet_options_from_ffo(
                     self.file_format_options.as_ref(),
@@ -804,7 +808,7 @@ impl TableProvider for DeltaTable {
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]
 pub struct DeltaTableProvider {
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<Schema>,
@@ -815,7 +819,7 @@ pub struct DeltaTableProvider {
 impl DeltaTableProvider {
     /// Build a DeltaTableProvider
     pub fn try_new(
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
@@ -904,7 +908,7 @@ impl TableProvider for DeltaTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.snapshot.datafusion_table_statistics()
+        self.snapshot.log_data().statistics()
     }
 
     /// Insert the data into the delta table
@@ -1052,7 +1056,7 @@ impl ExecutionPlan for DeltaScan {
 /// columns must appear at the end of the schema. This is to align with how partition are handled
 /// at the physical level
 fn df_logical_schema(
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     file_column_name: &Option<String>,
     schema: Option<SchemaRef>,
 ) -> DeltaResult<SchemaRef> {
@@ -1085,11 +1089,7 @@ fn df_logical_schema(
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn simplify_expr(
-    context: &SessionContext,
-    df_schema: &DFSchema,
-    expr: Expr,
-) -> Arc<dyn PhysicalExpr> {
+fn simplify_expr(context: &dyn Session, df_schema: &DFSchema, expr: Expr) -> Arc<dyn PhysicalExpr> {
     // Simplify the expression first
     let props = ExecutionProps::new();
     let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
@@ -1219,7 +1219,6 @@ fn partitioned_file_from_action(
 mod tests {
     use crate::kernel::{DataType, PrimitiveType, StructField, StructType};
     use crate::operations::create::CreateBuilder;
-    use crate::protocol::SaveMode;
     use crate::{DeltaTable, DeltaTableError};
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
@@ -1273,10 +1272,10 @@ mod tests {
         let session_state = create_test_session_state();
 
         let scan_config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap())
+            .build(table.snapshot().unwrap().snapshot())
             .unwrap();
         let table_provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().clone(),
+            table.snapshot().unwrap().snapshot().clone(),
             table.log_store(),
             scan_config,
         )

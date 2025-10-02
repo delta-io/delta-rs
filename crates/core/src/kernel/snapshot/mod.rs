@@ -44,7 +44,7 @@ use crate::kernel::parse::read_removes;
 use crate::kernel::transaction::CommitData;
 use crate::kernel::{ActionType, StructType};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
 pub use self::log_data::*;
 pub use iterators::*;
@@ -652,20 +652,34 @@ impl EagerSnapshot {
                 }
             };
 
-            let files = match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
+            match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
                 .map_err(DeltaTableError::from)
                 .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
             {
                 Ok(files) => files,
                 Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-            };
-
-            files
+            }
         } else {
             self.files.clone()
         };
         let iter = (0..data.num_rows()).map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
         futures::stream::iter(iter).boxed()
+    }
+
+    #[deprecated(since = "0.30.0", note = "Use `files` with kernel predicate instead.")]
+    pub fn file_views_by_partitions(
+        &self,
+        log_store: &dyn LogStore,
+        filters: &[PartitionFilter],
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        if filters.is_empty() {
+            return self.files(log_store, None);
+        }
+        let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
+            Ok(predicate) => Arc::new(predicate),
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+        };
+        self.files(log_store, Some(predicate))
     }
 
     /// Iterate over all latest app transactions

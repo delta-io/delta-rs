@@ -29,6 +29,7 @@ use super::CustomExecuteHandler;
 use super::Operation;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::EagerSnapshot;
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -39,7 +40,7 @@ use crate::DeltaTable;
 /// See this module's documentation for more information
 pub struct FileSystemCheckBuilder {
     /// A snapshot of the to-be-checked table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Don't remove actions to the table log. Just determine which files can be removed
@@ -109,9 +110,9 @@ impl super::Operation<()> for FileSystemCheckBuilder {
 
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
-    pub fn new(log_store: LogStoreRef, state: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         FileSystemCheckBuilder {
-            snapshot: state,
+            snapshot,
             log_store,
             dry_run: false,
             commit_properties: CommitProperties::default(),
@@ -140,9 +141,8 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-        let mut file_stream = self.snapshot.file_actions_iter(&self.log_store);
-        while let Some(active) = file_stream.next().await {
-            let active = active?;
+        let file_stream = self.snapshot.log_data().iter().map(|f| f.add_action());
+        for active in file_stream {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
@@ -178,7 +178,7 @@ impl FileSystemCheckBuilder {
 impl FileSystemCheckPlan {
     pub async fn execute(
         self,
-        snapshot: &DeltaTableState,
+        snapshot: &EagerSnapshot,
         mut commit_properties: CommitProperties,
         operation_id: Uuid,
         handle: Option<Arc<dyn CustomExecuteHandler>>,
@@ -242,7 +242,13 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             let plan = this.create_fsck_plan().await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot, None),
+                    DeltaTable::new_with_state(
+                        this.log_store,
+                        DeltaTableState {
+                            snapshot: this.snapshot,
+                        },
+                        None
+                    ),
                     FileSystemCheckMetrics {
                         files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),
                         dry_run: true,
@@ -251,7 +257,13 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             }
             if plan.files_to_remove.is_empty() {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot, None),
+                    DeltaTable::new_with_state(
+                        this.log_store,
+                        DeltaTableState {
+                            snapshot: this.snapshot,
+                        },
+                        None,
+                    ),
                     FileSystemCheckMetrics {
                         dry_run: false,
                         files_removed: Vec::new(),
@@ -272,7 +284,13 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot, None);
+            let mut table = DeltaTable::new_with_state(
+                this.log_store,
+                DeltaTableState {
+                    snapshot: this.snapshot,
+                },
+                None,
+            );
             table.update().await?;
             Ok((table, metrics))
         })

@@ -294,7 +294,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        dt.snapshot()?,
+        dt.snapshot()?.snapshot(),
         &filter,
         None,
         None,
@@ -317,7 +317,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let maybe_metrics = plan
         .execute(
             dt.log_store(),
-            dt.snapshot()?,
+            dt.snapshot()?.snapshot(),
             None,
             1,
             20,
@@ -361,7 +361,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &*dt.log_store(),
         OptimizeType::Compact,
-        dt.snapshot()?,
+        dt.snapshot()?.snapshot(),
         &filter,
         None,
         None,
@@ -383,7 +383,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let metrics = plan
         .execute(
             dt.log_store(),
-            dt.snapshot()?,
+            dt.snapshot()?.snapshot(),
             None,
             1,
             20,
@@ -425,7 +425,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        dt.snapshot()?,
+        dt.snapshot()?.snapshot(),
         &[],
         None,
         None,
@@ -436,7 +436,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let metrics = plan
         .execute(
             dt.log_store(),
-            dt.snapshot()?,
+            dt.snapshot()?.snapshot(),
             None,
             1,
             20,

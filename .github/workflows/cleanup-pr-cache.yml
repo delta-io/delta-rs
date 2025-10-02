@@ -1,0 +1,59 @@
+name: Cleanup PR Caches
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+jobs:
+  cleanup:
+    name: Cleanup PR Caches
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    permissions:
+      actions: write
+    steps:
+      - name: Cleanup PR Caches
+        run: |
+          echo "Cleaning up caches for closed PR #${{ github.event.pull_request.number }}"
+          echo "Branch: $BRANCH"
+
+          TOTAL_DELETED=0
+          BATCH=1
+
+          while true; do
+            CACHE_IDS=$(gh cache list --ref "$BRANCH" --limit 100 --json id --jq '.[].id' 2>/dev/null || true)
+            
+            if [ -z "$CACHE_IDS" ]; then
+              echo "No more caches found"
+              break
+            fi
+            
+            COUNT=$(echo "$CACHE_IDS" | wc -w)
+            
+            if [ "$COUNT" -eq 0 ]; then
+              echo "No more caches found"
+              break
+            fi
+            
+            echo "Batch $BATCH: Found $COUNT caches, deleting in parallel..."
+            
+            echo "$CACHE_IDS" | xargs -P 50 -I {} gh cache delete {} 2>/dev/null || true
+            
+            TOTAL_DELETED=$((TOTAL_DELETED + COUNT))
+            echo "✅ Batch $BATCH completed ($COUNT caches deleted)"
+            
+            BATCH=$((BATCH + 1))
+            
+            sleep 1
+          done
+
+          if [ "$TOTAL_DELETED" -eq 0 ]; then
+            echo "No caches found for this PR branch"
+          else
+            echo "🎉 Cache cleanup completed: $TOTAL_DELETED total caches deleted"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: refs/pull/${{ github.event.pull_request.number }}/merge

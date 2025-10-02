@@ -246,7 +246,7 @@ impl DeltaOps {
     pub fn load(self) -> LoadBuilder {
         LoadBuilder::new(
             self.0.log_store,
-            self.0.state.unwrap(),
+            self.0.state.unwrap().snapshot,
             self.0.file_format_options,
         )
     }
@@ -255,14 +255,14 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load_cdf(self) -> CdfLoadBuilder {
-        CdfLoadBuilder::new(self.0.log_store, self.0.state.unwrap())
+        CdfLoadBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Write data to Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::new(self.0.log_store, self.0.state, self.0.file_format_options)
+        WriteBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot), self.0.file_format_options)
             .with_input_batches(batches)
     }
 
@@ -275,7 +275,7 @@ impl DeltaOps {
     /// Audit active files with files present on the filesystem
     #[must_use]
     pub fn filesystem_check(self) -> FileSystemCheckBuilder {
-        FileSystemCheckBuilder::new(self.0.log_store, self.0.state.unwrap())
+        FileSystemCheckBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Audit active files with files present on the filesystem
@@ -284,7 +284,7 @@ impl DeltaOps {
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(
             self.0.log_store,
-            self.0.state.unwrap(),
+            self.0.state.unwrap().snapshot,
             self.0.file_format_options,
         )
     }
@@ -295,7 +295,7 @@ impl DeltaOps {
     pub fn delete(self) -> DeleteBuilder {
         DeleteBuilder::new(
             self.0.log_store,
-            self.0.state.unwrap(),
+            self.0.state.unwrap().snapshot,
             self.0.file_format_options,
         )
     }
@@ -306,7 +306,7 @@ impl DeltaOps {
     pub fn update(self) -> UpdateBuilder {
         UpdateBuilder::new(
             self.0.log_store,
-            self.0.state.unwrap(),
+            self.0.state.unwrap().snapshot,
             self.0.file_format_options,
         )
     }
@@ -314,7 +314,7 @@ impl DeltaOps {
     /// Restore delta table to a specified version or datetime
     #[must_use]
     pub fn restore(self) -> RestoreBuilder {
-        RestoreBuilder::new(self.0.log_store, self.0.state.unwrap())
+        RestoreBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Update data from Delta table
@@ -327,7 +327,7 @@ impl DeltaOps {
     ) -> MergeBuilder {
         MergeBuilder::new(
             self.0.log_store,
-            self.0.state.unwrap(),
+            self.0.state.unwrap().snapshot,
             self.0.file_format_options,
             predicate.into(),
             source,
@@ -338,13 +338,13 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn add_constraint(self) -> ConstraintBuilder {
-        ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap())
+        ConstraintBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Enable a table feature for a table
     #[must_use]
     pub fn add_feature(self) -> AddTableFeatureBuilder {
-        AddTableFeatureBuilder::new(self.0.log_store, self.0.state.unwrap())
+        AddTableFeatureBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Drops constraints from a table
@@ -353,29 +353,29 @@ impl DeltaOps {
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(
             self.0.log_store,
-            self.0.state.unwrap(),
+            self.0.state.unwrap().snapshot,
             self.0.file_format_options,
         )
     }
 
     /// Set table properties
     pub fn set_tbl_properties(self) -> SetTablePropertiesBuilder {
-        SetTablePropertiesBuilder::new(self.0.log_store, self.0.state.unwrap())
+        SetTablePropertiesBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Add new columns
     pub fn add_columns(self) -> AddColumnBuilder {
-        AddColumnBuilder::new(self.0.log_store, self.0.state.unwrap())
+        AddColumnBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Update field metadata
     pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
-        UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
+        UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Update table metadata
     pub fn update_table_metadata(self) -> UpdateTableMetadataBuilder {
-        UpdateTableMetadataBuilder::new(self.0.log_store, self.0.state.unwrap())
+        UpdateTableMetadataBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 }
 

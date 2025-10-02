@@ -6,7 +6,7 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, MetadataExt};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::file_format_options::FileFormatRef;
@@ -17,7 +17,7 @@ use crate::{DeltaResult, DeltaTableError};
 /// Remove constraints from the table
 pub struct DropConstraintBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Name of the constraint
     name: Option<String>,
     /// Raise if constraint doesn't exist
@@ -44,7 +44,7 @@ impl DropConstraintBuilder {
     /// Create a new builder
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         file_format_options: Option<FileFormatRef>,
     ) -> Self {
         Self {
@@ -111,7 +111,9 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                 }
                 return Ok(DeltaTable::new_with_state(
                     this.log_store,
-                    this.snapshot,
+                    DeltaTableState {
+                        snapshot: this.snapshot,
+                    },
                     this.file_format_options,
                 ));
             }

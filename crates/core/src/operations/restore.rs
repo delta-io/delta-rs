@@ -28,6 +28,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
+use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
@@ -35,7 +36,7 @@ use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use crate::kernel::{Action, Add, ProtocolExt as _, ProtocolInner, Remove};
+use crate::kernel::{Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -76,7 +77,7 @@ pub struct RestoreMetrics {
 /// See this module's documentation for more information
 pub struct RestoreBuilder {
     /// A snapshot of the to-be-restored table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to restore
@@ -103,7 +104,7 @@ impl super::Operation<()> for RestoreBuilder {
 
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,
@@ -157,7 +158,7 @@ impl RestoreBuilder {
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     log_store: LogStoreRef,
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     version_to_restore: Option<i64>,
     datetime_to_restore: Option<DateTime<Utc>>,
     ignore_missing_files: bool,
@@ -198,16 +199,22 @@ async fn execute(
     let snapshot_restored = table.snapshot()?;
     let metadata_restored_version = snapshot_restored.metadata();
 
-    let state_to_restore_files = snapshot_restored.file_actions(&log_store).await?;
-    let latest_state_files = snapshot.file_actions(&log_store).await?;
+    let state_to_restore_files: Vec<_> = snapshot_restored
+        .snapshot()
+        .files(&log_store, None)
+        .try_collect()
+        .await?;
+    let latest_state_files: Vec<_> = snapshot.files(&log_store, None).try_collect().await?;
     let state_to_restore_files_set =
-        HashSet::<Add>::from_iter(state_to_restore_files.iter().cloned());
-    let latest_state_files_set = HashSet::<Add>::from_iter(latest_state_files.iter().cloned());
+        HashSet::<_>::from_iter(state_to_restore_files.iter().map(|f| f.path().to_string()));
+    let latest_state_files_set =
+        HashSet::<_>::from_iter(latest_state_files.iter().map(|f| f.path().to_string()));
 
     let files_to_add: Vec<Add> = state_to_restore_files
-        .into_iter()
-        .filter(|a: &Add| !latest_state_files_set.contains(a))
-        .map(|mut a: Add| -> Add {
+        .iter()
+        .filter(|a| !latest_state_files_set.contains(&a.path().to_string()))
+        .map(|f| {
+            let mut a = f.add_action();
             a.data_change = true;
             a
         })
@@ -218,21 +225,12 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
     let files_to_remove: Vec<Remove> = latest_state_files
-        .into_iter()
-        .filter(|a: &Add| !state_to_restore_files_set.contains(a))
-        .map(|a: Add| -> Remove {
-            Remove {
-                path: a.path.clone(),
-                deletion_timestamp: Some(deletion_timestamp),
-                data_change: true,
-                extended_file_metadata: Some(false),
-                partition_values: Some(a.partition_values.clone()),
-                size: Some(a.size),
-                tags: a.tags,
-                deletion_vector: a.deletion_vector,
-                base_row_id: a.base_row_id,
-                default_row_commit_version: a.default_row_commit_version,
-            }
+        .iter()
+        .filter(|f| !state_to_restore_files_set.contains(&f.path().to_string()))
+        .map(|f| {
+            let mut rm = f.remove_action(true);
+            rm.deletion_timestamp = Some(deletion_timestamp);
+            rm
         })
         .collect();
 
@@ -364,7 +362,13 @@ impl std::future::IntoFuture for RestoreBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot, None);
+            let mut table = DeltaTable::new_with_state(
+                this.log_store,
+                DeltaTableState {
+                    snapshot: this.snapshot,
+                },
+                None,
+            );
             table.update().await?;
             Ok((table, metrics))
         })

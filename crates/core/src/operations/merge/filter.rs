@@ -14,7 +14,7 @@ use either::{Left, Right};
 use itertools::Itertools;
 
 use crate::delta_datafusion::execute_plan_to_batch;
-use crate::table::state::DeltaTableState;
+use crate::kernel::EagerSnapshot;
 use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug)]
@@ -324,7 +324,7 @@ pub(crate) fn generalize_filter(
 
 pub(crate) async fn try_construct_early_filter(
     join_predicate: Expr,
-    table_snapshot: &DeltaTableState,
+    table_snapshot: &EagerSnapshot,
     session_state: &SessionState,
     source: &LogicalPlan,
     source_name: &TableReference,
@@ -457,7 +457,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -548,7 +548,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -606,7 +606,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -669,7 +669,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -738,7 +738,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -810,7 +810,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,

@@ -255,7 +255,7 @@ impl LogicalFileView {
                     dv_col.column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap());
                 storage_col
                     .is_valid(self.index)
-                    .then(|| DeletionVectorView {
+                    .then_some(DeletionVectorView {
                         data: dv_col,
                         index: self.index,
                     })
