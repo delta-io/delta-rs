@@ -36,7 +36,7 @@ use std::time::Instant;
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
+use datafusion::common::{plan_err, Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
@@ -631,7 +631,13 @@ pub struct MergeMetrics {
     pub rewrite_time_ms: u64,
 }
 #[derive(Clone, Debug)]
-struct MergeMetricExtensionPlanner {}
+pub(crate) struct MergeMetricExtensionPlanner {}
+
+impl MergeMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
 
 #[async_trait]
 impl ExtensionPlanner for MergeMetricExtensionPlanner {
@@ -711,6 +717,9 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         }
 
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
+            if physical_inputs.len() != 1 {
+                return plan_err!("MergeBarrierExec expects exactly one input");
+            }
             let schema = barrier.input.schema();
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
@@ -755,12 +764,10 @@ async fn execute(
     }
 
     let current_metadata = snapshot.metadata();
-    let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
-        extension_planner: MergeMetricExtensionPlanner {},
-    };
+    let merge_planner = DeltaPlanner::new();
 
     let state = SessionStateBuilder::new_from_existing(state)
-        .with_query_planner(Arc::new(merge_planner))
+        .with_query_planner(merge_planner)
         .build();
 
     // TODO: Given the join predicate, remove any expression that involve the

@@ -158,7 +158,13 @@ impl DeleteBuilder {
 }
 
 #[derive(Clone, Debug)]
-struct DeleteMetricExtensionPlanner {}
+pub(crate) struct DeleteMetricExtensionPlanner {}
+
+impl DeleteMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
 
 #[async_trait]
 impl ExtensionPlanner for DeleteMetricExtensionPlanner {
@@ -204,12 +210,10 @@ async fn execute_non_empty_expr(
     let mut actions: Vec<Action> = Vec::new();
     let table_partition_cols = snapshot.metadata().partition_columns().clone();
 
-    let delete_planner = DeltaPlanner::<DeleteMetricExtensionPlanner> {
-        extension_planner: DeleteMetricExtensionPlanner {},
-    };
+    let delete_planner = DeltaPlanner::new();
 
     let state = SessionStateBuilder::new_from_existing(state.clone())
-        .with_query_planner(Arc::new(delete_planner))
+        .with_query_planner(delete_planner)
         .build();
 
     let scan_config = DeltaScanConfigBuilder::default()
