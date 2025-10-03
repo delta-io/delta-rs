@@ -126,10 +126,11 @@ impl DeltaTable {
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
     pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
+        let config = state.load_config().clone();
         Self {
             state: Some(state),
             log_store,
-            config: Default::default(),
+            config,
         }
     }
 
