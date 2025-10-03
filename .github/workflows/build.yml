@@ -26,7 +26,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt
+          components: rustfmt,clippy
           cache: true
           # if we ever get rid of all the clippy warnings, we can remove this line
           rustflags: ""
@@ -34,11 +34,11 @@ jobs:
       - name: Rustfmt Check
         uses: actions-rust-lang/rustfmt@v1
 
-      - name: Run Machete to check for unused dependencies
-        uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
-
       - name: build and lint with clippy
         run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
+
+      - name: Run Machete to check for unused dependencies
+        uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
 
   build:
     strategy:
@@ -60,6 +60,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          components: clippy
           cache: true
           # if we ever get rid of all the clippy warnings, we can remove this line
           rustflags: ""

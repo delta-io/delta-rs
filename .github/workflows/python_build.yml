@@ -63,17 +63,16 @@ jobs:
       RUSTC_WRAPPER: "sccache"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Run sccache-cache
+      - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          shared-key: "rust-cache-python-builds"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
-          cache-all-crates: true
-          cache-targets: false
+          toolchain: stable
+          cache: true
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env
