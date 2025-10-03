@@ -18,7 +18,6 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
-use arrow::compute::concat_batches;
 use arrow_array::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -450,7 +449,7 @@ impl Snapshot {
 pub struct EagerSnapshot {
     snapshot: Snapshot,
     // logical files in the snapshot
-    pub(crate) files: RecordBatch,
+    pub(crate) files: Vec<RecordBatch>,
 }
 
 impl EagerSnapshot {
@@ -467,9 +466,6 @@ impl EagerSnapshot {
             false => vec![],
         };
 
-        let scan_row_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
-        let files = concat_batches(&scan_row_schema, &files)?;
-
         Ok(Self { snapshot, files })
     }
 
@@ -482,9 +478,6 @@ impl EagerSnapshot {
             .files(log_store.as_ref(), None)
             .try_collect()
             .await?;
-        let scan_row_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
-        let files = concat_batches(&scan_row_schema, &files)?;
-
         Ok(Self { snapshot, files })
     }
 
@@ -508,7 +501,7 @@ impl EagerSnapshot {
             scan.scan_metadata_from_arrow(
                 engine.as_ref(),
                 current_version,
-                Box::new(std::iter::once(current_files)),
+                Box::new(current_files.into_iter()),
                 None,
             )?
             .map_ok(|s| s.scan_files)
@@ -517,8 +510,10 @@ impl EagerSnapshot {
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-        let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)?;
-        let files = self.snapshot.inner.parse_stats_column(&files)?;
+        let files = files
+            .iter()
+            .map(|f| self.snapshot.inner.parse_stats_column(f))
+            .try_collect()?;
 
         self.files = files;
 
@@ -627,7 +622,7 @@ impl EagerSnapshot {
             let files_iter = match scan.scan_metadata_from_arrow(
                 engine.as_ref(),
                 current_version,
-                Box::new(std::iter::once(current_files)),
+                Box::new(current_files.into_iter()),
                 None,
             ) {
                 Ok(files_iter) => files_iter,
@@ -647,9 +642,10 @@ impl EagerSnapshot {
                 }
             };
 
-            match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
-                .map_err(DeltaTableError::from)
-                .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
+            match files
+                .iter()
+                .map(|f| self.snapshot.inner.parse_stats_column(f))
+                .try_collect()
             {
                 Ok(files) => files,
                 Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
@@ -657,7 +653,12 @@ impl EagerSnapshot {
         } else {
             self.files.clone()
         };
-        let iter = (0..data.num_rows()).map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
+        let iter = data
+            .into_iter()
+            .flat_map(|batch| {
+                (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
+            })
+            .map(Ok);
         futures::stream::iter(iter).boxed()
     }
 
