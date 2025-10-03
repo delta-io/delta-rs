@@ -115,6 +115,7 @@ jobs:
         run: |
           make setup-dat
           cargo llvm-cov --features ${{ env.DEFAULT_FEATURES }} \
+            --workspace \
             --codecov \
             --output-path codecov.json \
             --exclude deltalake-azure \
