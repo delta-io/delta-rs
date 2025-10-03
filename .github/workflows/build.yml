@@ -112,6 +112,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run tests
+        shell: bash
         run: |
           make setup-dat
           cargo llvm-cov --features ${{ env.DEFAULT_FEATURES }} \
