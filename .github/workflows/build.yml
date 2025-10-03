@@ -108,10 +108,7 @@ jobs:
       - name: Run tests
         run: |
           make setup-dat
-          cargo llvm-cov \
-            --features ${{ env.DEFAULT_FEATURES }} \
-            --codecov \
-            --output-path codecov.json
+          cargo llvm-cov --features ${{ env.DEFAULT_FEATURES }}  --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
