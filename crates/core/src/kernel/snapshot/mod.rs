@@ -35,7 +35,6 @@ use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::task::spawn_blocking;
-use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol, Remove};
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
@@ -69,8 +68,6 @@ pub struct Snapshot {
     config: DeltaTableConfig,
     /// Logical table schema
     schema: SchemaRef,
-    /// Fully qualified URL of the table
-    table_url: Url,
 }
 
 impl Snapshot {
@@ -118,7 +115,6 @@ impl Snapshot {
             inner: snapshot,
             config,
             schema,
-            table_url: log_store.config().location.clone(),
         })
     }
 
@@ -136,7 +132,7 @@ impl Snapshot {
             store.put(&uri, data.into()).await?;
         }
 
-        let table_url = Url::parse("memory:///").unwrap();
+        let table_url = url::Url::parse("memory:///").unwrap();
 
         let log_store = default_logstore(
             store.clone(),
@@ -154,7 +150,6 @@ impl Snapshot {
                 inner: snapshot,
                 config: Default::default(),
                 schema,
-                table_url,
             },
             log_store,
         ))
@@ -221,7 +216,7 @@ impl Snapshot {
 
     /// Get the table root of the snapshot
     pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
-        Ok(Path::from_url_path(self.table_url.path())?)
+        Ok(Path::from_url_path(self.inner.table_root().path())?)
     }
 
     /// Well known properties of the table
