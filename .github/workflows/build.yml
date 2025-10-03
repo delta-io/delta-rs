@@ -102,7 +102,22 @@ jobs:
           # if we ever get rid of all the clippy warnings, we can remove this line
           rustflags: ""
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Run tests
         run: |
           make setup-dat
-          cargo test --features ${{ env.DEFAULT_FEATURES }}
+          cargo llvm-cov \
+            --package deltalake-lakefs \
+            --features ${{ env.DEFAULT_FEATURES }} \
+            --codecov \
+            --output-path codecov.json
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

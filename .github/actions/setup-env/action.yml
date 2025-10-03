@@ -16,9 +16,6 @@ runs:
   using: "composite"
 
   steps:
-    - name: checkout
-      uses: actions/checkout@v5
-
     - name: Install uv
       uses: astral-sh/setup-uv@v3
 
@@ -35,3 +32,5 @@ runs:
       with:
         toolchain: ${{ inputs.rust-toolchain }}
         cache: true
+        # if we ever get rid of all the clippy warnings, we can remove this line
+        rustflags: ""

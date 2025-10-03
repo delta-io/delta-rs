@@ -19,6 +19,8 @@ jobs:
   test-minimal:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:
@@ -42,6 +44,8 @@ jobs:
     name: Python Build (Python 3.10 PyArrow latest)
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -69,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -86,6 +92,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -107,6 +115,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -128,6 +138,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v5
+
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -151,7 +163,7 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env
