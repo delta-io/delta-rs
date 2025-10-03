@@ -119,6 +119,7 @@ jobs:
             --workspace \
             --codecov \
             --output-path codecov.json \
+            --exclude deltalake \
             --exclude deltalake-azure \
             --exclude deltalake-aws \
             --exclude deltalake-hdfs \
