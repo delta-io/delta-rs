@@ -58,6 +58,7 @@ jobs:
           fi
 
   build:
+    needs: test-matrix
     strategy:
       fail-fast: true
       matrix:
