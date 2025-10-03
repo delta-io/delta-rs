@@ -14,8 +14,6 @@ env:
   # Disable incremental builds by cargo for CI which should save disk space
   # and hopefully avoid final link "No space left on device"
   CARGO_INCREMENTAL: 0
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 
 jobs:
   # run various build configurations, fmt, and clippy.
@@ -32,9 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -45,7 +40,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: "rust-cache-${{ matrix.os }}"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
@@ -84,9 +78,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -97,7 +88,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: "rust-cache-${{ matrix.os }}"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
@@ -125,9 +115,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -138,7 +125,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-integration-tests"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
@@ -187,22 +173,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: "1.86"
           override: true
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "rust-cache-integration-tests"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
-          cache-all-crates: true
-          cache-targets: false
 
       # Install Java and Hadoop for HDFS integration tests
       - uses: actions/setup-java@v4
@@ -234,9 +210,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -247,7 +220,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-integration-tests-hdfs"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
@@ -293,9 +265,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -306,7 +275,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-integration-tests-lakefs"
-          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST"
           cache-all-crates: true
           cache-targets: false
 
