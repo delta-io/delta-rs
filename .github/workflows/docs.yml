@@ -1,4 +1,4 @@
-name: Build (and maybe release) the documentation
+name: docs
 
 on:
   merge_group:
