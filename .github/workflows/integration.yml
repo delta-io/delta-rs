@@ -1,4 +1,4 @@
-name: build
+name: integration
 
 on:
   push:
@@ -21,7 +21,6 @@ env:
 
 jobs:
   cloud:
-    name: Integration Tests
     runs-on: ubuntu-latest
 
     strategy:
@@ -111,11 +110,11 @@ jobs:
         run: |
           gmake setup-dat
           cargo test \
-            --package deltalake-aws
+            --package deltalake-aws \
             --no-default-features \
             --features integration_test,native-tls
 
-  integration_test_hdfs:
+  hdfs:
     name: Integration Tests (HDFS)
     runs-on: ubuntu-latest
     steps:
@@ -162,7 +161,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  integration_test_lakefs:
+  lakefs:
     name: Integration Tests (LakeFS v1.48)
     runs-on: ubuntu-latest
 
