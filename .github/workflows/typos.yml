@@ -1,0 +1,15 @@
+name: chores
+
+# Trigger whenever a PR is changed (title as well as new / changed commits)
+on:
+  pull_request:
+
+jobs:
+  typos:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check spelling
+        uses: crate-ci/typos@v1

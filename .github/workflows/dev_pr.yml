@@ -17,7 +17,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Assign GitHub labels
         if: |
@@ -41,7 +41,7 @@ jobs:
           node-version: "18"
       - run: npm install -g @commitlint/cli @commitlint/config-conventional
       # Checkout to get the commitlint configuration.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: commitlint --verbose <<< $COMMIT_MSG
         env:
           COMMIT_MSG: >
@@ -82,11 +82,3 @@ jobs:
               body: message
             })
             core.setFailed(message)
-
-  typos:
-    name: Spell Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check spelling
-        uses: crate-ci/typos@v1

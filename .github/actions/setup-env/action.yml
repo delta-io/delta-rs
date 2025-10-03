@@ -16,9 +16,6 @@ runs:
   using: "composite"
 
   steps:
-    - name: checkout
-      uses: actions/checkout@v4
-
     - name: Install uv
       uses: astral-sh/setup-uv@v3
 
@@ -27,14 +24,13 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
-    - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: default
-        toolchain: ${{ inputs.rust-toolchain }}
-        override: true
-        components: rustfmt, clippy
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
 
-    - uses: Swatinem/rust-cache@v2
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
-        cache-targets: false
+        toolchain: ${{ inputs.rust-toolchain }}
+        cache: true
+        # if we ever get rid of all the clippy warnings, we can remove this line
+        rustflags: ""
