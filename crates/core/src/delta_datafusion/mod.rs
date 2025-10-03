@@ -807,7 +807,21 @@ impl TableProviderFactory for DeltaTableFactory {
             open_table(table_url).await?
         } else {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
-            open_table_with_storage_options(table_url, cmd.to_owned().options).await?
+            open_table_with_storage_options(
+                table_url,
+                // remove "aws." prefixes from options
+                cmd.to_owned()
+                    .options
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        if k.starts_with("aws.") {
+                            Some((k.trim_start_matches("aws.").to_string(), v.to_string()))
+                        } else {
+                            Some((k.to_string(), v.to_string()))
+                        }
+                    })
+                    .collect::<HashMap<String, String>>(),
+            ).await?
         };
         Ok(Arc::new(provider))
     }
