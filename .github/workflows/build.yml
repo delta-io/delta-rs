@@ -80,15 +80,29 @@ jobs:
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
 
+  test-matrix:
+    runs-on: ubuntu-latest
+
+    outputs:
+      targets: ${{ steps.matrix.outputs.os }}
+
+    steps:
+      - name: Define test matrix
+        id: matrix
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Unit Tests
+    needs: test-matrix
     strategy:
       fail-fast: true
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+        os: ${{ fromJSON(needs.test-matrix.outputs.targets) }}
     runs-on: ${{ matrix.os }}
     env:
       DEFAULT_FEATURES: "datafusion"
