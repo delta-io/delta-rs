@@ -8,7 +8,7 @@ on:
   merge_group:
 
 env:
-  DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
+  DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
