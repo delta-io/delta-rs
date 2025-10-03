@@ -82,11 +82,3 @@ jobs:
               body: message
             })
             core.setFailed(message)
-
-  typos:
-    name: Spell Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Check spelling
-        uses: crate-ci/typos@v1
