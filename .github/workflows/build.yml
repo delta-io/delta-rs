@@ -8,13 +8,14 @@ on:
   merge_group:
 
 env:
-  DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
       - uses: actions/checkout@v5
@@ -49,6 +50,8 @@ jobs:
           - windows-latest
           - macos-latest
     runs-on: ${{ matrix.os }}
+    env:
+      DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
       - uses: actions/checkout@v5
@@ -87,6 +90,8 @@ jobs:
           - windows-latest
           - macos-latest
     runs-on: ${{ matrix.os }}
+    env:
+      DEFAULT_FEATURES: "datafusion"
 
     steps:
       - uses: actions/checkout@v5
