@@ -49,7 +49,7 @@ object_store = { version = "0.12.1" }
 parquet = { version = "56.0.0" }
 
 # datafusion
-datafusion = "50.0.0"
+datafusion = { version = "50.0.0" , features = ["parquet_encryption", "default"]}
 datafusion-ffi = "50.0.0"
 datafusion-proto = "50.0.0"
 
@@ -69,7 +69,7 @@ percent-encoding-rfc3986 = { version = "0.1.3" }
 uuid = { version = "1" }
 
 # runtime / async
-async-trait = { version = "0.1" }
+async-trait = { version = "0.1.89" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
