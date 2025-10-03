@@ -99,6 +99,8 @@ jobs:
         with:
           toolchain: stable
           cache: true
+          # if we ever get rid of all the clippy warnings, we can remove this line
+          rustflags: ""
 
       - name: Run tests
         run: |
