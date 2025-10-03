@@ -54,7 +54,7 @@ impl Serialize for Snapshot {
         let mut seq = serializer.serialize_seq(None)?;
 
         seq.serialize_element(&self.version())?;
-        seq.serialize_element(&self.table_url)?;
+        seq.serialize_element(&self.inner.table_root())?;
         seq.serialize_element(&self.protocol())?;
         seq.serialize_element(&self.metadata())?;
         seq.serialize_element(&ascending_commit_files)?;
@@ -202,7 +202,6 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
 
         Ok(Snapshot {
             inner: Arc::new(snapshot),
-            table_url,
             schema: Arc::new(schema),
             config,
         })
