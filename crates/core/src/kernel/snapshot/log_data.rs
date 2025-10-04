@@ -568,7 +568,7 @@ mod tests {
             .snapshot()
             .unwrap()
             .snapshot()
-            .files(&log_store, None)
+            .file_views(&log_store, None)
             .try_collect()
             .await
             .unwrap();
@@ -585,7 +585,7 @@ mod tests {
             .snapshot()
             .unwrap()
             .snapshot()
-            .files(&log_store, None)
+            .file_views(&log_store, None)
             .try_collect()
             .await
             .unwrap();

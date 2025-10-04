@@ -18,7 +18,7 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
-use arrow::compute::{concat_batches, filter_record_batch, is_not_null};
+use arrow::compute::{filter_record_batch, is_not_null};
 use arrow_array::RecordBatch;
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -31,15 +31,15 @@ use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version};
-use futures::stream::BoxStream;
+use futures::future::ready;
+use futures::stream::{once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
-use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::task::spawn_blocking;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
-use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, ScanExt, SnapshotExt};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, ScanExt};
 #[cfg(test)]
 use crate::kernel::transaction::CommitData;
 use crate::kernel::{StructType, ARROW_HANDLER};
@@ -258,33 +258,69 @@ impl Snapshot {
             .build()
         {
             Ok(scan) => scan,
-            Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
-            }
+            Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
         };
 
         // TODO: which capacity to choose?
         let mut builder = RecordBatchReceiverStreamBuilder::new(100);
-        let tx = builder.tx();
+        let snapshot = scan.snapshot().clone();
+
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
-        let inner = self.inner.clone();
-
+        let tx = builder.tx();
         builder.spawn_blocking(move || {
-            let scan_iter = scan.scan_metadata_arrow(engine.as_ref())?;
-            for res in scan_iter {
-                let batch = res?.scan_files;
-                let batch = inner.parse_stats_column(&batch)?;
-                if tx.blocking_send(Ok(batch)).is_err() {
+            for res in scan.scan_metadata_arrow(engine.as_ref())? {
+                if tx.blocking_send(Ok(res?.scan_files)).is_err() {
                     break;
                 }
             }
             Ok(())
         });
 
-        builder.build()
+        ScanRowOutStream::new(snapshot, builder.build()).boxed()
+    }
+
+    pub(crate) fn files_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+        existing_version: Version,
+        existing_data: Box<T>,
+        existing_predicate: Option<PredicateRef>,
+    ) -> SendableRBStream {
+        let scan = match self
+            .inner
+            .clone()
+            .scan_builder()
+            .with_predicate(predicate)
+            .build()
+        {
+            Ok(scan) => scan,
+            Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
+        };
+
+        // TODO: which capacity to choose?
+        let mut builder = RecordBatchReceiverStreamBuilder::new(100);
+        let snapshot = scan.snapshot().clone();
+
+        // TODO: bundle operation id with log store ...
+        let engine = log_store.engine(None);
+        let tx = builder.tx();
+        builder.spawn_blocking(move || {
+            for res in scan.scan_metadata_from_arrow(
+                engine.as_ref(),
+                existing_version,
+                existing_data,
+                existing_predicate,
+            )? {
+                if tx.blocking_send(Ok(res?.scan_files)).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        });
+
+        ScanRowOutStream::new(snapshot, builder.build()).boxed()
     }
 
     /// Get the commit infos in the snapshot
@@ -394,9 +430,7 @@ impl Snapshot {
         ) {
             Ok(data) => data,
             Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
+                return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
             }
         };
 
@@ -513,28 +547,17 @@ impl EagerSnapshot {
 
         self.snapshot.update(log_store, target_version).await?;
 
-        let scan = self.snapshot.inner.clone().scan_builder().build()?;
-        let engine = log_store.engine(None);
-        let current_files = self.files.clone();
-        let files: Vec<_> = spawn_blocking(move || {
-            scan.scan_metadata_from_arrow(
-                engine.as_ref(),
-                current_version,
-                Box::new(current_files.into_iter()),
+        self.files = self
+            .snapshot
+            .files_from(
+                log_store,
                 None,
-            )?
-            .map_ok(|s| s.scan_files)
+                current_version,
+                Box::new(self.files.clone().into_iter()),
+                None,
+            )
             .try_collect()
-        })
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-        let files = files
-            .iter()
-            .map(|f| self.snapshot.inner.parse_stats_column(f))
-            .try_collect()?;
-
-        self.files = files;
+            .await?;
 
         Ok(())
     }
@@ -598,87 +621,34 @@ impl EagerSnapshot {
     /// This function returns a stream of [`LogicalFileView`] objects,
     /// which represent the active files in the snapshot.
     ///
-    /// # Arguments
+    /// ## Parameters
     ///
     /// * `log_store` - A reference to a [`LogStore`] implementation.
     /// * `predicate` - An optional predicate to filter the files.
     ///
-    /// # Returns
+    /// ## Returns
     ///
     /// A stream of [`LogicalFileView`] objects.
-    pub fn files(
+    pub fn file_views(
         &self,
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        // TODO: the logic in this function would be more suitable as an async fn rather than
-        // a stream. However as we are moving from an eager to a cached snapshot, this should be
-        // a stream just like on the Snapshot. So we swallow the awkward error handling for now
-        // knowing that we will be able to clean this up soon (TM).
-        let data = if let Some(predicate) = predicate {
-            let scan = match self
-                .snapshot
-                .inner
-                .clone()
-                .scan_builder()
-                .with_predicate(predicate)
-                .build()
-            {
-                Ok(scan) => scan,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
-            };
-            let engine = log_store.engine(None);
-            let current_files = self.files.clone();
-            let current_version = self.version() as u64;
-
-            // TODO: while we are always re-processing the cached files, we are confident that no IO
-            // is performed when processing, so for now we are not spawning this on a blocking thread.
-            // As we continue refactoring, we need to move this onto an actual stream.
-            let files_iter = match scan.scan_metadata_from_arrow(
-                engine.as_ref(),
-                current_version,
-                Box::new(current_files.into_iter()),
+        self.snapshot
+            .files_from(
+                log_store,
+                predicate,
+                self.version() as u64,
+                Box::new(self.files.clone().into_iter()),
                 None,
-            ) {
-                Ok(files_iter) => files_iter,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
-            };
-
-            let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
-                Ok(files) => files,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
-            };
-
-            match files
-                .iter()
-                .map(|f| self.snapshot.inner.parse_stats_column(f))
-                .try_collect()
-            {
-                Ok(files) => files,
-                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-            }
-        } else {
-            self.files.clone()
-        };
-        let iter = data
-            .into_iter()
-            .flat_map(|batch| {
-                (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
+            )
+            .map_ok(|batch| {
+                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                })
             })
-            .map(Ok);
-        futures::stream::iter(iter).boxed()
+            .try_flatten()
+            .boxed()
     }
 
     #[deprecated(since = "0.30.0", note = "Use `files` with kernel predicate instead.")]
@@ -688,13 +658,13 @@ impl EagerSnapshot {
         filters: &[PartitionFilter],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
         if filters.is_empty() {
-            return self.files(log_store, None);
+            return self.file_views(log_store, None);
         }
         let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
             Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+            Err(err) => return Box::pin(once(ready(Err(err)))),
         };
-        self.files(log_store, Some(predicate))
+        self.file_views(log_store, Some(predicate))
     }
 
     /// Iterate over all latest app transactions
@@ -739,22 +709,17 @@ pub(crate) fn partitions_schema(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use delta_kernel::schema::{DataType, StructField};
     use futures::TryStreamExt;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
 
-    // use super::log_segment::tests::{concurrent_checkpoint, test_log_segment};
+    // use super::log_segment::tests::{concurrent_checkpoint};
     // use super::replay::tests::test_log_replay;
     use super::*;
-    use crate::protocol::{DeltaOperation, SaveMode};
-    use crate::test_utils::{assert_batches_sorted_eq, ActionFactory, TestResult, TestTables};
+    use crate::test_utils::{assert_batches_sorted_eq, TestResult, TestTables};
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
-        // test_log_segment().await?;
         test_snapshot().await?;
         test_eager_snapshot().await?;
 
@@ -845,63 +810,10 @@ mod tests {
         for version in 0..=12 {
             let snapshot =
                 EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
-            let batches: Vec<_> = snapshot.files(&log_store, None).try_collect().await?;
+            let batches: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_partition_schema() {
-        let schema = StructType::try_new(vec![
-            StructField::new("id", DataType::LONG, true),
-            StructField::new("name", DataType::STRING, true),
-            StructField::new("date", DataType::DATE, true),
-        ])
-        .unwrap();
-
-        let partition_columns = vec!["date".to_string()];
-        let metadata = ActionFactory::metadata(&schema, Some(&partition_columns), None);
-        let protocol = ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>);
-
-        let commit_data = CommitData::new(
-            vec![
-                Action::Protocol(protocol.clone()),
-                Action::Metadata(metadata.clone()),
-            ],
-            DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: Some(partition_columns),
-                predicate: None,
-            },
-            HashMap::new(),
-            vec![],
-        );
-
-        let (snapshot, _) = Snapshot::new_test(vec![&commit_data]).await.unwrap();
-
-        let expected = Arc::new(
-            StructType::try_new(vec![StructField::new("date", DataType::DATE, true)]).unwrap(),
-        );
-        assert_eq!(snapshot.inner.partitions_schema().unwrap(), Some(expected));
-
-        let metadata = ActionFactory::metadata(&schema, None::<Vec<&str>>, None);
-        let commit_data = CommitData::new(
-            vec![
-                Action::Protocol(protocol.clone()),
-                Action::Metadata(metadata.clone()),
-            ],
-            DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            },
-            HashMap::new(),
-            vec![],
-        );
-        let (snapshot, _) = Snapshot::new_test(vec![&commit_data]).await.unwrap();
-
-        assert_eq!(snapshot.inner.partitions_schema().unwrap(), None);
     }
 }
