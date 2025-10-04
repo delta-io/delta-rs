@@ -283,7 +283,7 @@ impl VacuumBuilder {
         .await?;
         let valid_files: HashSet<_> = self
             .snapshot
-            .files(self.log_store.as_ref(), None)
+            .file_views(self.log_store.as_ref(), None)
             .map_ok(|f| f.object_store_path())
             .try_collect()
             .await?;
