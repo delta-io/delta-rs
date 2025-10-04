@@ -916,4 +916,24 @@ mod tests {
         assert_eq!(None, result);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_partition_schema2() {
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::LONG, true),
+            StructField::new("name", DataType::STRING, true),
+            StructField::new("date", DataType::DATE, true),
+        ])
+        .unwrap();
+
+        let partition_columns = vec!["date".to_string()];
+        let expected =
+            StructType::try_new(vec![StructField::new("date", DataType::DATE, true)]).unwrap();
+        assert_eq!(
+            partitions_schema(&schema, &partition_columns).unwrap(),
+            Some(expected)
+        );
+
+        assert_eq!(partitions_schema(&schema, &[]).unwrap(), None);
+    }
 }
