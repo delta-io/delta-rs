@@ -193,6 +193,7 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt as _;
     use itertools::Itertools;
 
     use super::*;
@@ -222,9 +223,9 @@ mod tests {
             .snapshot()
             .unwrap()
             .all_tombstones(&table.log_store())
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap()
-            .collect_vec();
+            .unwrap();
         assert_eq!(tombstones.len(), 4);
         // assert!(tombstones.contains(&crate::kernel::Remove {
         //     path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
@@ -358,9 +359,9 @@ mod tests {
             .snapshot()
             .unwrap()
             .all_tombstones(&table.log_store())
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap()
-            .collect_vec();
+            .unwrap();
         assert_eq!(tombstones.len(), 1);
         let tombstone = tombstones.first().unwrap();
         assert_eq!(

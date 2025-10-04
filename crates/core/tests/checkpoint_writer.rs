@@ -432,6 +432,7 @@ mod checkpoints_with_tombstones {
     use deltalake_core::kernel::*;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
+    use futures::TryStreamExt as _;
     use pretty_assertions::assert_eq;
     use std::collections::{HashMap, HashSet};
 
@@ -481,10 +482,10 @@ mod checkpoints_with_tombstones {
                 .snapshot()
                 .unwrap()
                 .all_tombstones(&table.log_store())
+                .map_ok(|t| t.path().to_string())
+                .try_collect::<HashSet<_>>()
                 .await
-                .unwrap()
-                .map(|t| t.path().to_string())
-                .collect::<HashSet<_>>(),
+                .unwrap(),
             removes1
                 .iter()
                 .map(|t| t.path.clone())
@@ -506,9 +507,11 @@ mod checkpoints_with_tombstones {
                 .snapshot()
                 .unwrap()
                 .all_tombstones(&table.log_store())
+                .map_ok(|t| t.path().to_string())
+                .try_collect::<HashSet<_>>()
                 .await
                 .unwrap()
-                .count(),
+                .len(),
             0
         ); // stale removes are deleted from the state
     }

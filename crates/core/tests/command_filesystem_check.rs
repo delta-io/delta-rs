@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use deltalake_core::Path;
 use deltalake_core::{errors::DeltaTableError, DeltaOps};
 use deltalake_test::utils::*;
+use futures::TryStreamExt as _;
 use serial_test::serial;
 
 #[tokio::test]
@@ -42,9 +43,9 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     let remove = table
         .snapshot()?
         .all_tombstones(&table.log_store())
-        .await?
-        .map(|t| (t.path().to_string(), t))
-        .collect::<HashMap<_, _>>();
+        .map_ok(|t| (t.path().to_string(), t))
+        .try_collect::<HashMap<_, _>>()
+        .await?;
     let remove = remove.get(file).unwrap();
     assert!(remove.data_change());
 
@@ -90,9 +91,9 @@ async fn test_filesystem_check_partitioned() -> TestResult {
     let remove = table
         .snapshot()?
         .all_tombstones(&table.log_store())
-        .await?
-        .map(|t| (t.path().to_string(), t))
-        .collect::<HashMap<_, _>>();
+        .map_ok(|t| (t.path().to_string(), t))
+        .try_collect::<HashMap<_, _>>()
+        .await?;
     let remove = remove.get(file).unwrap();
     assert!(remove.data_change());
     Ok(())

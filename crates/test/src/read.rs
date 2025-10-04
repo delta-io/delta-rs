@@ -1,4 +1,5 @@
 use deltalake_core::DeltaTableBuilder;
+use futures::TryStreamExt as _;
 use object_store::path::Path;
 
 use crate::utils::{IntegrationContext, TestResult, TestTables};
@@ -56,8 +57,8 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     );
     let tombstones = snapshot
         .all_tombstones(&table.log_store())
-        .await?
-        .collect::<Vec<_>>();
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(tombstones.len(), 31);
     let paths = tombstones
         .iter()
@@ -101,8 +102,8 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     );
     let tombstones = snapshot
         .all_tombstones(&table.log_store())
-        .await?
-        .collect::<Vec<_>>();
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(tombstones.len(), 29);
     let paths = tombstones
         .iter()

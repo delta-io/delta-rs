@@ -6,6 +6,7 @@ use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::commit_uri_from_version;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{ensure_table_uri, DeltaOps, DeltaTable};
+use futures::TryStreamExt;
 use itertools::Itertools;
 use rand::Rng;
 use std::error::Error;
@@ -185,6 +186,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
         .table
         .snapshot()?
         .all_tombstones(&context.table.log_store())
+        .try_collect::<Vec<_>>()
         .await?
     {
         let p = tmp_dir.path().join(file.path().to_string());
@@ -214,6 +216,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
         .table
         .snapshot()?
         .all_tombstones(&context.table.log_store())
+        .try_collect::<Vec<_>>()
         .await?
     {
         let p = tmp_dir.path().join(file.path().to_string());
