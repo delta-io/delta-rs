@@ -150,14 +150,15 @@ impl SnapshotExt for Snapshot {
     /// scan row (file data).
     fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
         let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
+        let stats_idx = SCAN_ROW_ARROW_SCHEMA.index_of("stats").unwrap();
 
         let stats_schema = self.stats_schema()?;
         let stats_schema: ArrowSchema = stats_schema.as_ref().try_into_arrow()?;
-        fields.push(Arc::new(Field::new(
+        fields[stats_idx] = Arc::new(Field::new(
             "stats_parsed",
             ArrowDataType::Struct(stats_schema.fields().to_owned()),
             true,
-        )));
+        ));
 
         if let Some(partition_schema) = self.partitions_schema()? {
             let partition_schema: ArrowSchema = partition_schema.as_ref().try_into_arrow()?;
@@ -190,12 +191,12 @@ impl SnapshotExt for Snapshot {
         let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
 
         let stats_array: Arc<StructArray> = Arc::new(parsed.into());
-        fields.push(Arc::new(Field::new(
+        fields[stats_idx] = Arc::new(Field::new(
             "stats_parsed",
             stats_array.data_type().to_owned(),
             true,
-        )));
-        columns.push(stats_array.clone());
+        ));
+        columns[stats_idx] = stats_array;
 
         if let Some(partition_schema) = self.partitions_schema()? {
             let partition_array = parse_partitions(
