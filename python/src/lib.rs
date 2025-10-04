@@ -504,7 +504,7 @@ impl RawDeltaTable {
                     .map_err(PyErr::from),
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }?;
-            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot)
+            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot.snapshot().clone())
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
 

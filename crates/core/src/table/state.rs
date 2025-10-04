@@ -176,6 +176,10 @@ impl DeltaTableState {
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
+    #[deprecated(
+        since = "0.30.0",
+        note = "Simple object store paths are not meaningful once we support full urls."
+    )]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
         self.log_data().iter().map(|add| add.object_store_path())
     }
