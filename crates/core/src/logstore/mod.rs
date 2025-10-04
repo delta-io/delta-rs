@@ -159,6 +159,27 @@ pub fn default_logstore(
 /// Sharable reference to [`LogStore`]
 pub type LogStoreRef = Arc<dyn LogStore>;
 
+impl Serialize for dyn LogStore + '_ {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.config().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Box<dyn LogStore> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let config = LogStoreConfig::deserialize(deserializer)?;
+        logstore_for(config.location.clone(), config.options.clone())
+            .map_err(D::Error::custom)
+            .map(|ls| Box::new(ls) as Box<dyn LogStore>)
+    }
+}
+
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 pub(crate) static DELTA_LOG_REGEX: LazyLock<Regex> =
