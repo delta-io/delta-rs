@@ -187,7 +187,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
         .all_tombstones(&context.table.log_store())
         .await?
     {
-        let p = tmp_dir.path().join(file.clone().path);
+        let p = tmp_dir.path().join(file.path().to_string());
         fs::remove_file(p).unwrap();
     }
 
@@ -216,7 +216,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
         .all_tombstones(&context.table.log_store())
         .await?
     {
-        let p = tmp_dir.path().join(file.clone().path);
+        let p = tmp_dir.path().join(file.path().to_string());
         fs::remove_file(p).unwrap();
     }
 

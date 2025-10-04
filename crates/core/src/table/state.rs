@@ -18,8 +18,8 @@ use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, Remove,
-    StructType, ARROW_HANDLER,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, StructType,
+    TombstoneView, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
@@ -135,7 +135,7 @@ impl DeltaTableState {
     pub async fn all_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> DeltaResult<impl Iterator<Item = TombstoneView>> {
         Ok(self
             .snapshot
             .snapshot()
@@ -150,7 +150,7 @@ impl DeltaTableState {
     pub async fn unexpired_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> DeltaResult<impl Iterator<Item = TombstoneView>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_config()
@@ -159,7 +159,7 @@ impl DeltaTableState {
         let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
         Ok(tombstones
             .into_iter()
-            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
+            .filter(move |t| t.deletion_timestamp().unwrap_or(0) > retention_timestamp))
     }
 
     /// Full list of add actions representing all parquet files that are part of the current

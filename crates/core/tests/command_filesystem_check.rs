@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use deltalake_core::Path;
 use deltalake_core::{errors::DeltaTableError, DeltaOps};
@@ -43,9 +43,10 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
         .snapshot()?
         .all_tombstones(&table.log_store())
         .await?
-        .collect::<HashSet<_>>();
+        .map(|t| (t.path().to_string(), t))
+        .collect::<HashMap<_, _>>();
     let remove = remove.get(file).unwrap();
-    assert!(remove.data_change);
+    assert!(remove.data_change());
 
     // An additional run should return an empty list of orphaned actions
     let op = DeltaOps::from(table);
@@ -90,9 +91,10 @@ async fn test_filesystem_check_partitioned() -> TestResult {
         .snapshot()?
         .all_tombstones(&table.log_store())
         .await?
-        .collect::<HashSet<_>>();
+        .map(|t| (t.path().to_string(), t))
+        .collect::<HashMap<_, _>>();
     let remove = remove.get(file).unwrap();
-    assert!(remove.data_change);
+    assert!(remove.data_change());
     Ok(())
 }
 

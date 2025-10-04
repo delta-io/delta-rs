@@ -483,8 +483,12 @@ mod checkpoints_with_tombstones {
                 .all_tombstones(&table.log_store())
                 .await
                 .unwrap()
+                .map(|t| t.path().to_string())
                 .collect::<HashSet<_>>(),
             removes1
+                .iter()
+                .map(|t| t.path.clone())
+                .collect::<HashSet<_>>()
         );
 
         checkpoints::create_checkpoint(&table, None).await.unwrap();

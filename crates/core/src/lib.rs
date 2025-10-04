@@ -362,18 +362,12 @@ mod tests {
             .unwrap()
             .collect_vec();
         assert_eq!(tombstones.len(), 1);
-        assert!(tombstones.contains(&crate::kernel::Remove {
-            path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
-            deletion_timestamp: Some(1615043776198),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(HashMap::new()),
-            size: Some(445),
-            base_row_id: None,
-            default_row_commit_version: None,
-            deletion_vector: None,
-            tags: Some(HashMap::new()),
-        }));
+        let tombstone = tombstones.first().unwrap();
+        assert_eq!(
+            tombstone.path(),
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"
+        );
+        assert_eq!(tombstone.deletion_timestamp(), Some(1615043776198));
     }
 
     #[tokio::test]

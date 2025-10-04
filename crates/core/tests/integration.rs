@@ -73,7 +73,7 @@ async fn test_action_reconciliation() {
             .all_tombstones(&table.log_store())
             .await
             .unwrap()
-            .map(|r| r.path.clone())
+            .map(|r| r.path().to_string())
             .collect::<Vec<_>>(),
         vec![a.path.clone()]
     );

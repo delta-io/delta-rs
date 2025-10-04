@@ -513,9 +513,9 @@ async fn get_stale_files(
         .filter(|tombstone| {
             // if the file has a creation time before the `tombstone_retention_timestamp`
             // then it's considered as a stale file
-            tombstone.deletion_timestamp.unwrap_or(0) < tombstone_retention_timestamp
+            tombstone.deletion_timestamp().unwrap_or(0) < tombstone_retention_timestamp
         })
-        .map(|tombstone| tombstone.path)
+        .map(|tombstone| tombstone.path().to_string())
         .collect::<HashSet<_>>())
 }
 
