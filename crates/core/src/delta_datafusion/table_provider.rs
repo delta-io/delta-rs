@@ -773,7 +773,7 @@ impl TableProvider for DeltaTable {
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: EagerSnapshot,
     log_store: LogStoreRef,
