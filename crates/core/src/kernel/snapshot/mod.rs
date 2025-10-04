@@ -20,13 +20,13 @@ use std::sync::{Arc, LazyLock};
 
 use arrow::compute::{concat_batches, filter_record_batch, is_not_null};
 use arrow_array::RecordBatch;
-use delta_kernel::actions::Remove;
+use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::derive_macro_utils::ToDataType;
-use delta_kernel::schema::{SchemaRef, ToSchema};
+use delta_kernel::schema::{SchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
@@ -42,7 +42,7 @@ use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, ScanExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::transaction::CommitData;
-use crate::kernel::{ActionType, StructType, ARROW_HANDLER};
+use crate::kernel::{StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
@@ -359,8 +359,8 @@ impl Snapshot {
         static TOMBSTONE_SCHEMA: LazyLock<Arc<StructType>> = LazyLock::new(|| {
             Arc::new(
                 StructType::try_new(vec![
-                    ActionType::Remove.schema_field().clone(),
-                    ActionType::Sidecar.schema_field().clone(),
+                    StructField::nullable("remove", Remove::to_data_type()),
+                    StructField::nullable("sidecar", Sidecar::to_data_type()),
                 ])
                 .expect("Failed to create a StructType somehow"),
             )
