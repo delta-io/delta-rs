@@ -299,10 +299,21 @@ impl Snapshot {
             Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
         };
 
-        // TODO: which capacity to choose?
-        let mut builder = RecordBatchReceiverStreamBuilder::new(100);
         let snapshot = scan.snapshot().clone();
 
+        // process our stored / caed data to conform to the expected input for log replay
+        let evaluator = match scan_row_in_eval(&snapshot) {
+            Ok(scan_row_in_eval) => scan_row_in_eval,
+            Err(err) => return Box::pin(once(ready(Err(err)))),
+        };
+        let scan_row_iter = existing_data.map(move |b| {
+            evaluator
+                .evaluate_arrow(b)
+                .expect("Illegal stored log data")
+        });
+
+        // TODO: which capacity to choose?
+        let mut builder = RecordBatchReceiverStreamBuilder::new(100);
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
         let tx = builder.tx();
@@ -310,7 +321,7 @@ impl Snapshot {
             for res in scan.scan_metadata_from_arrow(
                 engine.as_ref(),
                 existing_version,
-                existing_data,
+                Box::new(scan_row_iter),
                 existing_predicate,
             )? {
                 if tx.blocking_send(Ok(res?.scan_files)).is_err() {
@@ -765,15 +776,15 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+-----------------------+-------------------------------------------------------+",
-            "| path                                                                | size | modificationTime | stats | deletionVector | fileConstantValues    | stats_parsed                                          |",
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+-----------------------+-------------------------------------------------------+",
-            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+-----------------------+-------------------------------------------------------+",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------+",
+            "| path                                                                | size | modificationTime | stats_parsed                                          | deletionVector | fileConstantValues    |",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------+",
+            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
