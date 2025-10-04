@@ -1,7 +1,6 @@
 import os
 import pathlib
 
-import pyarrow as pa
 import pytest
 from arro3.core import Table
 
@@ -150,7 +149,10 @@ def test_vacuum_keep_versions():
 
 
 # https://github.com/delta-io/delta-rs/issues/3745
+@pytest.mark.pyarrow
 def test_issue_3745(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
     data = pa.Table.from_pydict(
         {
             "x": pa.array(list(range(100)), type=pa.int32()),
