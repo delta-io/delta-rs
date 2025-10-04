@@ -14,19 +14,6 @@ pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
 }
 
-impl PartitionsExt for IndexMap<&str, Scalar> {
-    fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
-    }
-}
-
 impl PartitionsExt for IndexMap<String, Scalar> {
     fn hive_partition_path(&self) -> String {
         let fields = self

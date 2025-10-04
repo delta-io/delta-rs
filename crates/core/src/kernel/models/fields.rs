@@ -3,26 +3,6 @@ use std::sync::LazyLock;
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
 
-use super::ActionType;
-
-impl ActionType {
-    /// Returns the type of the corresponding field in the delta log schema
-    pub(crate) fn schema_field(&self) -> &StructField {
-        match self {
-            Self::Metadata => &METADATA_FIELD,
-            Self::Protocol => &PROTOCOL_FIELD,
-            Self::CommitInfo => &COMMIT_INFO_FIELD,
-            Self::Add => &ADD_FIELD,
-            Self::Remove => &REMOVE_FIELD,
-            Self::Cdc => &CDC_FIELD,
-            Self::Txn => &TXN_FIELD,
-            Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
-            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
-            Self::Sidecar => &SIDECAR_FIELD,
-        }
-    }
-}
-
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
 static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
@@ -207,33 +187,6 @@ static DOMAIN_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
             StructField::new("removed", DataType::BOOLEAN, false),
         ])
         .expect("Failed to construct StructType for DOMAIN_METADATA_FIELD"),
-        true,
-    )
-});
-// https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-metadata
-static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
-    StructField::new(
-        "checkpointMetadata",
-        StructType::try_new(vec![
-            StructField::new("flavor", DataType::STRING, false),
-            tags_field(),
-        ])
-        .expect("Failed to construct StructType for CHECKPOINT_METADATA_FIELD"),
-        true,
-    )
-});
-// https://github.com/delta-io/delta/blob/master/PROTOCOL.md#sidecar-file-information
-static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
-    StructField::new(
-        "sidecar",
-        StructType::try_new(vec![
-            StructField::new("path", DataType::STRING, false),
-            StructField::new("sizeInBytes", DataType::LONG, true),
-            StructField::new("modificationTime", DataType::LONG, false),
-            StructField::new("type", DataType::STRING, false),
-            tags_field(),
-        ])
-        .expect("Failed to construct StructType for SIDECAR_FIELD"),
         true,
     )
 });

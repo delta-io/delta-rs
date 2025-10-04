@@ -2,10 +2,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, ListArray, MapArray, PrimitiveArray,
-    RecordBatch, StringArray, StructArray,
-};
+use arrow_array::{Array, ListArray, MapArray, RecordBatch, StructArray};
 use arrow_schema::{ArrowError, DataType};
 
 use crate::{DeltaResult, DeltaTableError};
@@ -74,17 +71,6 @@ pub(crate) fn extract_column<'a>(
                     extract_column(maparr.entries(), next_path, remaining_path_steps)
                 } else {
                     Ok(child)
-                    // if maparr.entries().num_columns() != 2 {
-                    //     return Err(ArrowError::SchemaError(format!(
-                    //         "Map {path_step} has {} columns, expected 2",
-                    //         maparr.entries().num_columns()
-                    //     )));
-                    // }
-                    // if next_path_step == *maparr.entries().column_names().first().unwrap() {
-                    //     Ok(maparr.entries().column(0))
-                    // } else {
-                    //     Ok(maparr.entries().column(1))
-                    // }
                 }
             }
             DataType::List(_) => {
@@ -121,42 +107,4 @@ fn cast_column_as<'a, T: Array + 'static>(
         .ok_or(ArrowError::SchemaError(format!(
             "{name} is not of expected type."
         )))
-}
-
-#[inline]
-pub(crate) fn read_str(arr: &StringArray, idx: usize) -> DeltaResult<&str> {
-    read_str_opt(arr, idx).ok_or(DeltaTableError::Generic("missing value".into()))
-}
-
-#[inline]
-pub(crate) fn read_str_opt(arr: &StringArray, idx: usize) -> Option<&str> {
-    arr.is_valid(idx).then(|| arr.value(idx))
-}
-
-#[inline]
-pub(crate) fn read_primitive<T>(arr: &PrimitiveArray<T>, idx: usize) -> DeltaResult<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
-    read_primitive_opt(arr, idx).ok_or(DeltaTableError::Generic("missing value".into()))
-}
-
-#[inline]
-pub(crate) fn read_primitive_opt<T>(arr: &PrimitiveArray<T>, idx: usize) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
-    arr.is_valid(idx).then(|| arr.value(idx))
-}
-
-#[inline]
-pub(crate) fn read_bool(arr: &BooleanArray, idx: usize) -> DeltaResult<bool> {
-    read_bool_opt(arr, idx).ok_or(DeltaTableError::Generic("missing value".into()))
-}
-
-#[inline]
-pub(crate) fn read_bool_opt(arr: &BooleanArray, idx: usize) -> Option<bool> {
-    arr.is_valid(idx).then(|| arr.value(idx))
 }

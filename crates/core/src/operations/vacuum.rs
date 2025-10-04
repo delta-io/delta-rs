@@ -26,7 +26,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use futures::future::BoxFuture;
+use futures::future::{ready, BoxFuture};
 use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
@@ -505,18 +505,16 @@ async fn get_stale_files(
     store: &dyn LogStore,
 ) -> DeltaResult<HashSet<String>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
-    Ok(snapshot
+    snapshot
         .all_tombstones(store)
-        .await?
-        .collect::<Vec<_>>()
-        .into_iter()
-        .filter(|tombstone| {
+        .try_filter(|tombstone| {
             // if the file has a creation time before the `tombstone_retention_timestamp`
             // then it's considered as a stale file
-            tombstone.deletion_timestamp.unwrap_or(0) < tombstone_retention_timestamp
+            ready(tombstone.deletion_timestamp().unwrap_or(0) < tombstone_retention_timestamp)
         })
-        .map(|tombstone| tombstone.path)
-        .collect::<HashSet<_>>())
+        .map_ok(|tombstone| tombstone.path().to_string())
+        .try_collect::<HashSet<_>>()
+        .await
 }
 
 #[cfg(test)]

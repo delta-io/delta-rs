@@ -9,7 +9,7 @@ use delta_kernel::schema::StructField;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::{future::ready, StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +18,8 @@ use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, Remove,
-    StructType, ARROW_HANDLER,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, StructType,
+    TombstoneView, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
@@ -132,34 +132,31 @@ impl DeltaTableState {
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub async fn all_tombstones(
+    pub fn all_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
-        Ok(self
-            .snapshot
-            .snapshot()
-            .tombstones(log_store)
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter())
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
+        self.snapshot.snapshot().tombstones(log_store)
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    pub async fn unexpired_tombstones(
+    #[deprecated(
+        since = "0.30.0",
+        note = "Use `all_tombstones` instead and filter by retention timestamp."
+    )]
+    pub fn unexpired_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_config()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
-        let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
-        Ok(tombstones
-            .into_iter()
-            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
+        self.all_tombstones(log_store)
+            .try_filter(move |t| ready(t.deletion_timestamp().unwrap_or(0) > retention_timestamp))
+            .boxed()
     }
 
     /// Full list of add actions representing all parquet files that are part of the current

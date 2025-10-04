@@ -10,7 +10,6 @@ use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
 use tracing::log::*;
 
-use super::parse::collect_map;
 use crate::kernel::arrow::extract::{self as ex};
 use crate::kernel::StructType;
 use crate::{DeltaResult, DeltaTableError};
@@ -315,4 +314,22 @@ mod tests {
         );
         Ok(())
     }
+}
+
+fn collect_map(val: &StructArray) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
+    let keys = val
+        .column(0)
+        .as_ref()
+        .as_any()
+        .downcast_ref::<StringArray>()?;
+    let values = val
+        .column(1)
+        .as_ref()
+        .as_any()
+        .downcast_ref::<StringArray>()?;
+    Some(
+        keys.iter()
+            .zip(values.iter())
+            .filter_map(|(k, v)| k.map(|kv| (kv.to_string(), v.map(|vv| vv.to_string())))),
+    )
 }

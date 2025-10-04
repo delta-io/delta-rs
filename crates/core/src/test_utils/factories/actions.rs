@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use arrow_array::*;
+use arrow::array::AsArray as _;
+use arrow::datatypes::{Int32Type, Int64Type};
 use chrono::Utc;
 use delta_kernel::schema::{DataType, PrimitiveType};
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
@@ -10,7 +11,6 @@ use object_store::ObjectMeta;
 use serde_json::json;
 
 use super::{get_parquet_bytes, DataFactory, FileStats};
-use crate::kernel::arrow::extract::{self as ex};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
@@ -53,16 +53,21 @@ impl ActionFactory {
                 .map(|f| {
                     let value = match f.data_type() {
                         DataType::Primitive(PrimitiveType::String) => {
-                            let arr =
-                                ex::extract_and_cast::<StringArray>(&batch, f.name()).unwrap();
+                            let arr = batch.column_by_name(f.name()).unwrap().as_string::<i32>();
                             Some(arr.value(0).to_string())
                         }
                         DataType::Primitive(PrimitiveType::Integer) => {
-                            let arr = ex::extract_and_cast::<Int32Array>(&batch, f.name()).unwrap();
+                            let arr = batch
+                                .column_by_name(f.name())
+                                .unwrap()
+                                .as_primitive::<Int32Type>();
                             Some(arr.value(0).to_string())
                         }
                         DataType::Primitive(PrimitiveType::Long) => {
-                            let arr = ex::extract_and_cast::<Int64Array>(&batch, f.name()).unwrap();
+                            let arr = batch
+                                .column_by_name(f.name())
+                                .unwrap()
+                                .as_primitive::<Int64Type>();
                             Some(arr.value(0).to_string())
                         }
                         _ => unimplemented!(),
