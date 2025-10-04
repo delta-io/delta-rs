@@ -96,6 +96,14 @@ pub struct DeltaDataSink {
     metrics: ExecutionPlanMetricsSet,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct DeltaDataSinkWire {
+    log_store: LogStoreRef,
+    snapshot: EagerSnapshot,
+    save_mode: SaveMode,
+    schema: SchemaRef,
+}
+
 /// A [`DataSink`] implementation for writing to Delta Lake.
 ///
 /// `DeltaDataSink` is used by [`DataSinkExec`] during query execution to
@@ -773,7 +781,7 @@ impl TableProvider for DeltaTable {
 }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DeltaTableProvider {
     snapshot: EagerSnapshot,
     log_store: LogStoreRef,
