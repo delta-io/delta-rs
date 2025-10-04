@@ -52,7 +52,6 @@ pub use stream::*;
 
 mod iterators;
 mod log_data;
-pub(crate) mod replay;
 mod serde;
 mod stream;
 
