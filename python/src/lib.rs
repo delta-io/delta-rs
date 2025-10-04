@@ -1456,7 +1456,7 @@ impl RawDeltaTable {
                 .block_on(async {
                     t.snapshot()?
                         .snapshot()
-                        .files(&log_store, None)
+                        .file_views(&log_store, None)
                         .map_ok(|f| (f.path().to_string(), f.size()))
                         .try_collect()
                         .await

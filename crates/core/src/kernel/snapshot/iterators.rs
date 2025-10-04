@@ -19,8 +19,10 @@ use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
+pub(crate) use self::scan_row::ScanRowOutStream;
 pub use self::tombstones::TombstoneView;
 
+mod scan_row;
 mod tombstones;
 
 const FIELD_NAME_PATH: &str = "path";

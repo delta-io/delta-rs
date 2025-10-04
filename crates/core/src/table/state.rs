@@ -170,7 +170,7 @@ impl DeltaTableState {
     /// delta table state.
     pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
         self.snapshot
-            .files(log_store, None)
+            .file_views(log_store, None)
             .map_ok(|v| v.add_action())
             .boxed()
     }
