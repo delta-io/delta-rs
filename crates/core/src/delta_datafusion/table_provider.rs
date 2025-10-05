@@ -3,13 +3,10 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use futures::StreamExt;
-
+use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow_array::BooleanArray;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::TableProvider;
@@ -25,7 +22,6 @@ use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::TableType;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::ExecutionProps;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -46,6 +42,8 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use futures::StreamExt as _;
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -63,19 +61,8 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
-
-/// Get the session state from the session
-fn session_state_from_session(session: &dyn Session) -> Result<&SessionState> {
-    session
-        .as_any()
-        .downcast_ref::<SessionState>()
-        .ok_or_else(|| {
-            DataFusionError::Plan("Failed to downcast Session to SessionState".to_string())
-        })
-}
 
 /// DataSink implementation for delta lake
 /// This uses DataSinkExec to handle the insert operation
@@ -106,7 +93,6 @@ impl DeltaDataSink {
         log_store: LogStoreRef,
         snapshot: EagerSnapshot,
         save_mode: SaveMode,
-        session_state: Arc<SessionState>,
     ) -> datafusion::common::Result<Self> {
         let schema = snapshot
             .arrow_schema()
@@ -149,7 +135,7 @@ impl DeltaDataSink {
 /// This is used to write the data to the delta table
 /// It implements the `DataSink` trait and is used by the `DataSinkExec` node
 /// to write the data to the delta table
-#[async_trait]
+#[async_trait::async_trait]
 impl DataSink for DeltaDataSink {
     fn as_any(&self) -> &dyn Any {
         self
@@ -882,8 +868,7 @@ impl TableProvider for DeltaTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_state = session_state_from_session(state)?.clone();
-        register_store(self.log_store.clone(), session_state.runtime_env().clone());
+        register_store(self.log_store.clone(), state.runtime_env().clone());
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,
@@ -895,12 +880,8 @@ impl TableProvider for DeltaTableProvider {
             }
         };
 
-        let data_sink = DeltaDataSink::new(
-            self.log_store.clone(),
-            self.snapshot.clone(),
-            save_mode,
-            Arc::new(session_state),
-        )?;
+        let data_sink =
+            DeltaDataSink::new(self.log_store.clone(), self.snapshot.clone(), save_mode)?;
 
         Ok(Arc::new(DataSinkExec::new(
             input,
