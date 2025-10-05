@@ -277,17 +277,21 @@ mod tests {
 
         // parses simple expression
         let parsed = snapshot
+            .snapshot()
             .parse_predicate_expression("value > 10", &state)
             .unwrap();
         let expected = col("value").gt(lit::<i64>(10));
         assert_eq!(parsed, expected);
 
         // fails for unknown column
-        let parsed = snapshot.parse_predicate_expression("non_existent > 10", &state);
+        let parsed = snapshot
+            .snapshot()
+            .parse_predicate_expression("non_existent > 10", &state);
         assert!(parsed.is_err());
 
         // parses complex expression
         let parsed = snapshot
+            .snapshot()
             .parse_predicate_expression("value > 10 OR value <= 0", &state)
             .unwrap();
         let expected = col("value")

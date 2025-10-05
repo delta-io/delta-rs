@@ -34,7 +34,6 @@ use arrow_schema::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
-use arrow_select::concat::concat_batches;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
@@ -58,7 +57,6 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::table_configuration::TableConfiguration;
 use either::Either;
-use futures::TryStreamExt;
 use itertools::Itertools;
 use url::Url;
 
@@ -185,24 +183,6 @@ impl DataFusionMixins for EagerSnapshot {
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
         self.snapshot().parse_predicate_expression(expr, df_state)
-    }
-}
-
-impl DataFusionMixins for DeltaTableState {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot.arrow_schema()
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot.input_schema()
-    }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        self.snapshot.parse_predicate_expression(expr, df_state)
     }
 }
 
@@ -481,30 +461,6 @@ pub(crate) fn to_correct_scalar_value(
             )?)),
         },
     }
-}
-
-pub(crate) async fn execute_plan_to_batch(
-    state: &SessionState,
-    plan: Arc<dyn ExecutionPlan>,
-) -> DeltaResult<arrow::record_batch::RecordBatch> {
-    let data = futures::future::try_join_all(
-        (0..plan.properties().output_partitioning().partition_count()).map(|p| {
-            let plan_copy = plan.clone();
-            let task_context = state.task_ctx().clone();
-            async move {
-                let batch_stream = plan_copy.execute(p, task_context)?;
-
-                let schema = batch_stream.schema();
-
-                let batches = batch_stream.try_collect::<Vec<_>>().await?;
-
-                DataFusionResult::<_>::Ok(concat_batches(&schema, batches.iter())?)
-            }
-        }),
-    )
-    .await?;
-
-    Ok(concat_batches(&plan.schema(), data.iter())?)
 }
 
 /// Responsible for checking batches of data conform to table's invariants, constraints and nullability.

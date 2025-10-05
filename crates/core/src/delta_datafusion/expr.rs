@@ -816,6 +816,7 @@ mod test {
                         &table
                             .snapshot()
                             .unwrap()
+                            .snapshot()
                             .input_schema()
                             .unwrap()
                             .as_ref()
@@ -926,6 +927,7 @@ mod test {
             let actual_expr = table
                 .snapshot()
                 .unwrap()
+                .snapshot()
                 .parse_predicate_expression(actual, &session.state())
                 .unwrap();
 
