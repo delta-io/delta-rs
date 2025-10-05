@@ -491,7 +491,7 @@ mod tests {
     use crate::logstore::tests::flatten_list_stream as list;
     use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::*;
-    use crate::{ensure_table_uri, DeltaTableBuilder};
+    use crate::DeltaTableBuilder;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use std::sync::Arc;

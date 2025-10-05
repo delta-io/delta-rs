@@ -36,7 +36,7 @@ use std::time::Instant;
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
+use datafusion::common::{plan_err, Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
@@ -81,7 +81,7 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{new_metadata, Action, StructTypeExt};
+use crate::kernel::{new_metadata, Action, EagerSnapshot, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -134,7 +134,7 @@ pub struct MergeBuilder {
     ///Prefix target columns with a user provided prefix
     target_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// The source data
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
@@ -168,7 +168,7 @@ impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         predicate: E,
         source: DataFrame,
     ) -> Self {
@@ -631,7 +631,13 @@ pub struct MergeMetrics {
     pub rewrite_time_ms: u64,
 }
 #[derive(Clone, Debug)]
-struct MergeMetricExtensionPlanner {}
+pub(crate) struct MergeMetricExtensionPlanner {}
+
+impl MergeMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
 
 #[async_trait]
 impl ExtensionPlanner for MergeMetricExtensionPlanner {
@@ -711,6 +717,9 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         }
 
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
+            if physical_inputs.len() != 1 {
+                return plan_err!("MergeBarrierExec expects exactly one input");
+            }
             let schema = barrier.input.schema();
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
@@ -728,7 +737,7 @@ async fn execute(
     predicate: Expression,
     mut source: DataFrame,
     log_store: LogStoreRef,
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
@@ -742,7 +751,7 @@ async fn execute(
     not_match_source_operations: Vec<MergeOperationConfig>,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
+) -> DeltaResult<(EagerSnapshot, MergeMetrics)> {
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can
@@ -755,12 +764,10 @@ async fn execute(
     }
 
     let current_metadata = snapshot.metadata();
-    let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
-        extension_planner: MergeMetricExtensionPlanner {},
-    };
+    let merge_planner = DeltaPlanner::new();
 
     let state = SessionStateBuilder::new_from_existing(state)
-        .with_query_planner(Arc::new(merge_planner))
+        .with_query_planner(merge_planner)
         .build();
 
     // TODO: Given the join predicate, remove any expression that involve the
@@ -1376,9 +1383,9 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let writer_stats_config = WriterStatsConfig::new(
-        snapshot.table_config().num_indexed_cols(),
+        snapshot.table_properties().num_indexed_cols(),
         snapshot
-            .table_config()
+            .table_properties()
             .data_skipping_stats_columns
             .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
@@ -1390,7 +1397,7 @@ async fn execute(
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
-        Some(snapshot.table_config().target_file_size().get() as usize),
+        Some(snapshot.table_properties().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -1462,7 +1469,7 @@ async fn execute(
         .with_post_commit_hook_handler(handle.cloned())
         .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
-    Ok((commit.snapshot(), metrics))
+    Ok((commit.snapshot().snapshot, metrics))
 }
 
 fn modify_schema(
@@ -1524,7 +1531,7 @@ impl std::future::IntoFuture for MergeBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot)?;
 
             if !this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
@@ -1569,7 +1576,7 @@ impl std::future::IntoFuture for MergeBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, snapshot),
+                DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
                 metrics,
             ))
         })

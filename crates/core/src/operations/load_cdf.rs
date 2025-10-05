@@ -16,13 +16,13 @@ use std::time::SystemTime;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
+use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
-use datafusion::execution::SessionState;
 use datafusion::physical_expr::{expressions, PhysicalExpr};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
@@ -33,9 +33,8 @@ use tracing::log;
 use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo};
+use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
 use crate::logstore::{get_actions, LogStoreRef};
-use crate::table::state::DeltaTableState;
 use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
@@ -43,7 +42,7 @@ use crate::{delta_datafusion::cdf::*, kernel::Remove};
 #[derive(Clone, Debug)]
 pub struct CdfLoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    pub snapshot: DeltaTableState,
+    pub snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to read from
@@ -60,7 +59,7 @@ pub struct CdfLoadBuilder {
 
 impl CdfLoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,
@@ -326,13 +325,13 @@ impl CdfLoadBuilder {
     /// Executes the scan
     pub(crate) async fn build(
         &self,
-        session_sate: &SessionState,
+        session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         PROTOCOL.can_read_from(&self.snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read().await?;
-        register_store(self.log_store.clone(), session_sate.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().clone());
 
         let partition_values = self.snapshot.metadata().partition_columns().clone();
         let schema = self.snapshot.input_schema()?;

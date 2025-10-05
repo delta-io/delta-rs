@@ -6,25 +6,13 @@ use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use indexmap::IndexMap;
+use itertools::Itertools;
 
 use super::super::scalars::ScalarExt;
 use super::iterators::LogicalFileView;
 
 pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
-}
-
-impl PartitionsExt for IndexMap<&str, Scalar> {
-    fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
-    }
 }
 
 impl PartitionsExt for IndexMap<String, Scalar> {
@@ -67,12 +55,12 @@ impl<T: PartitionsExt> PartitionsExt for Arc<T> {
 /// to avid the necessiity of knowing the exact layout of the underlying log data.
 #[derive(Clone)]
 pub struct LogDataHandler<'a> {
-    data: &'a RecordBatch,
+    data: &'a [RecordBatch],
     config: &'a TableConfiguration,
 }
 
 impl<'a> LogDataHandler<'a> {
-    pub(crate) fn new(data: &'a RecordBatch, config: &'a TableConfiguration) -> Self {
+    pub(crate) fn new(data: &'a [RecordBatch], config: &'a TableConfiguration) -> Self {
         Self { data, config }
     }
 
@@ -94,12 +82,13 @@ impl<'a> LogDataHandler<'a> {
 
     /// The number of files in the log data.
     pub fn num_files(&self) -> usize {
-        self.data.num_rows()
+        self.data.iter().map(|batch| batch.num_rows()).sum()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = LogicalFileView> {
-        let batch = self.data.clone();
-        (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
+    pub fn iter(&self) -> impl Iterator<Item = LogicalFileView> + '_ {
+        self.data.iter().flat_map(|batch| {
+            (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
+        })
     }
 }
 
@@ -108,8 +97,9 @@ impl IntoIterator for LogDataHandler<'_> {
     type IntoIter = Box<dyn Iterator<Item = Self::Item>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let batch = self.data.clone();
-        Box::new((0..self.data.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx)))
+        Box::new(self.data.to_vec().into_iter().flat_map(|batch| {
+            (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
+        }))
     }
 }
 
@@ -125,6 +115,7 @@ mod datafusion {
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
+    use arrow::compute::concat;
     use arrow_arith::aggregate::sum;
     use arrow_array::{Array, RecordBatch, StringArray, StructArray};
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
@@ -320,33 +311,50 @@ mod datafusion {
     }
 
     impl LogDataHandler<'_> {
+        fn accessors(&self) -> Option<Vec<FileStatsAccessor<'_>>> {
+            self.data
+                .iter()
+                .map(FileStatsAccessor::try_new)
+                .try_collect()
+                .ok()
+        }
+
         fn num_records(&self) -> Precision<usize> {
-            FileStatsAccessor::try_new(self.data)
-                .map(|a| a.num_records())
-                .into_iter()
-                .reduce(|acc, num_records| acc.add(&num_records))
-                .unwrap_or(Precision::Absent)
+            if let Some(accessors) = self.accessors() {
+                return accessors
+                    .iter()
+                    .map(|a| a.num_records())
+                    .reduce(|acc, num_records| acc.add(&num_records))
+                    .unwrap_or(Precision::Absent);
+            }
+            Precision::Absent
         }
 
         fn total_size_files(&self) -> Precision<usize> {
-            FileStatsAccessor::try_new(self.data)
-                .map(|a| a.total_size_files())
-                .into_iter()
-                .reduce(|acc, size| acc.add(&size))
-                .unwrap_or(Precision::Absent)
+            if let Some(accessors) = self.accessors() {
+                return accessors
+                    .iter()
+                    .map(|a| a.total_size_files())
+                    .reduce(|acc, size| acc.add(&size))
+                    .unwrap_or(Precision::Absent);
+            }
+            Precision::Absent
         }
 
         pub(crate) fn column_stats(&self, name: impl AsRef<str>) -> Option<ColumnStatistics> {
-            FileStatsAccessor::try_new(self.data)
-                .map(|a| a.column_stats(name.as_ref()))
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?
-                .iter()
-                .fold(None::<ColumnStatistics>, |acc, stats| match (acc, stats) {
-                    (None, stats) => Some(stats.clone()),
-                    (Some(acc), stats) => Some(acc.add(stats)),
-                })
+            if let Some(accessors) = self.accessors() {
+                return accessors
+                    .iter()
+                    .map(|a| a.column_stats(name.as_ref()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()?
+                    .iter()
+                    .fold(None::<ColumnStatistics>, |acc, stats| match (acc, stats) {
+                        (None, stats) => Some(stats.clone()),
+                        (Some(acc), stats) => Some(acc.add(stats)),
+                    });
+            }
+            None
         }
 
         pub(crate) fn statistics(&self) -> Option<Statistics> {
@@ -388,8 +396,21 @@ mod datafusion {
                 field.data_type().clone(),
             );
 
-            let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
-            batch.column_by_name("output").cloned()
+            let results: Vec<_> = self
+                .data
+                .iter()
+                .map(|data| -> DeltaResult<_> {
+                    Ok(evaluator.evaluate_arrow(data.clone())?.column(0).clone())
+                })
+                .try_collect()
+                .ok()?;
+            concat(
+                &results
+                    .iter()
+                    .map(|result| result.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .ok()
         }
     }
 
@@ -409,7 +430,7 @@ mod datafusion {
         /// return the number of containers (e.g. row groups) being
         /// pruned with these statistics
         fn num_containers(&self) -> usize {
-            self.data.num_rows()
+            self.data.iter().map(|b| b.num_rows()).sum()
         }
 
         /// return the number of null values for the named column as an
@@ -454,8 +475,23 @@ mod datafusion {
                 )
             });
 
-            let batch = ROW_COUNTS_EVAL.evaluate_arrow(self.data.clone()).ok()?;
-            arrow_cast::cast(batch.column_by_name("output")?, &ArrowDataType::UInt64).ok()
+            let results: Vec<_> = self
+                .data
+                .iter()
+                .map(|data| -> DeltaResult<_> {
+                    let batch = ROW_COUNTS_EVAL.evaluate_arrow(data.clone())?;
+                    Ok(arrow_cast::cast(batch.column(0), &ArrowDataType::UInt64)?)
+                })
+                .try_collect()
+                .ok()?;
+
+            concat(
+                &results
+                    .iter()
+                    .map(|result| result.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .ok()
         }
 
         // This function is optional but will optimize partition column pruning
@@ -531,8 +567,8 @@ mod tests {
         let json_adds: Vec<_> = table_from_json_stats
             .snapshot()
             .unwrap()
-            .snapshot
-            .files(&log_store, None)
+            .snapshot()
+            .file_views(&log_store, None)
             .try_collect()
             .await
             .unwrap();
@@ -548,8 +584,8 @@ mod tests {
         let struct_adds: Vec<_> = table_from_struct_stats
             .snapshot()
             .unwrap()
-            .snapshot
-            .files(&log_store, None)
+            .snapshot()
+            .file_views(&log_store, None)
             .try_collect()
             .await
             .unwrap();
@@ -588,7 +624,7 @@ mod tests {
         let file_stats = table_from_struct_stats
             .snapshot()
             .unwrap()
-            .snapshot
+            .snapshot()
             .log_data();
 
         let col_stats = file_stats.statistics();

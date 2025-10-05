@@ -36,7 +36,7 @@ pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
-use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
+use metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -71,11 +71,11 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{
-    new_metadata, Action, ActionType, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
+    new_metadata, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType,
+    StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -130,7 +130,7 @@ impl FromStr for SchemaMode {
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: Option<DeltaTableState>,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// The input plan
@@ -190,7 +190,7 @@ impl super::Operation<()> for WriteBuilder {
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: Option<DeltaTableState>) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -368,7 +368,7 @@ impl WriteBuilder {
         match &self.snapshot {
             Some(snapshot) => {
                 if self.mode == SaveMode::Overwrite {
-                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
+                    PROTOCOL.check_append_only(snapshot)?;
                     if !snapshot.load_config().require_files {
                         return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
                     }
@@ -425,9 +425,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut metrics = WriteMetrics::default();
             let exec_start = Instant::now();
 
-            let write_planner = DeltaPlanner::<WriteMetricExtensionPlanner> {
-                extension_planner: WriteMetricExtensionPlanner {},
-            };
+            let write_planner = DeltaPlanner::new();
 
             // Create table actions to initialize table in case it does not yet exist
             // and should be created
@@ -437,12 +435,12 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let state = match this.state {
                 Some(state) => SessionStateBuilder::new_from_existing(state.clone())
-                    .with_query_planner(Arc::new(write_planner))
+                    .with_query_planner(write_planner.clone())
                     .build(),
                 None => {
                     let state = SessionStateBuilder::new()
                         .with_default_features()
-                        .with_query_planner(Arc::new(write_planner))
+                        .with_query_planner(write_planner)
                         .build();
                     register_store(this.log_store.clone(), state.runtime_env().clone());
                     state
@@ -611,7 +609,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let config = this
                 .snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.table_config());
+                .map(|snapshot| snapshot.table_properties());
 
             let target_file_size = this.target_file_size.or_else(|| {
                 Some(super::get_target_file_size(config, &this.configuration) as usize)
@@ -663,7 +661,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         _ => {
                             let remove_actions = snapshot
                                 .log_data()
-                                .iter()
+                                .into_iter()
                                 .map(|p| p.remove_action(true).into());
                             actions.extend(remove_actions);
                         }
@@ -671,7 +669,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
                 metrics.num_removed_files = actions
                     .iter()
-                    .filter(|a| a.action_type() == ActionType::Remove)
+                    .filter(|a| matches!(a, Action::Remove(_)))
                     .count();
             }
 
@@ -1950,9 +1948,10 @@ mod tests {
                     .logical_plan()
                     .clone(),
             );
-            let writer = WriteBuilder::new(table.log_store.clone(), table.state)
-                .with_input_execution_plan(plan)
-                .with_save_mode(SaveMode::Overwrite);
+            let writer =
+                WriteBuilder::new(table.log_store.clone(), table.state.map(|f| f.snapshot))
+                    .with_input_execution_plan(plan)
+                    .with_save_mode(SaveMode::Overwrite);
 
             let _ = writer.check_preconditions().await?;
             Ok(())

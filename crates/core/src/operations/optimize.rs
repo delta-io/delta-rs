@@ -27,7 +27,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
-use datafusion::prelude::SessionConfig;
+use datafusion::execution::context::SessionState;
+use datafusion::execution::memory_pool::FairSpillPool;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -50,6 +53,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
+use crate::kernel::EagerSnapshot;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
@@ -195,7 +199,7 @@ pub enum OptimizeType {
 /// table's configuration is read. Otherwise a default value is used.
 pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
@@ -214,8 +218,8 @@ pub struct OptimizeBuilder<'a> {
     max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
-    /// Optional [SessionConfig] for users that want more control over the Datafusion execution
-    session_config: Option<SessionConfig>,
+    /// Datafusion session state relevant for executing the input plan
+    state: Option<SessionState>,
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -231,7 +235,7 @@ impl super::Operation<()> for OptimizeBuilder<'_> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,
@@ -244,7 +248,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
-            session_config: None,
+            state: None,
             custom_execute_handler: None,
         }
     }
@@ -292,6 +296,10 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Max spill size
+    #[deprecated(
+        since = "0.29.0",
+        note = "Pass in a `SessionState` configured with a `RuntimeEnv` and a `FairSpillPool`"
+    )]
     pub fn with_max_spill_size(mut self, max_spill_size: usize) -> Self {
         self.max_spill_size = max_spill_size;
         self
@@ -309,9 +317,9 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Add a custom [SessionConfig] to the optimize plan execution
-    pub fn with_session_config(mut self, config: SessionConfig) -> Self {
-        self.session_config = Some(config);
+    /// A session state accompanying a given input plan, containing e.g. registered object stores
+    pub fn with_input_session_state(mut self, state: SessionState) -> Self {
+        self.state = Some(state);
         self
     }
 }
@@ -324,7 +332,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            PROTOCOL.can_write_to(&this.snapshot)?;
             if !&this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
             }
@@ -344,7 +352,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
-                this.session_config,
+                this.state,
             )
             .await?;
 
@@ -364,7 +372,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             if let Some(handler) = this.custom_execute_handler {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let mut table =
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(this.snapshot));
             table.update().await?;
             Ok((table, metrics))
         })
@@ -439,7 +448,7 @@ enum OptimizeOperations {
     ZOrder(
         Vec<String>,
         HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
-        Option<SessionConfig>,
+        Box<Option<SessionState>>,
     ),
     // TODO: Sort
 }
@@ -612,7 +621,7 @@ impl MergePlan {
     pub async fn execute(
         mut self,
         log_store: LogStoreRef,
-        snapshot: &DeltaTableState,
+        snapshot: &EagerSnapshot,
         max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
@@ -622,6 +631,7 @@ impl MergePlan {
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
+        let object_store = log_store.object_store(Some(operation_id));
 
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
@@ -636,7 +646,7 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.path);
                     }
-                    let object_store_ref = log_store.object_store(Some(operation_id));
+                    let object_store_ref = object_store.clone();
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
@@ -657,20 +667,32 @@ impl MergePlan {
                         self.task_parameters.clone(),
                         partition,
                         files,
-                        log_store.object_store(Some(operation_id)).clone(),
+                        object_store.clone(),
                         futures::future::ready(Ok(batch_stream)),
                     ));
                     util::flatten_join_error(rewrite_result)
                 })
                 .boxed(),
-            OptimizeOperations::ZOrder(zorder_columns, bins, session_config) => {
+            OptimizeOperations::ZOrder(zorder_columns, bins, state) => {
                 debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
+
+                let state = if let Some(state) = *state {
+                    state
+                } else {
+                    let memory_pool = FairSpillPool::new(max_spill_size);
+                    let runtime = RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::new(memory_pool))
+                        .build_arc()?;
+                    SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_runtime_env(runtime)
+                        .build()
+                };
 
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    log_store.object_store(Some(operation_id)),
-                    max_spill_size,
-                    session_config,
+                    state,
+                    object_store,
                 )?);
                 let task_parameters = self.task_parameters.clone();
 
@@ -713,7 +735,8 @@ impl MergePlan {
 
         let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
-        let mut table = DeltaTable::new_with_state(log_store.clone(), snapshot.clone());
+        let mut table =
+            DeltaTable::new_with_state(log_store.clone(), DeltaTableState::new(snapshot.clone()));
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.
@@ -777,7 +800,7 @@ impl MergePlan {
                         self.task_parameters.input_parameters.clone().into(),
                     )
                     .await?;
-                snapshot = commit.snapshot();
+                snapshot = commit.snapshot().snapshot;
                 commits_made += 1;
             }
 
@@ -794,7 +817,7 @@ impl MergePlan {
             total_metrics.files_removed.min = 0;
         }
 
-        table.state = Some(snapshot);
+        table.state = Some(DeltaTableState::new(snapshot));
 
         Ok(total_metrics)
     }
@@ -804,14 +827,14 @@ impl MergePlan {
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties: WriterProperties,
-    session_config: Option<SessionConfig>,
+    state: Option<SessionState>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
-        target_size.unwrap_or_else(|| snapshot.table_config().target_file_size().get());
+        target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());
     let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics) = match optimize_type {
@@ -825,7 +848,7 @@ pub async fn create_merge_plan(
                 snapshot,
                 partitions_keys,
                 filters,
-                session_config,
+                state,
             )
             .await?
         }
@@ -847,9 +870,9 @@ pub async fn create_merge_plan(
             input_parameters,
             file_schema,
             writer_properties,
-            num_indexed_cols: snapshot.table_config().num_indexed_cols(),
+            num_indexed_cols: snapshot.table_properties().num_indexed_cols(),
             stats_columns: snapshot
-                .table_config()
+                .table_properties()
                 .data_skipping_stats_columns
                 .as_ref()
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
@@ -902,14 +925,14 @@ impl IntoIterator for MergeBin {
 
 async fn build_compaction_plan(
     log_store: &dyn LogStore,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
     target_size: u64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    let mut file_stream = snapshot.get_active_add_actions_by_partitions(log_store, filters);
+    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         metrics.total_considered_files += 1;
@@ -983,10 +1006,10 @@ async fn build_compaction_plan(
 async fn build_zorder_plan(
     log_store: &dyn LogStore,
     zorder_columns: Vec<String>,
-    snapshot: &DeltaTableState,
+    snapshot: &EagerSnapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
-    session_config: Option<SessionConfig>,
+    state: Option<SessionState>,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1021,7 +1044,7 @@ async fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    let mut file_stream = snapshot.get_active_add_actions_by_partitions(log_store, filters);
+    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         let partition_values = file
@@ -1043,7 +1066,7 @@ async fn build_zorder_plan(
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
-    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, session_config);
+    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(state));
     Ok((operation, metrics))
 }
 
@@ -1090,10 +1113,7 @@ pub(super) mod zorder {
             ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
             Volatility,
         };
-        use ::datafusion::{
-            execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder},
-            prelude::{SessionConfig, SessionContext},
-        };
+        use ::datafusion::prelude::SessionContext;
         use arrow_schema::DataType;
         use itertools::Itertools;
         use std::any::Any;
@@ -1108,21 +1128,14 @@ pub(super) mod zorder {
         impl ZOrderExecContext {
             pub fn new(
                 columns: Vec<String>,
-                object_store: ObjectStoreRef,
-                max_spill_size: usize,
-                session_config: Option<SessionConfig>,
+                session_state: SessionState,
+                object_store_ref: ObjectStoreRef,
             ) -> Result<Self, DataFusionError> {
                 let columns = columns.into();
 
-                let memory_pool = FairSpillPool::new(max_spill_size);
-                let runtime = RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::new(memory_pool))
-                    .build_arc()?;
-                runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
-
-                let ctx =
-                    SessionContext::new_with_config_rt(session_config.unwrap_or_default(), runtime);
+                let ctx = SessionContext::new_with_state(session_state);
                 ctx.register_udf(ScalarUDF::from(datafusion::ZOrderUDF));
+                ctx.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store_ref);
                 Ok(Self { columns, ctx })
             }
         }

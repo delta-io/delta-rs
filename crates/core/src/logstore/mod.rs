@@ -341,7 +341,7 @@ pub trait LogStore: Send + Sync + AsAny {
 
     #[deprecated(
         since = "0.1.0",
-        note = "DO NOT USE: Just a stop grap to support lakefs during kernel migration"
+        note = "DO NOT USE: Just a stop gap to support lakefs during kernel migration"
     )]
     fn transaction_url(&self, _operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
         Ok(base.clone())

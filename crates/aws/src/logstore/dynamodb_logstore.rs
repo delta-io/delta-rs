@@ -148,7 +148,7 @@ impl S3DynamoDbLogStore {
                 ),
             }
         }
-        unreachable!("for loop yields Ok or Err in body when retyr = MAX_REPAIR_RETRIES")
+        unreachable!("for loop yields Ok or Err in body when retry = MAX_REPAIR_RETRIES")
     }
 
     fn map_retry_result(
