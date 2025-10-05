@@ -252,7 +252,7 @@ impl DeltaOps {
     /// Vacuum stale files from delta table
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
-        VacuumBuilder::new(self.0.log_store, self.0.state.unwrap())
+        VacuumBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Audit active files with files present on the filesystem
