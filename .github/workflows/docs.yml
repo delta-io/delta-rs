@@ -1,4 +1,4 @@
-name: Build (and maybe release) the documentation
+name: docs
 
 on:
   merge_group:
@@ -22,10 +22,10 @@ jobs:
   markdown-link-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses:  tcort/github-action-markdown-link-check@v1
+      - uses: actions/checkout@v5
+      - uses: tcort/github-action-markdown-link-check@v1
         with:
-          config-file: 'docs/mlc_config.json'
+          config-file: "docs/mlc_config.json"
           folder-path: docs
           base-branch: main
           use-quiet-mode: yes
@@ -34,7 +34,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           cd docs
           make check
@@ -45,7 +45,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env
