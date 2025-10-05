@@ -71,8 +71,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{
-    new_metadata, Action, ActionType, EagerSnapshot, MetadataExt as _, ProtocolExt as _,
-    StructType, StructTypeExt,
+    new_metadata, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType,
+    StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -661,7 +661,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         _ => {
                             let remove_actions = snapshot
                                 .log_data()
-                                .iter()
+                                .into_iter()
                                 .map(|p| p.remove_action(true).into());
                             actions.extend(remove_actions);
                         }
@@ -669,7 +669,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
                 metrics.num_removed_files = actions
                     .iter()
-                    .filter(|a| a.action_type() == ActionType::Remove)
+                    .filter(|a| matches!(a, Action::Remove(_)))
                     .count();
             }
 

@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow_array::{Array, StructArray};
 use arrow_schema::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
@@ -12,7 +11,6 @@ use delta_kernel::arrow::compute::filter_record_batch;
 use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::{ColumnName, Scalar, StructData};
 use delta_kernel::scan::{Scan, ScanMetadata};
 use delta_kernel::schema::{
@@ -27,7 +25,6 @@ use delta_kernel::{
 use itertools::Itertools;
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
-use crate::kernel::replay::parse_partitions;
 use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
@@ -118,9 +115,6 @@ pub(crate) trait SnapshotExt {
     /// computations by delta-rs. Specifically the `stats_parsed` and
     /// `partitionValues_parsed` fields are added.
     fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef>;
-
-    /// Parse stats column into a struct array.
-    fn parse_stats_column(&self, batch: &RecordBatch) -> DeltaResultLocal<RecordBatch>;
 }
 
 impl SnapshotExt for Snapshot {
@@ -150,14 +144,15 @@ impl SnapshotExt for Snapshot {
     /// scan row (file data).
     fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
         let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
+        let stats_idx = SCAN_ROW_ARROW_SCHEMA.index_of("stats").unwrap();
 
         let stats_schema = self.stats_schema()?;
         let stats_schema: ArrowSchema = stats_schema.as_ref().try_into_arrow()?;
-        fields.push(Arc::new(Field::new(
+        fields[stats_idx] = Arc::new(Field::new(
             "stats_parsed",
             ArrowDataType::Struct(stats_schema.fields().to_owned()),
             true,
-        )));
+        ));
 
         if let Some(partition_schema) = self.partitions_schema()? {
             let partition_schema: ArrowSchema = partition_schema.as_ref().try_into_arrow()?;
@@ -170,51 +165,6 @@ impl SnapshotExt for Snapshot {
 
         let schema = Arc::new(ArrowSchema::new(fields));
         Ok(schema)
-    }
-
-    fn parse_stats_column(&self, batch: &RecordBatch) -> DeltaResultLocal<RecordBatch> {
-        let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
-            return Err(DeltaTableError::SchemaMismatch {
-                msg: "stats column not found".to_string(),
-            });
-        };
-
-        let mut columns = batch.columns().to_vec();
-        let mut fields = batch.schema().fields().to_vec();
-
-        let stats_schema = self.stats_schema()?;
-        let stats_batch = batch.project(&[stats_idx])?;
-        let stats_data = Box::new(ArrowEngineData::new(stats_batch));
-
-        let parsed = parse_json(stats_data, stats_schema)?;
-        let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
-
-        let stats_array: Arc<StructArray> = Arc::new(parsed.into());
-        fields.push(Arc::new(Field::new(
-            "stats_parsed",
-            stats_array.data_type().to_owned(),
-            true,
-        )));
-        columns.push(stats_array.clone());
-
-        if let Some(partition_schema) = self.partitions_schema()? {
-            let partition_array = parse_partitions(
-                batch,
-                partition_schema.as_ref(),
-                "fileConstantValues.partitionValues",
-            )?;
-            fields.push(Arc::new(Field::new(
-                "partitionValues_parsed",
-                partition_array.data_type().to_owned(),
-                false,
-            )));
-            columns.push(Arc::new(partition_array));
-        }
-
-        Ok(RecordBatch::try_new(
-            Arc::new(ArrowSchema::new(fields)),
-            columns,
-        )?)
     }
 }
 
@@ -915,5 +865,25 @@ mod tests {
         let result = partitions_schema(&logical_schema, &[])?;
         assert_eq!(None, result);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partition_schema2() {
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::LONG, true),
+            StructField::new("name", DataType::STRING, true),
+            StructField::new("date", DataType::DATE, true),
+        ])
+        .unwrap();
+
+        let partition_columns = vec!["date".to_string()];
+        let expected =
+            StructType::try_new(vec![StructField::new("date", DataType::DATE, true)]).unwrap();
+        assert_eq!(
+            partitions_schema(&schema, &partition_columns).unwrap(),
+            Some(expected)
+        );
+
+        assert_eq!(partitions_schema(&schema, &[]).unwrap(), None);
     }
 }
