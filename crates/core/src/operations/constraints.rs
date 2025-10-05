@@ -156,7 +156,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
             for p in 0..plan.properties().output_partitioning().partition_count() {
                 let inner_plan = plan.clone();
                 let inner_checker = checker.clone();
-                let task_ctx= Arc::new((&session).into());
+                let task_ctx = Arc::new((&session).into());
                 let mut record_stream: SendableRecordBatchStream =
                     inner_plan.execute(p, task_ctx)?;
                 let handle: tokio::task::JoinHandle<DeltaResult<()>> =

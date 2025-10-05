@@ -423,8 +423,8 @@ pub(crate) fn get_target_file_size(
 
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
-    use datafusion::{catalog::Session, common::DFSchema};
     use datafusion::logical_expr::Expr;
+    use datafusion::{catalog::Session, common::DFSchema};
 
     use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 
