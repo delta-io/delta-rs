@@ -18,17 +18,19 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
-use arrow::compute::concat_batches;
+use arrow::compute::{concat_batches, filter_record_batch, is_not_null};
 use arrow_array::RecordBatch;
+use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::SchemaRef;
+use delta_kernel::schema::derive_macro_utils::ToDataType;
+use delta_kernel::schema::{SchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{PredicateRef, Version};
+use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -36,12 +38,11 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::task::spawn_blocking;
 
-use super::{Action, CommitInfo, Metadata, Protocol, Remove};
-use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
-use crate::kernel::parse::read_removes;
+use super::{Action, CommitInfo, Metadata, Protocol};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, ScanExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::transaction::CommitData;
-use crate::kernel::{ActionType, StructType};
+use crate::kernel::{StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
@@ -51,7 +52,6 @@ pub use stream::*;
 
 mod iterators;
 mod log_data;
-pub(crate) mod parse;
 pub(crate) mod replay;
 mod serde;
 mod stream;
@@ -355,14 +355,27 @@ impl Snapshot {
     pub(crate) fn tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> BoxStream<'_, DeltaResult<Remove>> {
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
         static TOMBSTONE_SCHEMA: LazyLock<Arc<StructType>> = LazyLock::new(|| {
             Arc::new(
                 StructType::try_new(vec![
-                    ActionType::Remove.schema_field().clone(),
-                    ActionType::Sidecar.schema_field().clone(),
+                    StructField::nullable("remove", Remove::to_data_type()),
+                    StructField::nullable("sidecar", Sidecar::to_data_type()),
                 ])
                 .expect("Failed to create a StructType somehow"),
+            )
+        });
+        static TOMBSTONE_EVALUATOR: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
+            let expression = Expression::struct_from(
+                Remove::to_schema()
+                    .fields()
+                    .map(|field| Expression::column(["remove", field.name()])),
+            )
+            .into();
+            ARROW_HANDLER.new_expression_evaluator(
+                TOMBSTONE_SCHEMA.clone(),
+                expression,
+                Remove::to_data_type(),
             )
         });
 
@@ -400,10 +413,15 @@ impl Snapshot {
 
         builder
             .build()
-            .map(|maybe_batch| maybe_batch.and_then(|batch| read_removes(&batch)))
-            .map_ok(|removes| {
-                futures::stream::iter(removes.into_iter().map(Ok::<_, DeltaTableError>))
+            .map(|maybe_batch| {
+                maybe_batch.and_then(|batch| {
+                    let filtered = filter_record_batch(&batch, &is_not_null(batch.column(0))?)?;
+                    let tombstones = TOMBSTONE_EVALUATOR.evaluate_arrow(filtered)?;
+                    Ok((0..tombstones.num_rows())
+                        .map(move |idx| TombstoneView::new(tombstones.clone(), idx)))
+                })
             })
+            .map_ok(|removes| futures::stream::iter(removes.map(Ok::<_, DeltaTableError>)))
             .try_flatten()
             .boxed()
     }
