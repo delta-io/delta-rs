@@ -70,7 +70,7 @@ impl std::future::IntoFuture for LoadBuilder {
                     snapshot: this.snapshot,
                 },
             );
-            let schema = table.snapshot()?.arrow_schema()?;
+            let schema = table.snapshot()?.snapshot().arrow_schema()?;
             let projection = this
                 .columns
                 .map(|cols| {

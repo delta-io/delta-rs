@@ -720,7 +720,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<Schema> {
-        self.snapshot().unwrap().arrow_schema().unwrap()
+        self.snapshot().unwrap().snapshot().arrow_schema().unwrap()
     }
 
     fn table_type(&self) -> TableType {
