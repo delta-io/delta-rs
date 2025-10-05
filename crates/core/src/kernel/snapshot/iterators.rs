@@ -19,6 +19,10 @@ use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
+pub use self::tombstones::TombstoneView;
+
+mod tombstones;
+
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
