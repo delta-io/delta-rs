@@ -201,7 +201,13 @@ impl UpdateBuilder {
 }
 
 #[derive(Clone, Debug)]
-struct UpdateMetricExtensionPlanner {}
+pub(crate) struct UpdateMetricExtensionPlanner {}
+
+impl UpdateMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
 
 #[async_trait]
 impl ExtensionPlanner for UpdateMetricExtensionPlanner {
@@ -276,12 +282,10 @@ async fn execute(
         .with_optimizer_rules(rules)
         .build();
 
-    let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
-        extension_planner: UpdateMetricExtensionPlanner {},
-    };
+    let update_planner = DeltaPlanner::new();
 
     let state = SessionStateBuilder::new_from_existing(state)
-        .with_query_planner(Arc::new(update_planner))
+        .with_query_planner(update_planner)
         .build();
 
     let exec_start = Instant::now();

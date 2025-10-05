@@ -18,31 +18,31 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
-use arrow::compute::concat_batches;
+use arrow::compute::{filter_record_batch, is_not_null};
 use arrow_array::RecordBatch;
+use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::SchemaRef;
+use delta_kernel::schema::derive_macro_utils::ToDataType;
+use delta_kernel::schema::{SchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{PredicateRef, Version};
-use futures::stream::BoxStream;
+use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version};
+use futures::future::ready;
+use futures::stream::{once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
-use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::task::spawn_blocking;
-use url::Url;
 
-use super::{Action, CommitInfo, Metadata, Protocol, Remove};
-use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
-use crate::kernel::parse::read_removes;
+use super::{Action, CommitInfo, Metadata, Protocol};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, ScanExt};
 #[cfg(test)]
 use crate::kernel::transaction::CommitData;
-use crate::kernel::{ActionType, StructType};
+use crate::kernel::{StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
@@ -52,8 +52,6 @@ pub use stream::*;
 
 mod iterators;
 mod log_data;
-pub(crate) mod parse;
-pub(crate) mod replay;
 mod serde;
 mod stream;
 
@@ -69,8 +67,6 @@ pub struct Snapshot {
     config: DeltaTableConfig,
     /// Logical table schema
     schema: SchemaRef,
-    /// Fully qualified URL of the table
-    table_url: Url,
 }
 
 impl Snapshot {
@@ -118,7 +114,6 @@ impl Snapshot {
             inner: snapshot,
             config,
             schema,
-            table_url: log_store.config().location.clone(),
         })
     }
 
@@ -136,7 +131,7 @@ impl Snapshot {
             store.put(&uri, data.into()).await?;
         }
 
-        let table_url = Url::parse("memory:///").unwrap();
+        let table_url = url::Url::parse("memory:///").unwrap();
 
         let log_store = default_logstore(
             store.clone(),
@@ -154,7 +149,6 @@ impl Snapshot {
                 inner: snapshot,
                 config: Default::default(),
                 schema,
-                table_url,
             },
             log_store,
         ))
@@ -221,7 +215,7 @@ impl Snapshot {
 
     /// Get the table root of the snapshot
     pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
-        Ok(Path::from_url_path(self.table_url.path())?)
+        Ok(Path::from_url_path(self.inner.table_root().path())?)
     }
 
     /// Well known properties of the table
@@ -263,33 +257,80 @@ impl Snapshot {
             .build()
         {
             Ok(scan) => scan,
-            Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
-            }
+            Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
         };
 
         // TODO: which capacity to choose?
         let mut builder = RecordBatchReceiverStreamBuilder::new(100);
-        let tx = builder.tx();
+        let snapshot = scan.snapshot().clone();
+
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
-        let inner = self.inner.clone();
-
+        let tx = builder.tx();
         builder.spawn_blocking(move || {
-            let scan_iter = scan.scan_metadata_arrow(engine.as_ref())?;
-            for res in scan_iter {
-                let batch = res?.scan_files;
-                let batch = inner.parse_stats_column(&batch)?;
-                if tx.blocking_send(Ok(batch)).is_err() {
+            for res in scan.scan_metadata_arrow(engine.as_ref())? {
+                if tx.blocking_send(Ok(res?.scan_files)).is_err() {
                     break;
                 }
             }
             Ok(())
         });
 
-        builder.build()
+        ScanRowOutStream::new(snapshot, builder.build()).boxed()
+    }
+
+    pub(crate) fn files_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+        existing_version: Version,
+        existing_data: Box<T>,
+        existing_predicate: Option<PredicateRef>,
+    ) -> SendableRBStream {
+        let scan = match self
+            .inner
+            .clone()
+            .scan_builder()
+            .with_predicate(predicate)
+            .build()
+        {
+            Ok(scan) => scan,
+            Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
+        };
+
+        let snapshot = scan.snapshot().clone();
+
+        // process our stored / caed data to conform to the expected input for log replay
+        let evaluator = match scan_row_in_eval(&snapshot) {
+            Ok(scan_row_in_eval) => scan_row_in_eval,
+            Err(err) => return Box::pin(once(ready(Err(err)))),
+        };
+        let scan_row_iter = existing_data.map(move |b| {
+            evaluator
+                .evaluate_arrow(b)
+                .expect("Illegal stored log data")
+        });
+
+        // TODO: which capacity to choose?
+        let mut builder = RecordBatchReceiverStreamBuilder::new(100);
+        // TODO: bundle operation id with log store ...
+        let engine = log_store.engine(None);
+        let tx = builder.tx();
+        builder.spawn_blocking(move || {
+            for res in scan.scan_metadata_from_arrow(
+                engine.as_ref(),
+                existing_version,
+                Box::new(scan_row_iter),
+                existing_predicate,
+            )? {
+                if tx.blocking_send(Ok(res?.scan_files)).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        });
+
+        ScanRowOutStream::new(snapshot, builder.build()).boxed()
     }
 
     /// Get the commit infos in the snapshot
@@ -360,14 +401,27 @@ impl Snapshot {
     pub(crate) fn tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> BoxStream<'_, DeltaResult<Remove>> {
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
         static TOMBSTONE_SCHEMA: LazyLock<Arc<StructType>> = LazyLock::new(|| {
             Arc::new(
                 StructType::try_new(vec![
-                    ActionType::Remove.schema_field().clone(),
-                    ActionType::Sidecar.schema_field().clone(),
+                    StructField::nullable("remove", Remove::to_data_type()),
+                    StructField::nullable("sidecar", Sidecar::to_data_type()),
                 ])
                 .expect("Failed to create a StructType somehow"),
+            )
+        });
+        static TOMBSTONE_EVALUATOR: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
+            let expression = Expression::struct_from(
+                Remove::to_schema()
+                    .fields()
+                    .map(|field| Expression::column(["remove", field.name()])),
+            )
+            .into();
+            ARROW_HANDLER.new_expression_evaluator(
+                TOMBSTONE_SCHEMA.clone(),
+                expression,
+                Remove::to_data_type(),
             )
         });
 
@@ -386,9 +440,7 @@ impl Snapshot {
         ) {
             Ok(data) => data,
             Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
+                return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
             }
         };
 
@@ -405,10 +457,15 @@ impl Snapshot {
 
         builder
             .build()
-            .map(|maybe_batch| maybe_batch.and_then(|batch| read_removes(&batch)))
-            .map_ok(|removes| {
-                futures::stream::iter(removes.into_iter().map(Ok::<_, DeltaTableError>))
+            .map(|maybe_batch| {
+                maybe_batch.and_then(|batch| {
+                    let filtered = filter_record_batch(&batch, &is_not_null(batch.column(0))?)?;
+                    let tombstones = TOMBSTONE_EVALUATOR.evaluate_arrow(filtered)?;
+                    Ok((0..tombstones.num_rows())
+                        .map(move |idx| TombstoneView::new(tombstones.clone(), idx)))
+                })
             })
+            .map_ok(|removes| futures::stream::iter(removes.map(Ok::<_, DeltaTableError>)))
             .try_flatten()
             .boxed()
     }
@@ -455,7 +512,7 @@ impl Snapshot {
 pub struct EagerSnapshot {
     snapshot: Snapshot,
     // logical files in the snapshot
-    pub(crate) files: RecordBatch,
+    pub(crate) files: Vec<RecordBatch>,
 }
 
 impl EagerSnapshot {
@@ -472,9 +529,6 @@ impl EagerSnapshot {
             false => vec![],
         };
 
-        let scan_row_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
-        let files = concat_batches(&scan_row_schema, &files)?;
-
         Ok(Self { snapshot, files })
     }
 
@@ -487,9 +541,6 @@ impl EagerSnapshot {
             .files(log_store.as_ref(), None)
             .try_collect()
             .await?;
-        let scan_row_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
-        let files = concat_batches(&scan_row_schema, &files)?;
-
         Ok(Self { snapshot, files })
     }
 
@@ -506,26 +557,17 @@ impl EagerSnapshot {
 
         self.snapshot.update(log_store, target_version).await?;
 
-        let scan = self.snapshot.inner.clone().scan_builder().build()?;
-        let engine = log_store.engine(None);
-        let current_files = self.files.clone();
-        let files: Vec<_> = spawn_blocking(move || {
-            scan.scan_metadata_from_arrow(
-                engine.as_ref(),
-                current_version,
-                Box::new(std::iter::once(current_files)),
+        self.files = self
+            .snapshot
+            .files_from(
+                log_store,
                 None,
-            )?
-            .map_ok(|s| s.scan_files)
+                current_version,
+                Box::new(self.files.clone().into_iter()),
+                None,
+            )
             .try_collect()
-        })
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-        let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)?;
-        let files = self.snapshot.inner.parse_stats_column(&files)?;
-
-        self.files = files;
+            .await?;
 
         Ok(())
     }
@@ -589,81 +631,34 @@ impl EagerSnapshot {
     /// This function returns a stream of [`LogicalFileView`] objects,
     /// which represent the active files in the snapshot.
     ///
-    /// # Arguments
+    /// ## Parameters
     ///
     /// * `log_store` - A reference to a [`LogStore`] implementation.
     /// * `predicate` - An optional predicate to filter the files.
     ///
-    /// # Returns
+    /// ## Returns
     ///
     /// A stream of [`LogicalFileView`] objects.
-    pub fn files(
+    pub fn file_views(
         &self,
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        // TODO: the logic in this function would be more suitable as an async fn rather than
-        // a stream. However as we are moving from an eager to a cached snapshot, this should be
-        // a stream just like on the Snapshot. So we swallow the awkward error handling for now
-        // knowing that we will be able to clean this up soon (TM).
-        let data = if let Some(predicate) = predicate {
-            let scan = match self
-                .snapshot
-                .inner
-                .clone()
-                .scan_builder()
-                .with_predicate(predicate)
-                .build()
-            {
-                Ok(scan) => scan,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
-            };
-            let engine = log_store.engine(None);
-            let current_files = self.files.clone();
-            let current_version = self.version() as u64;
-
-            // TODO: while we are always re-processing the cached files, we are confident that no IO
-            // is performed when processing, so for now we are not spawning this on a blocking thread.
-            // As we continue refactoring, we need to move this onto an actual stream.
-            let files_iter = match scan.scan_metadata_from_arrow(
-                engine.as_ref(),
-                current_version,
-                Box::new(std::iter::once(current_files)),
+        self.snapshot
+            .files_from(
+                log_store,
+                predicate,
+                self.version() as u64,
+                Box::new(self.files.clone().into_iter()),
                 None,
-            ) {
-                Ok(files_iter) => files_iter,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
-            };
-
-            let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
-                Ok(files) => files,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
-            };
-
-            match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
-                .map_err(DeltaTableError::from)
-                .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
-            {
-                Ok(files) => files,
-                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-            }
-        } else {
-            self.files.clone()
-        };
-        let iter = (0..data.num_rows()).map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
-        futures::stream::iter(iter).boxed()
+            )
+            .map_ok(|batch| {
+                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                })
+            })
+            .try_flatten()
+            .boxed()
     }
 
     #[deprecated(since = "0.30.0", note = "Use `files` with kernel predicate instead.")]
@@ -673,13 +668,13 @@ impl EagerSnapshot {
         filters: &[PartitionFilter],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
         if filters.is_empty() {
-            return self.files(log_store, None);
+            return self.file_views(log_store, None);
         }
         let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
             Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+            Err(err) => return Box::pin(once(ready(Err(err)))),
         };
-        self.files(log_store, Some(predicate))
+        self.file_views(log_store, Some(predicate))
     }
 
     /// Iterate over all latest app transactions
@@ -724,22 +719,17 @@ pub(crate) fn partitions_schema(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use delta_kernel::schema::{DataType, StructField};
     use futures::TryStreamExt;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
 
-    // use super::log_segment::tests::{concurrent_checkpoint, test_log_segment};
+    // use super::log_segment::tests::{concurrent_checkpoint};
     // use super::replay::tests::test_log_replay;
     use super::*;
-    use crate::protocol::{DeltaOperation, SaveMode};
-    use crate::test_utils::{assert_batches_sorted_eq, ActionFactory, TestResult, TestTables};
+    use crate::test_utils::{assert_batches_sorted_eq, TestResult, TestTables};
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
-        // test_log_segment().await?;
         test_snapshot().await?;
         test_eager_snapshot().await?;
 
@@ -785,15 +775,15 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+-----------------------+-------------------------------------------------------+",
-            "| path                                                                | size | modificationTime | stats | deletionVector | fileConstantValues    | stats_parsed                                          |",
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+-----------------------+-------------------------------------------------------+",
-            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}} | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+-----------------------+-------------------------------------------------------+",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------+",
+            "| path                                                                | size | modificationTime | stats_parsed                                          | deletionVector | fileConstantValues    |",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------+",
+            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}} |",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -830,63 +820,10 @@ mod tests {
         for version in 0..=12 {
             let snapshot =
                 EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
-            let batches: Vec<_> = snapshot.files(&log_store, None).try_collect().await?;
+            let batches: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_partition_schema() {
-        let schema = StructType::try_new(vec![
-            StructField::new("id", DataType::LONG, true),
-            StructField::new("name", DataType::STRING, true),
-            StructField::new("date", DataType::DATE, true),
-        ])
-        .unwrap();
-
-        let partition_columns = vec!["date".to_string()];
-        let metadata = ActionFactory::metadata(&schema, Some(&partition_columns), None);
-        let protocol = ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>);
-
-        let commit_data = CommitData::new(
-            vec![
-                Action::Protocol(protocol.clone()),
-                Action::Metadata(metadata.clone()),
-            ],
-            DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: Some(partition_columns),
-                predicate: None,
-            },
-            HashMap::new(),
-            vec![],
-        );
-
-        let (snapshot, _) = Snapshot::new_test(vec![&commit_data]).await.unwrap();
-
-        let expected = Arc::new(
-            StructType::try_new(vec![StructField::new("date", DataType::DATE, true)]).unwrap(),
-        );
-        assert_eq!(snapshot.inner.partitions_schema().unwrap(), Some(expected));
-
-        let metadata = ActionFactory::metadata(&schema, None::<Vec<&str>>, None);
-        let commit_data = CommitData::new(
-            vec![
-                Action::Protocol(protocol.clone()),
-                Action::Metadata(metadata.clone()),
-            ],
-            DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            },
-            HashMap::new(),
-            vec![],
-        );
-        let (snapshot, _) = Snapshot::new_test(vec![&commit_data]).await.unwrap();
-
-        assert_eq!(snapshot.inner.partitions_schema().unwrap(), None);
     }
 }

@@ -146,3 +146,24 @@ def test_vacuum_keep_versions():
         "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet",
         "part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet",
     }
+
+
+# https://github.com/delta-io/delta-rs/issues/3745
+@pytest.mark.pyarrow
+def test_issue_3745(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    data = pa.Table.from_pydict(
+        {
+            "x": pa.array(list(range(100)), type=pa.int32()),
+        }
+    )
+    write_deltalake(table_or_uri=tmp_path, data=data, mode="append")
+
+    table = DeltaTable(tmp_path)
+    table.create_checkpoint()
+
+    write_deltalake(table_or_uri=tmp_path, data=data, mode="append")
+
+    table = DeltaTable(tmp_path)
+    table.vacuum()

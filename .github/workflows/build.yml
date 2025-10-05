@@ -16,26 +16,22 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # run various build configurations, fmt, and clippy.
-  build:
-    strategy:
-      fail-fast: true
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-    runs-on: ${{ matrix.os }}
+  check:
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
-          profile: default
-          toolchain: "1.86"
-          override: true
+          toolchain: stable
+          components: rustfmt,clippy
+          cache: true
+          # if we ever get rid of all the clippy warnings, we can remove this line
+          rustflags: ""
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -43,36 +39,34 @@ jobs:
           cache-all-crates: true
           cache-targets: false
 
-      - name: Format
-        run: cargo fmt -- --check
+      - name: build and lint with clippy
+        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Run Machete to check for unused dependencies
         uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
 
-      - name: Default build
-        run: (cd crates/deltalake && cargo build --tests)
+  test-matrix:
+    runs-on: ubuntu-latest
 
-      - name: build and lint with clippy
-        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
+    outputs:
+      targets: ${{ steps.matrix.outputs.os }}
 
-      - name: Spot-check build for native-tls features
-        run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue --tests
+    steps:
+      - name: Define test matrix
+        id: matrix
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Check no default features (except rustls)
-        run: cargo check --no-default-features --features rustls
-
-      - name: Check docs
-        run: cargo doc --no-deps --features ${{ env.DEFAULT_FEATURES }}
-
-  unit_test:
-    name: Unit Tests
+  build:
+    needs: test-matrix
     strategy:
       fail-fast: true
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+        os: ${{ fromJSON(needs.test-matrix.outputs.targets) }}
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -204,11 +198,10 @@ jobs:
     name: Integration Tests (HDFS)
     runs-on: ubuntu-latest
     env:
-      # https://github.com/rust-lang/cargo/issues/10280
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
@@ -223,47 +216,31 @@ jobs:
           cache-all-crates: true
           cache-targets: false
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Default build
+        run: cargo build --package deltalake
 
-      # Install Java and Hadoop for HDFS integration tests
-      - uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
+      - name: Default features with clippy
+        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }}
 
-      - name: Download Hadoop
-        run: |
-          wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
-          tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
-          echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
+      - name: Spot-check build for native-tls features
+        run: cargo build --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
 
-      - name: Run tests with rustls (default)
-        run: |
-          gmake setup-dat
-          cargo llvm-cov \
-            --features integration_test \
-            --package deltalake-hdfs \
-            --codecov \
-            --output-path codecov.json
+      - name: Check no default features (except rustls)
+        run: cargo check --no-default-features --features rustls
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: codecov.json
-          fail_ci_if_error: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  integration_test_lakefs:
-    name: Integration Tests (LakeFS v1.48)
-    runs-on: ubuntu-latest
+  test:
+    name: Unit Tests
+    needs: test-matrix
+    strategy:
+      fail-fast: true
+      matrix:
+        os: ${{ fromJSON(needs.test-matrix.outputs.targets) }}
+    runs-on: ${{ matrix.os }}
     env:
-      # https://github.com/rust-lang/cargo/issues/10280
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      DEFAULT_FEATURES: "datafusion"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
@@ -281,23 +258,19 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Download Lakectl
+      - name: Run tests
+        shell: bash
         run: |
-          wget -q https://github.com/treeverse/lakeFS/releases/download/v1.48.1/lakeFS_1.48.1_Linux_x86_64.tar.gz
-          tar -xf lakeFS_1.48.1_Linux_x86_64.tar.gz -C $GITHUB_WORKSPACE
-          echo "$GITHUB_WORKSPACE" >> $GITHUB_PATH
-
-      - name: Start emulated services
-        run: docker compose -f docker-compose-lakefs.yml up -d
-
-      - name: Run tests with rustls (default)
-        run: |
-          gmake setup-dat
-          cargo llvm-cov \
-            --package deltalake-lakefs \
-            --features integration_test_lakefs \
+          make setup-dat
+          cargo llvm-cov --features ${{ env.DEFAULT_FEATURES }} \
+            --workspace \
             --codecov \
-            --output-path codecov.json
+            --output-path codecov.json \
+            --exclude deltalake \
+            --exclude deltalake-azure \
+            --exclude deltalake-aws \
+            --exclude deltalake-hdfs \
+            --exclude deltalake-lakefs
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

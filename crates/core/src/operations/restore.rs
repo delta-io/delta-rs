@@ -201,10 +201,10 @@ async fn execute(
 
     let state_to_restore_files: Vec<_> = snapshot_restored
         .snapshot()
-        .files(&log_store, None)
+        .file_views(&log_store, None)
         .try_collect()
         .await?;
-    let latest_state_files: Vec<_> = snapshot.files(&log_store, None).try_collect().await?;
+    let latest_state_files: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
     let state_to_restore_files_set =
         HashSet::<_>::from_iter(state_to_restore_files.iter().map(|f| f.path().to_string()));
     let latest_state_files_set =

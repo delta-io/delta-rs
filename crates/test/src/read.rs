@@ -1,4 +1,5 @@
 use deltalake_core::DeltaTableBuilder;
+use futures::TryStreamExt as _;
 use object_store::path::Path;
 
 use crate::utils::{IntegrationContext, TestResult, TestTables};
@@ -56,21 +57,21 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     );
     let tombstones = snapshot
         .all_tombstones(&table.log_store())
-        .await?
-        .collect::<Vec<_>>();
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(tombstones.len(), 31);
-    assert!(tombstones.contains(&deltalake_core::kernel::Remove {
-        path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-        deletion_timestamp: Some(1587968596250),
-        data_change: true,
-        extended_file_metadata: None,
-        deletion_vector: None,
-        base_row_id: None,
-        default_row_commit_version: None,
-        size: None,
-        partition_values: Some(Default::default()),
-        tags: Some(Default::default()),
-    }));
+    let paths = tombstones
+        .iter()
+        .map(|tombstone| tombstone.path().to_string())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(
+        &"part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string()
+    ));
+    let deletion_ts = tombstones
+        .iter()
+        .map(|tombstone| tombstone.deletion_timestamp())
+        .collect::<Vec<_>>();
+    assert!(deletion_ts.contains(&Some(1587968596250)));
 
     Ok(())
 }
@@ -101,21 +102,21 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     );
     let tombstones = snapshot
         .all_tombstones(&table.log_store())
-        .await?
-        .collect::<Vec<_>>();
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(tombstones.len(), 29);
-    assert!(tombstones.contains(&deltalake_core::kernel::Remove {
-        path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-        deletion_timestamp: Some(1587968596250),
-        data_change: true,
-        tags: Some(Default::default()),
-        partition_values: Some(Default::default()),
-        base_row_id: None,
-        default_row_commit_version: None,
-        size: None,
-        deletion_vector: None,
-        extended_file_metadata: None,
-    }));
+    let paths = tombstones
+        .iter()
+        .map(|tombstone| tombstone.path().to_string())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(
+        &"part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string()
+    ));
+    let deletion_ts = tombstones
+        .iter()
+        .map(|tombstone| tombstone.deletion_timestamp())
+        .collect::<Vec<_>>();
+    assert!(deletion_ts.contains(&Some(1587968596250)));
 
     Ok(())
 }

@@ -1,18 +1,138 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
 
-use arrow_array::MapArray;
-use arrow_array::*;
+use arrow::array::{Array as _, *};
 use arrow_schema::{Field as ArrowField, Fields};
+use arrow_schema::{Field, Schema};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::UnaryExpressionOp;
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
+use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator};
+use futures::Stream;
+use pin_project_lite::pin_project;
 use tracing::log::*;
 
+use crate::kernel::arrow::engine_ext::SnapshotExt;
 use crate::kernel::arrow::extract::{self as ex};
 use crate::kernel::StructType;
+use crate::kernel::ARROW_HANDLER;
 use crate::{DeltaResult, DeltaTableError};
+
+pin_project! {
+    pub(crate) struct ScanRowOutStream<S> {
+        snapshot: Arc<KernelSnapshot>,
+
+        #[pin]
+        stream: S,
+    }
+}
+
+impl<S> ScanRowOutStream<S> {
+    pub fn new(snapshot: Arc<KernelSnapshot>, stream: S) -> Self {
+        Self { snapshot, stream }
+    }
+}
+
+impl<S> Stream for ScanRowOutStream<S>
+where
+    S: Stream<Item = DeltaResult<RecordBatch>>,
+{
+    type Item = DeltaResult<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        match this.stream.poll_next(cx) {
+            Poll::Ready(Some(Ok(batch))) => match parse_stats_column(&this.snapshot, &batch) {
+                Ok(batch) => Poll::Ready(Some(Ok(batch))),
+                Err(err) => Poll::Ready(Some(Err(err))),
+            },
+            other => other,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
+    }
+}
+
+pub(crate) fn scan_row_in_eval(
+    snapshot: &KernelSnapshot,
+) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
+    static EXPRESSION: LazyLock<Arc<Expression>> = LazyLock::new(|| {
+        Expression::struct_from(scan_row_schema().fields().map(|field| {
+            if field.name == "stats" {
+                Expression::unary(
+                    UnaryExpressionOp::ToJson,
+                    Expression::column(["stats_parsed"]),
+                )
+            } else {
+                Expression::column([field.name.clone()])
+            }
+        }))
+        .into()
+    });
+    static OUT_TYPE: LazyLock<DataType> =
+        LazyLock::new(|| DataType::Struct(Box::new(scan_row_schema().as_ref().clone())));
+
+    let input_schema = snapshot.scan_row_parsed_schema_arrow()?;
+    let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+
+    Ok(ARROW_HANDLER.new_expression_evaluator(input_schema, EXPRESSION.clone(), OUT_TYPE.clone()))
+}
+
+fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<RecordBatch> {
+    let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: "stats column not found".to_string(),
+        });
+    };
+
+    let mut columns = batch.columns().to_vec();
+    let mut fields = batch.schema().fields().to_vec();
+
+    let stats_schema = sn.stats_schema()?;
+    let stats_batch = batch.project(&[stats_idx])?;
+    let stats_data = Box::new(ArrowEngineData::new(stats_batch));
+
+    let parsed = parse_json(stats_data, stats_schema)?;
+    let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
+
+    let stats_array: Arc<StructArray> = Arc::new(parsed.into());
+    fields[stats_idx] = Arc::new(Field::new(
+        "stats_parsed",
+        stats_array.data_type().to_owned(),
+        true,
+    ));
+    columns[stats_idx] = stats_array;
+
+    if let Some(partition_schema) = sn.partitions_schema()? {
+        let partition_array = parse_partitions(
+            batch,
+            partition_schema.as_ref(),
+            "fileConstantValues.partitionValues",
+        )?;
+        fields.push(Arc::new(Field::new(
+            "partitionValues_parsed",
+            partition_array.data_type().to_owned(),
+            false,
+        )));
+        columns.push(Arc::new(partition_array));
+    }
+
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new(fields)),
+        columns,
+    )?)
+}
 
 pub(crate) fn parse_partitions(
     batch: &RecordBatch,
@@ -203,6 +323,24 @@ pub(crate) fn parse_partitions(
     )?)
 }
 
+fn collect_map(val: &StructArray) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
+    let keys = val
+        .column(0)
+        .as_ref()
+        .as_any()
+        .downcast_ref::<StringArray>()?;
+    let values = val
+        .column(1)
+        .as_ref()
+        .as_any()
+        .downcast_ref::<StringArray>()?;
+    Some(
+        keys.iter()
+            .zip(values.iter())
+            .filter_map(|(k, v)| k.map(|kv| (kv.to_string(), v.map(|vv| vv.to_string())))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,22 +452,4 @@ mod tests {
         );
         Ok(())
     }
-}
-
-fn collect_map(val: &StructArray) -> Option<impl Iterator<Item = (String, Option<String>)> + '_> {
-    let keys = val
-        .column(0)
-        .as_ref()
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    let values = val
-        .column(1)
-        .as_ref()
-        .as_any()
-        .downcast_ref::<StringArray>()?;
-    Some(
-        keys.iter()
-            .zip(values.iter())
-            .filter_map(|(k, v)| k.map(|kv| (kv.to_string(), v.map(|vv| vv.to_string())))),
-    )
 }

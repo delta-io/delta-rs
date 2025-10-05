@@ -54,7 +54,7 @@ impl Serialize for Snapshot {
         let mut seq = serializer.serialize_seq(None)?;
 
         seq.serialize_element(&self.version())?;
-        seq.serialize_element(&self.table_url)?;
+        seq.serialize_element(&self.inner.table_root())?;
         seq.serialize_element(&self.protocol())?;
         seq.serialize_element(&self.metadata())?;
         seq.serialize_element(&ascending_commit_files)?;
@@ -202,7 +202,6 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
 
         Ok(Snapshot {
             inner: Arc::new(snapshot),
-            table_url,
             schema: Arc::new(schema),
             config,
         })
@@ -226,15 +225,20 @@ impl Serialize for EagerSnapshot {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.snapshot)?;
 
-        let mut buffer = vec![];
-        let mut writer = FileWriter::try_new(&mut buffer, self.files.schema().as_ref())
-            .map_err(serde::ser::Error::custom)?;
-        writer
-            .write(&self.files)
-            .map_err(serde::ser::Error::custom)?;
-        writer.finish().map_err(serde::ser::Error::custom)?;
-        let data = writer.into_inner().map_err(serde::ser::Error::custom)?;
-        seq.serialize_element(&data)?;
+        if !self.files.is_empty() {
+            let mut buffer = vec![];
+            let mut writer = FileWriter::try_new(&mut buffer, self.files[0].schema().as_ref())
+                .map_err(serde::ser::Error::custom)?;
+            for file in &self.files {
+                writer.write(file).map_err(serde::ser::Error::custom)?;
+            }
+            writer.finish().map_err(serde::ser::Error::custom)?;
+            let data = writer.into_inner().map_err(serde::ser::Error::custom)?;
+
+            seq.serialize_element(&data)?;
+        } else {
+            seq.serialize_element(&Vec::<u8>::new())?;
+        }
 
         seq.end()
     }
@@ -262,12 +266,15 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
             return Err(de::Error::invalid_length(3, &self));
         };
 
-        let mut reader = FileReader::try_new(std::io::Cursor::new(elem), None)
-            .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?;
-        let files = reader
-            .next()
-            .ok_or(de::Error::custom("missing ipc data"))?
-            .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?;
+        let files = if elem.is_empty() {
+            vec![]
+        } else {
+            let reader = FileReader::try_new(std::io::Cursor::new(elem), None)
+                .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?;
+            reader
+                .try_collect()
+                .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?
+        };
 
         Ok(EagerSnapshot { snapshot, files })
     }
