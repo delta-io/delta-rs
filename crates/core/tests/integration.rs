@@ -1,6 +1,7 @@
 use deltalake_test::read::read_table_paths;
 use deltalake_test::utils::*;
 use deltalake_test::{test_concurrent_writes, test_read_tables};
+use futures::TryStreamExt as _;
 use object_store::path::Path;
 use serial_test::serial;
 
@@ -71,10 +72,10 @@ async fn test_action_reconciliation() {
             .snapshot()
             .unwrap()
             .all_tombstones(&table.log_store())
+            .map_ok(|r| r.path().to_string())
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap()
-            .map(|r| r.path.clone())
-            .collect::<Vec<_>>(),
+            .unwrap(),
         vec![a.path.clone()]
     );
 }
