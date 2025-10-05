@@ -18,6 +18,7 @@
 //! ````
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::common::ScalarValue;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::provider_as_source;
@@ -68,6 +69,7 @@ const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 
 /// Delete Records from the Delta Table.
 /// See this module's documentation for more information
+#[derive(Clone)]
 pub struct DeleteBuilder {
     /// Which records to delete
     predicate: Option<Expression>,
@@ -76,12 +78,23 @@ pub struct DeleteBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    state: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
+}
+
+impl std::fmt::Debug for DeleteBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeleteBuilder")
+            .field("predicate", &self.predicate)
+            .field("snapshot", &self.snapshot)
+            .field("log_store", &self.log_store)
+            .field("commit_properties", &self.commit_properties)
+            .finish()
+    }
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -133,7 +146,7 @@ impl DeleteBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: SessionState) -> Self {
+    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
     }
@@ -197,7 +210,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 async fn execute_non_empty_expr(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    session: &SessionState,
     expression: &Expr,
     rewrite: &[Add],
     metrics: &mut DeleteMetrics,
@@ -212,7 +225,7 @@ async fn execute_non_empty_expr(
 
     let delete_planner = DeltaPlanner::new();
 
-    let state = SessionStateBuilder::new_from_existing(state.clone())
+    let state = SessionStateBuilder::new_from_existing(session.clone())
         .with_query_planner(delete_planner)
         .build();
 
@@ -316,7 +329,7 @@ async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    state: SessionState,
+    session: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     operation_id: Uuid,
@@ -330,7 +343,7 @@ async fn execute(
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(lit(true));
@@ -340,7 +353,7 @@ async fn execute(
         let add = execute_non_empty_expr(
             &snapshot,
             log_store.clone(),
-            &state,
+            &session,
             &predicate,
             &candidates.candidates,
             &mut metrics,
@@ -422,20 +435,21 @@ impl std::future::IntoFuture for DeleteBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let state = this.state.unwrap_or_else(|| {
-                let session: SessionContext = DeltaSessionContext::default().into();
+            let session = this
+                .state
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    let session: SessionContext = DeltaSessionContext::default().into();
+                    session.state()
+                });
 
-                // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.log_store.clone(), session.runtime_env());
-
-                session.state()
-            });
+            register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
                     Expression::DataFusion(expr) => Some(expr),
                     Expression::String(s) => {
-                        Some(this.snapshot.parse_predicate_expression(s, &state)?)
+                        Some(this.snapshot.parse_predicate_expression(s, &session)?)
                     }
                 },
                 None => None,
@@ -445,7 +459,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 this.snapshot,
-                state,
+                session,
                 this.writer_properties,
                 this.commit_properties,
                 operation_id,

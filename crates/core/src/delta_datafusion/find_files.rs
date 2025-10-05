@@ -5,8 +5,9 @@ use std::sync::Arc;
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion::catalog::Session;
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{col, Expr, Volatility};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
@@ -33,7 +34,7 @@ pub(crate) struct FindFiles {
 pub(crate) async fn find_files(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    state: &dyn Session,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
@@ -190,7 +191,7 @@ fn join_batches_with_add_actions(
 async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    state: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot

@@ -44,7 +44,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::vec;
 
 use arrow_array::RecordBatch;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
@@ -136,7 +136,7 @@ pub struct WriteBuilder {
     /// The input plan
     input: Option<Arc<LogicalPlan>>,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    state: Option<Arc<dyn Session>>,
     /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
     /// Column names for table partitioning
@@ -249,12 +249,12 @@ impl WriteBuilder {
     /// A session state accompanying a given input plan, containing e.g. registered object stores
     #[deprecated(since = "0.29.0", note = "Use `with_session_state` instead")]
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
-        self.state = Some(state);
+        self.state = Some(Arc::new(state));
         self
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: SessionState) -> Self {
+    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
     }
@@ -440,19 +440,16 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let partition_columns = this.get_partition_columns()?;
 
-            let state = match this.state {
-                Some(state) => SessionStateBuilder::new_from_existing(state.clone())
-                    .with_query_planner(write_planner.clone())
-                    .build(),
-                None => {
-                    let state = SessionStateBuilder::new()
-                        .with_default_features()
-                        .with_query_planner(write_planner)
-                        .build();
-                    register_store(this.log_store.clone(), state.runtime_env().clone());
-                    state
-                }
-            };
+            let state = this
+                .state
+                .map(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .flatten()
+                .map(|state| SessionStateBuilder::new_from_existing(state))
+                .unwrap_or_default()
+                .with_query_planner(write_planner)
+                .build();
+            register_store(this.log_store.clone(), state.runtime_env().as_ref());
+
             let mut schema_drift = false;
             let mut generated_col_exp = None;
             let mut missing_gen_col = None;

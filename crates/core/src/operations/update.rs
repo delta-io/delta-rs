@@ -25,10 +25,13 @@ use std::{
 };
 
 use async_trait::async_trait;
-use datafusion::common::{Column, ScalarValue};
 use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::{
     case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+};
+use datafusion::{
+    catalog::Session,
+    common::{Column, ScalarValue},
 };
 use datafusion::{
     dataframe::DataFrame,
@@ -92,7 +95,7 @@ pub struct UpdateBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    state: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional information to add to the commit
@@ -162,7 +165,7 @@ impl UpdateBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: SessionState) -> Self {
+    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
     }
@@ -506,14 +509,14 @@ impl std::future::IntoFuture for UpdateBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let state = this.state.unwrap_or_else(|| {
-                let session: SessionContext = DeltaSessionContext::default().into();
-
-                // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.log_store.clone(), session.runtime_env());
-
-                session.state()
-            });
+            let state = this
+                .state
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    let session: SessionContext = DeltaSessionContext::default().into();
+                    session.state()
+                });
+            register_store(this.log_store.clone(), state.runtime_env().as_ref());
 
             let (snapshot, metrics) = execute(
                 this.predicate,

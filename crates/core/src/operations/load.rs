@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
@@ -16,7 +17,7 @@ use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: EagerSnapshot,
@@ -25,7 +26,16 @@ pub struct LoadBuilder {
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    state: Option<Arc<dyn Session>>,
+}
+
+impl std::fmt::Debug for LoadBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadBuilder")
+            .field("snapshot", &self.snapshot)
+            .field("log_store", &self.log_store)
+            .finish()
+    }
 }
 
 impl super::Operation<()> for LoadBuilder {
@@ -55,7 +65,7 @@ impl LoadBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: SessionState) -> Self {
+    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
     }
@@ -96,12 +106,15 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            let state = this.state.unwrap_or_else(|| {
-                SessionStateBuilder::new()
-                    .with_default_features()
-                    .with_config(DeltaSessionConfig::default().into())
-                    .build()
-            });
+            let state = this
+                .state
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_config(DeltaSessionConfig::default().into())
+                        .build()
+                });
             let scan_plan = table.scan(&state, projection.as_ref(), &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&state));
