@@ -7,6 +7,7 @@ use std::sync::Arc;
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use tokio::runtime::Handle;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -66,6 +67,8 @@ pub struct CreateBuilder {
     commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
+    /// Optional tokio handle to execute the operation on
+    handle: Option<Handle>,
 }
 
 impl super::Operation<()> for CreateBuilder {
@@ -102,6 +105,7 @@ impl CreateBuilder {
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
             custom_execute_handler: None,
+            handle: None,
         }
     }
 
@@ -244,6 +248,12 @@ impl CreateBuilder {
         self
     }
 
+    /// Set a custom tokio handle to execute the operation on
+    pub fn with_handle(mut self, handle: Handle) -> Self {
+        self.handle = Some(handle);
+        self
+    }
+
     /// Consume self into uninitialized table with corresponding create actions and operation meta
     pub(crate) async fn into_table_and_actions(
         mut self,
@@ -347,54 +357,65 @@ impl std::future::IntoFuture for CreateBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-        Box::pin(async move {
-            let handler = this.custom_execute_handler.clone();
-            let mode = &this.mode;
-            let (mut table, mut actions, operation, operation_id) =
-                this.clone().into_table_and_actions().await?;
+        Box::pin(async {
+            let handle = this.handle.clone();
+            let fut = async move {
+                let handler = this.custom_execute_handler.clone();
+                let mode = &this.mode;
+                let (mut table, mut actions, operation, operation_id) =
+                    this.clone().into_table_and_actions().await?;
 
-            let table_state = if table.log_store.is_delta_table_location().await? {
-                match mode {
-                    SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
-                    SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
-                    SaveMode::Ignore => {
-                        table.load().await?;
-                        return Ok(table);
+                let table_state = if table.log_store.is_delta_table_location().await? {
+                    match mode {
+                        SaveMode::ErrorIfExists => {
+                            return Err(CreateError::TableAlreadyExists.into())
+                        }
+                        SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
+                        SaveMode::Ignore => {
+                            table.load().await?;
+                            return Ok(table);
+                        }
+                        SaveMode::Overwrite => {
+                            table.load().await?;
+                            let remove_actions = table
+                                .snapshot()?
+                                .log_data()
+                                .iter()
+                                .map(|p| p.remove_action(true).into());
+                            actions.extend(remove_actions);
+                            Some(table.snapshot()?)
+                        }
                     }
-                    SaveMode::Overwrite => {
-                        table.load().await?;
-                        let remove_actions = table
-                            .snapshot()?
-                            .log_data()
-                            .iter()
-                            .map(|p| p.remove_action(true).into());
-                        actions.extend(remove_actions);
-                        Some(table.snapshot()?)
-                    }
+                } else {
+                    None
+                };
+
+                let version = CommitBuilder::from(this.commit_properties.clone())
+                    .with_actions(actions)
+                    .with_operation_id(operation_id)
+                    .with_post_commit_hook_handler(handler.clone())
+                    .build(
+                        table_state.map(|f| f as &dyn TableReference),
+                        table.log_store.clone(),
+                        operation,
+                    )
+                    .await?
+                    .version();
+                table.load_version(version).await?;
+
+                if let Some(handler) = handler {
+                    handler
+                        .post_execute(&table.log_store(), operation_id)
+                        .await?;
                 }
-            } else {
-                None
+                Ok(table)
             };
-
-            let version = CommitBuilder::from(this.commit_properties.clone())
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(handler.clone())
-                .build(
-                    table_state.map(|f| f as &dyn TableReference),
-                    table.log_store.clone(),
-                    operation,
-                )
-                .await?
-                .version();
-            table.load_version(version).await?;
-
-            if let Some(handler) = handler {
-                handler
-                    .post_execute(&table.log_store(), operation_id)
-                    .await?;
+            if let Some(handle) = handle {
+                let task_handle = handle.spawn(fut);
+                crate::operations::util::flatten_join_error(task_handle).await
+            } else {
+                fut.await
             }
-            Ok(table)
         })
     }
 }
@@ -612,6 +633,23 @@ mod tests {
         assert_eq!(state.version(), 1);
         // Checks if files got removed after overwrite
         assert_eq!(state.log_data().num_files(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_with_custom_handle() {
+        let table_schema = get_delta_schema();
+
+        let cpu_runtime = crate::operations::util::CpuRuntime::try_new().unwrap();
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_save_mode(SaveMode::Ignore)
+            .with_handle(cpu_runtime.handle().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+        assert_eq!(table.snapshot().unwrap().schema(), &table_schema)
     }
 
     #[tokio::test]

@@ -670,7 +670,7 @@ impl MergePlan {
                         object_store.clone(),
                         futures::future::ready(Ok(batch_stream)),
                     ));
-                    util::flatten_join_error(rewrite_result)
+                    crate::operations::util::flatten_join_error(rewrite_result)
                 })
                 .boxed(),
             OptimizeOperations::ZOrder(zorder_columns, bins, state) => {
@@ -727,7 +727,7 @@ impl MergePlan {
                             log_store.object_store(Some(operation_id)),
                             batch_stream,
                         ));
-                        util::flatten_join_error(rewrite_result)
+                        crate::operations::util::flatten_join_error(rewrite_result)
                     })
                     .boxed()
             }
@@ -1068,27 +1068,6 @@ async fn build_zorder_plan(
 
     let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(state));
     Ok((operation, metrics))
-}
-
-pub(super) mod util {
-    use super::*;
-    use futures::Future;
-    use tokio::task::JoinError;
-
-    pub async fn flatten_join_error<T, E>(
-        future: impl Future<Output = Result<Result<T, E>, JoinError>>,
-    ) -> Result<T, DeltaTableError>
-    where
-        E: Into<DeltaTableError>,
-    {
-        match future.await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(error)) => Err(error.into()),
-            Err(error) => Err(DeltaTableError::GenericError {
-                source: Box::new(error),
-            }),
-        }
-    }
 }
 
 /// Z-order utilities
