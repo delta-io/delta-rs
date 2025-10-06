@@ -12,17 +12,14 @@ use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::{ColumnName, Scalar, StructData};
-use delta_kernel::scan::{Scan, ScanMetadata};
+use delta_kernel::scan::ScanMetadata;
 use delta_kernel::schema::{
     ArrayType, DataType, MapType, PrimitiveType, Schema, SchemaRef, SchemaTransform, StructField,
     StructType,
 };
 use delta_kernel::snapshot::Snapshot;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
-use delta_kernel::{
-    DeltaResult, Engine, EngineData, ExpressionEvaluator, ExpressionRef, PredicateRef, Version,
-};
-use itertools::Itertools;
+use delta_kernel::{DeltaResult, ExpressionEvaluator, ExpressionRef};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
@@ -45,57 +42,6 @@ pub(crate) struct ScanMetadataArrow {
     ///
     /// Note: This vector can be indexed by row number.
     pub scan_file_transforms: Vec<Option<ExpressionRef>>,
-}
-
-/// Internal extension trait to streamline working with Kernel scan objects.
-///
-/// THe trait mainly handles conversion between arrow `RecordBatch` and `ArrowEngineData`.
-/// The exposed methods are arrow-variants of methods already exposed on the kernel scan.
-pub(crate) trait ScanExt {
-    /// Get the metadata for a table scan.
-    ///
-    /// This method handles translation between `EngineData` and `RecordBatch`
-    /// and will already apply any selection vectors to the data.
-    /// See [`Scan::scan_metadata`] for details.
-    fn scan_metadata_arrow(
-        &self,
-        engine: &dyn Engine,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<ScanMetadataArrow>>>;
-
-    fn scan_metadata_from_arrow(
-        &self,
-        engine: &dyn Engine,
-        existing_version: Version,
-        existing_data: Box<dyn Iterator<Item = RecordBatch>>,
-        existing_predicate: Option<PredicateRef>,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<ScanMetadataArrow>>>;
-}
-
-impl ScanExt for Scan {
-    fn scan_metadata_arrow(
-        &self,
-        engine: &dyn Engine,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<ScanMetadataArrow>>> {
-        Ok(self
-            .scan_metadata(engine)?
-            .map_ok(kernel_to_arrow)
-            .flatten())
-    }
-
-    fn scan_metadata_from_arrow(
-        &self,
-        engine: &dyn Engine,
-        existing_version: Version,
-        existing_data: Box<dyn Iterator<Item = RecordBatch>>,
-        existing_predicate: Option<PredicateRef>,
-    ) -> DeltaResult<impl Iterator<Item = DeltaResult<ScanMetadataArrow>>> {
-        let engine_iter =
-            existing_data.map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>);
-        Ok(self
-            .scan_metadata_from(engine, existing_version, engine_iter, existing_predicate)?
-            .map_ok(kernel_to_arrow)
-            .flatten())
-    }
 }
 
 /// Internal extension traits to the Kernel Snapshot.
@@ -439,7 +385,7 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
     )
 }
 
-fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
+pub(crate) fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
     let scan_file_transforms = metadata
         .scan_file_transforms
         .into_iter()

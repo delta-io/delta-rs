@@ -39,9 +39,8 @@ use object_store::ObjectStore;
 use tokio::task::spawn_blocking;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
-use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, ScanExt};
-#[cfg(test)]
-use crate::kernel::transaction::CommitData;
+use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
+use crate::kernel::snapshot::scan::ScanBuilder;
 use crate::kernel::{StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
@@ -52,6 +51,7 @@ pub use stream::*;
 
 mod iterators;
 mod log_data;
+mod scan;
 mod serde;
 mod stream;
 
@@ -117,41 +117,12 @@ impl Snapshot {
         })
     }
 
-    #[cfg(test)]
-    pub async fn new_test<'a>(
-        commits: impl IntoIterator<Item = &'a CommitData>,
-    ) -> DeltaResult<(Self, Arc<dyn LogStore>)> {
-        use crate::logstore::{commit_uri_from_version, default_logstore};
-        use object_store::memory::InMemory;
-        let store = Arc::new(InMemory::new());
+    pub fn scan_builder(&self) -> ScanBuilder {
+        ScanBuilder::new(self.inner.clone())
+    }
 
-        for (idx, commit) in commits.into_iter().enumerate() {
-            let uri = commit_uri_from_version(idx as i64);
-            let data = commit.get_bytes()?;
-            store.put(&uri, data.into()).await?;
-        }
-
-        let table_url = url::Url::parse("memory:///").unwrap();
-
-        let log_store = default_logstore(
-            store.clone(),
-            store.clone(),
-            &table_url,
-            &Default::default(),
-        );
-
-        let engine = log_store.engine(None);
-        let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
-        let schema = snapshot.table_configuration().schema();
-
-        Ok((
-            Self {
-                inner: snapshot,
-                config: Default::default(),
-                schema,
-            },
-            log_store,
-        ))
+    pub fn into_scan_builder(self) -> ScanBuilder {
+        ScanBuilder::new(self.inner)
     }
 
     /// Update the snapshot to the given version
@@ -249,34 +220,18 @@ impl Snapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
-        let scan = match self
-            .inner
-            .clone()
-            .scan_builder()
-            .with_predicate(predicate)
-            .build()
-        {
+        let scan = match self.scan_builder().with_predicate(predicate).build() {
             Ok(scan) => scan,
-            Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
+            Err(err) => return Box::pin(once(ready(Err(err)))),
         };
-
-        // TODO: which capacity to choose?
-        let mut builder = RecordBatchReceiverStreamBuilder::new(100);
-        let snapshot = scan.snapshot().clone();
 
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
-        let tx = builder.tx();
-        builder.spawn_blocking(move || {
-            for res in scan.scan_metadata_arrow(engine.as_ref())? {
-                if tx.blocking_send(Ok(res?.scan_files)).is_err() {
-                    break;
-                }
-            }
-            Ok(())
-        });
+        let stream = scan
+            .scan_metadata(engine)
+            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
 
-        ScanRowOutStream::new(snapshot, builder.build()).boxed()
+        ScanRowOutStream::new(self.inner.clone(), stream).boxed()
     }
 
     pub(crate) fn files_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
@@ -287,50 +242,17 @@ impl Snapshot {
         existing_data: Box<T>,
         existing_predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
-        let scan = match self
-            .inner
-            .clone()
-            .scan_builder()
-            .with_predicate(predicate)
-            .build()
-        {
+        let scan = match self.scan_builder().with_predicate(predicate).build() {
             Ok(scan) => scan,
-            Err(err) => return Box::pin(once(ready(Err(DeltaTableError::KernelError(err))))),
-        };
-
-        let snapshot = scan.snapshot().clone();
-
-        // process our stored / caed data to conform to the expected input for log replay
-        let evaluator = match scan_row_in_eval(&snapshot) {
-            Ok(scan_row_in_eval) => scan_row_in_eval,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
-        let scan_row_iter = existing_data.map(move |b| {
-            evaluator
-                .evaluate_arrow(b)
-                .expect("Illegal stored log data")
-        });
 
-        // TODO: which capacity to choose?
-        let mut builder = RecordBatchReceiverStreamBuilder::new(100);
-        // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
-        let tx = builder.tx();
-        builder.spawn_blocking(move || {
-            for res in scan.scan_metadata_from_arrow(
-                engine.as_ref(),
-                existing_version,
-                Box::new(scan_row_iter),
-                existing_predicate,
-            )? {
-                if tx.blocking_send(Ok(res?.scan_files)).is_err() {
-                    break;
-                }
-            }
-            Ok(())
-        });
+        let stream = scan
+            .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
+            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
 
-        ScanRowOutStream::new(snapshot, builder.build()).boxed()
+        ScanRowOutStream::new(self.inner.clone(), stream).boxed()
     }
 
     /// Get the commit infos in the snapshot
@@ -446,8 +368,7 @@ impl Snapshot {
 
         builder.spawn_blocking(move || {
             for res in remove_data {
-                let batch: RecordBatch =
-                    ArrowEngineData::try_from_engine_data(res?.actions)?.into();
+                let batch = ArrowEngineData::try_from_engine_data(res?.actions)?.into();
                 if tx.blocking_send(Ok(batch)).is_err() {
                     break;
                 }
@@ -529,18 +450,6 @@ impl EagerSnapshot {
             false => vec![],
         };
 
-        Ok(Self { snapshot, files })
-    }
-
-    #[cfg(test)]
-    pub async fn new_test<'a>(
-        commits: impl IntoIterator<Item = &'a CommitData>,
-    ) -> DeltaResult<Self> {
-        let (snapshot, log_store) = Snapshot::new_test(commits).await?;
-        let files: Vec<_> = snapshot
-            .files(log_store.as_ref(), None)
-            .try_collect()
-            .await?;
         Ok(Self { snapshot, files })
     }
 
@@ -726,7 +635,61 @@ mod tests {
     // use super::log_segment::tests::{concurrent_checkpoint};
     // use super::replay::tests::test_log_replay;
     use super::*;
-    use crate::test_utils::{assert_batches_sorted_eq, TestResult, TestTables};
+    use crate::{
+        kernel::transaction::CommitData,
+        test_utils::{assert_batches_sorted_eq, TestResult, TestTables},
+    };
+
+    impl Snapshot {
+        pub async fn new_test<'a>(
+            commits: impl IntoIterator<Item = &'a CommitData>,
+        ) -> DeltaResult<(Self, Arc<dyn LogStore>)> {
+            use crate::logstore::{commit_uri_from_version, default_logstore};
+            use object_store::memory::InMemory;
+            let store = Arc::new(InMemory::new());
+
+            for (idx, commit) in commits.into_iter().enumerate() {
+                let uri = commit_uri_from_version(idx as i64);
+                let data = commit.get_bytes()?;
+                store.put(&uri, data.into()).await?;
+            }
+
+            let table_url = url::Url::parse("memory:///").unwrap();
+
+            let log_store = default_logstore(
+                store.clone(),
+                store.clone(),
+                &table_url,
+                &Default::default(),
+            );
+
+            let engine = log_store.engine(None);
+            let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
+            let schema = snapshot.table_configuration().schema();
+
+            Ok((
+                Self {
+                    inner: snapshot,
+                    config: Default::default(),
+                    schema,
+                },
+                log_store,
+            ))
+        }
+    }
+
+    impl EagerSnapshot {
+        pub async fn new_test<'a>(
+            commits: impl IntoIterator<Item = &'a CommitData>,
+        ) -> DeltaResult<Self> {
+            let (snapshot, log_store) = Snapshot::new_test(commits).await?;
+            let files: Vec<_> = snapshot
+                .files(log_store.as_ref(), None)
+                .try_collect()
+                .await?;
+            Ok(Self { snapshot, files })
+        }
+    }
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
