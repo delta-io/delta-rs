@@ -1,12 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_schema::{Schema, SchemaRef};
-use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::catalog::TableProvider;
-use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult};
-use datafusion::execution::SessionState;
+use arrow::datatypes::{Schema, SchemaRef};
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_expr::PhysicalExpr;
@@ -15,19 +12,12 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
-use crate::DeltaTableError;
 use crate::{
     delta_datafusion::DataFusionMixins, operations::load_cdf::CdfLoadBuilder, DeltaResult,
+    DeltaTableError,
 };
 
 use super::ADD_PARTITION_SCHEMA;
-
-fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
-    session
-        .as_any()
-        .downcast_ref::<SessionState>()
-        .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
-}
 
 #[derive(Debug)]
 pub struct DeltaCdfTableProvider {
@@ -49,7 +39,7 @@ impl DeltaCdfTableProvider {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl TableProvider for DeltaCdfTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -70,18 +60,17 @@ impl TableProvider for DeltaCdfTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let session_state = session_state_from_session(session)?;
         let schema: DFSchema = self.schema().try_into()?;
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
             let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
             let plan = self
                 .cdf_builder
-                .build(session_state, Some(&physical_expr))
+                .build(session, Some(&physical_expr))
                 .await?;
             Arc::new(FilterExec::try_new(physical_expr, plan)?)
         } else {
-            self.cdf_builder.build(session_state, None).await?
+            self.cdf_builder.build(session, None).await?
         };
 
         let df_schema: DFSchema = plan.schema().try_into()?;
