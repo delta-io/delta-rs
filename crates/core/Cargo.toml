@@ -90,7 +90,7 @@ validator = { version = "0.19", features = ["derive"] }
 [dev-dependencies]
 criterion = "0.5"
 ctor = "0"
-datatest-stable = "0.2"
+datatest-stable = "0.3"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
