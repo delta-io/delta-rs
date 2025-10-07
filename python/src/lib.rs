@@ -27,8 +27,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, StructType,
-    Transaction,
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -469,7 +468,7 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let schema: StructType = self.with_table(|t| {
+        let schema = self.with_table(|t| {
             let snapshot = t
                 .snapshot()
                 .map_err(PythonError::from)
@@ -1269,7 +1268,7 @@ impl RawDeltaTable {
                     }
 
                     // Update metadata with new schema
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         let mut metadata = self.with_table(|t| {
                             let snapshot = t
                                 .snapshot()
@@ -1286,7 +1285,7 @@ impl RawDeltaTable {
                 }
                 _ => {
                     // This should be unreachable from Python
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
                     }
                 }

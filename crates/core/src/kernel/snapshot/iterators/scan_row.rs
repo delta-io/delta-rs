@@ -51,7 +51,7 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         match this.stream.poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => match parse_stats_column(&this.snapshot, &batch) {
+            Poll::Ready(Some(Ok(batch))) => match parse_stats_column(this.snapshot, &batch) {
                 Ok(batch) => Poll::Ready(Some(Ok(batch))),
                 Err(err) => Poll::Ready(Some(Err(err))),
             },

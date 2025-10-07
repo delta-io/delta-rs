@@ -218,7 +218,7 @@ async fn execute_non_empty_expr(
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(snapshot.input_schema())
         .build(snapshot)?;
 
     let target_provider = Arc::new(
