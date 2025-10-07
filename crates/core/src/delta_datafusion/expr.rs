@@ -818,7 +818,6 @@ mod test {
                             .unwrap()
                             .snapshot()
                             .input_schema()
-                            .unwrap()
                             .as_ref()
                             .to_owned()
                             .to_dfschema()

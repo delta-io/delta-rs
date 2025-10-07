@@ -725,7 +725,10 @@ impl StructType {
     }
 }
 
-pub fn schema_to_pyobject(schema: DeltaStructType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+pub fn schema_to_pyobject(
+    schema: Arc<DeltaStructType>,
+    py: Python<'_>,
+) -> PyResult<Bound<'_, PyAny>> {
     let fields = schema.fields().map(|field| Field {
         inner: field.clone(),
     });
@@ -883,7 +886,7 @@ impl PySchema {
             .try_into_kernel()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
-        schema_to_pyobject(inner_type, py)
+        schema_to_pyobject(Arc::new(inner_type), py)
     }
 
     #[pyo3(text_signature = "($self)")]
