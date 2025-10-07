@@ -41,7 +41,7 @@ impl PyQueryBuilder {
         let log_store = delta_table.log_store()?;
 
         let scan_config = DeltaScanConfigBuilder::default()
-            .with_schema(snapshot.input_schema().map_err(PythonError::from)?)
+            .with_schema(snapshot.input_schema())
             .build(&snapshot)
             .map_err(PythonError::from)?;
 

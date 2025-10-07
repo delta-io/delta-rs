@@ -117,10 +117,10 @@ impl From<DataFusionError> for DeltaTableError {
 /// Convenience trait for calling common methods on snapshot hierarchies
 pub trait DataFusionMixins {
     /// The physical datafusion schema of a table
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+    fn read_schema(&self) -> ArrowSchemaRef;
 
     /// Get the table schema as an [`ArrowSchemaRef`]
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
+    fn input_schema(&self) -> ArrowSchemaRef;
 
     /// Parse an expression string into a datafusion [`Expr`]
     fn parse_predicate_expression(
@@ -131,12 +131,20 @@ pub trait DataFusionMixins {
 }
 
 impl DataFusionMixins for Snapshot {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self.table_configuration(), true)
+    fn read_schema(&self) -> ArrowSchemaRef {
+        _arrow_schema(
+            self.arrow_schema(),
+            self.metadata().partition_columns(),
+            true,
+        )
     }
 
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self.table_configuration(), false)
+    fn input_schema(&self) -> ArrowSchemaRef {
+        _arrow_schema(
+            self.arrow_schema(),
+            self.metadata().partition_columns(),
+            false,
+        )
     }
 
     fn parse_predicate_expression(
@@ -144,18 +152,38 @@ impl DataFusionMixins for Snapshot {
         expr: impl AsRef<str>,
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema().as_ref().to_owned())?;
+        let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
     }
 }
 
 impl DataFusionMixins for LogDataHandler<'_> {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self.table_configuration(), true)
+    fn read_schema(&self) -> ArrowSchemaRef {
+        _arrow_schema(
+            Arc::new(
+                self.table_configuration()
+                    .schema()
+                    .as_ref()
+                    .try_into_arrow()
+                    .unwrap(),
+            ),
+            self.table_configuration().metadata().partition_columns(),
+            true,
+        )
     }
 
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        _arrow_schema(self.table_configuration(), false)
+    fn input_schema(&self) -> ArrowSchemaRef {
+        _arrow_schema(
+            Arc::new(
+                self.table_configuration()
+                    .schema()
+                    .as_ref()
+                    .try_into_arrow()
+                    .unwrap(),
+            ),
+            self.table_configuration().metadata().partition_columns(),
+            false,
+        )
     }
 
     fn parse_predicate_expression(
@@ -163,17 +191,17 @@ impl DataFusionMixins for LogDataHandler<'_> {
         expr: impl AsRef<str>,
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
     }
 }
 
 impl DataFusionMixins for EagerSnapshot {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        Ok(self.snapshot().arrow_schema())
+    fn read_schema(&self) -> ArrowSchemaRef {
+        self.snapshot().read_schema()
     }
 
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+    fn input_schema(&self) -> ArrowSchemaRef {
         self.snapshot().input_schema()
     }
 
@@ -187,22 +215,20 @@ impl DataFusionMixins for EagerSnapshot {
 }
 
 fn _arrow_schema(
-    snapshot: &TableConfiguration,
+    schema: SchemaRef,
+    partition_columns: &[String],
     wrap_partitions: bool,
-) -> DeltaResult<ArrowSchemaRef> {
-    let meta = snapshot.metadata();
-    let schema = snapshot.schema();
-
+) -> ArrowSchemaRef {
     let fields = schema
         .fields()
-        .filter(|f| !meta.partition_columns().contains(&f.name().to_string()))
-        .map(|f| f.try_into_arrow())
+        .into_iter()
+        .filter(|f| !partition_columns.contains(&f.name().to_string()))
+        .cloned()
         .chain(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
-            meta.partition_columns().iter().map(|partition_col| {
-                let f = schema.field(partition_col).unwrap();
-                let field: Field = f.try_into_arrow()?;
+            partition_columns.iter().map(|partition_col| {
+                let field = schema.field_with_name(partition_col).unwrap();
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
@@ -218,12 +244,11 @@ fn _arrow_schema(
                 } else {
                     field.data_type().clone()
                 };
-                Ok(field.with_data_type(corrected))
+                Arc::new(field.clone().with_data_type(corrected))
             }),
         )
-        .collect::<Result<Vec<Field>, _>>()?;
-
-    Ok(Arc::new(ArrowSchema::new(fields)))
+        .collect::<Vec<_>>();
+    Arc::new(ArrowSchema::new(fields))
 }
 
 pub(crate) fn files_matching_predicate<'a>(
@@ -234,8 +259,8 @@ pub(crate) fn files_matching_predicate<'a>(
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
         let expr = SessionContext::new()
-            .create_physical_expr(predicate, &log_data.arrow_schema()?.to_dfschema()?)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, log_data.arrow_schema()?)?;
+            .create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
         let mask = pruning_predicate.prune(&log_data)?;
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
@@ -294,7 +319,7 @@ pub(crate) fn df_logical_schema(
 ) -> DeltaResult<SchemaRef> {
     let input_schema = match schema {
         Some(schema) => schema,
-        None => snapshot.input_schema()?,
+        None => snapshot.input_schema(),
     };
     let table_partition_cols = snapshot.metadata().partition_columns();
 

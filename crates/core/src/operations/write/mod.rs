@@ -469,7 +469,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // in this case we have to insert the generated column and it's type in the schema of the batch
             let mut new_schema = None;
             if let Some(snapshot) = &this.snapshot {
-                let table_schema = snapshot.input_schema()?;
+                let table_schema = snapshot.input_schema();
 
                 if let Err(schema_err) =
                     try_cast_schema(source_schema.fields(), table_schema.fields())

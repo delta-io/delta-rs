@@ -820,7 +820,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(snapshot.input_schema())
         .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
@@ -944,7 +944,7 @@ async fn execute(
     let mut schema_action = None;
     if merge_schema {
         let merge_schema = merge_arrow_schema(
-            snapshot.input_schema()?,
+            snapshot.input_schema(),
             source_schema.inner().clone(),
             false,
         )?;
