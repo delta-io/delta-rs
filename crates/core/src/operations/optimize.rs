@@ -859,7 +859,7 @@ pub async fn create_merge_plan(
         predicate: serde_json::to_string(filters).ok(),
     };
     let file_schema = arrow_schema_without_partitions(
-        &Arc::new(snapshot.schema().try_into_arrow()?),
+        &Arc::new(snapshot.schema().as_ref().try_into_arrow()?),
         partitions_keys,
     );
 

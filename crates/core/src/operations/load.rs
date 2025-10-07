@@ -7,7 +7,6 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
-use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::EagerSnapshot;
@@ -70,7 +69,7 @@ impl std::future::IntoFuture for LoadBuilder {
                     snapshot: this.snapshot,
                 },
             );
-            let schema = table.snapshot()?.snapshot().arrow_schema()?;
+            let schema = table.snapshot()?.snapshot().arrow_schema();
             let projection = this
                 .columns
                 .map(|cols| {

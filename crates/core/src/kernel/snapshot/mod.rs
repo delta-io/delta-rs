@@ -18,15 +18,16 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
+use arrow::array::RecordBatch;
 use arrow::compute::{filter_record_batch, is_not_null};
-use arrow_array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use delta_kernel::actions::{Remove, Sidecar};
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::derive_macro_utils::ToDataType;
-use delta_kernel::schema::{SchemaRef, StructField, ToSchema};
+use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
@@ -40,13 +41,13 @@ use tokio::task::spawn_blocking;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
-use crate::kernel::snapshot::scan::ScanBuilder;
 use crate::kernel::{StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
 pub use self::log_data::*;
 pub use iterators::*;
+pub use scan::*;
 pub use stream::*;
 
 mod iterators;
@@ -108,7 +109,13 @@ impl Snapshot {
             }
         };
 
-        let schema = snapshot.table_configuration().schema();
+        let schema = Arc::new(
+            snapshot
+                .table_configuration()
+                .schema()
+                .as_ref()
+                .try_into_arrow()?,
+        );
 
         Ok(Self {
             inner: snapshot,
@@ -154,7 +161,13 @@ impl Snapshot {
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
         self.inner = snapshot;
-        self.schema = self.inner.table_configuration().schema();
+        self.schema = Arc::new(
+            self.inner
+                .table_configuration()
+                .schema()
+                .as_ref()
+                .try_into_arrow()?,
+        );
 
         Ok(())
     }
@@ -165,8 +178,12 @@ impl Snapshot {
     }
 
     /// Get the table schema of the snapshot
-    pub fn schema(&self) -> &StructType {
-        self.schema.as_ref()
+    pub fn schema(&self) -> KernelSchemaRef {
+        self.inner.table_configuration().schema()
+    }
+
+    pub fn arrow_schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 
     /// Get the table metadata of the snapshot
@@ -502,8 +519,13 @@ impl EagerSnapshot {
     }
 
     /// Get the table schema of the snapshot
-    pub fn schema(&self) -> &StructType {
+    pub fn schema(&self) -> KernelSchemaRef {
         self.snapshot.schema()
+    }
+
+    /// Get the table arrow schema of the snapshot
+    pub fn arrow_schema(&self) -> SchemaRef {
+        self.snapshot.arrow_schema()
     }
 
     /// Get the table metadata of the snapshot
@@ -579,7 +601,7 @@ impl EagerSnapshot {
         if filters.is_empty() {
             return self.file_views(log_store, None);
         }
-        let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
+        let predicate = match to_kernel_predicate(filters, self.snapshot.schema().as_ref()) {
             Ok(predicate) => Arc::new(predicate),
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
@@ -665,13 +687,17 @@ mod tests {
 
             let engine = log_store.engine(None);
             let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
-            let schema = snapshot.table_configuration().schema();
+            let schema = snapshot
+                .table_configuration()
+                .schema()
+                .as_ref()
+                .try_into_arrow()?;
 
             Ok((
                 Self {
                     inner: snapshot,
                     config: Default::default(),
-                    schema,
+                    schema: Arc::new(schema),
                 },
                 log_store,
             ))
@@ -717,7 +743,7 @@ mod tests {
 
         let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string)?;
-        assert_eq!(snapshot.schema(), &expected);
+        assert_eq!(snapshot.schema().as_ref(), &expected);
 
         let infos = snapshot
             .commit_infos(&log_store, None)
@@ -776,7 +802,7 @@ mod tests {
 
         let schema_string = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}"#;
         let expected: StructType = serde_json::from_str(schema_string)?;
-        assert_eq!(snapshot.schema(), &expected);
+        assert_eq!(snapshot.schema().as_ref(), &expected);
 
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 

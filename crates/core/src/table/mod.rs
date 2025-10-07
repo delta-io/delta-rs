@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Metadata, Protocol, StructType};
+use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Metadata, Protocol};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -337,20 +337,6 @@ impl DeltaTable {
     #[deprecated(since = "0.27.1", note = "Use `snapshot()?.metadata()` instead")]
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
         Ok(self.snapshot()?.metadata())
-    }
-
-    /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
-    /// no metadata was found in the log.
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
-    pub fn schema(&self) -> Option<&StructType> {
-        Some(self.snapshot().ok()?.schema())
-    }
-
-    /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
-    /// been loaded or no metadata was found in the log.
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
-    pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
-        Ok(self.snapshot()?.schema())
     }
 
     /// Time travel Delta table to the latest version that's created at or before provided

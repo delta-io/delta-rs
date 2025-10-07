@@ -144,7 +144,7 @@ impl DataFusionMixins for Snapshot {
         expr: impl AsRef<str>,
         df_state: &SessionState,
     ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())?;
+        let schema = DFSchema::try_from(self.arrow_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, df_state)
     }
 }
@@ -170,7 +170,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
 
 impl DataFusionMixins for EagerSnapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot().arrow_schema()
+        Ok(self.snapshot().arrow_schema())
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {

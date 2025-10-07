@@ -89,22 +89,14 @@ pub struct DeltaDataSink {
 /// transaction log access, snapshot state, and session configuration.
 impl DeltaDataSink {
     /// Create a new `DeltaDataSink`
-    pub fn new(
-        log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
-        save_mode: SaveMode,
-    ) -> datafusion::common::Result<Self> {
-        let schema = snapshot
-            .arrow_schema()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        Ok(Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot, save_mode: SaveMode) -> Self {
+        Self {
             log_store,
+            schema: snapshot.arrow_schema(),
             snapshot,
             save_mode,
-            schema,
             metrics: ExecutionPlanMetricsSet::new(),
-        })
+        }
     }
 
     /// Create a streaming transformed version of the input that converts dictionary columns
@@ -167,9 +159,7 @@ impl DataSink for DeltaDataSink {
         let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
         let stats_config = WriterStatsConfig::new(DataSkippingNumIndexedCols::AllColumns, None);
         let config = WriterConfig::new(
-            self.snapshot
-                .arrow_schema()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            self.snapshot.arrow_schema(),
             partition_columns.clone(),
             None,
             None,
@@ -439,9 +429,9 @@ impl<'a> DeltaScanBuilder<'a> {
         };
 
         let schema = match config.schema.clone() {
-            Some(value) => Ok(value),
+            Some(value) => value,
             None => self.snapshot.arrow_schema(),
-        }?;
+        };
 
         let logical_schema = df_logical_schema(
             self.snapshot,
@@ -720,7 +710,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<Schema> {
-        self.snapshot().unwrap().snapshot().arrow_schema().unwrap()
+        self.snapshot().unwrap().snapshot().arrow_schema()
     }
 
     fn table_type(&self) -> TableType {
@@ -881,7 +871,7 @@ impl TableProvider for DeltaTableProvider {
         };
 
         let data_sink =
-            DeltaDataSink::new(self.log_store.clone(), self.snapshot.clone(), save_mode)?;
+            DeltaDataSink::new(self.log_store.clone(), self.snapshot.clone(), save_mode);
 
         Ok(Arc::new(DataSinkExec::new(
             input,
