@@ -418,7 +418,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema)
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema)
     }
 
     #[tokio::test]
@@ -442,7 +442,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema)
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema)
     }
 
     #[tokio::test]
@@ -479,7 +479,7 @@ mod tests {
             snapshot.protocol().min_writer_version(),
             PROTOCOL.default_writer_version()
         );
-        assert_eq!(snapshot.schema(), &schema);
+        assert_eq!(snapshot.schema().as_ref(), &schema);
 
         // check we can overwrite default settings via adding actions
         let protocol = ProtocolInner {

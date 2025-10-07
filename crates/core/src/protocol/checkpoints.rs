@@ -358,7 +358,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema);
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
         let res = create_checkpoint_for(0, table.log_store.as_ref(), None).await;
         assert!(res.is_ok());
 
@@ -388,7 +388,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema);
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
 
         let part_cols: Vec<String> = vec![];
         let metadata =
@@ -476,7 +476,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema);
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
         match create_checkpoint_for(1, table.log_store.as_ref(), None).await {
             Ok(_) => {
                 /*

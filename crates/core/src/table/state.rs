@@ -6,7 +6,7 @@ use arrow::compute::concat_batches;
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
-use delta_kernel::schema::StructField;
+use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
@@ -19,7 +19,7 @@ use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, StructType,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol,
     TombstoneView, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
@@ -67,7 +67,7 @@ impl DeltaTableState {
     }
 
     /// The table schema
-    pub fn schema(&self) -> &StructType {
+    pub fn schema(&self) -> KernelSchemaRef {
         self.snapshot.schema()
     }
 

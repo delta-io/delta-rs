@@ -334,10 +334,8 @@ impl CdfLoadBuilder {
         register_store(self.log_store.clone(), session.runtime_env().clone());
 
         let partition_values = self.snapshot.metadata().partition_columns().clone();
-        let schema = self.snapshot.input_schema()?;
-        let schema_fields: Vec<Arc<Field>> = self
-            .snapshot
-            .input_schema()?
+        let schema = self.snapshot.input_schema();
+        let schema_fields: Vec<Arc<Field>> = schema
             .fields()
             .into_iter()
             .filter(|f| !partition_values.contains(f.name()))

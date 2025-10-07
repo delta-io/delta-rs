@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use delta_kernel::actions::{Metadata, Protocol};
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::log_segment::{ListedLogFiles, LogSegment};
 use delta_kernel::path::ParsedLogPath;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
@@ -196,8 +197,10 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
 
         let snapshot = KernelSnapshot::new(log_segment, table_configuration);
         let schema = snapshot
-            .metadata()
-            .parse_schema()
+            .table_configuration()
+            .schema()
+            .as_ref()
+            .try_into_arrow()
             .map_err(de::Error::custom)?;
 
         Ok(Snapshot {

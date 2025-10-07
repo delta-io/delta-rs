@@ -820,7 +820,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(snapshot.input_schema())
         .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
@@ -944,7 +944,7 @@ async fn execute(
     let mut schema_action = None;
     if merge_schema {
         let merge_schema = merge_arrow_schema(
-            snapshot.input_schema()?,
+            snapshot.input_schema(),
             source_schema.inner().clone(),
             false,
         )?;
@@ -974,7 +974,7 @@ async fn execute(
         let schema = Arc::new(schema_builder.finish());
         new_schema = Some(schema.clone());
         let schema_struct: StructType = schema.try_into_kernel()?;
-        if &schema_struct != snapshot.schema() {
+        if &schema_struct != snapshot.schema().as_ref() {
             let action = Action::Metadata(new_metadata(
                 &schema_struct,
                 current_metadata.partition_columns(),
@@ -1097,7 +1097,7 @@ async fn execute(
     let mut write_projection_with_cdf = Vec::new();
 
     let schema = if let Some(schema) = new_schema {
-        &schema.try_into_kernel()?
+        Arc::new(schema.try_into_kernel()?)
     } else {
         snapshot.schema()
     };
@@ -1902,7 +1902,8 @@ mod tests {
             .unwrap();
 
         // Verify schema nullability is preserved after merge
-        let final_fields: Vec<_> = merged_table.snapshot().unwrap().schema().fields().collect();
+        let schema = merged_table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
         assert!(
             !final_fields[0].is_nullable(),
             "id should remain non-nullable after merge"
@@ -2269,7 +2270,10 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -2336,7 +2340,10 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -3410,7 +3417,10 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = schema.as_ref().try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -4244,7 +4254,10 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         let expected_schema_struct: StructType = source_schema.try_into_kernel().unwrap();
-        assert_eq!(&expected_schema_struct, table.snapshot().unwrap().schema());
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
 
         let ctx = SessionContext::new();

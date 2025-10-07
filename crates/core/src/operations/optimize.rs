@@ -702,7 +702,7 @@ impl MergePlan {
 
                 let scan_config = DeltaScanConfigBuilder::default()
                     .with_file_column(false)
-                    .with_schema(snapshot.input_schema()?)
+                    .with_schema(snapshot.input_schema())
                     .build(snapshot)?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
@@ -859,7 +859,7 @@ pub async fn create_merge_plan(
         predicate: serde_json::to_string(filters).ok(),
     };
     let file_schema = arrow_schema_without_partitions(
-        &Arc::new(snapshot.schema().try_into_arrow()?),
+        &Arc::new(snapshot.schema().as_ref().try_into_arrow()?),
         partitions_keys,
     );
 
