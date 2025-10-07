@@ -16,13 +16,13 @@ use std::time::SystemTime;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
+use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
-use datafusion::execution::SessionState;
 use datafusion::physical_expr::{expressions, PhysicalExpr};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
@@ -325,19 +325,17 @@ impl CdfLoadBuilder {
     /// Executes the scan
     pub(crate) async fn build(
         &self,
-        session_sate: &SessionState,
+        session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         PROTOCOL.can_read_from(&self.snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read().await?;
-        register_store(self.log_store.clone(), session_sate.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().clone());
 
         let partition_values = self.snapshot.metadata().partition_columns().clone();
-        let schema = self.snapshot.input_schema()?;
-        let schema_fields: Vec<Arc<Field>> = self
-            .snapshot
-            .input_schema()?
+        let schema = self.snapshot.input_schema();
+        let schema_fields: Vec<Arc<Field>> = schema
             .fields()
             .into_iter()
             .filter(|f| !partition_values.contains(f.name()))

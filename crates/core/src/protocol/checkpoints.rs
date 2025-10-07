@@ -18,7 +18,7 @@ use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use tokio::task::spawn_blocking;
-use tracing::*;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::logstore::{LogStore, LogStoreExt, DELTA_LOG_REGEX};
@@ -315,6 +315,7 @@ mod tests {
     use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
     use object_store::path::Path;
     use object_store::Error;
+    use tracing::warn;
 
     use super::*;
     use crate::ensure_table_uri;
@@ -358,7 +359,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema);
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
         let res = create_checkpoint_for(0, table.log_store.as_ref(), None).await;
         assert!(res.is_ok());
 
@@ -388,7 +389,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema);
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
 
         let part_cols: Vec<String> = vec![];
         let metadata =
@@ -476,7 +477,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema(), &table_schema);
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
         match create_checkpoint_for(1, table.log_store.as_ref(), None).await {
             Ok(_) => {
                 /*

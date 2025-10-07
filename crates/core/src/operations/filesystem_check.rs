@@ -142,7 +142,7 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-        let file_stream = self.snapshot.log_data().iter().map(|f| f.add_action());
+        let file_stream = self.snapshot.log_data().into_iter().map(|f| f.add_action());
         for active in file_stream {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(

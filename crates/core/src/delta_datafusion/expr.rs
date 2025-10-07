@@ -816,8 +816,8 @@ mod test {
                         &table
                             .snapshot()
                             .unwrap()
+                            .snapshot()
                             .input_schema()
-                            .unwrap()
                             .as_ref()
                             .to_owned()
                             .to_dfschema()
@@ -926,6 +926,7 @@ mod test {
             let actual_expr = table
                 .snapshot()
                 .unwrap()
+                .snapshot()
                 .parse_predicate_expression(actual, &session.state())
                 .unwrap();
 

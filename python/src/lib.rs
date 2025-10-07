@@ -28,8 +28,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, StructType,
-    Transaction,
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -470,7 +469,7 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let schema: StructType = self.with_table(|t| {
+        let schema = self.with_table(|t| {
             let snapshot = t
                 .snapshot()
                 .map_err(PythonError::from)
@@ -505,7 +504,7 @@ impl RawDeltaTable {
                     .map_err(PyErr::from),
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }?;
-            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot)
+            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot.snapshot().clone())
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
 
@@ -1270,7 +1269,7 @@ impl RawDeltaTable {
                     }
 
                     // Update metadata with new schema
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         let mut metadata = self.with_table(|t| {
                             let snapshot = t
                                 .snapshot()
@@ -1287,7 +1286,7 @@ impl RawDeltaTable {
                 }
                 _ => {
                     // This should be unreachable from Python
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
                     }
                 }
@@ -1457,7 +1456,7 @@ impl RawDeltaTable {
                 .block_on(async {
                     t.snapshot()?
                         .snapshot()
-                        .files(&log_store, None)
+                        .file_views(&log_store, None)
                         .map_ok(|f| (f.path().to_string(), f.size()))
                         .try_collect()
                         .await

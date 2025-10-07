@@ -36,7 +36,7 @@ pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
-use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
+use metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -72,8 +72,8 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{
-    new_metadata, Action, ActionType, EagerSnapshot, MetadataExt as _, ProtocolExt as _,
-    StructType, StructTypeExt,
+    new_metadata, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType,
+    StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -429,9 +429,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 let mut metrics = WriteMetrics::default();
                 let exec_start = Instant::now();
 
-                let write_planner = DeltaPlanner::<WriteMetricExtensionPlanner> {
-                    extension_planner: WriteMetricExtensionPlanner {},
-                };
+                let write_planner = DeltaPlanner::new();
 
                 // Create table actions to initialize table in case it does not yet exist
                 // and should be created
@@ -441,12 +439,12 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let state = match this.state {
                     Some(state) => SessionStateBuilder::new_from_existing(state.clone())
-                        .with_query_planner(Arc::new(write_planner))
+                        .with_query_planner(write_planner.clone())
                         .build(),
                     None => {
                         let state = SessionStateBuilder::new()
                             .with_default_features()
-                            .with_query_planner(Arc::new(write_planner))
+                            .with_query_planner(write_planner)
                             .build();
                         register_store(this.log_store.clone(), state.runtime_env().clone());
                         state
@@ -477,7 +475,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 // in this case we have to insert the generated column and it's type in the schema of the batch
                 let mut new_schema = None;
                 if let Some(snapshot) = &this.snapshot {
-                    let table_schema = snapshot.input_schema()?;
+                    let table_schema = snapshot.input_schema();
 
                     if let Err(schema_err) =
                         try_cast_schema(source_schema.fields(), table_schema.fields())
@@ -568,7 +566,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         Some(SchemaMode::Merge) if schema_drift => true,
                         Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
                             let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
-                            &delta_schema != snapshot.schema()
+                            &delta_schema != snapshot.schema().as_ref()
                         }
                         _ => false,
                     };
@@ -576,7 +574,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     if should_update_schema {
                         let schema_struct: StructType = schema.clone().try_into_kernel()?;
                         // Verify if delta schema changed
-                        if &schema_struct != snapshot.schema() {
+                        if &schema_struct != snapshot.schema().as_ref() {
                             let current_protocol = snapshot.protocol();
                             let configuration = snapshot.metadata().configuration().clone();
                             let new_protocol = current_protocol
@@ -669,7 +667,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             _ => {
                                 let remove_actions = snapshot
                                     .log_data()
-                                    .iter()
+                                    .into_iter()
                                     .map(|p| p.remove_action(true).into());
                                 actions.extend(remove_actions);
                             }
@@ -677,7 +675,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                     metrics.num_removed_files = actions
                         .iter()
-                        .filter(|a| a.action_type() == ActionType::Remove)
+                        .filter(|a| matches!(a, Action::Remove(_)))
                         .count();
                 }
 
@@ -2045,7 +2043,8 @@ mod tests {
             .await?;
 
         // Verify initial schema has correct nullability
-        let schema_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let schema_fields: Vec<_> = schema.fields().collect();
         assert!(!schema_fields[0].is_nullable(), "id should be non-nullable");
         assert!(schema_fields[1].is_nullable(), "name should be nullable");
         assert!(
@@ -2091,7 +2090,8 @@ mod tests {
             .await?;
 
         // Verify that nullability constraints are preserved
-        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
         assert!(
             !final_fields[0].is_nullable(),
             "id should remain non-nullable after overwrite"
@@ -2191,7 +2191,8 @@ mod tests {
             .await?;
 
         // Verify schema was NOT updated
-        let after_overwrite_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let after_overwrite_fields: Vec<_> = schema.fields().collect();
 
         // Schema should be EXACTLY the same as before
         assert_eq!(
@@ -2284,7 +2285,8 @@ mod tests {
         );
 
         // Verify the table data and schema remain unchanged after failed writes
-        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
 
         // Schema should still be the original schema
         assert!(
@@ -2374,7 +2376,8 @@ mod tests {
             .await?;
 
         // Verify schema is preserved
-        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
 
         for (i, field) in final_fields.iter().enumerate() {
             assert_eq!(

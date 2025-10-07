@@ -138,7 +138,7 @@ pub(crate) async fn execute_non_empty_expr(
     // Take the insert plan schema since it might have been schema evolved, if its not
     // it is simply the table schema
     let scan_config = DeltaScanConfigBuilder::new()
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(snapshot.input_schema())
         .build(snapshot)?;
 
     let target_provider = Arc::new(
