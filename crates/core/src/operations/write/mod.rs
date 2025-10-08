@@ -550,7 +550,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let source = LogicalPlan::Extension(Extension {
                     node: Arc::new(MetricObserver {
-                        id: "write_source_count".into(),
+                        id: SOURCE_COUNT_ID.into(),
                         input: source.logical_plan().clone(),
                         enable_pushdown: false,
                     }),
