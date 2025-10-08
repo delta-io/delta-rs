@@ -433,7 +433,7 @@ impl PartitionWriter {
             part_count += 1;
         }
 
-        debug!(parts = part_count, "uploading multipart file");
+        debug!(parts = part_count, path = %path, "uploading multipart file");
 
         // wait for all remaining tasks to complete
         while let Some(result) = tasks.join_next().await {
@@ -441,7 +441,7 @@ impl PartitionWriter {
         }
 
         multi_part_upload.complete().await?;
-        debug!("multipart upload completed successfully");
+        debug!(path = %path, "multipart upload completed successfully");
 
         self.files_written.push(
             create_add(
