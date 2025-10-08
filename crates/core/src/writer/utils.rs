@@ -7,6 +7,7 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_json::ReaderBuilder;
 use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use bytes::{BufMut, Bytes, BytesMut};
 use object_store::path::Path;
 use parking_lot::RwLock;
 use parquet::basic::Compression;
@@ -105,41 +106,52 @@ pub(crate) fn arrow_schema_without_partitions(
 /// allows multiple owners to have access to the same underlying buffer.
 #[derive(Debug, Default, Clone)]
 pub struct ShareableBuffer {
-    buffer: Arc<RwLock<Vec<u8>>>,
+    buffer: Arc<RwLock<BytesMut>>,
 }
 
 impl ShareableBuffer {
-    /// Consumes this instance and returns the underlying buffer.
+    /// Consumes this instance and returns the underlying buffer as Vec.
     /// Returns None if there are other references to the instance.
     pub fn into_inner(self) -> Option<Vec<u8>> {
         Arc::try_unwrap(self.buffer)
             .ok()
-            .map(|lock| lock.into_inner())
+            .map(|lock| lock.into_inner().to_vec())
+    }
+
+    /// Returns a zero-copy reference to the buffer as `Bytes`.
+    pub fn to_bytes(&self) -> Bytes {
+        let inner = self.buffer.read();
+        inner.clone().freeze()
     }
 
     /// Returns a clone of the underlying buffer as a `Vec`.
     pub fn to_vec(&self) -> Vec<u8> {
-        let inner = self.buffer.read();
-        (*inner).to_vec()
+        self.to_bytes().to_vec()
     }
 
     /// Returns the number of bytes in the underlying buffer.
     pub fn len(&self) -> usize {
         let inner = self.buffer.read();
-        (*inner).len()
+        inner.len()
     }
 
     /// Returns true if the underlying buffer is empty.
     pub fn is_empty(&self) -> bool {
         let inner = self.buffer.read();
-        (*inner).is_empty()
+        inner.is_empty()
     }
 
-    /// Creates a new instance with buffer initialized from the underylying bytes.
+    /// Creates a new instance with buffer initialized from the provided bytes.
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
-            buffer: Arc::new(RwLock::new(bytes.to_vec())),
+            buffer: Arc::new(RwLock::new(BytesMut::from(bytes))),
         }
+    }
+
+    /// Creates a snapshot of the current buffer for rollback purposes.
+    /// Returns the current length for efficient restoration.
+    pub fn snapshot_len(&self) -> usize {
+        self.len()
     }
 
     /// Truncates the buffer to the specified length.
@@ -153,12 +165,12 @@ impl ShareableBuffer {
 impl Write for ShareableBuffer {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut inner = self.buffer.write();
-        (*inner).write(buf)
+        inner.put_slice(buf);
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let mut inner = self.buffer.write();
-        (*inner).flush()
+        Ok(())
     }
 }
 

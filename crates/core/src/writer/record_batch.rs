@@ -10,9 +10,8 @@ use std::{collections::HashMap, sync::Arc};
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
 use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
-use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow_select::take::take;
-use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -267,7 +266,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let prefix = Path::parse(writer.partition_values.hive_partition_path())?;
             let uuid = Uuid::new_v4();
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
-            let obj_bytes = Bytes::from(writer.buffer.to_vec());
+            let obj_bytes = writer.buffer.to_bytes();
             let file_size = obj_bytes.len() as i64;
             self.storage
                 .put_with_retries(&path, obj_bytes.into(), 15)
