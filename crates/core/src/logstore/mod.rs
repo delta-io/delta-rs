@@ -569,22 +569,26 @@ pub async fn get_actions(
 ) -> Result<Vec<Action>, DeltaTableError> {
     debug!("parsing commit with version {version}...");
 
-    let mut actions = Vec::new();
-    for line_bytes in commit_log_bytes.split(|&b| b == b'\n') {
-        if line_bytes.is_empty() {
-            continue;
-        }
-        let action = serde_json::from_slice(line_bytes).map_err(|e| {
-            let line = String::from_utf8_lossy(line_bytes).to_string();
-            DeltaTableError::InvalidJsonLog {
-                json_err: e,
-                line,
-                version,
+    tokio::task::spawn_blocking(move || {
+        let mut actions = Vec::new();
+        for line_bytes in commit_log_bytes.split(|&b| b == b'\n') {
+            if line_bytes.is_empty() {
+                continue;
             }
-        })?;
-        actions.push(action);
-    }
-    Ok(actions)
+            let action = serde_json::from_slice(line_bytes).map_err(|e| {
+                let line = String::from_utf8_lossy(line_bytes).to_string();
+                DeltaTableError::InvalidJsonLog {
+                    json_err: e,
+                    line,
+                    version,
+                }
+            })?;
+            actions.push(action);
+        }
+        Ok(actions)
+    })
+    .await
+    .map_err(|e| DeltaTableError::Generic(format!("Failed to parse commit log {version}: {e}")))?
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
@@ -944,6 +948,37 @@ pub(crate) mod tests {
         let result = table.log_store().peek_next_commit(0).await;
         assert!(result.is_err());
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_actions_non_blocking() -> DeltaResult<()> {
+        let valid_commit = r#"{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}
+{"commitInfo":{"timestamp":1234567890}}
+{"add":{"path":"part-00000.parquet","size":1234,"modificationTime":1234567890,"dataChange":true,"partitionValues":{}}}"#;
+
+        let commit_bytes = Bytes::from(valid_commit);
+        let actions = get_actions(0, commit_bytes).await?;
+
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], Action::Protocol(_)));
+        assert!(matches!(actions[1], Action::CommitInfo(_)));
+        assert!(matches!(actions[2], Action::Add(_)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_actions_invalid_json_error() {
+        let invalid_commit = r#"{"invalid_json"#;
+        let commit_bytes = Bytes::from(invalid_commit);
+        let result = get_actions(0, commit_bytes).await;
+
+        assert!(result.is_err());
+        if let Err(DeltaTableError::InvalidJsonLog { version, .. }) = result {
+            assert_eq!(version, 0);
+        } else {
+            panic!("Expected InvalidJsonLog error");
+        }
     }
 
     /// Collect list stream
