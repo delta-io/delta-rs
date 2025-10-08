@@ -626,14 +626,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 return Ok(PostCommit {
                     version: 0,
                     data: this.data,
-                    create_checkpoint: this
-                        .post_commit
-                        .map(|v| v.create_checkpoint)
-                        .unwrap_or_default(),
-                    cleanup_expired_logs: this
-                        .post_commit
-                        .map(|v| v.cleanup_expired_logs)
-                        .unwrap_or_default(),
+                    create_checkpoint: false,
+                    cleanup_expired_logs: None,
                     log_store: this.log_store,
                     table_data: None,
                     custom_execute_handler: this.post_commit_hook_handler,
