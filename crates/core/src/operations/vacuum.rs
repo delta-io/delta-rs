@@ -261,12 +261,9 @@ impl VacuumBuilder {
                 .await?;
                 for version in sorted_versions {
                     state.update(&self.log_store, Some(version)).await?;
-                    let files: Vec<String> = state
-                        .file_paths_iter()
-                        .map(|path| path.to_string())
-                        .collect();
-                    debug!("keep version:{version}\n, {files:#?}");
-                    keep_files.extend(files);
+                    let files_iter = state.file_paths_iter().map(|path| path.to_string());
+                    debug!("keep version:{version}");
+                    keep_files.extend(files_iter);
                 }
 
                 keep_files
