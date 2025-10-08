@@ -15,7 +15,6 @@ use object_store::{
 use object_store::{MultipartUpload, PutMultipartOptions};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
-use tracing::*;
 
 /// Creates static IO Runtime with optional configuration
 fn io_rt(config: Option<&RuntimeConfig>) -> &Runtime {
