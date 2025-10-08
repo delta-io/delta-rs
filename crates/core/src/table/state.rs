@@ -143,7 +143,7 @@ impl DeltaTableState {
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
     #[deprecated(
-        since = "0.30.0",
+        since = "0.29.0",
         note = "Use `all_tombstones` instead and filter by retention timestamp."
     )]
     pub fn unexpired_tombstones(
@@ -178,7 +178,7 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     #[deprecated(
-        since = "0.30.0",
+        since = "0.29.0",
         note = "Simple object store paths are not meaningful once we support full urls."
     )]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
@@ -227,7 +227,7 @@ impl DeltaTableState {
     ///
     /// A stream of logical file views that match the partition filters.
     #[deprecated(
-        since = "0.30.0",
+        since = "0.29.0",
         note = "Use `.snapshot().files(log_store, predicate)` with a kernel predicate instead."
     )]
     pub fn get_active_add_actions_by_partitions(
