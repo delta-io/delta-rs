@@ -697,7 +697,7 @@ pub async fn read_commit_entry(
             Ok(None)
         }
         Err(err) => {
-            error!(error = %err, "failed to read commit entry");
+            error!(error = %err, version = version, "failed to read commit entry");
             Err(err.into())
         }
     }
