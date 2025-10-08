@@ -131,9 +131,6 @@ fn stats_from_metadata(
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
-    let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
-    let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
-    let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
     let dialect = sqlparser::dialect::GenericDialect {};
 
     let idx_to_iterate = if let Some(stats_cols) = stats_columns {
@@ -176,6 +173,14 @@ fn stats_from_metadata(
             "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
         )));
     };
+
+    let estimated_capacity = idx_to_iterate.len();
+    let mut min_values: HashMap<String, ColumnValueStat> =
+        HashMap::with_capacity(estimated_capacity);
+    let mut max_values: HashMap<String, ColumnValueStat> =
+        HashMap::with_capacity(estimated_capacity);
+    let mut null_count: HashMap<String, ColumnCountStat> =
+        HashMap::with_capacity(estimated_capacity);
 
     for idx in idx_to_iterate {
         let column_descr = schema_descriptor.column(idx);
@@ -549,19 +554,22 @@ fn apply_min_max_for_column(
     match (column_path_parts.len(), column_path_parts.first()) {
         // Base case - we are at the leaf struct level in the path
         (1, _) => {
-            let key = column_descr.name().to_string();
+            let key = column_descr.name();
 
             if let Some(min) = statistics.min {
                 let min = ColumnValueStat::Value(min.into());
-                min_values.insert(key.clone(), min);
+                min_values.insert(key.to_string(), min);
             }
 
             if let Some(max) = statistics.max {
                 let max = ColumnValueStat::Value(max.into());
-                max_values.insert(key.clone(), max);
+                max_values.insert(key.to_string(), max);
             }
 
-            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
+            null_counts.insert(
+                key.to_string(),
+                ColumnCountStat::Value(statistics.null_count as i64),
+            );
 
             Ok(())
         }
