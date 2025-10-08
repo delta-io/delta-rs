@@ -944,11 +944,12 @@ async fn build_compaction_plan(
         let partition_values = file
             .partition_values()
             .map(|v| {
-                v.fields()
-                    .iter()
-                    .zip(v.values().iter())
-                    .map(|(k, v)| (k.name().to_string(), v.clone()))
-                    .collect::<IndexMap<_, _>>()
+                let fields_count = v.fields().len();
+                let mut map = IndexMap::with_capacity(fields_count);
+                for (field, value) in v.fields().iter().zip(v.values().iter()) {
+                    map.insert(field.name().to_string(), value.clone());
+                }
+                map
             })
             .unwrap_or_default();
 
