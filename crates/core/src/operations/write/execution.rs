@@ -391,10 +391,9 @@ pub(crate) async fn write_execution_plan_v2(
 
                     let write_start = std::time::Instant::now();
                     // split batch since we unioned upstream the operation write and cdf plan
-                    let table_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
-                        batch.schema(),
-                        vec![vec![batch.clone()]],
-                    )?);
+                    let batch_schema = batch.schema();
+                    let table_provider: Arc<dyn TableProvider> =
+                        Arc::new(MemTable::try_new(batch_schema, vec![vec![batch]])?);
                     let batch_df = session_context.read_table(table_provider).unwrap();
 
                     let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
