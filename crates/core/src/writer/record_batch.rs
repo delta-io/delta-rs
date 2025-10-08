@@ -462,12 +462,16 @@ pub(crate) fn divide_by_partition_values(
 
     let partition_ranges = partition(sorted_partition_columns.as_slice())?;
 
-    for range in partition_ranges.ranges().into_iter() {
-        // get row indices for current partition
-        let idx: UInt32Array = (range.start..range.end)
-            .map(|i| Some(indices.value(i)))
-            .collect();
+    let sorted_data_columns: Vec<ArrayRef> = arrow_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let col_idx = schema.index_of(f.name())?;
+            Ok(take(values.column(col_idx), &indices, None)?)
+        })
+        .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
+    for range in partition_ranges.ranges().into_iter() {
         let partition_key_iter = sorted_partition_columns
             .iter()
             .map(|col| {
@@ -482,12 +486,11 @@ pub(crate) fn divide_by_partition_values(
             .into_iter()
             .zip(partition_key_iter)
             .collect();
-        let batch_data = arrow_schema
-            .fields()
+
+        let batch_data: Vec<ArrayRef> = sorted_data_columns
             .iter()
-            .map(|f| Ok(values.column(schema.index_of(f.name())?).clone()))
-            .map(move |col: Result<_, ArrowError>| take(col?.as_ref(), &idx, None))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|col| col.slice(range.start, range.end - range.start))
+            .collect();
 
         partitions.push(PartitionResult {
             partition_values,
