@@ -197,7 +197,10 @@ async fn find_files_scan(
         .log_data()
         .iter()
         .map(|f| f.add_action())
-        .map(|add| (add.path.clone(), add.to_owned()))
+        .map(|add| {
+            let path = add.path.clone();
+            (path, add)
+        })
         .collect();
 
     let scan_config = DeltaScanConfigBuilder::default()
