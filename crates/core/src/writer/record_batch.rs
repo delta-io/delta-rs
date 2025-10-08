@@ -400,8 +400,8 @@ impl PartitionWriter {
             None
         };
 
-        // Copy current cursor bytes so we can recover from failures
-        let buffer_bytes = self.buffer.to_vec();
+        // Save buffer length so we can rollback on failure
+        let buffer_len = self.buffer.len();
         let record_batch = merged_batch.as_ref().unwrap_or(record_batch);
 
         match self.arrow_writer.write(record_batch) {
@@ -411,10 +411,9 @@ impl PartitionWriter {
             }
             // If a write fails we need to reset the state of the PartitionWriter
             Err(e) => {
-                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
-                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
+                self.buffer.truncate(buffer_len);
                 let arrow_writer = ArrowWriter::try_new(
-                    new_buffer,
+                    self.buffer.clone(),
                     self.arrow_schema.clone(),
                     Some(self.writer_properties.clone()),
                 )?;

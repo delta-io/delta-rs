@@ -141,6 +141,13 @@ impl ShareableBuffer {
             buffer: Arc::new(RwLock::new(bytes.to_vec())),
         }
     }
+
+    /// Truncates the buffer to the specified length.
+    /// If the buffer is shorter than the specified length, this is a no-op.
+    pub fn truncate(&self, len: usize) {
+        let mut inner = self.buffer.write();
+        inner.truncate(len);
+    }
 }
 
 impl Write for ShareableBuffer {
