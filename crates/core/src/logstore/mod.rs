@@ -569,26 +569,19 @@ pub async fn get_actions(
 ) -> Result<Vec<Action>, DeltaTableError> {
     debug!("parsing commit with version {version}...");
 
-    tokio::task::spawn_blocking(move || {
-        let mut actions = Vec::new();
-        for line_bytes in commit_log_bytes.split(|&b| b == b'\n') {
-            if line_bytes.is_empty() {
-                continue;
-            }
-            let action = serde_json::from_slice(line_bytes).map_err(|e| {
-                let line = String::from_utf8_lossy(line_bytes).to_string();
+    serde_json::Deserializer::from_slice(&commit_log_bytes)
+        .into_iter::<Action>()
+        .map(|result| {
+            result.map_err(|e| {
+                let line = format!("Error at line {}, column {}", e.line(), e.column());
                 DeltaTableError::InvalidJsonLog {
                     json_err: e,
                     line,
                     version,
                 }
-            })?;
-            actions.push(action);
-        }
-        Ok(actions)
-    })
-    .await
-    .map_err(|e| DeltaTableError::Generic(format!("Failed to parse commit log {version}: {e}")))?
+            })
+        })
+        .collect()
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
