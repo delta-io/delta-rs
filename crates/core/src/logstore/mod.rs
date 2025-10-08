@@ -48,7 +48,6 @@
 //! ## Configuration
 //!
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use bytes::Bytes;
@@ -569,16 +568,19 @@ pub async fn get_actions(
     commit_log_bytes: bytes::Bytes,
 ) -> Result<Vec<Action>, DeltaTableError> {
     debug!("parsing commit with version {version}...");
-    let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
     let mut actions = Vec::new();
-    for re_line in reader.lines() {
-        let line = re_line?;
-        let lstr = line.as_str();
-        let action = serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-            json_err: e,
-            line,
-            version,
+    for line_bytes in commit_log_bytes.split(|&b| b == b'\n') {
+        if line_bytes.is_empty() {
+            continue;
+        }
+        let action = serde_json::from_slice(line_bytes).map_err(|e| {
+            let line = String::from_utf8_lossy(line_bytes).to_string();
+            DeltaTableError::InvalidJsonLog {
+                json_err: e,
+                line,
+                version,
+            }
         })?;
         actions.push(action);
     }

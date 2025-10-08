@@ -87,8 +87,9 @@ impl<'a> LogDataHandler<'a> {
 
     pub fn iter(&self) -> impl Iterator<Item = LogicalFileView> + '_ {
         self.data.iter().flat_map(|batch| {
-            let batch = Arc::new(batch.clone());
-            (0..batch.num_rows()).map(move |idx| LogicalFileView::new(Arc::clone(&batch), idx))
+            let batch = batch.clone();
+            let num_rows = batch.num_rows();
+            (0..num_rows).map(move |idx| LogicalFileView::new(batch.clone(), idx))
         })
     }
 }
@@ -99,8 +100,8 @@ impl IntoIterator for LogDataHandler<'_> {
 
     fn into_iter(self) -> Self::IntoIter {
         Box::new(self.data.to_vec().into_iter().flat_map(|batch| {
-            let batch = Arc::new(batch);
-            (0..batch.num_rows()).map(move |idx| LogicalFileView::new(Arc::clone(&batch), idx))
+            let num_rows = batch.num_rows();
+            (0..num_rows).map(move |idx| LogicalFileView::new(batch.clone(), idx))
         }))
     }
 }
