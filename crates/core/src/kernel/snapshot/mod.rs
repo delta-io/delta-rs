@@ -584,8 +584,9 @@ impl EagerSnapshot {
                 None,
             )
             .map_ok(|batch| {
+                let batch = Arc::new(batch);
                 futures::stream::iter(0..batch.num_rows()).map(move |idx| {
-                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(Arc::clone(&batch), idx))
                 })
             })
             .try_flatten()
