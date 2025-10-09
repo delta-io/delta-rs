@@ -1669,7 +1669,7 @@ mod tests {
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
-        let version_actions = get_actions(2, snapshot_bytes).await?;
+        let version_actions = get_actions(2, &snapshot_bytes).await?;
 
         let cdc_actions = version_actions
             .iter()
@@ -1743,7 +1743,7 @@ mod tests {
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
-        let version_actions = get_actions(2, snapshot_bytes).await?;
+        let version_actions = get_actions(2, &snapshot_bytes).await?;
 
         let cdc_actions = version_actions
             .iter()
@@ -1844,7 +1844,7 @@ mod tests {
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
-        let version_actions = get_actions(2, snapshot_bytes).await?;
+        let version_actions = get_actions(2, &snapshot_bytes).await?;
 
         let cdc_actions = version_actions
             .iter()

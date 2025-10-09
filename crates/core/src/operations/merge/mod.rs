@@ -1999,7 +1999,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, snapshot_bytes)
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes)
             .await
             .unwrap();
 
@@ -2075,7 +2075,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, snapshot_bytes)
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes)
             .await
             .unwrap();
 
@@ -2186,7 +2186,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, snapshot_bytes)
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes)
             .await
             .unwrap();
 

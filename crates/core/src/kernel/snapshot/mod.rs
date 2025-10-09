@@ -15,7 +15,6 @@
 //!
 //!
 
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use arrow::array::RecordBatch;
@@ -37,6 +36,7 @@ use futures::stream::{once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
+use serde_json::Deserializer;
 use tokio::task::spawn_blocking;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
@@ -323,9 +323,10 @@ impl Snapshot {
                 let store = store.clone();
                 async move {
                     let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
-                    let reader = BufReader::new(Cursor::new(commit_log_bytes));
-                    for line in reader.lines() {
-                        let action: Action = serde_json::from_str(line?.as_str())?;
+
+                    for result in Deserializer::from_slice(&commit_log_bytes).into_iter::<Action>()
+                    {
+                        let action = result?;
                         if let Action::CommitInfo(commit_info) = action {
                             return Ok::<_, DeltaTableError>(Some(commit_info));
                         }
