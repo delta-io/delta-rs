@@ -462,7 +462,7 @@ async fn execute(
             Ok(df) => {
                 let cdc_actions = write_execution_plan_cdc(
                     Some(&snapshot),
-                    state,
+                    session,
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
@@ -514,7 +514,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                     let session: SessionContext = DeltaSessionContext::default().into();
                     session.state()
                 });
-            register_store(this.log_store.clone(), state.runtime_env().as_ref());
+            register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
             let (snapshot, metrics) = execute(
                 this.predicate,

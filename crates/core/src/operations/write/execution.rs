@@ -45,7 +45,7 @@ pub(crate) struct WriteExecutionPlanMetrics {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
     snapshot: Option<&EagerSnapshot>,
-    state: SessionState,
+    session: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -58,7 +58,7 @@ pub(crate) async fn write_execution_plan_cdc(
 
     Ok(write_execution_plan(
         snapshot,
-        state,
+        session,
         plan,
         partition_columns,
         cdc_store,
