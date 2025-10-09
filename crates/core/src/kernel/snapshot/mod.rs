@@ -592,7 +592,7 @@ impl EagerSnapshot {
             .boxed()
     }
 
-    #[deprecated(since = "0.30.0", note = "Use `files` with kernel predicate instead.")]
+    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
     pub fn file_views_by_partitions(
         &self,
         log_store: &dyn LogStore,
