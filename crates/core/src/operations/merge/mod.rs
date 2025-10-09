@@ -35,11 +35,11 @@ use std::time::Instant;
 
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{plan_err, Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::SessionConfig;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::execution_props::ExecutionProps;
@@ -77,7 +77,7 @@ use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObse
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
     register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
-    DeltaSessionConfig, DeltaTableProvider,
+    DeltaSessionContext, DeltaTableProvider,
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
@@ -144,7 +144,7 @@ pub struct MergeBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    state: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional information to add to the commit
@@ -384,7 +384,7 @@ impl MergeBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: SessionState) -> Self {
+    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
     }
@@ -1540,15 +1540,15 @@ impl std::future::IntoFuture for MergeBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let state = this.state.unwrap_or_else(|| {
-                let config: SessionConfig = DeltaSessionConfig::default().into();
-                let session = SessionContext::new_with_config(config);
+            let state = this
+                .state
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    let session: SessionContext = DeltaSessionContext::default().into();
+                    session.state()
+                });
 
-                // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.log_store.clone(), session.runtime_env());
-
-                session.state()
-            });
+            register_store(this.log_store.clone(), state.runtime_env().as_ref());
 
             let (snapshot, metrics) = execute(
                 this.predicate,

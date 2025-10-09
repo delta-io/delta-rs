@@ -44,7 +44,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::vec;
 
 use arrow_array::RecordBatch;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
@@ -136,7 +136,7 @@ pub struct WriteBuilder {
     /// The input plan
     input: Option<Arc<LogicalPlan>>,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    session: Option<Arc<dyn Session>>,
     /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
     /// Column names for table partitioning
@@ -195,7 +195,7 @@ impl WriteBuilder {
             snapshot,
             log_store,
             input: None,
-            state: None,
+            session: None,
             mode: SaveMode::Append,
             partition_columns: None,
             predicate: None,
@@ -247,8 +247,15 @@ impl WriteBuilder {
     }
 
     /// A session state accompanying a given input plan, containing e.g. registered object stores
+    #[deprecated(since = "0.29.0", note = "Use `with_session_state` instead")]
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
-        self.state = Some(state);
+        self.session = Some(Arc::new(state));
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 
@@ -433,23 +440,19 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let partition_columns = this.get_partition_columns()?;
 
-            let state = match this.state {
-                Some(state) => SessionStateBuilder::new_from_existing(state.clone())
-                    .with_query_planner(write_planner.clone())
-                    .build(),
-                None => {
-                    let state = SessionStateBuilder::new()
-                        .with_default_features()
-                        .with_query_planner(write_planner)
-                        .build();
-                    register_store(this.log_store.clone(), state.runtime_env().clone());
-                    state
-                }
-            };
+            let session = this
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
+                .map(SessionStateBuilder::new_from_existing)
+                .unwrap_or_default()
+                .with_query_planner(write_planner)
+                .build();
+            register_store(this.log_store.clone(), session.runtime_env().as_ref());
+
             let mut schema_drift = false;
             let mut generated_col_exp = None;
             let mut missing_gen_col = None;
-            let mut source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
+            let mut source = DataFrame::new(session.clone(), this.input.unwrap().as_ref().clone());
             if let Some(snapshot) = &this.snapshot {
                 if able_to_gc(snapshot)? {
                     let generated_col_expressions = snapshot.schema().get_generated_columns()?;
@@ -537,7 +540,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         source,
                         &generated_columns_exp,
                         &missing_generated_col,
-                        &state,
+                        &session,
                     )?;
                 }
             }
@@ -550,7 +553,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }),
             });
 
-            let mut source = DataFrame::new(state.clone(), source);
+            let mut source = DataFrame::new(session.clone(), source);
 
             let schema = Arc::new(source.schema().as_arrow().clone());
 
@@ -598,7 +601,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         Expression::DataFusion(expr) => expr,
                         Expression::String(s) => {
                             let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
-                            parse_predicate_expression(&df_schema, s, &state)?
+                            parse_predicate_expression(&df_schema, s, &session)?
                         }
                     };
                     (Some(fmt_expr_to_sql(&pred)?), Some(pred))
@@ -638,7 +641,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 pred.clone(),
                                 this.log_store.clone(),
                                 snapshot,
-                                state.clone(),
+                                session.clone(),
                                 partition_columns.clone(),
                                 this.writer_properties.clone(),
                                 deletion_timestamp,
@@ -678,7 +681,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // Here we need to validate if the new data conforms to a predicate if one is provided
             let (add_actions, _) = write_execution_plan_v2(
                 this.snapshot.as_ref(),
-                state.clone(),
+                session.clone(),
                 source_plan.clone(),
                 partition_columns.clone(),
                 this.log_store.object_store(Some(operation_id)).clone(),

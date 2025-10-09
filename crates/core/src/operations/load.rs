@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::TaskContext;
+use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
-use crate::delta_datafusion::DataFusionMixins as _;
+use crate::delta_datafusion::{DataFusionMixins as _, DeltaSessionConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::EagerSnapshot;
@@ -15,7 +17,7 @@ use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
     snapshot: EagerSnapshot,
@@ -23,6 +25,17 @@ pub struct LoadBuilder {
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
+    /// Datafusion session state relevant for executing the input plan
+    session: Option<Arc<dyn Session>>,
+}
+
+impl std::fmt::Debug for LoadBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadBuilder")
+            .field("snapshot", &self.snapshot)
+            .field("log_store", &self.log_store)
+            .finish()
+    }
 }
 
 impl super::Operation<()> for LoadBuilder {
@@ -41,12 +54,19 @@ impl LoadBuilder {
             snapshot,
             log_store,
             columns: None,
+            session: None,
         }
     }
 
     /// Specify column selection to load
     pub fn with_columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.columns = Some(columns.into_iter().map(|s| s.into()).collect());
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 }
@@ -86,12 +106,18 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            let ctx = SessionContext::new();
-            let scan_plan = table
-                .scan(&ctx.state(), projection.as_ref(), &[], None)
-                .await?;
+            let session = this
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_config(DeltaSessionConfig::default().into())
+                        .build()
+                });
+            let scan_plan = table.scan(&session, projection.as_ref(), &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+            let task_ctx = Arc::new(TaskContext::from(&session));
             let stream = plan.execute(0, task_ctx)?;
 
             Ok((table, stream))
