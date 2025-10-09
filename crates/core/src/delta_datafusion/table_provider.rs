@@ -875,9 +875,9 @@ impl TableProvider for DeltaTableProvider {
             InsertOp::Append => SaveMode::Append,
             InsertOp::Overwrite => SaveMode::Overwrite,
             InsertOp::Replace => {
-                return Err(DataFusionError::Plan(format!(
-                    "Replace operation is not supported for DeltaTableProvider"
-                )))
+                return Err(DataFusionError::Plan(
+                    "Replace operation is not supported for DeltaTableProvider".to_string(),
+                ))
             }
         };
 
@@ -965,22 +965,6 @@ impl ExecutionPlan for DeltaScan {
         }))
     }
 
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.parquet_scan.execute(partition, context)
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.parquet_scan.partition_statistics(partition)
-    }
-
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -997,6 +981,22 @@ impl ExecutionPlan for DeltaScan {
         } else {
             Ok(None)
         }
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.parquet_scan.execute(partition, context)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.parquet_scan.partition_statistics(partition)
     }
 }
 
