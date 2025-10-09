@@ -277,17 +277,21 @@ mod tests {
 
         // parses simple expression
         let parsed = snapshot
+            .snapshot()
             .parse_predicate_expression("value > 10", &state)
             .unwrap();
         let expected = col("value").gt(lit::<i64>(10));
         assert_eq!(parsed, expected);
 
         // fails for unknown column
-        let parsed = snapshot.parse_predicate_expression("non_existent > 10", &state);
+        let parsed = snapshot
+            .snapshot()
+            .parse_predicate_expression("non_existent > 10", &state);
         assert!(parsed.is_err());
 
         // parses complex expression
         let parsed = snapshot
+            .snapshot()
             .parse_predicate_expression("value > 10 OR value <= 0", &state)
             .unwrap();
         let expected = col("value")
@@ -320,7 +324,7 @@ mod tests {
         )));
 
         let state = DeltaTableState::from_actions(actions).await.unwrap();
-        let files = files_matching_predicate(state.snapshot.log_data(), &[])
+        let files = files_matching_predicate(state.snapshot().log_data(), &[])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 3);
@@ -329,7 +333,7 @@ mod tests {
             .gt(lit::<i32>(10))
             .or(col("value").lt_eq(lit::<i32>(0)));
 
-        let files = files_matching_predicate(state.snapshot.log_data(), &[predictate])
+        let files = files_matching_predicate(state.snapshot().log_data(), &[predictate])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);

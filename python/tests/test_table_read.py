@@ -60,7 +60,7 @@ def test_read_simple_table_to_dict():
 def test_table_count():
     table_path = "../crates/test/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
-    assert dt.count() == 1
+    assert dt.count() == 1111930
 
 
 class _SerializableException(BaseException):

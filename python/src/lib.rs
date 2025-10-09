@@ -27,7 +27,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, LogicalFileView, MetadataExt as _, StructDataExt as _, StructType, Transaction,
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -154,9 +154,10 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.log_store().object_store(None).clone()))
     }
 
-    fn cloned_state(&self) -> PyResult<DeltaTableState> {
+    fn cloned_state(&self) -> PyResult<EagerSnapshot> {
         self.with_table(|t| {
             t.snapshot()
+                .map(|snapshot| snapshot.snapshot())
                 .cloned()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)
@@ -467,7 +468,7 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let schema: StructType = self.with_table(|t| {
+        let schema = self.with_table(|t| {
             let snapshot = t
                 .snapshot()
                 .map_err(PythonError::from)
@@ -502,7 +503,7 @@ impl RawDeltaTable {
                     .map_err(PyErr::from),
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }?;
-            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot)
+            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot.snapshot().clone())
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
 
@@ -1184,7 +1185,7 @@ impl RawDeltaTable {
         let adds: Vec<_> = rt()
             .block_on(async {
                 state
-                    .get_active_add_actions_by_partitions(&log_store, &converted_filters)
+                    .file_views_by_partitions(&log_store, &converted_filters)
                     .try_collect()
                     .await
             })
@@ -1200,7 +1201,7 @@ impl RawDeltaTable {
                                 *col,
                                 add.partition_values()
                                     .and_then(|v| {
-                                        v.index_of(*col).and_then(|idx| v.value(idx).cloned())
+                                        v.index_of(col).and_then(|idx| v.value(idx).cloned())
                                     })
                                     .map(|v| v.serialize()),
                             )
@@ -1255,10 +1256,7 @@ impl RawDeltaTable {
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
                             state
-                                .get_active_add_actions_by_partitions(
-                                    &log_store,
-                                    &converted_filters,
-                                )
+                                .file_views_by_partitions(&log_store, &converted_filters)
                                 .try_collect()
                                 .await
                         })
@@ -1270,7 +1268,7 @@ impl RawDeltaTable {
                     }
 
                     // Update metadata with new schema
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         let mut metadata = self.with_table(|t| {
                             let snapshot = t
                                 .snapshot()
@@ -1287,7 +1285,7 @@ impl RawDeltaTable {
                 }
                 _ => {
                     // This should be unreachable from Python
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
                     }
                 }
@@ -1457,7 +1455,7 @@ impl RawDeltaTable {
                 .block_on(async {
                     t.snapshot()?
                         .snapshot()
-                        .files(&log_store, None)
+                        .file_views(&log_store, None)
                         .map_ok(|f| (f.path().to_string(), f.size()))
                         .try_collect()
                         .await
@@ -1689,7 +1687,7 @@ impl RawDeltaTable {
 
             let mut builder = WriteBuilder::new(
                 self.log_store()?,
-                self.with_table(|t| Ok(t.state.clone()))?,
+                self.with_table(|t| Ok(t.state.as_ref().map(|s| s.snapshot().clone())))?,
                 // Take the Option<state> since it might be the first write,
                 // triggered through `write_to_deltalake`
             )
@@ -1870,7 +1868,7 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                 if let Some(encoding) = column_prop.encoding {
                     properties = properties.set_column_encoding(
                         column_name.clone().into(),
-                        Encoding::from_str(&encoding).map_err(|err| DeltaTableError::from(err))?,
+                        Encoding::from_str(&encoding).map_err(DeltaTableError::from)?,
                     );
                     properties =
                         properties.set_column_dictionary_enabled(column_name.clone().into(), false);

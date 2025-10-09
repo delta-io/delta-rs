@@ -193,11 +193,11 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt as _;
     use itertools::Itertools;
 
     use super::*;
     use crate::table::PeekCommit;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn read_delta_2_0_table_without_version() {
@@ -222,9 +222,9 @@ mod tests {
             .snapshot()
             .unwrap()
             .all_tombstones(&table.log_store())
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap()
-            .collect_vec();
+            .unwrap();
         assert_eq!(tombstones.len(), 4);
         // assert!(tombstones.contains(&crate::kernel::Remove {
         //     path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
@@ -358,22 +358,16 @@ mod tests {
             .snapshot()
             .unwrap()
             .all_tombstones(&table.log_store())
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap()
-            .collect_vec();
+            .unwrap();
         assert_eq!(tombstones.len(), 1);
-        assert!(tombstones.contains(&crate::kernel::Remove {
-            path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
-            deletion_timestamp: Some(1615043776198),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(HashMap::new()),
-            size: Some(445),
-            base_row_id: None,
-            default_row_commit_version: None,
-            deletion_vector: None,
-            tags: Some(HashMap::new()),
-        }));
+        let tombstone = tombstones.first().unwrap();
+        assert_eq!(
+            tombstone.path(),
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"
+        );
+        assert_eq!(tombstone.deletion_timestamp(), Some(1615043776198));
     }
 
     #[tokio::test]

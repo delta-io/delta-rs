@@ -1,20 +1,20 @@
 //! Utility functions to determine early filters for file/partition pruning
-use datafusion::functions_aggregate::expr_fn::{max, min};
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use arrow::compute::concat_batches;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
+use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{lit, Aggregate, BinaryExpr, LogicalPlan, Operator};
-use datafusion::logical_expr::{Between, Expr};
-
+use datafusion::logical_expr::{lit, Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator};
+use datafusion::physical_plan::ExecutionPlan;
 use either::{Left, Right};
-
+use futures::TryStreamExt as _;
 use itertools::Itertools;
 
-use crate::delta_datafusion::execute_plan_to_batch;
-use crate::table::state::DeltaTableState;
+use crate::kernel::EagerSnapshot;
 use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug)]
@@ -324,7 +324,7 @@ pub(crate) fn generalize_filter(
 
 pub(crate) async fn try_construct_early_filter(
     join_predicate: Expr,
-    table_snapshot: &DeltaTableState,
+    table_snapshot: &EagerSnapshot,
     session_state: &SessionState,
     source: &LogicalPlan,
     source_name: &TableReference,
@@ -395,6 +395,28 @@ pub(crate) async fn try_construct_early_filter(
         }
     }
 }
+
+async fn execute_plan_to_batch(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+) -> DeltaResult<arrow::record_batch::RecordBatch> {
+    let data = futures::future::try_join_all(
+        (0..plan.properties().output_partitioning().partition_count()).map(|p| {
+            let plan_copy = plan.clone();
+            let task_context = state.task_ctx().clone();
+            async move {
+                let batch_stream = plan_copy.execute(p, task_context)?;
+                let schema = batch_stream.schema();
+                let batches = batch_stream.try_collect::<Vec<_>>().await?;
+                datafusion::error::Result::<_>::Ok(concat_batches(&schema, batches.iter())?)
+            }
+        }),
+    )
+    .await?;
+
+    Ok(concat_batches(&plan.schema(), data.iter())?)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::operations::merge::tests::setup_table;
@@ -457,7 +479,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -548,7 +570,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -606,7 +628,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -669,7 +691,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -738,7 +760,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -810,7 +832,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,

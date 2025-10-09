@@ -2,14 +2,15 @@
 
 use std::sync::Arc;
 
+use arrow::compute::concat_batches;
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
-use delta_kernel::schema::StructField;
+use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::{future::ready, StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -18,13 +19,13 @@ use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol, Remove,
-    StructType, ARROW_HANDLER,
+    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol,
+    TombstoneView, ARROW_HANDLER,
 };
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
-use crate::{to_kernel_predicate, DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +35,10 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    pub fn new(snapshot: EagerSnapshot) -> Self {
+        Self { snapshot }
+    }
+
     /// Create a new DeltaTableState
     pub async fn try_new(
         log_store: &dyn LogStore,
@@ -62,7 +67,7 @@ impl DeltaTableState {
     }
 
     /// The table schema
-    pub fn schema(&self) -> &StructType {
+    pub fn schema(&self) -> KernelSchemaRef {
         self.snapshot.schema()
     }
 
@@ -128,34 +133,31 @@ impl DeltaTableState {
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub async fn all_tombstones(
+    pub fn all_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
-        Ok(self
-            .snapshot
-            .snapshot()
-            .tombstones(log_store)
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter())
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
+        self.snapshot.snapshot().tombstones(log_store)
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    pub async fn unexpired_tombstones(
+    #[deprecated(
+        since = "0.29.0",
+        note = "Use `all_tombstones` instead and filter by retention timestamp."
+    )]
+    pub fn unexpired_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_config()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
-        let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
-        Ok(tombstones
-            .into_iter()
-            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
+        self.all_tombstones(log_store)
+            .try_filter(move |t| ready(t.deletion_timestamp().unwrap_or(0) > retention_timestamp))
+            .boxed()
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
@@ -168,15 +170,21 @@ impl DeltaTableState {
     /// delta table state.
     pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
         self.snapshot
-            .files(log_store, None)
+            .file_views(log_store, None)
             .map_ok(|v| v.add_action())
             .boxed()
     }
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
+    #[deprecated(
+        since = "0.29.0",
+        note = "Simple object store paths are not meaningful once we support full urls."
+    )]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.log_data().iter().map(|add| add.object_store_path())
+        self.log_data()
+            .into_iter()
+            .map(|add| add.object_store_path())
     }
 
     /// Get the transaction version for the given application ID.
@@ -218,21 +226,53 @@ impl DeltaTableState {
     /// ## Returns
     ///
     /// A stream of logical file views that match the partition filters.
+    #[deprecated(
+        since = "0.29.0",
+        note = "Use `.snapshot().files(log_store, predicate)` with a kernel predicate instead."
+    )]
     pub fn get_active_add_actions_by_partitions(
         &self,
         log_store: &dyn LogStore,
         filters: &[PartitionFilter],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if filters.is_empty() {
-            return self.snapshot().files(log_store, None);
-        }
-        let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
-            Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-        };
-        self.snapshot().files(log_store, Some(predicate))
+        self.snapshot().file_views_by_partitions(log_store, filters)
     }
 
+    /// Get an [arrow::record_batch::RecordBatch] containing add action data.
+    ///
+    /// # Arguments
+    ///
+    /// * `flatten` - whether to flatten the schema. Partition values columns are
+    ///   given the prefix `partition.`, statistics (null_count, min, and max) are
+    ///   given the prefix `null_count.`, `min.`, and `max.`, and tags the
+    ///   prefix `tags.`. Nested field names are concatenated with `.`.
+    ///
+    /// # Data schema
+    ///
+    /// Each row represents a file that is a part of the selected tables state.
+    ///
+    /// * `path` (String): relative or absolute to a file.
+    /// * `size_bytes` (Int64): size of file in bytes.
+    /// * `modification_time` (Millisecond Timestamp): time the file was created.
+    /// * `null_count.{col_name}` (Int64): number of null values for column in
+    ///   this file.
+    /// * `num_records.{col_name}` (Int64): number of records for column in
+    ///   this file.
+    /// * `min.{col_name}` (matches column type): minimum value of column in file
+    ///   (if available).
+    /// * `max.{col_name}` (matches column type): maximum value of column in file
+    ///   (if available).
+    /// * `partition.{partition column name}` (matches column type): value of
+    ///   partition the file corresponds to.
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        self.snapshot.add_actions_table(flatten)
+    }
+}
+
+impl EagerSnapshot {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
     ///
     /// # Arguments
@@ -274,7 +314,7 @@ impl DeltaTableState {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot.snapshot().inner.stats_schema()?;
+        let stats_schema = self.snapshot().inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
             .ok_or_else(|| DeltaTableError::SchemaMismatch {
@@ -303,7 +343,7 @@ impl DeltaTableState {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
+        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,
@@ -314,13 +354,18 @@ impl DeltaTableState {
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
 
-        let input_schema = self.snapshot.files.schema();
+        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-        let actions = self.snapshot.files.clone();
-
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
-        let result = evaluator.evaluate_arrow(actions)?;
+
+        let results = self
+            .files
+            .iter()
+            .map(|file| evaluator.evaluate_arrow(file.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let result = concat_batches(results[0].schema_ref(), &results)?;
 
         if flatten {
             Ok(result.normalize(".", None)?)
