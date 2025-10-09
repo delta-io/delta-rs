@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::ToDFSchema;
-use datafusion::execution::{SendableRecordBatchStream, SessionState, TaskContext};
+use datafusion::execution::{SendableRecordBatchStream, SessionState};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use delta_kernel::table_features::WriterFeature;

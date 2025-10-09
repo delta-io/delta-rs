@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{col, Expr, Volatility};

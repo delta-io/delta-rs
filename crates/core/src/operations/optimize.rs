@@ -51,7 +51,7 @@ use uuid::Uuid;
 
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::{DeltaSessionContext, DeltaTableProvider};
+use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::EagerSnapshot;

@@ -1542,8 +1542,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
             let state = this
                 .state
-                .map(|state| state.as_any().downcast_ref::<SessionState>().cloned())
-                .flatten()
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
                 .unwrap_or_else(|| {
                     let session: SessionContext = DeltaSessionContext::default().into();
                     session.state()

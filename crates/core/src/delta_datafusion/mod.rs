@@ -42,7 +42,7 @@ use datafusion::common::{
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::context::{SessionConfig, SessionContext, SessionState};
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -55,7 +55,6 @@ use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use delta_kernel::table_configuration::TableConfiguration;
 use either::Either;
 use itertools::Itertools;
 use url::Url;

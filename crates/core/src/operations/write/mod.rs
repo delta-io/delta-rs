@@ -442,9 +442,8 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let state = this
                 .state
-                .map(|state| state.as_any().downcast_ref::<SessionState>().cloned())
-                .flatten()
-                .map(|state| SessionStateBuilder::new_from_existing(state))
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .map(SessionStateBuilder::new_from_existing)
                 .unwrap_or_default()
                 .with_query_planner(write_planner)
                 .build();
