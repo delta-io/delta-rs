@@ -36,7 +36,7 @@ pub struct ConstraintBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<Arc<dyn Session>>,
+    session: Option<Arc<dyn Session>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -59,7 +59,7 @@ impl ConstraintBuilder {
             expr: None,
             snapshot,
             log_store,
-            state: None,
+            session: None,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
         }
@@ -77,8 +77,8 @@ impl ConstraintBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
-        self.state = Some(state);
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 
@@ -131,8 +131,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
             }
 
             let session = this
-                .state
-                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
                 .unwrap_or_else(|| {
                     let session: SessionContext = DeltaSessionContext::default().into();
                     session.state()

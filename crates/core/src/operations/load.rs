@@ -26,7 +26,7 @@ pub struct LoadBuilder {
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<Arc<dyn Session>>,
+    session: Option<Arc<dyn Session>>,
 }
 
 impl std::fmt::Debug for LoadBuilder {
@@ -54,7 +54,7 @@ impl LoadBuilder {
             snapshot,
             log_store,
             columns: None,
-            state: None,
+            session: None,
         }
     }
 
@@ -65,8 +65,8 @@ impl LoadBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
-        self.state = Some(state);
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 }
@@ -106,18 +106,18 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            let state = this
-                .state
-                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+            let session = this
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
                 .unwrap_or_else(|| {
                     SessionStateBuilder::new()
                         .with_default_features()
                         .with_config(DeltaSessionConfig::default().into())
                         .build()
                 });
-            let scan_plan = table.scan(&state, projection.as_ref(), &[], None).await?;
+            let scan_plan = table.scan(&session, projection.as_ref(), &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&state));
+            let task_ctx = Arc::new(TaskContext::from(&session));
             let stream = plan.execute(0, task_ctx)?;
 
             Ok((table, stream))

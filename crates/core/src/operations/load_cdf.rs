@@ -56,7 +56,7 @@ pub struct CdfLoadBuilder {
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<Arc<dyn Session>>,
+    session: Option<Arc<dyn Session>>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -84,7 +84,7 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
-            state: None,
+            session: None,
         }
     }
 
@@ -119,8 +119,8 @@ impl CdfLoadBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
-        self.state = Some(state);
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 

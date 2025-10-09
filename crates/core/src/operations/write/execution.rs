@@ -92,7 +92,7 @@ pub(crate) async fn write_execution_plan_cdc(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
     snapshot: Option<&EagerSnapshot>,
-    state: SessionState,
+    session: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -103,7 +103,7 @@ pub(crate) async fn write_execution_plan(
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         snapshot,
-        state,
+        session,
         plan,
         partition_columns,
         object_store,
@@ -122,7 +122,7 @@ pub(crate) async fn write_execution_plan(
 pub(crate) async fn execute_non_empty_expr(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: SessionState,
+    session: SessionState,
     partition_columns: Vec<String>,
     expression: &Expr,
     rewrite: &[Add],
@@ -150,7 +150,7 @@ pub(crate) async fn execute_non_empty_expr(
     let source = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
     // We don't want to verify the predicate against existing data
 
-    let df = DataFrame::new(state.clone(), source);
+    let df = DataFrame::new(session.clone(), source);
 
     let cdf_df = if !partition_scan {
         // Apply the negation of the filter and rewrite files
@@ -164,7 +164,7 @@ pub(crate) async fn execute_non_empty_expr(
 
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
-            state.clone(),
+            session.clone(),
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
@@ -201,20 +201,25 @@ pub(crate) async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
     snapshot: &EagerSnapshot,
-    state: SessionState,
+    session: SessionState,
     partition_columns: Vec<String>,
     writer_properties: Option<WriterProperties>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let candidates =
-        find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
+    let candidates = find_files(
+        snapshot,
+        log_store.clone(),
+        &session,
+        Some(predicate.clone()),
+    )
+    .await?;
 
     let (mut actions, cdf_df) = execute_non_empty_expr(
         snapshot,
         log_store,
-        state,
+        session,
         partition_columns,
         &predicate,
         &candidates.candidates,
@@ -247,7 +252,7 @@ pub(crate) async fn prepare_predicate_actions(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
     snapshot: Option<&EagerSnapshot>,
-    state: SessionState,
+    session: SessionState,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -285,7 +290,7 @@ pub(crate) async fn write_execution_plan_v2(
         for i in 0..plan.properties().output_partitioning().partition_count() {
             let inner_plan = plan.clone();
             let inner_schema = schema.clone();
-            let task_ctx = Arc::new(TaskContext::from(&state));
+            let task_ctx = Arc::new(TaskContext::from(&session));
             let config = WriterConfig::new(
                 inner_schema.clone(),
                 partition_columns.clone(),
@@ -351,7 +356,7 @@ pub(crate) async fn write_execution_plan_v2(
                     .collect::<Vec<_>>(),
             ));
             let cdf_schema = schema.clone();
-            let task_ctx = Arc::new(TaskContext::from(&state));
+            let task_ctx = Arc::new(TaskContext::from(&session));
             let normal_config = WriterConfig::new(
                 write_schema.clone(),
                 partition_columns.clone(),

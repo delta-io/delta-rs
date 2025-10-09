@@ -95,7 +95,7 @@ pub struct UpdateBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<Arc<dyn Session>>,
+    session: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional information to add to the commit
@@ -140,7 +140,7 @@ impl UpdateBuilder {
             updates: HashMap::new(),
             snapshot,
             log_store,
-            state: None,
+            session: None,
             writer_properties: None,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
@@ -165,8 +165,8 @@ impl UpdateBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
-        self.state = Some(state);
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 
@@ -253,7 +253,7 @@ async fn execute(
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    state: SessionState,
+    session: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
@@ -273,7 +273,7 @@ async fn execute(
     // NOTE: The optimize_projections rule is being temporarily disabled because it errors with
     // our schemas for Lists due to issues discussed
     // [here](https://github.com/delta-io/delta-rs/pull/2886#issuecomment-2481550560>
-    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = state
+    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = session
         .optimizers()
         .iter()
         .filter(|rule| {
@@ -281,13 +281,11 @@ async fn execute(
         })
         .cloned()
         .collect();
-    let state = SessionStateBuilder::from(state)
-        .with_optimizer_rules(rules)
-        .build();
 
     let update_planner = DeltaPlanner::new();
 
-    let state = SessionStateBuilder::new_from_existing(state)
+    let session = SessionStateBuilder::from(session)
+        .with_optimizer_rules(rules)
         .with_query_planner(update_planner)
         .build();
 
@@ -301,7 +299,7 @@ async fn execute(
     let predicate = match predicate {
         Some(predicate) => match predicate {
             Expression::DataFusion(expr) => Some(expr),
-            Expression::String(s) => Some(snapshot.parse_predicate_expression(s, &state)?),
+            Expression::String(s) => Some(snapshot.parse_predicate_expression(s, &session)?),
         },
         None => None,
     };
@@ -311,7 +309,7 @@ async fn execute(
         .map(|(key, expr)| match expr {
             Expression::DataFusion(e) => Ok((key.name, e)),
             Expression::String(s) => snapshot
-                .parse_predicate_expression(s, &state)
+                .parse_predicate_expression(s, &session)
                 .map(|e| (key.name, e)),
         })
         .collect::<Result<HashMap<String, Expr>, _>>()?;
@@ -320,7 +318,7 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &state, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -344,7 +342,7 @@ async fn execute(
     let target_provider = provider_as_source(target_provider);
     let plan = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
 
-    let df = DataFrame::new(state.clone(), plan);
+    let df = DataFrame::new(session.clone(), plan);
 
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT satisfy the predicate.  The
@@ -364,7 +362,7 @@ async fn execute(
             enable_pushdown: false,
         }),
     });
-    let df_with_predicate_and_metrics = DataFrame::new(state.clone(), plan_with_metrics);
+    let df_with_predicate_and_metrics = DataFrame::new(session.clone(), plan_with_metrics);
 
     let expressions: Vec<Expr> = df_with_predicate_and_metrics
         .schema()
@@ -402,7 +400,7 @@ async fn execute(
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
-        state.clone(),
+        session.clone(),
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
@@ -509,9 +507,9 @@ impl std::future::IntoFuture for UpdateBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let state = this
-                .state
-                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+            let session = this
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
                 .unwrap_or_else(|| {
                     let session: SessionContext = DeltaSessionContext::default().into();
                     session.state()
@@ -523,7 +521,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.updates,
                 this.log_store.clone(),
                 this.snapshot,
-                state,
+                session,
                 this.writer_properties,
                 this.commit_properties,
                 this.safe_cast,
