@@ -729,7 +729,7 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store(), session.runtime_env().clone());
+        register_store(self.log_store(), session.runtime_env().as_ref());
         let filter_expr = conjunction(filters.iter().cloned());
 
         let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
@@ -817,7 +817,7 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), session.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().as_ref());
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
@@ -855,7 +855,7 @@ impl TableProvider for DeltaTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), state.runtime_env().clone());
+        register_store(self.log_store.clone(), state.runtime_env().as_ref());
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,
