@@ -4,6 +4,8 @@ use std::{error::Error, sync::Arc};
 use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
+use datafusion::prelude::SessionContext;
+use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
@@ -289,6 +291,8 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
@@ -298,7 +302,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        None,
+        df_context.state(),
     )
     .await?;
 
@@ -319,7 +323,6 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
-            20,
             None,
             CommitProperties::default(),
             Uuid::new_v4(),
@@ -356,6 +359,8 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
         &dt.log_store(),
@@ -364,7 +369,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        None,
+        df_context.state(),
     )
     .await?;
 
@@ -384,7 +389,6 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
-            20,
             None,
             CommitProperties::default(),
             Uuid::new_v4(),
@@ -420,6 +424,8 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
+    let context: SessionContext = DeltaSessionContext::default().into();
+
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
@@ -427,7 +433,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
-        None,
+        context.state(),
     )
     .await?;
 
@@ -436,7 +442,6 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
-            20,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
             CommitProperties::default(),
             Uuid::new_v4(),
