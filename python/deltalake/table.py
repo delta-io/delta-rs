@@ -1018,9 +1018,9 @@ class DeltaTable:
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions(self, flatten: bool = False) -> RecordBatch:
+    def get_add_actions(self, flatten: bool = False) -> RecordBatchReader:
         """
-        Return a dataframe with all current add actions.
+        Return a RecordBatchReader of add actions for the table.
 
         Add actions represent the files that currently make up the table. This
         data is a low-level representation parsed from the transaction log.
@@ -1032,7 +1032,7 @@ class DeltaTable:
                         prefix `tags.`. Nested field names are concatenated with `.`.
 
         Returns:
-            a PyArrow RecordBatch containing the add action data.
+            a RecordBatchReader yielding add action data.
 
         Example:
             ```python
@@ -1042,7 +1042,10 @@ class DeltaTable:
             data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
             write_deltalake("tmp", data, partition_by=["x"])
             dt = DeltaTable("tmp")
-            df = dt.get_add_actions().to_pandas()
+            
+            # Read all add actions into a table
+            table = dt.get_add_actions().read_all()
+            df = table.to_pandas()
             df["path"].sort_values(ignore_index=True)
             0    x=1/0
             1    x=2/0
@@ -1050,11 +1053,19 @@ class DeltaTable:
             ```
 
             ```python
-            df = dt.get_add_actions(flatten=True).to_pandas()
+            # With flattened schema
+            table = dt.get_add_actions(flatten=True).read_all()
+            df = table.to_pandas()
             df["partition.x"].sort_values(ignore_index=True)
             0    1
             1    2
             2    3
+            ```
+            
+            ```python
+            # Or iterate through batches lazily
+            for batch in dt.get_add_actions():
+                print(f"Batch with {batch.num_rows} rows")
             ```
         """
         return self._table.get_add_actions(flatten)
