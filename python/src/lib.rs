@@ -85,7 +85,7 @@ use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
-use crate::reader::convert_stream_to_reader;
+use crate::reader::{convert_boxstream_to_reader, convert_stream_to_reader};
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 use crate::writer::to_lazy_table;
@@ -1434,18 +1434,30 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
-        // replace with Arro3RecordBatch once new release is done for arro3.core
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatchReader> {
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
-        let batch = self.with_table(|t| {
-            Ok(t.snapshot()
-                .map_err(PythonError::from)?
-                .add_actions_table(flatten)
-                .map_err(PythonError::from)?)
+        
+        let (batches, schema) = self.with_table(|t| {
+            let snapshot = t.snapshot().map_err(PythonError::from)?;
+            let schema = snapshot.arrow_schema().map_err(PythonError::from)?;
+            let stream = snapshot.add_actions_table(flatten);
+            
+            // Collect batches from stream
+            let batches: Vec<RecordBatch> = rt()
+                .block_on(async { stream.try_collect().await })
+                .map_err(PythonError::from)?;
+            
+            Ok::<_, PythonError>((batches, schema))
         })?;
-        Ok(batch.into())
+        
+        // Create a reader from the batches
+        let static_stream: futures::stream::BoxStream<'static, DeltaResult<RecordBatch>> = 
+            Box::pin(futures::stream::iter(batches.into_iter().map(Ok)));
+        
+        let reader = convert_boxstream_to_reader(static_stream, schema);
+        Ok(reader.into())
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
