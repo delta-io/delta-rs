@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Metadata, Protocol, StructType};
+use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Metadata, Protocol};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -126,10 +126,11 @@ impl DeltaTable {
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
     pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
+        let config = state.load_config().clone();
         Self {
             state: Some(state),
             log_store,
-            config: Default::default(),
+            config,
         }
     }
 
@@ -235,7 +236,7 @@ impl DeltaTable {
     ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
         let infos = self
             .snapshot()?
-            .snapshot
+            .snapshot()
             .snapshot()
             .commit_infos(&self.log_store(), limit)
             .await?
@@ -265,7 +266,9 @@ impl DeltaTable {
                 Err(DeltaTableError::NotInitialized)
             }));
         };
-        state.get_active_add_actions_by_partitions(&self.log_store, filters)
+        state
+            .snapshot()
+            .file_views_by_partitions(&self.log_store, filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -334,20 +337,6 @@ impl DeltaTable {
     #[deprecated(since = "0.27.1", note = "Use `snapshot()?.metadata()` instead")]
     pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
         Ok(self.snapshot()?.metadata())
-    }
-
-    /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
-    /// no metadata was found in the log.
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
-    pub fn schema(&self) -> Option<&StructType> {
-        Some(self.snapshot().ok()?.schema())
-    }
-
-    /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
-    /// been loaded or no metadata was found in the log.
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.schema()` instead")]
-    pub fn get_schema(&self) -> Result<&StructType, DeltaTableError> {
-        Ok(self.snapshot()?.schema())
     }
 
     /// Time travel Delta table to the latest version that's created at or before provided

@@ -21,11 +21,13 @@
 
 //! Utility functions for Datafusion's Expressions
 use std::fmt::{self, Display, Error, Formatter, Write};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow_array::{Array, GenericListArray};
 use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDate};
+use datafusion::catalog::Session;
 use datafusion::common::Result as DFResult;
 use datafusion::common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
@@ -186,30 +188,35 @@ impl ExprPlanner for CustomNestedFunctionPlanner {
 
 pub(crate) struct DeltaContextProvider<'a> {
     state: SessionState,
-    /// Keeping this around just to make use of the 'a lifetime
-    _original: &'a SessionState,
     planners: Vec<Arc<dyn ExprPlanner>>,
+    /// Keeping this around just to make use of the 'a lifetime
+    _phantom: PhantomData<&'a SessionState>,
 }
 
 impl<'a> DeltaContextProvider<'a> {
-    fn new(state: &'a SessionState) -> Self {
+    fn new(session: &'a dyn Session) -> Self {
         // default planners are [CoreFunctionPlanner, NestedFunctionPlanner, FieldAccessPlanner,
         // UserDefinedFunctionPlanner]
         let planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(CoreFunctionPlanner::default()),
             Arc::new(CustomNestedFunctionPlanner::default()),
             Arc::new(FieldAccessPlanner),
-            Arc::new(datafusion::functions::planner::UserDefinedFunctionPlanner),
+            Arc::new(datafusion::functions::unicode::planner::UnicodeFunctionPlanner),
+            Arc::new(datafusion::functions::datetime::planner::DatetimeFunctionPlanner),
         ];
         // Disable the above for testing
         //let planners = state.expr_planners();
-        let new_state = SessionStateBuilder::new_from_existing(state.clone())
+        let new_state = session
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .map(|state| SessionStateBuilder::new_from_existing(state.clone()))
+            .unwrap_or_default()
             .with_expr_planners(planners.clone())
             .build();
         DeltaContextProvider {
             planners,
             state: new_state,
-            _original: state,
+            _phantom: PhantomData,
         }
     }
 }
@@ -260,7 +267,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
 pub fn parse_predicate_expression(
     schema: &DFSchema,
     expr: impl AsRef<str>,
-    df_state: &SessionState,
+    session: &dyn Session,
 ) -> DeltaResult<Expr> {
     let dialect = &GenericDialect {};
     let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
@@ -276,7 +283,7 @@ pub fn parse_predicate_expression(
             source: Box::new(err),
         })?;
 
-    let context_provider = DeltaContextProvider::new(df_state);
+    let context_provider = DeltaContextProvider::new(session);
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
@@ -478,7 +485,7 @@ macro_rules! format_option {
     }};
 }
 
-/// Epoch days from ce calander until 1970-01-01
+/// Epoch days from ce calendar until 1970-01-01
 pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
 struct ScalarValueFormat<'a> {
@@ -816,8 +823,8 @@ mod test {
                         &table
                             .snapshot()
                             .unwrap()
+                            .snapshot()
                             .input_schema()
-                            .unwrap()
                             .as_ref()
                             .to_owned()
                             .to_dfschema()
@@ -926,6 +933,7 @@ mod test {
             let actual_expr = table
                 .snapshot()
                 .unwrap()
+                .snapshot()
                 .parse_predicate_expression(actual, &session.state())
                 .unwrap();
 

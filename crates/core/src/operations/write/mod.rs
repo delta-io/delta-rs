@@ -36,7 +36,7 @@ pub use configs::WriterStatsConfig;
 use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
-use metrics::{WriteMetricExtensionPlanner, SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
+use metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::vec;
 
 use arrow_array::RecordBatch;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
@@ -71,11 +71,11 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
 use crate::kernel::{
-    new_metadata, Action, ActionType, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
+    new_metadata, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType,
+    StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
@@ -130,13 +130,13 @@ impl FromStr for SchemaMode {
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: Option<DeltaTableState>,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// The input plan
     input: Option<Arc<LogicalPlan>>,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    session: Option<Arc<dyn Session>>,
     /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
     /// Column names for table partitioning
@@ -190,12 +190,12 @@ impl super::Operation<()> for WriteBuilder {
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: Option<DeltaTableState>) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
             input: None,
-            state: None,
+            session: None,
             mode: SaveMode::Append,
             partition_columns: None,
             predicate: None,
@@ -247,8 +247,15 @@ impl WriteBuilder {
     }
 
     /// A session state accompanying a given input plan, containing e.g. registered object stores
+    #[deprecated(since = "0.29.0", note = "Use `with_session_state` instead")]
     pub fn with_input_session_state(mut self, state: SessionState) -> Self {
-        self.state = Some(state);
+        self.session = Some(Arc::new(state));
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 
@@ -368,7 +375,7 @@ impl WriteBuilder {
         match &self.snapshot {
             Some(snapshot) => {
                 if self.mode == SaveMode::Overwrite {
-                    PROTOCOL.check_append_only(&snapshot.snapshot)?;
+                    PROTOCOL.check_append_only(snapshot)?;
                     if !snapshot.load_config().require_files {
                         return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
                     }
@@ -425,9 +432,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut metrics = WriteMetrics::default();
             let exec_start = Instant::now();
 
-            let write_planner = DeltaPlanner::<WriteMetricExtensionPlanner> {
-                extension_planner: WriteMetricExtensionPlanner {},
-            };
+            let write_planner = DeltaPlanner::new();
 
             // Create table actions to initialize table in case it does not yet exist
             // and should be created
@@ -435,23 +440,19 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let partition_columns = this.get_partition_columns()?;
 
-            let state = match this.state {
-                Some(state) => SessionStateBuilder::new_from_existing(state.clone())
-                    .with_query_planner(Arc::new(write_planner))
-                    .build(),
-                None => {
-                    let state = SessionStateBuilder::new()
-                        .with_default_features()
-                        .with_query_planner(Arc::new(write_planner))
-                        .build();
-                    register_store(this.log_store.clone(), state.runtime_env().clone());
-                    state
-                }
-            };
+            let session = this
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
+                .map(SessionStateBuilder::new_from_existing)
+                .unwrap_or_default()
+                .with_query_planner(write_planner)
+                .build();
+            register_store(this.log_store.clone(), session.runtime_env().as_ref());
+
             let mut schema_drift = false;
             let mut generated_col_exp = None;
             let mut missing_gen_col = None;
-            let mut source = DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
+            let mut source = DataFrame::new(session.clone(), this.input.unwrap().as_ref().clone());
             if let Some(snapshot) = &this.snapshot {
                 if able_to_gc(snapshot)? {
                     let generated_col_expressions = snapshot.schema().get_generated_columns()?;
@@ -471,7 +472,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // in this case we have to insert the generated column and it's type in the schema of the batch
             let mut new_schema = None;
             if let Some(snapshot) = &this.snapshot {
-                let table_schema = snapshot.input_schema()?;
+                let table_schema = snapshot.input_schema();
 
                 if let Err(schema_err) =
                     try_cast_schema(source_schema.fields(), table_schema.fields())
@@ -539,7 +540,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         source,
                         &generated_columns_exp,
                         &missing_generated_col,
-                        &state,
+                        &session,
                     )?;
                 }
             }
@@ -552,7 +553,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }),
             });
 
-            let mut source = DataFrame::new(state.clone(), source);
+            let mut source = DataFrame::new(session.clone(), source);
 
             let schema = Arc::new(source.schema().as_arrow().clone());
 
@@ -562,7 +563,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     Some(SchemaMode::Merge) if schema_drift => true,
                     Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
                         let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
-                        &delta_schema != snapshot.schema()
+                        &delta_schema != snapshot.schema().as_ref()
                     }
                     _ => false,
                 };
@@ -570,7 +571,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 if should_update_schema {
                     let schema_struct: StructType = schema.clone().try_into_kernel()?;
                     // Verify if delta schema changed
-                    if &schema_struct != snapshot.schema() {
+                    if &schema_struct != snapshot.schema().as_ref() {
                         let current_protocol = snapshot.protocol();
                         let configuration = snapshot.metadata().configuration().clone();
                         let new_protocol = current_protocol
@@ -600,7 +601,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         Expression::DataFusion(expr) => expr,
                         Expression::String(s) => {
                             let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
-                            parse_predicate_expression(&df_schema, s, &state)?
+                            parse_predicate_expression(&df_schema, s, &session)?
                         }
                     };
                     (Some(fmt_expr_to_sql(&pred)?), Some(pred))
@@ -611,7 +612,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let config = this
                 .snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.table_config());
+                .map(|snapshot| snapshot.table_properties());
 
             let target_file_size = this.target_file_size.or_else(|| {
                 Some(super::get_target_file_size(config, &this.configuration) as usize)
@@ -640,7 +641,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 pred.clone(),
                                 this.log_store.clone(),
                                 snapshot,
-                                state.clone(),
+                                session.clone(),
                                 partition_columns.clone(),
                                 this.writer_properties.clone(),
                                 deletion_timestamp,
@@ -663,7 +664,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         _ => {
                             let remove_actions = snapshot
                                 .log_data()
-                                .iter()
+                                .into_iter()
                                 .map(|p| p.remove_action(true).into());
                             actions.extend(remove_actions);
                         }
@@ -671,7 +672,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
                 metrics.num_removed_files = actions
                     .iter()
-                    .filter(|a| a.action_type() == ActionType::Remove)
+                    .filter(|a| matches!(a, Action::Remove(_)))
                     .count();
             }
 
@@ -680,7 +681,7 @@ impl std::future::IntoFuture for WriteBuilder {
             // Here we need to validate if the new data conforms to a predicate if one is provided
             let (add_actions, _) = write_execution_plan_v2(
                 this.snapshot.as_ref(),
-                state.clone(),
+                session.clone(),
                 source_plan.clone(),
                 partition_columns.clone(),
                 this.log_store.object_store(Some(operation_id)).clone(),
@@ -1950,9 +1951,10 @@ mod tests {
                     .logical_plan()
                     .clone(),
             );
-            let writer = WriteBuilder::new(table.log_store.clone(), table.state)
-                .with_input_execution_plan(plan)
-                .with_save_mode(SaveMode::Overwrite);
+            let writer =
+                WriteBuilder::new(table.log_store.clone(), table.state.map(|f| f.snapshot))
+                    .with_input_execution_plan(plan)
+                    .with_save_mode(SaveMode::Overwrite);
 
             let _ = writer.check_preconditions().await?;
             Ok(())
@@ -2031,7 +2033,8 @@ mod tests {
             .await?;
 
         // Verify initial schema has correct nullability
-        let schema_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let schema_fields: Vec<_> = schema.fields().collect();
         assert!(!schema_fields[0].is_nullable(), "id should be non-nullable");
         assert!(schema_fields[1].is_nullable(), "name should be nullable");
         assert!(
@@ -2077,7 +2080,8 @@ mod tests {
             .await?;
 
         // Verify that nullability constraints are preserved
-        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
         assert!(
             !final_fields[0].is_nullable(),
             "id should remain non-nullable after overwrite"
@@ -2177,7 +2181,8 @@ mod tests {
             .await?;
 
         // Verify schema was NOT updated
-        let after_overwrite_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let after_overwrite_fields: Vec<_> = schema.fields().collect();
 
         // Schema should be EXACTLY the same as before
         assert_eq!(
@@ -2270,7 +2275,8 @@ mod tests {
         );
 
         // Verify the table data and schema remain unchanged after failed writes
-        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
 
         // Schema should still be the original schema
         assert!(
@@ -2360,7 +2366,8 @@ mod tests {
             .await?;
 
         // Verify schema is preserved
-        let final_fields: Vec<_> = table.snapshot().unwrap().schema().fields().collect();
+        let schema = table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
 
         for (i, field) in final_fields.iter().enumerate() {
             assert_eq!(

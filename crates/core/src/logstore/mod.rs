@@ -161,6 +161,9 @@ pub type LogStoreRef = Arc<dyn LogStore>;
 
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
+pub(crate) static DELTA_LOG_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
+
 /// Return the [LogStoreRef] for the provided [Url] location
 ///
 /// This will use the built-in process global [crate::storage::ObjectStoreRegistry] by default
@@ -338,7 +341,7 @@ pub trait LogStore: Send + Sync + AsAny {
 
     #[deprecated(
         since = "0.1.0",
-        note = "DO NOT USE: Just a stop grap to support lakefs during kernel migration"
+        note = "DO NOT USE: Just a stop gap to support lakefs during kernel migration"
     )]
     fn transaction_url(&self, _operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
         Ok(base.clone())
@@ -636,9 +639,6 @@ impl<'de> Deserialize<'de> for LogStoreConfig {
         deserializer.deserialize_seq(LogStoreConfigVisitor {})
     }
 }
-
-static DELTA_LOG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
 
 /// Extract version from a file name in the delta log
 pub fn extract_version_from_filename(name: &str) -> Option<i64> {

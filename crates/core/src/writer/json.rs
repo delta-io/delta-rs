@@ -264,6 +264,7 @@ impl JsonWriter {
             .schema();
         Arc::new(
             schema
+                .as_ref()
                 .try_into_arrow()
                 .expect("Failed to coerce delta schema to arrow"),
         )
@@ -497,11 +498,10 @@ mod tests {
     async fn test_partition_not_written_to_parquet() {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
-        let schema = table.snapshot().unwrap().schema();
-        let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
+        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             ensure_table_uri(&table.table_uri()).unwrap(),
-            Arc::new(arrow_schema),
+            arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
         )
@@ -574,11 +574,10 @@ mod tests {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
 
-        let arrow_schema: ArrowSchema =
-            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
+        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             ensure_table_uri(&table.table_uri()).unwrap(),
-            Arc::new(arrow_schema),
+            arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
         )
@@ -612,11 +611,10 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let table = get_test_table(&table_dir).await;
 
-            let arrow_schema: ArrowSchema =
-                table.snapshot().unwrap().schema().try_into_arrow().unwrap();
+            let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
             let mut writer = JsonWriter::try_new(
                 Url::from_directory_path(table_dir.path()).unwrap(),
-                Arc::new(arrow_schema),
+                arrow_schema,
                 Some(vec!["modified".to_string()]),
                 None,
             )
@@ -653,11 +651,9 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let mut table = get_test_table(&table_dir).await;
 
-            let schema = table.snapshot().unwrap().schema();
-            let arrow_schema: ArrowSchema = schema.try_into_arrow().unwrap();
             let mut writer = JsonWriter::try_new(
                 ensure_table_uri(&table.table_uri()).unwrap(),
-                Arc::new(arrow_schema),
+                table.snapshot().unwrap().snapshot().arrow_schema(),
                 Some(vec!["modified".to_string()]),
                 None,
             )
@@ -761,11 +757,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let arrow_schema: ArrowSchema =
-            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
+        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             crate::ensure_table_uri(&table.table_uri()).unwrap(),
-            Arc::new(arrow_schema),
+            arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
         )
@@ -825,11 +820,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let arrow_schema: ArrowSchema =
-            table.snapshot().unwrap().schema().try_into_arrow().unwrap();
+        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             crate::ensure_table_uri(&table.table_uri()).unwrap(),
-            Arc::new(arrow_schema),
+            arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
         )

@@ -9,7 +9,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
 
 use crate::errors::DeltaResult;
-use crate::kernel::Add;
 use crate::DeltaTableError;
 
 /// Trait for types that stream [RecordBatch]
@@ -52,8 +51,6 @@ pub trait RecordBatchStream: Stream<Item = DeltaResult<RecordBatch>> {
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 pub type SendableRBStream = Pin<Box<dyn Stream<Item = DeltaResult<RecordBatch>> + Send>>;
-
-pub type SendableAddStream = Pin<Box<dyn Stream<Item = DeltaResult<Add>> + Send>>;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///

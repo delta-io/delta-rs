@@ -8,17 +8,16 @@ use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{ProtocolExt as _, TableFeatures};
+use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 /// Enable table features for a table
 pub struct AddTableFeatureBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Name of the feature
     name: Vec<TableFeatures>,
     /// Allow protocol versions to be increased by setting features
@@ -41,7 +40,7 @@ impl super::Operation<()> for AddTableFeatureBuilder {
 
 impl AddTableFeatureBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             name: vec![],
             allow_protocol_versions_increase: false,

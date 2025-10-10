@@ -6,7 +6,7 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, MetadataExt};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -16,7 +16,7 @@ use crate::{DeltaResult, DeltaTableError};
 /// Remove constraints from the table
 pub struct DropConstraintBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Name of the constraint
     name: Option<String>,
     /// Raise if constraint doesn't exist
@@ -39,7 +39,7 @@ impl super::Operation<()> for DropConstraintBuilder {
 
 impl DropConstraintBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             name: None,
             raise_if_not_exists: true,
@@ -101,7 +101,12 @@ impl std::future::IntoFuture for DropConstraintBuilder {
                         "Constraint with name '{name}' does not exist."
                     )));
                 }
-                return Ok(DeltaTable::new_with_state(this.log_store, this.snapshot));
+                return Ok(DeltaTable::new_with_state(
+                    this.log_store,
+                    DeltaTableState {
+                        snapshot: this.snapshot,
+                    },
+                ));
             }
 
             metadata = metadata.remove_config_key(&configuration_key)?;

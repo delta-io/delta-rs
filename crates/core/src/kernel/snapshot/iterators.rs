@@ -8,6 +8,7 @@ use arrow_array::types::Int64Type;
 use arrow_array::{Array, RecordBatch, StructArray};
 use arrow_schema::DataType as ArrowDataType;
 use chrono::{DateTime, Utc};
+use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
@@ -19,10 +20,15 @@ use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
+pub(crate) use self::scan_row::{scan_row_in_eval, ScanRowOutStream};
+pub use self::tombstones::TombstoneView;
+
+mod scan_row;
+mod tombstones;
+
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
-const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
@@ -50,9 +56,6 @@ static FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| 
 
     let modification_time_idx = schema.index_of(FIELD_NAME_MODIFICATION_TIME).unwrap();
     indices.insert(FIELD_NAME_MODIFICATION_TIME, modification_time_idx);
-
-    let stats_idx = schema.index_of(FIELD_NAME_STATS).unwrap();
-    indices.insert(FIELD_NAME_STATS, stats_idx);
 
     indices
 });
@@ -154,12 +157,12 @@ impl LogicalFileView {
     }
 
     /// Returns the raw JSON statistics string for this file, if available.
-    pub fn stats(&self) -> Option<&str> {
-        get_string_value(
-            self.files
-                .column(*FIELD_INDICES.get(FIELD_NAME_STATS).unwrap()),
-            self.index,
-        )
+    pub fn stats(&self) -> Option<String> {
+        let stats = self.stats_parsed()?.slice(self.index, 1);
+        let value = to_json(&stats)
+            .ok()
+            .map(|arr| arr.as_string::<i32>().value(0).to_string());
+        value.and_then(|v| (!v.is_empty()).then_some(v))
     }
 
     /// Returns the parsed partition values as structured data.
@@ -239,6 +242,14 @@ impl LogicalFileView {
             .map(|s| round_ms_datetimes(s, &ceil_datetime))
     }
 
+    /// Return the underlying [DeletionVectorDescriptor] if it exists.
+    ///
+    /// **NOTE**: THis API may be removed in the future without deprecation warnings as the
+    /// utilization of deletion vectors inside of delta-rs becomes more sophisticated.
+    pub fn deletion_vector_descriptor(&self) -> Option<DeletionVectorDescriptor> {
+        self.deletion_vector().map(|dv| dv.descriptor())
+    }
+
     /// Returns a view into the deletion vector for this file, if present.
     fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
         let dv_col = self
@@ -255,7 +266,7 @@ impl LogicalFileView {
                     dv_col.column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap());
                 storage_col
                     .is_valid(self.index)
-                    .then(|| DeletionVectorView {
+                    .then_some(DeletionVectorView {
                         data: dv_col,
                         index: self.index,
                     })
@@ -271,7 +282,7 @@ impl LogicalFileView {
             size: self.size(),
             modification_time: self.modification_time(),
             data_change: true,
-            stats: self.stats().map(|v| v.to_string()),
+            stats: self.stats(),
             tags: None,
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
             base_row_id: None,
