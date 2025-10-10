@@ -848,12 +848,6 @@ impl UnityCatalog {
         table_name: impl AsRef<str>,
         operation: impl AsRef<str>,
     ) -> Result<TableTempCredentialsResponse, UnityCatalogError> {
-        if operation.as_ref() != "READ" || operation.as_ref() != "READ_WRITE" {
-            return Err(UnityCatalogError::MissingConfiguration(format!(
-                "Invalid operation, can only be READ or READ_WRITE, provided: {}",
-                operation.as_ref()
-            )));
-        }
         let token = self.get_credential().await?;
         let table_info = self
             .get_table(catalog_id, database_name, table_name)
