@@ -39,7 +39,7 @@ use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
 /// Builder for create a read of change data feeds for delta tables
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CdfLoadBuilder {
     /// A snapshot of the to-be-loaded table's state
     pub snapshot: EagerSnapshot,
@@ -55,6 +55,22 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
+    /// Datafusion session state relevant for executing the input plan
+    session: Option<Arc<dyn Session>>,
+}
+
+impl std::fmt::Debug for CdfLoadBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CdfLoadBuilder")
+            .field("snapshot", &self.snapshot)
+            .field("log_store", &self.log_store)
+            .field("starting_version", &self.starting_version)
+            .field("ending_version", &self.ending_version)
+            .field("starting_timestamp", &self.starting_timestamp)
+            .field("ending_timestamp", &self.ending_timestamp)
+            .field("allow_out_of_range", &self.allow_out_of_range)
+            .finish()
+    }
 }
 
 impl CdfLoadBuilder {
@@ -68,6 +84,7 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
+            session: None,
         }
     }
 
@@ -98,6 +115,12 @@ impl CdfLoadBuilder {
     /// Enable ending version or timestamp exceeding the last commit
     pub fn with_allow_out_of_range(mut self) -> Self {
         self.allow_out_of_range = true;
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 
@@ -331,7 +354,7 @@ impl CdfLoadBuilder {
         PROTOCOL.can_read_from(&self.snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read().await?;
-        register_store(self.log_store.clone(), session.runtime_env().clone());
+        register_store(self.log_store.clone(), session.runtime_env().as_ref());
 
         let partition_values = self.snapshot.metadata().partition_columns().clone();
         let schema = self.snapshot.input_schema();
