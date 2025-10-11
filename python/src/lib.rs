@@ -16,7 +16,7 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::arrow::{self, array::RecordBatch, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
@@ -1439,18 +1439,27 @@ impl RawDeltaTable {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
         
-        let (batches, schema) = self.with_table(|t| {
-            let snapshot = t.snapshot().map_err(PythonError::from)?;
-            let schema = snapshot.arrow_schema().map_err(PythonError::from)?;
+        let batches = self.with_table(|t| {
+            let snapshot = t.snapshot()
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
             let stream = snapshot.add_actions_table(flatten);
             
             // Collect batches from stream
             let batches: Vec<RecordBatch> = rt()
                 .block_on(async { stream.try_collect().await })
-                .map_err(PythonError::from)?;
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
             
-            Ok::<_, PythonError>((batches, schema))
+            Ok(batches)
         })?;
+        
+        // Get schema from first batch, or create an empty reader if no batches
+        if batches.is_empty() {
+            return Err(DeltaError::new_err("No add actions found"));
+        }
+        
+        let schema = batches[0].schema();
         
         // Create a reader from the batches
         let static_stream: futures::stream::BoxStream<'static, DeltaResult<RecordBatch>> = 

@@ -542,7 +542,7 @@ class DeltaTable:
         """
         total_rows = 0
 
-        for value in self.get_add_actions().column("num_records").to_pylist():
+        for value in self.get_add_actions().read_all().column("num_records").to_pylist():
             # Add action file statistics are optional and so while most modern
             # tables are _likely_ to have this information it is not
             # guaranteed.
