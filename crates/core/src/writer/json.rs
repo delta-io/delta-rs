@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
-use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -122,8 +121,8 @@ impl DataArrowWriter {
             self.partition_values = partition_values;
         }
 
-        // Copy current buffered bytes so we can recover from failures
-        let buffer_bytes = self.buffer.to_vec();
+        // Save buffer length for rollback without copying data
+        let buffer_len = self.buffer.snapshot_len();
 
         let record_batch = record_batch_without_partitions(&record_batch, partition_columns)?;
         let result = self.arrow_writer.write(&record_batch);
@@ -135,8 +134,8 @@ impl DataArrowWriter {
             }
             // If a write fails we need to reset the state of the DeltaArrowWriter
             Err(e) => {
-                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
-                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
+                self.buffer.truncate(buffer_len);
+                let new_buffer = self.buffer.clone();
                 let arrow_writer = Self::new_underlying_writer(
                     new_buffer,
                     self.arrow_schema.clone(),
@@ -383,7 +382,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let uuid = Uuid::new_v4();
 
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
-            let obj_bytes = Bytes::from(writer.buffer.to_vec());
+            let obj_bytes = writer.buffer.to_bytes();
             let file_size = obj_bytes.len() as i64;
             self.table
                 .object_store()

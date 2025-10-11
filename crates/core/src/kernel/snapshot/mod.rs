@@ -489,7 +489,7 @@ impl EagerSnapshot {
                 log_store,
                 None,
                 current_version,
-                Box::new(self.files.clone().into_iter()),
+                Box::new(std::mem::take(&mut self.files).into_iter()),
                 None,
             )
             .try_collect()

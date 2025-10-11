@@ -208,7 +208,7 @@ pub(crate) fn parse_partitions(
                     let arr = match p {
                         PrimitiveType::String => {
                             Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
-                                Scalar::String(s) => Some(s.clone()),
+                                Scalar::String(s) => Some(s.as_str()),
                                 Scalar::Null(_) => None,
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef

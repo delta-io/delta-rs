@@ -10,9 +10,8 @@ use std::{collections::HashMap, sync::Arc};
 use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
 use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
-use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow_select::take::take;
-use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -267,7 +266,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let prefix = Path::parse(writer.partition_values.hive_partition_path())?;
             let uuid = Uuid::new_v4();
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
-            let obj_bytes = Bytes::from(writer.buffer.to_vec());
+            let obj_bytes = writer.buffer.to_bytes();
             let file_size = obj_bytes.len() as i64;
             self.storage
                 .put_with_retries(&path, obj_bytes.into(), 15)
@@ -400,8 +399,8 @@ impl PartitionWriter {
             None
         };
 
-        // Copy current cursor bytes so we can recover from failures
-        let buffer_bytes = self.buffer.to_vec();
+        // Save buffer length so we can rollback on failure
+        let buffer_len = self.buffer.len();
         let record_batch = merged_batch.as_ref().unwrap_or(record_batch);
 
         match self.arrow_writer.write(record_batch) {
@@ -411,10 +410,9 @@ impl PartitionWriter {
             }
             // If a write fails we need to reset the state of the PartitionWriter
             Err(e) => {
-                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
-                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
+                self.buffer.truncate(buffer_len);
                 let arrow_writer = ArrowWriter::try_new(
-                    new_buffer,
+                    self.buffer.clone(),
                     self.arrow_schema.clone(),
                     Some(self.writer_properties.clone()),
                 )?;
@@ -463,12 +461,16 @@ pub(crate) fn divide_by_partition_values(
 
     let partition_ranges = partition(sorted_partition_columns.as_slice())?;
 
-    for range in partition_ranges.ranges().into_iter() {
-        // get row indices for current partition
-        let idx: UInt32Array = (range.start..range.end)
-            .map(|i| Some(indices.value(i)))
-            .collect();
+    let sorted_data_columns: Vec<ArrayRef> = arrow_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let col_idx = schema.index_of(f.name())?;
+            Ok(take(values.column(col_idx), &indices, None)?)
+        })
+        .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
+    for range in partition_ranges.ranges().into_iter() {
         let partition_key_iter = sorted_partition_columns
             .iter()
             .map(|col| {
@@ -483,12 +485,11 @@ pub(crate) fn divide_by_partition_values(
             .into_iter()
             .zip(partition_key_iter)
             .collect();
-        let batch_data = arrow_schema
-            .fields()
+
+        let batch_data: Vec<ArrayRef> = sorted_data_columns
             .iter()
-            .map(|f| Ok(values.column(schema.index_of(f.name())?).clone()))
-            .map(move |col: Result<_, ArrowError>| take(col?.as_ref(), &idx, None))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|col| col.slice(range.start, range.end - range.start))
+            .collect();
 
         partitions.push(PartitionResult {
             partition_values,

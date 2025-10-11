@@ -943,11 +943,12 @@ async fn build_compaction_plan(
         let partition_values = file
             .partition_values()
             .map(|v| {
-                v.fields()
-                    .iter()
-                    .zip(v.values().iter())
-                    .map(|(k, v)| (k.name().to_string(), v.clone()))
-                    .collect::<IndexMap<_, _>>()
+                let fields_count = v.fields().len();
+                let mut map = IndexMap::with_capacity(fields_count);
+                for (field, value) in v.fields().iter().zip(v.values().iter()) {
+                    map.insert(field.name().to_string(), value.clone());
+                }
+                map
             })
             .unwrap_or_default();
 
@@ -963,7 +964,8 @@ async fn build_compaction_plan(
         file.sort_by(|a, b| b.size.cmp(&a.size));
     }
 
-    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> =
+        HashMap::with_capacity(partition_files.len());
     for (part, (partition, files)) in partition_files {
         let mut merge_bins = vec![MergeBin::new()];
 
