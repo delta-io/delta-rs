@@ -14,21 +14,27 @@ fn main() {
 static ALLOC: AllocProfiler = AllocProfiler::system();
 
 fn bench_merge(bencher: Bencher, op: MergeOp, params: &MergePerfParams) {
-    bencher.bench_local(move || {
-        let params = params.clone();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let parquet_dir = PathBuf::from(
-            std::env::var("TPCDS_PARQUET_DIR").unwrap_or_else(|_| "data/tpcds_parquet".to_string()),
-        );
-        rt.block_on(async move {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    bencher
+        .with_inputs(|| {
             let tmp_dir = tempfile::tempdir().unwrap();
-            let (source, table) = prepare_source_and_table(&params, &tmp_dir, &parquet_dir)
-                .await
-                .unwrap();
-
-            let _ = divan::black_box(op(source, table).unwrap().await.unwrap());
+            let parquet_dir = PathBuf::from(
+                std::env::var("TPCDS_PARQUET_DIR")
+                    .unwrap_or_else(|_| "data/tpcds_parquet".to_string()),
+            );
+            rt.block_on(async move {
+                let (source, table) = prepare_source_and_table(params, &tmp_dir, &parquet_dir)
+                    .await
+                    .unwrap();
+                (source, table, tmp_dir)
+            })
         })
-    });
+        .bench_local_values(|(source, table, tmp_dir)| {
+            rt.block_on(async move {
+                let _ = divan::black_box(op(source, table).unwrap().await.unwrap());
+            });
+            drop(tmp_dir);
+        });
 }
 
 #[divan::bench(args = [
