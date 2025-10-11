@@ -165,5 +165,9 @@ required-features = ["datafusion"]
 name = "read_delta_partitions_test"
 required-features = ["datafusion"]
 
+[[bench]]
+name = "json_parsing"
+harness = false
+
 [package.metadata.cargo-machete]
 ignored = ["foyer"]

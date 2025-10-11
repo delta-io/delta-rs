@@ -48,7 +48,6 @@
 //! ## Configuration
 //!
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use bytes::Bytes;
@@ -68,6 +67,7 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
+use serde_json::Deserializer;
 use tokio::runtime::RuntimeFlavor;
 use tokio::task::spawn_blocking;
 use tracing::*;
@@ -309,7 +309,7 @@ pub trait LogStore: Send + Sync + AsAny {
             Err(err) => Err(err),
         }?;
 
-        let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
+        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes).await;
         Ok(PeekCommit::New(next_version, actions?))
     }
 
@@ -566,23 +566,22 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
 /// Reads a commit and gets list of actions
 pub async fn get_actions(
     version: i64,
-    commit_log_bytes: bytes::Bytes,
+    commit_log_bytes: &bytes::Bytes,
 ) -> Result<Vec<Action>, DeltaTableError> {
     debug!("parsing commit with version {version}...");
-    let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-    let mut actions = Vec::new();
-    for re_line in reader.lines() {
-        let line = re_line?;
-        let lstr = line.as_str();
-        let action = serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-            json_err: e,
-            line,
-            version,
-        })?;
-        actions.push(action);
-    }
-    Ok(actions)
+    Deserializer::from_slice(commit_log_bytes)
+        .into_iter::<Action>()
+        .map(|result| {
+            result.map_err(|e| {
+                let line = format!("Error at line {}, column {}", e.line(), e.column());
+                DeltaTableError::InvalidJsonLog {
+                    json_err: e,
+                    line,
+                    version,
+                }
+            })
+        })
+        .collect()
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
@@ -998,6 +997,29 @@ mod datafusion_tests {
                 object_store_url(&url_1).as_str(),
                 object_store_url(&url_2).as_str(),
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_actions_malformed_json() {
+        let malformed_json = bytes::Bytes::from(
+            r#"{"add": {"path": "test.parquet", "partitionValues": {}, "size": 100, "modificationTime": 1234567890, "dataChange": true}}
+{"invalid json without closing brace"#,
+        );
+
+        let result = get_actions(0, &malformed_json).await;
+
+        match result {
+            Err(DeltaTableError::InvalidJsonLog {
+                line,
+                version,
+                json_err,
+            }) => {
+                assert_eq!(version, 0);
+                assert!(line.contains("line 2"));
+                assert!(json_err.is_eof());
+            }
+            other => panic!("Expected InvalidJsonLog error, got {:?}", other),
         }
     }
 }
