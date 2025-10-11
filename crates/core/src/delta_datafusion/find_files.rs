@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
+use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{col, Expr, Volatility};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
@@ -43,7 +44,7 @@ pub(crate) struct FindFiles {
 pub(crate) async fn find_files(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    session: &dyn Session,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
@@ -71,7 +72,7 @@ pub(crate) async fn find_files(
                 Ok(result)
             } else {
                 let candidates =
-                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
+                    find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
 
                 let result = FindFiles {
                     candidates,
@@ -219,7 +220,7 @@ fn join_batches_with_add_actions(
 async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    session: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
@@ -246,7 +247,7 @@ async fn find_files_scan(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let scan = DeltaScanBuilder::new(snapshot, log_store, state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
@@ -258,14 +259,14 @@ async fn find_files_scan(
     let input_schema = scan.logical_schema.as_ref().to_owned();
     let input_dfschema = input_schema.clone().try_into()?;
 
-    let predicate_expr =
-        state.create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
+    let predicate_expr = session
+        .create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
 
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
-    let task_ctx = Arc::new(TaskContext::from(state));
+    let task_ctx = Arc::new(TaskContext::from(session));
     let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
 
     let result = join_batches_with_add_actions(
