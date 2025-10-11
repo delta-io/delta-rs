@@ -565,15 +565,30 @@ impl UnityCatalogBuilder {
         let storage_location = unity_catalog
             .get_table_storage_location(Some(catalog_id.to_string()), database_name, table_name)
             .await?;
+        // Attempt to get read/write permissions to begin with.
         let temp_creds_res = unity_catalog
-            .get_temp_table_credentials(catalog_id, database_name, table_name)
+            .get_temp_table_credentials_with_permission(
+                catalog_id,
+                database_name,
+                table_name,
+                "READ_WRITE",
+            )
             .await?;
         let credentials = match temp_creds_res {
             TableTempCredentialsResponse::Success(temp_creds) => temp_creds
                 .get_credentials()
                 .ok_or_else(|| UnityCatalogError::MissingCredential)?,
             TableTempCredentialsResponse::Error(_error) => {
-                return Err(UnityCatalogError::TemporaryCredentialsFetchFailure)
+                // If that fails attempt to get just read permissions.
+                match unity_catalog
+                    .get_temp_table_credentials(catalog_id, database_name, table_name)
+                    .await?
+                {
+                    TableTempCredentialsResponse::Success(temp_creds) => temp_creds
+                        .get_credentials()
+                        .ok_or_else(|| UnityCatalogError::MissingCredential)?,
+                    _ => return Err(UnityCatalogError::TemporaryCredentialsFetchFailure),
+                }
             }
         };
         Ok((storage_location, credentials))
@@ -817,13 +832,30 @@ impl UnityCatalog {
         database_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
     ) -> Result<TableTempCredentialsResponse, UnityCatalogError> {
+        self.get_temp_table_credentials_with_permission(
+            catalog_id,
+            database_name,
+            table_name,
+            "READ",
+        )
+        .await
+    }
+
+    pub async fn get_temp_table_credentials_with_permission(
+        &self,
+        catalog_id: impl AsRef<str>,
+        database_name: impl AsRef<str>,
+        table_name: impl AsRef<str>,
+        operation: impl AsRef<str>,
+    ) -> Result<TableTempCredentialsResponse, UnityCatalogError> {
         let token = self.get_credential().await?;
         let table_info = self
             .get_table(catalog_id, database_name, table_name)
             .await?;
         let response = match table_info {
             GetTableResponse::Success(table) => {
-                let request = TemporaryTableCredentialsRequest::new(&table.table_id, "READ");
+                let request =
+                    TemporaryTableCredentialsRequest::new(&table.table_id, operation.as_ref());
                 Ok(self
                     .client
                     .post(format!(
