@@ -2,12 +2,12 @@
 use std::sync::{Arc, LazyLock};
 
 use dashmap::DashMap;
+use deltalake_derive::DeltaConfig;
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
 use url::Url;
 
 use crate::{DeltaResult, DeltaTableError};
-use deltalake_derive::DeltaConfig;
 
 pub use retry_ext::ObjectStoreRetryExt;
 pub use runtime::{DeltaIOStorageBackend, IORuntime};
@@ -21,7 +21,7 @@ static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"
 /// Sharable reference to [`ObjectStore`]
 pub type ObjectStoreRef = Arc<DynObjectStore>;
 
-pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static + Clone {
+pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(
         &self,
