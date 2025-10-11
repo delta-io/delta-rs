@@ -1865,7 +1865,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
         configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
     )
     dt = DeltaTable(tmp_path)
-    add_actions_table = dt.get_add_actions(flatten=True)
+    add_actions_table = dt.get_add_actions(flatten=True).read_all()
 
     def get_value(name: str):
         return add_actions_table.column(name)[0].as_py()
@@ -1907,7 +1907,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
     ).when_matched_update_all().execute()
 
     dt = DeltaTable(tmp_path)
-    add_actions_table = dt.get_add_actions(flatten=True)
+    add_actions_table = dt.get_add_actions(flatten=True).read_all()
 
     assert dt.version() == 1
 
@@ -2220,7 +2220,7 @@ def test_merge_when_wrong_but_castable_type_passed_while_merge(
     ).when_not_matched_insert_all().execute()
 
     table_schema = pq.read_table(
-        tmp_path / dt.get_add_actions().column(0)[0].as_py()
+        tmp_path / dt.get_add_actions().read_all().column(0)[0].as_py()
     ).schema
     assert table_schema.field("price").type == sample_table["price"].type
 

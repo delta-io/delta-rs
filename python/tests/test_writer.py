@@ -1658,7 +1658,7 @@ def test_float_values(tmp_path: pathlib.Path):
         == data
     )
 
-    actions = dt.get_add_actions()
+    actions = dt.get_add_actions().read_all()
 
     def get_value(name: str):
         return actions.column(name)[0].as_py()
@@ -1807,7 +1807,7 @@ def test_rust_decimal_cast(tmp_path: pathlib.Path):
 
 def test_write_stats_column_idx(tmp_path: pathlib.Path):
     def _check_stats(dt: DeltaTable):
-        add_actions_table = dt.get_add_actions(flatten=True)
+        add_actions_table = dt.get_add_actions(flatten=True).read_all()
 
         def get_value(name: str):
             return add_actions_table.column(name)[0].as_py()
@@ -1859,7 +1859,7 @@ def test_write_stats_column_idx(tmp_path: pathlib.Path):
 
 def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path):
     def _check_stats(dt: DeltaTable):
-        add_actions_table = dt.get_add_actions(flatten=True)
+        add_actions_table = dt.get_add_actions(flatten=True).read_all()
 
         def get_value(name: str):
             return add_actions_table.column(name)[0].as_py()
@@ -2416,7 +2416,7 @@ def test_write_binary_col_without_dssc(tmp_path: pathlib.Path):
     assert len(df_with_bin_col.rows()) == 4
 
     dt = DeltaTable(tmp_path)
-    stats = dt.get_add_actions(flatten=True)
+    stats = dt.get_add_actions(flatten=True).read_all()
     assert stats["null_count.x"].to_pylist() == [None]
     assert stats["min.x"].to_pylist() == [None]
     assert stats["max.x"].to_pylist() == [None]
@@ -2451,7 +2451,7 @@ def test_write_binary_col_with_dssc(tmp_path: pathlib.Path):
     assert len(df_with_bin_col.rows()) == 4
 
     dt = DeltaTable(tmp_path)
-    stats = dt.get_add_actions(flatten=True)
+    stats = dt.get_add_actions(flatten=True).read_all()
     assert stats["null_count.x"].to_pylist() == [None]
     assert stats["min.x"].to_pylist() == [None]
     assert stats["max.x"].to_pylist() == [None]

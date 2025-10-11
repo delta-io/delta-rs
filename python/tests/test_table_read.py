@@ -225,7 +225,7 @@ def test_read_simple_table_update_incremental():
 def test_read_simple_table_file_sizes_failure(mocker):
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    add_actions = dt.get_add_actions()
+    add_actions = dt.get_add_actions().read_all()
 
     # set all sizes to -1, the idea is to break the reading, to check
     # that input file sizes are actually used
@@ -496,7 +496,7 @@ def test_add_actions_table(flatten: bool):
 
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
-    actions_df = dt.get_add_actions(flatten)
+    actions_df = dt.get_add_actions(flatten).read_all()
     # RecordBatch doesn't have a sort_by method yet
     actions_df = pa.table(actions_df).sort_by("path").to_batches()[0]
 

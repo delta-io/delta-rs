@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use arrow::compute::concat_batches;
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use datafusion::catalog::Session;
@@ -12,6 +13,7 @@ use datafusion::logical_expr::{col, Expr, Volatility};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::ExecutionPlan;
+use futures::TryStreamExt;
 use itertools::Itertools;
 
 use crate::delta_datafusion::{
@@ -253,7 +255,12 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         .map(|f| f.add_action())
         .collect_vec();
 
-    let batch = snapshot.add_actions_table(true)?;
+    let batches: Vec<RecordBatch> = snapshot
+        .add_actions_table(true)
+        .try_collect()
+        .await?;
+    
+    let batch = concat_batches(&batches[0].schema(), &batches)?;
     let mut arrays = Vec::new();
     let mut fields = Vec::new();
 
