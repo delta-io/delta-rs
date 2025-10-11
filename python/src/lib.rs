@@ -59,7 +59,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
@@ -1439,34 +1439,32 @@ impl RawDeltaTable {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
         
-        let batches = self.with_table(|t| {
+        self.with_table(|t| {
             let snapshot = t.snapshot()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
-            let stream = snapshot.add_actions_table(flatten);
             
-            // Collect batches from stream
-            let batches: Vec<RecordBatch> = rt()
-                .block_on(async { stream.try_collect().await })
+            let mut stream = snapshot.add_actions_table(flatten);
+            
+            // peek at first batch to get the schema
+            let first_batch = rt()
+                .block_on(async { stream.try_next().await })
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             
-            Ok(batches)
-        })?;
-        
-        // Get schema from first batch, or create an empty reader if no batches
-        if batches.is_empty() {
-            return Err(DeltaError::new_err("No add actions found"));
-        }
-        
-        let schema = batches[0].schema();
-        
-        // Create a reader from the batches
-        let static_stream: futures::stream::BoxStream<'static, DeltaResult<RecordBatch>> = 
-            Box::pin(futures::stream::iter(batches.into_iter().map(Ok)));
-        
-        let reader = convert_boxstream_to_reader(static_stream, schema);
-        Ok(reader.into())
+            let schema = match &first_batch {
+                Some(batch) => batch.schema(),
+                None => return Err(DeltaError::new_err("No add actions found").into()),
+            };
+            
+            // chain it back to the stream
+            let full_stream = futures::stream::iter(first_batch.into_iter().map(Ok))
+                .chain(stream)
+                .boxed();
+            
+            let reader = convert_boxstream_to_reader(full_stream, schema);
+            Ok(reader.into())
+        })
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
