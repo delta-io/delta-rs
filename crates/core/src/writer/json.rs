@@ -15,7 +15,7 @@ use parquet::{
     file::properties::WriterProperties,
 };
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::*;
 use url::Url;
 use uuid::Uuid;
 
@@ -372,9 +372,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     ///
     /// This function returns the [Add] actions which should be committed to the [DeltaTable] for
     /// the written data files
+    #[instrument(skip(self), fields(writer_count = 0))]
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
+
+        Span::current().record("writer_count", writers.len());
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
@@ -385,6 +388,9 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
+
+            debug!(path = %path, size = file_size, rows = metadata.num_rows, "writing data file");
+
             self.table
                 .object_store()
                 .put_with_retries(&path, obj_bytes.into(), 15)
@@ -404,6 +410,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                     .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
             )?);
         }
+        debug!(actions_count = actions.len(), "flush completed");
         Ok(actions)
     }
 }

@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use tokio::runtime::RuntimeFlavor;
 use tokio::task::spawn_blocking;
-use tracing::{debug, error};
+use tracing::*;
 use url::Url;
 use uuid::Uuid;
 
@@ -679,19 +679,31 @@ pub async fn get_latest_version(
 }
 
 /// Read delta log for a specific version
+#[instrument(skip(storage), fields(version = version, path = %commit_uri_from_version(version)))]
 pub async fn read_commit_entry(
     storage: &dyn ObjectStore,
     version: i64,
 ) -> DeltaResult<Option<Bytes>> {
     let commit_uri = commit_uri_from_version(version);
     match storage.get(&commit_uri).await {
-        Ok(res) => Ok(Some(res.bytes().await?)),
-        Err(ObjectStoreError::NotFound { .. }) => Ok(None),
-        Err(err) => Err(err.into()),
+        Ok(res) => {
+            let bytes = res.bytes().await?;
+            debug!(size = bytes.len(), "commit entry read successfully");
+            Ok(Some(bytes))
+        }
+        Err(ObjectStoreError::NotFound { .. }) => {
+            debug!("commit entry not found");
+            Ok(None)
+        }
+        Err(err) => {
+            error!(error = %err, version = version, "failed to read commit entry");
+            Err(err.into())
+        }
     }
 }
 
 /// Default implementation for writing a commit entry
+#[instrument(skip(storage), fields(version = version, tmp_path = %tmp_commit, commit_path = %commit_uri_from_version(version)))]
 pub async fn write_commit_entry(
     storage: &dyn ObjectStore,
     version: i64,
@@ -705,21 +717,28 @@ pub async fn write_commit_entry(
         .map_err(|err| -> TransactionError {
             match err {
                 ObjectStoreError::AlreadyExists { .. } => {
+                    warn!("commit entry already exists");
                     TransactionError::VersionAlreadyExists(version)
                 }
-                _ => TransactionError::from(err),
+                _ => {
+                    error!(error = %err, "failed to write commit entry");
+                    TransactionError::from(err)
+                }
             }
         })?;
+    debug!("commit entry written successfully");
     Ok(())
 }
 
 /// Default implementation for aborting a commit entry
+#[instrument(skip(storage), fields(version = _version, tmp_path = %tmp_commit))]
 pub async fn abort_commit_entry(
     storage: &dyn ObjectStore,
     _version: i64,
     tmp_commit: &Path,
 ) -> Result<(), TransactionError> {
     storage.delete_with_retries(tmp_commit, 15).await?;
+    debug!("commit entry aborted successfully");
     Ok(())
 }
 
