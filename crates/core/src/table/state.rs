@@ -265,7 +265,7 @@ impl DeltaTableState {
     pub fn add_actions_table(
         &self,
         flatten: bool,
-    ) -> BoxStream<'_, DeltaResult<arrow::record_batch::RecordBatch>> {
+    ) -> BoxStream<'static, DeltaResult<arrow::record_batch::RecordBatch>> {
         self.snapshot.add_actions_table(flatten)
     }
 }
@@ -300,7 +300,7 @@ impl EagerSnapshot {
     pub fn add_actions_table(
         &self,
         flatten: bool,
-    ) -> BoxStream<'_, DeltaResult<arrow::record_batch::RecordBatch>> {
+    ) -> BoxStream<'static, DeltaResult<arrow::record_batch::RecordBatch>> {
         let mut expressions = vec![
             column_expr_ref!("path"),
             column_expr_ref!("size"),
@@ -378,9 +378,10 @@ impl EagerSnapshot {
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
 
-        stream::iter(self.files.iter())
+        let files = self.files.clone();
+        stream::iter(files)
             .map(move |file| {
-                let batch = evaluator.evaluate_arrow(file.clone())?;
+                let batch = evaluator.evaluate_arrow(file)?;
                 if flatten {
                     Ok(batch.normalize(".", None)?)
                 } else {
