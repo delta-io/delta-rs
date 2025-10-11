@@ -127,7 +127,12 @@ To view the available history, use `DeltaTable.history`:
 The active state for a delta table is determined by the Add actions,
 which provide the list of files that are part of the table and metadata
 about them, such as creation time, size, and statistics. You can get a
-data frame of the add actions data using `DeltaTable.get_add_actions`:
+data frame of the add actions data using `DeltaTable.get_add_actions`.
+
+The method returns a `RecordBatchReader` which supports streaming data
+in batches for memory efficiency. Use `.read_all()` to load all data
+into a single `RecordBatch`, or iterate over the reader to process
+batches one at a time.
 
 <!-- spellchecker:off --!>
 
@@ -135,7 +140,7 @@ data frame of the add actions data using `DeltaTable.get_add_actions`:
     ``` python
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0")
-    >>> dt.get_add_actions(flatten=True).to_pandas()
+    >>> dt.get_add_actions(flatten=True).read_all().to_pandas()
                                                         path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
     0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
     1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
@@ -152,7 +157,7 @@ This works even with past versions of the table:
 === "Python"
     ``` python
     >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0", version=0)
-    >>> dt.get_add_actions(flatten=True).to_pandas()
+    >>> dt.get_add_actions(flatten=True).read_all().to_pandas()
                                                     path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
     0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
     1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4

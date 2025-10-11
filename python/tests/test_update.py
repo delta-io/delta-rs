@@ -296,7 +296,7 @@ def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
         configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
     )
     dt = DeltaTable(tmp_path)
-    add_actions_table = dt.get_add_actions(flatten=True)
+    add_actions_table = dt.get_add_actions(flatten=True).read_all()
 
     def get_value(name: str):
         return add_actions_table.column(name)[0].as_py()
@@ -315,7 +315,7 @@ def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
     dt.update({"foo": "'hello world'"})
 
     dt = DeltaTable(tmp_path)
-    add_actions_table = dt.get_add_actions(flatten=True)
+    add_actions_table = dt.get_add_actions(flatten=True).read_all()
 
     def get_value(name: str):
         return add_actions_table.column(name)[0].as_py()

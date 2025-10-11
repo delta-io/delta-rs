@@ -24,7 +24,6 @@ use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
 use crate::{DeltaResult, DeltaTableError};
-use datafusion::logical_expr::utils::columnize_expr;
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,7 +314,7 @@ impl EagerSnapshot {
 
         let stats_schema = match self.snapshot().inner.stats_schema() {
             Ok(schema) => schema,
-            Err(e) => return stream::once(ready(Err(e))).boxed(),
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
         };
 
         let num_records_field = match stats_schema.field("numRecords") {
@@ -356,19 +355,19 @@ impl EagerSnapshot {
                     fields.push(StructField::nullable("partition", partition_type));
                     expressions.push(column_expr_ref!("partitionValues_parsed"));
                 }
-                Err(e) => return stream::once(ready(Err(e))).boxed(),
+                Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
             }
         }
 
         let expression = Expression::Struct(expressions);
         let table_schema = match DataType::try_struct_type(fields) {
             Ok(schema) => schema,
-            Err(e) => return stream::once(ready(Err(e))).boxed(),
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
         };
 
         let input_schema = match self.snapshot().inner.scan_row_parsed_schema_arrow() {
             Ok(schema) => schema,
-            Err(e) => return stream::once(ready(Err(e))).boxed(),
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
         };
 
         let input_schema = match input_schema.as_ref().try_into_kernel() {
