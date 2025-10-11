@@ -1,13 +1,17 @@
 use std::path::Path;
 
-use datafusion::logical_expr::{cast, lit};
-use datafusion::prelude::DataFrame;
-use datafusion::prelude::ParquetReadOptions;
+use deltalake_core::datafusion::functions::expr_fn;
 use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake_core::kernel::{StructField, StructType};
 use deltalake_core::operations::merge::MergeBuilder;
-use deltalake_core::DeltaResult;
-use deltalake_core::{datafusion::prelude::SessionContext, DeltaOps, DeltaTable, DeltaTableError};
+use deltalake_core::{arrow, DeltaResult};
+use deltalake_core::{
+    datafusion::{
+        logical_expr::{cast, lit},
+        prelude::{DataFrame, ParquetReadOptions, SessionContext},
+    },
+    DeltaOps, DeltaTable, DeltaTableError,
+};
 use tempfile::TempDir;
 use url::Url;
 
@@ -164,16 +168,14 @@ pub async fn prepare_source_and_table(
     // Split matched and not-matched portions
     let matched = source
         .clone()
-        .filter(datafusion::functions::expr_fn::random().lt_eq(lit(params.sample_matched_rows)))?;
+        .filter(expr_fn::random().lt_eq(lit(params.sample_matched_rows)))?;
 
     let rand = cast(
-        datafusion::functions::expr_fn::random() * lit(u32::MAX),
-        datafusion::arrow::datatypes::DataType::Int64,
+        expr_fn::random() * lit(u32::MAX),
+        arrow::datatypes::DataType::Int64,
     );
     let not_matched = source
-        .filter(
-            datafusion::functions::expr_fn::random().lt_eq(lit(params.sample_not_matched_rows)),
-        )?
+        .filter(expr_fn::random().lt_eq(lit(params.sample_not_matched_rows)))?
         .with_column("wr_item_sk", rand.clone())?
         .with_column("wr_order_number", rand)?;
 

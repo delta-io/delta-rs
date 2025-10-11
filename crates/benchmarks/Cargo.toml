@@ -16,16 +16,6 @@ chrono = { workspace = true }
 url = { workspace = true }
 tempfile = { workspace = true }
 
-# arrow
-arrow = { workspace = true }
-arrow-array = { workspace = true }
-
-# serde
-serde_json = { workspace = true }
-
-# datafusion
-datafusion = { workspace = true }
-
 [dependencies.deltalake-core]
 path = "../core"
 version = "0"
