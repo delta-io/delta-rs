@@ -1,12 +1,9 @@
 use bytes::Bytes;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use std::io::{BufRead, BufReader, Cursor};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
-use deltalake_core::kernel::Action;
 use deltalake_core::logstore::get_actions;
-use deltalake_core::DeltaTableError;
 
 fn generate_commit_log_complex(
     num_actions: usize,
@@ -50,29 +47,6 @@ fn generate_commit_log_complex(
     Bytes::from(log_lines.join("\n"))
 }
 
-// Baseline implementation for comparison
-// TODO: this is the version of the main branch for performance comparison
-// Remove it after merging the PR
-async fn get_actions_baseline(
-    version: i64,
-    commit_log_bytes: Bytes,
-) -> Result<Vec<Action>, DeltaTableError> {
-    let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-    let mut actions = Vec::new();
-    for re_line in reader.lines() {
-        let line = re_line?;
-        let lstr = line.as_str();
-        let action = serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-            json_err: e,
-            line,
-            version,
-        })?;
-        actions.push(action);
-    }
-    Ok(actions)
-}
-
 fn bench_simple_actions(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("simple_actions_1000");
@@ -82,16 +56,7 @@ fn bench_simple_actions(c: &mut Criterion) {
 
     let commit_log = generate_commit_log_complex(1000, false, false, false);
 
-    group.bench_function("baseline", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                let result = get_actions_baseline(0, commit_log.clone()).await;
-                black_box(result.unwrap().len())
-            })
-        });
-    });
-
-    group.bench_function("new version", |b| {
+    group.bench_function("get_actions", |b| {
         b.iter(|| {
             rt.block_on(async {
                 let result = get_actions(0, &commit_log).await;
@@ -112,16 +77,7 @@ fn bench_with_stats(c: &mut Criterion) {
 
     let commit_log = generate_commit_log_complex(1000, true, false, false);
 
-    group.bench_function("baseline", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                let result = get_actions_baseline(0, commit_log.clone()).await;
-                black_box(result.unwrap().len())
-            })
-        });
-    });
-
-    group.bench_function("new version", |b| {
+    group.bench_function("get_actions", |b| {
         b.iter(|| {
             rt.block_on(async {
                 let result = get_actions(0, &commit_log).await;
@@ -142,16 +98,7 @@ fn bench_full_complexity(c: &mut Criterion) {
 
     let commit_log = generate_commit_log_complex(1000, true, true, true);
 
-    group.bench_function("baseline", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                let result = get_actions_baseline(0, commit_log.clone()).await;
-                black_box(result.unwrap().len())
-            })
-        });
-    });
-
-    group.bench_function("new version", |b| {
+    group.bench_function("get_actions", |b| {
         b.iter(|| {
             rt.block_on(async {
                 let result = get_actions(0, &commit_log).await;
