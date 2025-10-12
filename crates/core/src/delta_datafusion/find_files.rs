@@ -198,7 +198,10 @@ async fn find_files_scan(
         .log_data()
         .iter()
         .map(|f| f.add_action())
-        .map(|add| (add.path.clone(), add.to_owned()))
+        .map(|add| {
+            let path = add.path.clone();
+            (path, add)
+        })
         .collect();
 
     let scan_config = DeltaScanConfigBuilder::default()
@@ -225,8 +228,7 @@ async fn find_files_scan(
     let scan = Arc::new(scan);
 
     let config = &scan.config;
-    let input_schema = scan.logical_schema.as_ref().to_owned();
-    let input_dfschema = input_schema.clone().try_into()?;
+    let input_dfschema = scan.logical_schema.as_ref().to_owned().try_into()?;
 
     let predicate_expr = session
         .create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
@@ -295,7 +297,10 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
 
     let map = actions
         .into_iter()
-        .map(|action| (action.path.clone(), action))
+        .map(|action| {
+            let path = action.path.clone();
+            (path, action)
+        })
         .collect::<HashMap<String, Add>>();
 
     join_batches_with_add_actions(batches, map, PATH_COLUMN, false)
