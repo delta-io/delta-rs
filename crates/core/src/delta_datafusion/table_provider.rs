@@ -967,8 +967,9 @@ pub struct DeltaScan {
     pub parquet_scan: Arc<dyn ExecutionPlan>,
     /// The schema of the table to be used when evaluating expressions
     pub logical_schema: Arc<Schema>,
+    // FIXME: @HStack - exposed this builder so we can recreate DeltaScan
     /// Metrics for scan reported via DataFusion
-    pub(super) metrics: ExecutionPlanMetricsSet,
+    pub metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
