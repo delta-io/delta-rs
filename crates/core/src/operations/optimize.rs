@@ -872,7 +872,7 @@ pub async fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties_factory: Option<WriterPropertiesFactoryRef>,
-    session: Option<SessionState>,
+    session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
         target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());

@@ -21,6 +21,7 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot};
 use crate::logstore::LogStoreRef;
+use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
@@ -45,6 +46,7 @@ pub(crate) async fn find_files(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
+    file_format_options: Option<&FileFormatRef>,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
@@ -71,8 +73,14 @@ pub(crate) async fn find_files(
                 Span::current().record("candidate_count", result.candidates.len());
                 Ok(result)
             } else {
-                let candidates =
-                    find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
+                let candidates = find_files_scan(
+                    snapshot,
+                    log_store,
+                    session,
+                    file_format_options,
+                    predicate.to_owned(),
+                )
+                    .await?;
 
                 let result = FindFiles {
                     candidates,
@@ -221,6 +229,7 @@ async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
+    file_format_options: Option<&FileFormatRef>,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
@@ -250,10 +259,13 @@ async fn find_files_scan(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
+    let table_parquet_options = to_table_parquet_options_from_ffo(file_format_options);
+
     let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
+        .with_parquet_options(table_parquet_options)
         .build()
         .await?;
     let scan = Arc::new(scan);

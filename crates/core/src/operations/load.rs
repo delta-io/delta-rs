@@ -7,7 +7,6 @@ use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
-use std::sync::Arc;
 
 use super::CustomExecuteHandler;
 use crate::delta_datafusion::{DataFusionMixins as _, DeltaSessionConfig};

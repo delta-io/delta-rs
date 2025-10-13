@@ -85,7 +85,6 @@ pub mod planner;
 mod schema_adapter;
 mod table_provider;
 
-use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use table_provider::DeltaScanBuilder;
 pub use table_provider::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
