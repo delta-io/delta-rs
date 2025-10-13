@@ -58,7 +58,7 @@ use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, FileFormatRef, WriterPropertiesFactory,
+    state_with_file_format_options, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::{
@@ -95,12 +95,10 @@ pub struct UpdateBuilder {
     snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Options to apply when operating on the table files
-    file_format_options: Option<FileFormatRef>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -137,11 +135,8 @@ impl super::Operation<()> for UpdateBuilder {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(
-        log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
-        file_format_options: Option<FileFormatRef>,
-    ) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+        let file_format_options = snapshot.load_config().file_format_options.clone();
         let writer_properties_factory =
             build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
@@ -149,7 +144,6 @@ impl UpdateBuilder {
             updates: HashMap::new(),
             snapshot,
             log_store,
-            file_format_options,
             state: None,
             writer_properties_factory,
             commit_properties: CommitProperties::default(),
@@ -258,9 +252,8 @@ async fn execute(
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    file_format_options: Option<FileFormatRef>,
     state: SessionState,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     operation_id: Uuid,
@@ -288,6 +281,7 @@ async fn execute(
         .cloned()
         .collect();
 
+    let file_format_options = snapshot.load_config().file_format_options.clone();
     let state = state_with_file_format_options(state, file_format_options.as_ref())?;
 
     let update_planner = DeltaPlanner::<UpdateMetricExtensionPlanner> {
@@ -545,7 +539,6 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.updates,
                 this.log_store.clone(),
                 this.snapshot,
-                this.file_format_options.clone(),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,
@@ -560,11 +553,7 @@ impl std::future::IntoFuture for UpdateBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(
-                    this.log_store,
-                    DeltaTableState::new(snapshot),
-                    this.file_format_options,
-                ),
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                 metrics,
             ))
         })

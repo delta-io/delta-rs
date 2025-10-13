@@ -1,7 +1,7 @@
 //! Abstractions and implementations for writing data to delta tables
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
@@ -24,7 +24,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_wp, WriterPropertiesFactory,
+    build_writer_properties_factory_wp, WriterPropertiesFactoryRef,
 };
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
@@ -105,7 +105,7 @@ pub struct WriterConfig {
     /// Column names for columns the table is partitioned by
     partition_columns: Vec<String>,
     /// Properties passed to underlying parquet writer
-    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    writer_properties_factory: WriterPropertiesFactoryRef,
     /// Size above which we will write a buffered parquet file to disk.
     target_file_size: usize,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
@@ -122,7 +122,7 @@ impl WriterConfig {
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
-        writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+        writer_properties_factory: Option<WriterPropertiesFactoryRef>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
         num_indexed_cols: DataSkippingNumIndexedCols,
@@ -278,7 +278,7 @@ pub struct PartitionWriterConfig {
     /// Values for all partition columns
     partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
-    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    writer_properties_factory: WriterPropertiesFactoryRef,
     /// Size above which we will write a buffered parquet file to disk.
     target_file_size: usize,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
@@ -291,7 +291,7 @@ impl PartitionWriterConfig {
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
-        writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+        writer_properties_factory: Option<WriterPropertiesFactoryRef>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> DeltaResult<Self> {

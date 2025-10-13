@@ -20,8 +20,7 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
-use crate::table::file_format_options::FileFormatRef;
-use crate::{DeltaTable, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableBuilder, DeltaTableConfig};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -61,7 +60,7 @@ pub struct CreateBuilder {
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
-    file_format_options: Option<FileFormatRef>,
+    table_config: DeltaTableConfig,
     configuration: HashMap<String, Option<String>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
@@ -99,7 +98,7 @@ impl CreateBuilder {
             storage_options: None,
             actions: Default::default(),
             log_store: None,
-            file_format_options: None,
+            table_config: DeltaTableConfig::default(),
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
@@ -241,8 +240,8 @@ impl CreateBuilder {
     }
 
     // Set format options for underlying table files
-    pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
-        self.file_format_options = Some(file_format_options);
+    pub fn with_table_config(mut self, table_config: DeltaTableConfig) -> Self {
+        self.table_config = table_config;
         self
     }
 
@@ -270,11 +269,7 @@ impl CreateBuilder {
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
                 ensure_table_uri(log_store.root_uri())?.as_str().to_string(),
-                DeltaTable::new(
-                    log_store,
-                    Default::default(),
-                    self.file_format_options.clone(),
-                ),
+                DeltaTable::new(log_store, self.table_config.clone()),
             )
         } else {
             let storage_url =
@@ -282,6 +277,7 @@ impl CreateBuilder {
             (
                 storage_url.as_str().to_string(),
                 DeltaTableBuilder::from_uri(storage_url)?
+                    .with_table_config(self.table_config.clone())
                     .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )

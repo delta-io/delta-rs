@@ -247,7 +247,6 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                         DeltaTableState {
                             snapshot: this.snapshot,
                         },
-                        None,
                     ),
                     FileSystemCheckMetrics {
                         files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),
@@ -262,7 +261,6 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                         DeltaTableState {
                             snapshot: this.snapshot,
                         },
-                        None,
                     ),
                     FileSystemCheckMetrics {
                         dry_run: false,
@@ -289,7 +287,6 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 DeltaTableState {
                     snapshot: this.snapshot,
                 },
-                None,
             );
             table.update().await?;
             Ok((table, metrics))

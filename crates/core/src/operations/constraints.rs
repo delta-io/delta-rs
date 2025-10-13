@@ -227,7 +227,6 @@ impl std::future::IntoFuture for ConstraintBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
-                None,
             ))
         })
     }

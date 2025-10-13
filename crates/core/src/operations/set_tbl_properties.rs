@@ -128,7 +128,6 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             Ok(DeltaTable::new_with_state(
                 this.log_store,
                 commit.snapshot(),
-                None,
             ))
         })
     }

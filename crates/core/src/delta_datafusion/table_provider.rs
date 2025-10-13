@@ -46,7 +46,6 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
-use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::ObjectMeta;
 
@@ -772,7 +771,7 @@ impl TableProvider for DeltaTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store(), session.runtime_env().clone());
-        if let Some(format_options) = &self.file_format_options {
+        if let Some(format_options) = &self.config.file_format_options {
             format_options.update_session(session)?;
         }
         let filter_expr = conjunction(filters.iter().cloned());
@@ -780,7 +779,7 @@ impl TableProvider for DeltaTable {
         let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_parquet_options(
                 crate::table::file_format_options::to_table_parquet_options_from_ffo(
-                    self.file_format_options.as_ref(),
+                    self.config.file_format_options.as_ref(),
                 ),
             )
             .with_projection(projection)

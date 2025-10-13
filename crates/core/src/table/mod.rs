@@ -31,7 +31,6 @@ pub mod state;
 mod columns;
 pub mod file_format_options;
 
-use crate::table::file_format_options::FileFormatRef;
 // Re-exposing for backwards compatibility
 pub use columns::*;
 
@@ -47,8 +46,6 @@ pub struct DeltaTable {
     pub state: Option<DeltaTableState>,
     /// the load options used during load
     pub config: DeltaTableConfig,
-    /// options to apply when operating on the table files
-    pub file_format_options: Option<FileFormatRef>,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -101,7 +98,6 @@ impl<'de> Deserialize<'de> for DeltaTable {
                     state,
                     config,
                     log_store,
-                    file_format_options: None,
                 };
                 Ok(table)
             }
@@ -116,16 +112,11 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(
-        log_store: LogStoreRef,
-        config: DeltaTableConfig,
-        file_format_options: Option<FileFormatRef>,
-    ) -> Self {
+    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
         Self {
             state: None,
             log_store,
             config,
-            file_format_options,
         }
     }
 
@@ -134,16 +125,12 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
-    pub(crate) fn new_with_state(
-        log_store: LogStoreRef,
-        state: DeltaTableState,
-        file_format_options: Option<FileFormatRef>,
-    ) -> Self {
+    pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
+        let config = state.load_config().clone();
         Self {
             state: Some(state),
             log_store,
-            config: Default::default(),
-            file_format_options,
+            config,
         }
     }
 

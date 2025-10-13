@@ -62,7 +62,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, FileFormatRef, WriterPropertiesFactory,
+    state_with_file_format_options, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
@@ -79,12 +79,10 @@ pub struct DeleteBuilder {
     snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Options to apply when operating on the table files
-    file_format_options: Option<FileFormatRef>,
     /// Datafusion session state relevant for executing the input plan
     state: Option<SessionState>,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -120,18 +118,14 @@ impl super::Operation<()> for DeleteBuilder {
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
-    pub fn new(
-        log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
-        file_format_options: Option<FileFormatRef>,
-    ) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+        let file_format_options = &snapshot.load_config().file_format_options;
         let writer_properties_factory =
             build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate: None,
             snapshot,
             log_store,
-            file_format_options,
             state: None,
             commit_properties: CommitProperties::default(),
             writer_properties_factory,
@@ -204,13 +198,12 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 #[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
     snapshot: &EagerSnapshot,
-    file_format_options: Option<FileFormatRef>,
     log_store: LogStoreRef,
     state: &SessionState,
     expression: &Expr,
     rewrite: &[Add],
     metrics: &mut DeleteMetrics,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     partition_scan: bool,
     operation_id: Uuid,
 ) -> DeltaResult<Vec<Action>> {
@@ -231,6 +224,8 @@ async fn execute_non_empty_expr(
         .with_file_column(false)
         .with_schema(snapshot.input_schema()?)
         .build(snapshot)?;
+
+    let file_format_options = snapshot.load_config().file_format_options.clone();
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
@@ -328,9 +323,8 @@ async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    file_format_options: Option<FileFormatRef>,
     state: SessionState,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     mut commit_properties: CommitProperties,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
@@ -338,6 +332,8 @@ async fn execute(
     if !&snapshot.load_config().require_files {
         return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
     }
+
+    let file_format_options = snapshot.load_config().file_format_options.clone();
 
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
@@ -359,7 +355,6 @@ async fn execute(
         let write_start = Instant::now();
         let add = execute_non_empty_expr(
             &snapshot,
-            file_format_options,
             log_store.clone(),
             &state,
             &predicate,
@@ -451,7 +446,9 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
-            let state = state_with_file_format_options(state, this.file_format_options.as_ref())?;
+            let file_format_options = &this.snapshot.load_config().file_format_options;
+
+            let state = state_with_file_format_options(state, file_format_options.as_ref())?;
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
@@ -467,7 +464,6 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 this.snapshot,
-                this.file_format_options.clone(),
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,
@@ -482,7 +478,6 @@ impl std::future::IntoFuture for DeleteBuilder {
                     DeltaTableState {
                         snapshot: new_snapshot,
                     },
-                    this.file_format_options,
                 ),
                 metrics,
             ))

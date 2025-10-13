@@ -11,7 +11,6 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::EagerSnapshot;
 use crate::logstore::LogStoreRef;
-use crate::table::file_format_options::FileFormatRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
@@ -23,8 +22,6 @@ pub struct LoadBuilder {
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
-    /// Options to apply when operating on the table files
-    file_format_options: Option<FileFormatRef>,
 }
 
 impl super::Operation<()> for LoadBuilder {
@@ -38,16 +35,11 @@ impl super::Operation<()> for LoadBuilder {
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(
-        log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
-        file_format_options: Option<FileFormatRef>,
-    ) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         Self {
             snapshot,
             log_store,
             columns: None,
-            file_format_options,
         }
     }
 
@@ -76,7 +68,6 @@ impl std::future::IntoFuture for LoadBuilder {
                 DeltaTableState {
                     snapshot: this.snapshot,
                 },
-                this.file_format_options.clone(),
             );
             let schema = table.snapshot()?.arrow_schema()?;
             let projection = this
@@ -95,11 +86,11 @@ impl std::future::IntoFuture for LoadBuilder {
                 .transpose()?;
 
             let ctx = SessionContext::new();
-            let state = ctx.state();
-
-            let scan_plan = table.scan(&state, projection.as_ref(), &[], None).await?;
+            let scan_plan = table
+                .scan(&ctx.state(), projection.as_ref(), &[], None)
+                .await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&state));
+            let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
             let stream = plan.execute(0, task_ctx)?;
 
             Ok((table, stream))

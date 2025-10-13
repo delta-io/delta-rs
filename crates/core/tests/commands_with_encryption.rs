@@ -25,6 +25,7 @@ use parquet_key_management::{
     kms::KmsConnectionConfig,
     test_kms::TestKmsClientFactory,
 };
+use paste::paste;
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
 use url::Url;
@@ -82,14 +83,23 @@ fn get_table_batches() -> RecordBatch {
 }
 
 // Create a DeltaOps instance with the specified file_format_options to apply crypto settings.
+async fn ops_from_uri(uri: &str) -> Result<DeltaOps, DeltaTableError> {
+    let prefix_uri = format!("file://{}", uri);
+    let url = Url::parse(&*prefix_uri).unwrap();
+    let ops = DeltaOps::try_from_uri(url).await?;
+    Ok(ops)
+}
+
+// Create a DeltaOps instance with the specified file_format_options to apply crypto settings.
 async fn ops_with_crypto(
     uri: &str,
     file_format_options: &FileFormatRef,
 ) -> Result<DeltaOps, DeltaTableError> {
-    let prefix_uri = format!("file://{}", uri);
-    let url = Url::parse(&*prefix_uri).unwrap();
-    let ops = DeltaOps::try_from_uri(url).await?;
-    Ok(ops.with_file_format_options(file_format_options.clone()))
+    let ops = ops_from_uri(uri).await?;
+    let ops = ops
+        .with_file_format_options(file_format_options.clone())
+        .await?;
+    Ok(ops)
 }
 
 async fn create_table(
@@ -129,8 +139,12 @@ async fn create_table(
 async fn read_table(
     uri: &str,
     file_format_options: &FileFormatRef,
+    use_file_format_options: bool,
 ) -> Result<Vec<RecordBatch>, DeltaTableError> {
-    let ops = ops_with_crypto(uri, file_format_options).await?;
+    let ops = match use_file_format_options {
+        true => ops_with_crypto(uri, file_format_options).await?,
+        false => ops_from_uri(uri).await?,
+    };
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
     Ok(data)
@@ -243,17 +257,20 @@ async fn optimize_table_compact(
     optimize_table(uri, file_format_options, OptimizeType::Compact).await
 }
 
-fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
-    let key: Vec<_> = b"1234567890123450".to_vec();
+// Create a direct encryption / decryption configuration using EncryptionProperties and the provided keys
+fn create_plain_crypto_format(
+    encrypt_key: Vec<u8>,
+    decrypt_key: Vec<u8>,
+) -> Result<FileFormatRef, DeltaTableError> {
+    let crypt =
+        parquet::encryption::encrypt::FileEncryptionProperties::builder(encrypt_key.clone())
+            .with_column_key("int", encrypt_key.clone())
+            .with_column_key("string", encrypt_key.clone())
+            .build()?;
 
-    let crypt = parquet::encryption::encrypt::FileEncryptionProperties::builder(key.clone())
-        .with_column_key("int", key.clone())
-        .with_column_key("string", key.clone())
-        .build()?;
-
-    let decrypt = FileDecryptionProperties::builder(key.clone())
-        .with_column_key("int", key.clone())
-        .with_column_key("string", key.clone())
+    let decrypt = FileDecryptionProperties::builder(decrypt_key.clone())
+        .with_column_key("int", decrypt_key.clone())
+        .with_column_key("string", decrypt_key.clone())
         .build()?;
 
     let mut tpo: TableParquetOptions = TableParquetOptions::default();
@@ -264,6 +281,17 @@ fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     tbl_options.current_format = Some(ConfigFileType::PARQUET);
     let file_format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options)) as FileFormatRef;
     Ok(file_format_options)
+}
+
+fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
+    let key: Vec<_> = b"1234567890123450".to_vec();
+    create_plain_crypto_format(key.clone(), key.clone())
+}
+
+fn plain_crypto_format_bad_decryptor() -> Result<FileFormatRef, DeltaTableError> {
+    let encryption_key: Vec<_> = b"1234567890123450".to_vec();
+    let decryption_key: Vec<_> = b"0123456789012345".to_vec();
+    create_plain_crypto_format(encryption_key.clone(), decryption_key.clone())
 }
 fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
@@ -329,6 +357,7 @@ async fn run_modify_test(
     file_format_options: FileFormatRef,
     modifier: ModifyFn,
     expected: Vec<String>,
+    decrypt_final_read: bool,
 ) {
     let temp_dir = TempDir::new().unwrap();
     let uri = temp_dir.path().to_str().unwrap();
@@ -339,66 +368,96 @@ async fn run_modify_test(
     modifier(uri, &file_format_options)
         .await
         .expect("Failed to modify encrypted table");
-    let data = read_table(uri, &file_format_options)
+    let data = read_table(uri, &file_format_options, decrypt_final_read)
         .await
         .expect("Failed to read encrypted table");
     let expected_refs: Vec<&str> = expected.iter().map(AsRef::as_ref).collect();
     assert_batches_sorted_eq!(&expected_refs, &data);
 }
 
-async fn test_create_and_read(file_format_options: FileFormatRef) {
+async fn test_create_and_read(file_format_options: FileFormatRef, decrypt_final_read: bool) {
     // Use the shared modify test template with a no-op modifier
     let expected: Vec<String> = full_table_data().iter().map(|s| s.to_string()).collect();
     run_modify_test(
         file_format_options,
         |_uri, _opts| Box::pin(async { Ok(()) }),
         expected,
+        decrypt_final_read,
     )
     .await;
 }
 
-#[tokio::test]
-async fn test_create_and_read_plain_crypto() {
-    let file_format_options = plain_crypto_format().unwrap();
-    test_create_and_read(file_format_options).await;
+// Macro to generate the common encryption test matrix for a given runner function
+macro_rules! encryption_tests {
+    ($runner:ident) => {
+        paste! {
+            #[tokio::test]
+            async fn [<$runner _plain_crypto>]() {
+                let file_format_options = plain_crypto_format().unwrap();
+                $runner(file_format_options, true).await;
+            }
+
+            #[tokio::test]
+            #[should_panic(expected = "Failed to read encrypted table")]
+            async fn [<$runner _plain_crypto_no_decryptor>]() {
+                let file_format_options = plain_crypto_format().unwrap();
+                $runner(file_format_options, false).await;
+            }
+
+            #[tokio::test]
+            async fn [<$runner _kms>]() {
+                let file_format_options = kms_crypto_format().unwrap();
+                $runner(file_format_options, true).await;
+            }
+
+            #[tokio::test]
+            #[should_panic(expected = "Failed to read encrypted table")]
+            async fn [<$runner _kms_no_decryptor>]() {
+                let file_format_options = kms_crypto_format().unwrap();
+                $runner(file_format_options, false).await;
+            }
+        }
+    };
 }
 
+encryption_tests!(test_create_and_read);
+
 #[tokio::test]
-async fn test_create_and_read_kms() {
-    let file_format_options = kms_crypto_format().unwrap();
-    test_create_and_read(file_format_options).await;
+#[should_panic(expected = "Failed to read encrypted table")]
+async fn test_create_and_read_bad_crypto() {
+    let file_format_options = plain_crypto_format_bad_decryptor().unwrap();
+    test_create_and_read(file_format_options, true).await;
 }
 
-async fn test_optimize(file_format_options: FileFormatRef) {
+async fn test_optimize_compact(file_format_options: FileFormatRef, decrypt_final_read: bool) {
+    // Use the shared modify test template; perform optimization steps inside the modifier
+    let expected: Vec<String> = full_table_data().iter().map(|s| s.to_string()).collect();
+    run_modify_test(
+        file_format_options,
+        |uri, opts| Box::pin(optimize_table_compact(uri, opts)),
+        expected,
+        decrypt_final_read,
+    )
+    .await;
+}
+
+async fn test_optimize_z_order(file_format_options: FileFormatRef, decrypt_final_read: bool) {
     // Use the shared modify test template; perform optimization steps inside the modifier
     let expected: Vec<String> = full_table_data().iter().map(|s| s.to_string()).collect();
     run_modify_test(
         file_format_options.clone(),
         |uri, opts| Box::pin(optimize_table_z_order(uri, opts)),
-        expected.clone(),
-    )
-    .await;
-    run_modify_test(
-        file_format_options,
-        |uri, opts| Box::pin(optimize_table_compact(uri, opts)),
         expected,
+        decrypt_final_read,
     )
     .await;
 }
 
-#[tokio::test]
-async fn test_optimize_plain_crypto() {
-    let file_format_options = plain_crypto_format().unwrap();
-    test_optimize(file_format_options).await;
-}
+encryption_tests!(test_optimize_compact);
 
-#[tokio::test]
-async fn test_optimize_kms() {
-    let file_format_options = kms_crypto_format().unwrap();
-    test_optimize(file_format_options).await;
-}
+encryption_tests!(test_optimize_z_order);
 
-async fn test_update(file_format_options: FileFormatRef) {
+async fn test_update(file_format_options: FileFormatRef, decrypt_final_read: bool) {
     let base = full_table_data();
     let expected: Vec<String> = base
         .iter()
@@ -409,23 +468,14 @@ async fn test_update(file_format_options: FileFormatRef) {
         file_format_options,
         |uri, opts| Box::pin(update_table(uri, opts)),
         expected,
+        decrypt_final_read,
     )
     .await;
 }
 
-#[tokio::test]
-async fn test_update_plain_crypto() {
-    let file_format_options = plain_crypto_format().unwrap();
-    test_update(file_format_options).await;
-}
+encryption_tests!(test_update);
 
-#[tokio::test]
-async fn test_update_kms() {
-    let file_format_options = kms_crypto_format().unwrap();
-    test_update(file_format_options).await;
-}
-
-async fn test_delete(file_format_options: FileFormatRef) {
+async fn test_delete(file_format_options: FileFormatRef, decrypt_final_read: bool) {
     let base = full_table_data();
     let expected: Vec<String> = base
         .iter()
@@ -437,23 +487,14 @@ async fn test_delete(file_format_options: FileFormatRef) {
         file_format_options,
         |uri, opts| Box::pin(delete_from_table(uri, opts)),
         expected,
+        decrypt_final_read,
     )
     .await;
 }
 
-#[tokio::test]
-async fn test_delete_plain_crypto() {
-    let file_format_options = plain_crypto_format().unwrap();
-    test_delete(file_format_options).await;
-}
+encryption_tests!(test_delete);
 
-#[tokio::test]
-async fn test_delete_kms() {
-    let file_format_options = kms_crypto_format().unwrap();
-    test_delete(file_format_options).await;
-}
-
-async fn test_merge(file_format_options: FileFormatRef) {
+async fn test_merge(file_format_options: FileFormatRef, decrypt_final_read: bool) {
     let expected_str = vec![
         "+-----+--------+----------------------------+",
         "| int | string | timestamp                  |",
@@ -467,18 +508,9 @@ async fn test_merge(file_format_options: FileFormatRef) {
         file_format_options,
         |uri, opts| Box::pin(merge_table(uri, opts)),
         expected,
+        decrypt_final_read,
     )
     .await;
 }
 
-#[tokio::test]
-async fn test_merge_plain_crypto() {
-    let file_format_options = plain_crypto_format().unwrap();
-    test_merge(file_format_options).await;
-}
-
-#[tokio::test]
-async fn test_merge_kms() {
-    let file_format_options = kms_crypto_format().unwrap();
-    test_merge(file_format_options).await;
-}
+encryption_tests!(test_merge);

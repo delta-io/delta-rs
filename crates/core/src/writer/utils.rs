@@ -15,7 +15,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::errors::DeltaResult;
-use crate::table::file_format_options::WriterPropertiesFactory;
+use crate::table::file_format_options::WriterPropertiesFactoryRef;
 use crate::writer::DeltaWriterError;
 
 /// Generate the name of the file to be written
@@ -26,7 +26,7 @@ pub(crate) fn next_data_path(
     prefix: &Path,
     part_count: usize,
     writer_id: &Uuid,
-    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    writer_properties_factory: WriterPropertiesFactoryRef,
 ) -> Path {
     fn compression_to_str(compression: &Compression) -> &str {
         match compression {

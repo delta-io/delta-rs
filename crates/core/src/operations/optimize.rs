@@ -64,7 +64,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
     build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatRef,
-    WriterPropertiesFactory,
+    WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -210,14 +210,12 @@ pub struct OptimizeBuilder<'a> {
     snapshot: EagerSnapshot,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
-    /// Options to apply when operating on the table files
-    file_format_options: Option<FileFormatRef>,
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
     target_size: Option<u64>,
     /// Properties passed to underlying parquet writer
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     /// Whether to preserve insertion order within files (default false)
@@ -245,11 +243,8 @@ impl super::Operation<()> for OptimizeBuilder<'_> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(
-        log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
-        file_format_options: Option<FileFormatRef>,
-    ) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+        let file_format_options = snapshot.load_config().file_format_options.clone();
         let writer_properties_factory = match file_format_options.as_ref() {
             None => {
                 let wp = WriterProperties::builder()
@@ -265,7 +260,6 @@ impl<'a> OptimizeBuilder<'a> {
         Self {
             snapshot,
             log_store,
-            file_format_options,
             filters: &[],
             target_size: None,
             writer_properties_factory,
@@ -382,7 +376,6 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 .execute(
                     this.log_store.clone(),
                     &this.snapshot,
-                    this.file_format_options.clone(),
                     this.max_concurrent_tasks,
                     this.max_spill_size,
                     this.min_commit_interval,
@@ -395,11 +388,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             if let Some(handler) = this.custom_execute_handler {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
-            let mut table = DeltaTable::new_with_state(
-                this.log_store,
-                DeltaTableState::new(this.snapshot),
-                this.file_format_options,
-            );
+            let mut table =
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(this.snapshot));
             table.update().await?;
             Ok((table, metrics))
         })
@@ -505,7 +495,7 @@ pub struct MergeTaskParameters {
     /// Schema of written files
     file_schema: ArrowSchemaRef,
     /// Properties passed to parquet writer
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Num index cols to collect stats for
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
@@ -649,7 +639,6 @@ impl MergePlan {
         mut self,
         log_store: LogStoreRef,
         snapshot: &EagerSnapshot,
-        file_format_options: Option<FileFormatRef>,
         max_concurrent_tasks: usize,
         #[allow(unused_variables)] // used behind a feature flag
         max_spill_size: usize,
@@ -660,7 +649,7 @@ impl MergePlan {
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
         let object_store = log_store.object_store(Some(operation_id));
-        let ffo = file_format_options.clone();
+        let ffo = snapshot.load_config().file_format_options.clone();
 
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
@@ -685,16 +674,15 @@ impl MergePlan {
                             async move {
                                 let decrypt: Option<FileDecryptionProperties> =
                                     match &file_format_options {
-                                        Some(ffo) => get_file_decryption_properties(
-                                            ffo,
-                                            &meta.location,
-                                        )
-                                        .await
-                                        .map_err(|e| {
-                                            ParquetError::General(format!(
+                                        Some(ffo) => {
+                                            get_file_decryption_properties(ffo, &meta.location)
+                                                .await
+                                                .map_err(|e| {
+                                                    ParquetError::General(format!(
                                                 "Error getting file decryption properties: {e}"
                                             ))
-                                        })?,
+                                                })?
+                                        }
                                         None => None,
                                     };
                                 let file_reader =
@@ -787,11 +775,8 @@ impl MergePlan {
 
         let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
-        let mut table = DeltaTable::new_with_state(
-            log_store.clone(),
-            DeltaTableState::new(snapshot.clone()),
-            file_format_options.clone(),
-        );
+        let mut table =
+            DeltaTable::new_with_state(log_store.clone(), DeltaTableState::new(snapshot.clone()));
 
         // Actions buffered so far. These will be flushed either at the end
         // or when we reach the commit interval.
@@ -885,7 +870,7 @@ pub async fn create_merge_plan(
     snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
     target_size: Option<u64>,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     state: Option<SessionState>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =

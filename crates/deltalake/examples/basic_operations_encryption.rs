@@ -91,7 +91,10 @@ async fn ops_with_crypto(
     let prefix_uri = format!("file://{}", uri);
     let url = Url::parse(&*prefix_uri).unwrap();
     let ops = DeltaOps::try_from_uri(url).await?;
-    Ok(ops.with_file_format_options(file_format_options.clone()))
+    let ops = ops
+        .with_file_format_options(file_format_options.clone())
+        .await?;
+    Ok(ops)
 }
 
 async fn create_table(
@@ -133,7 +136,6 @@ async fn read_table(uri: &str, file_format_options: &FileFormatRef) -> Result<()
     let (_table, stream) = ops.load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
-    // println!("{data:?}");
     let formatted = format_batches(&*data)?.to_string();
     println!("Final table:");
     println!("{}", formatted);
@@ -235,8 +237,6 @@ async fn merge_table(
 
     let (_table, stream) = DeltaOps(table).load().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
-
-    // println!("{data:?}");
 
     assert_batches_sorted_eq!(&expected, &data);
     Ok(())

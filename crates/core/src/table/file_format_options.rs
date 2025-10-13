@@ -26,7 +26,7 @@ pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
     #[cfg(feature = "datafusion")]
     fn table_options(&self) -> TableOptions;
 
-    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory>;
+    fn writer_properties_factory(&self) -> WriterPropertiesFactoryRef;
 
     #[cfg(feature = "datafusion")]
     fn update_session(&self, _session: &dyn Session) -> DeltaResult<()> {
@@ -37,6 +37,9 @@ pub trait FileFormatOptions: Send + Sync + std::fmt::Debug + 'static {
 
 /// Convenience alias for file format options reference used across the codebase
 pub type FileFormatRef = Arc<dyn FileFormatOptions>;
+
+/// Convenience alias for writer properties factory reference used across the codebase
+pub type WriterPropertiesFactoryRef = Arc<dyn WriterPropertiesFactory>;
 
 #[cfg(feature = "datafusion")]
 #[derive(Clone, Debug, Default)]
@@ -57,20 +60,20 @@ impl FileFormatOptions for SimpleFileFormatOptions {
         self.table_options.clone()
     }
 
-    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
+    fn writer_properties_factory(&self) -> WriterPropertiesFactoryRef {
         build_writer_properties_factory_tpo(&Some(self.table_options.parquet.clone())).unwrap()
     }
 }
 
 pub fn build_writer_properties_factory_ffo(
     file_format_options: Option<FileFormatRef>,
-) -> Option<Arc<dyn WriterPropertiesFactory>> {
+) -> Option<WriterPropertiesFactoryRef> {
     file_format_options.map(|ffo| ffo.writer_properties_factory())
 }
 
 pub fn build_writer_properties_factory_or_default_ffo(
     file_format_options: Option<FileFormatRef>,
-) -> Arc<dyn WriterPropertiesFactory> {
+) -> WriterPropertiesFactoryRef {
     build_writer_properties_factory_ffo(file_format_options)
         .unwrap_or_else(|| build_writer_properties_factory_default())
 }
@@ -97,34 +100,34 @@ pub fn state_with_file_format_options(
 fn build_writer_properties_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
 ) -> Option<WriterProperties> {
-    use datafusion::common::file_options::parquet_writer::ParquetWriterOptions;
     table_parquet_options.as_ref().map(|tpo| {
         let mut tpo = tpo.clone();
         tpo.global.skip_arrow_metadata = true;
-        ParquetWriterOptions::try_from(&tpo)
-            .expect("Failed to convert TableParquetOptions to ParquetWriterOptions")
-            .writer_options()
-            .clone()
+        let mut wp_build = WriterPropertiesBuilder::try_from(&tpo)
+            .expect("Failed to convert TableParquetOptions to ParquetWriterOptions");
+        if tpo.crypto.file_encryption.is_some() {
+            wp_build = wp_build
+                .with_file_encryption_properties(tpo.crypto.file_encryption.unwrap().into());
+        }
+        wp_build.build()
     })
 }
 
 #[cfg(feature = "datafusion")]
 fn build_writer_properties_factory_tpo(
     table_parquet_options: &Option<TableParquetOptions>,
-) -> Option<Arc<dyn WriterPropertiesFactory>> {
+) -> Option<WriterPropertiesFactoryRef> {
     let props = build_writer_properties_tpo(table_parquet_options);
-    props.map(|wp| {
-        Arc::new(SimpleWriterPropertiesFactory::new(wp)) as Arc<dyn WriterPropertiesFactory>
-    })
+    props.map(|wp| Arc::new(SimpleWriterPropertiesFactory::new(wp)) as WriterPropertiesFactoryRef)
 }
 
 pub fn build_writer_properties_factory_wp(
     writer_properties: WriterProperties,
-) -> Arc<dyn WriterPropertiesFactory> {
+) -> WriterPropertiesFactoryRef {
     Arc::new(SimpleWriterPropertiesFactory::new(writer_properties))
 }
 
-pub fn build_writer_properties_factory_default() -> Arc<dyn WriterPropertiesFactory> {
+pub fn build_writer_properties_factory_default() -> WriterPropertiesFactoryRef {
     Arc::new(SimpleWriterPropertiesFactory::default())
 }
 
@@ -225,7 +228,7 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
 #[cfg(feature = "datafusion")]
 pub struct KmsFileFormatOptions {
     table_encryption: TableEncryption,
-    writer_properties_factory: Arc<dyn WriterPropertiesFactory>,
+    writer_properties_factory: WriterPropertiesFactoryRef,
     encryption_factory_id: String,
 }
 
@@ -262,7 +265,7 @@ impl FileFormatOptions for KmsFileFormatOptions {
         table_options
     }
 
-    fn writer_properties_factory(&self) -> Arc<dyn WriterPropertiesFactory> {
+    fn writer_properties_factory(&self) -> WriterPropertiesFactoryRef {
         Arc::clone(&self.writer_properties_factory)
     }
 

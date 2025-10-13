@@ -54,6 +54,11 @@ pub struct DeltaTableConfig {
 
     #[serde(skip_serializing, skip_deserializing)]
     #[delta(skip)]
+    /// Options to apply when operating on the table files
+    pub file_format_options: Option<FileFormatRef>,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
 }
@@ -64,6 +69,7 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
+            file_format_options: None,
             io_runtime: None,
         }
     }
@@ -91,8 +97,6 @@ pub struct DeltaTableBuilder {
     #[allow(unused_variables)]
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
-    /// options to apply when operating on the table files
-    file_format_options: Option<FileFormatRef>,
 }
 
 impl DeltaTableBuilder {
@@ -121,7 +125,6 @@ impl DeltaTableBuilder {
             storage_options: None,
             allow_http: None,
             table_config: DeltaTableConfig::default(),
-            file_format_options: None,
         })
     }
 
@@ -171,10 +174,14 @@ impl DeltaTableBuilder {
             storage_options: None,
             allow_http: None,
             table_config: DeltaTableConfig::default(),
-            file_format_options: None,
         })
     }
 
+    /// Sets the overall table configuration
+    pub fn with_table_config(mut self, table_config: DeltaTableConfig) -> Self {
+        self.table_config = table_config;
+        self
+    }
     /// Sets `require_files=false` to the builder
     pub fn without_files(mut self) -> Self {
         self.table_config.require_files = false;
@@ -272,7 +279,7 @@ impl DeltaTableBuilder {
 
     /// Set the file options to use when reading/writing individual files in the table.
     pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
-        self.file_format_options = Some(file_format_options);
+        self.table_config.file_format_options = Some(file_format_options);
         self
     }
 
@@ -321,11 +328,7 @@ impl DeltaTableBuilder {
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
     pub fn build(self) -> DeltaResult<DeltaTable> {
-        Ok(DeltaTable::new(
-            self.build_storage()?,
-            self.table_config,
-            self.file_format_options,
-        ))
+        Ok(DeltaTable::new(self.build_storage()?, self.table_config))
     }
 
     /// Build the [`DeltaTable`] and load its state

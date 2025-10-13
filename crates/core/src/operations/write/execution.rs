@@ -34,7 +34,7 @@ use datafusion::logical_expr::col;
 
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::{WriteError, WriterStatsConfig};
-use crate::table::file_format_options::{FileFormatRef, WriterPropertiesFactory};
+use crate::table::file_format_options::{FileFormatRef, WriterPropertiesFactoryRef};
 
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {
@@ -51,7 +51,7 @@ pub(crate) async fn write_execution_plan_cdc(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
@@ -98,7 +98,7 @@ pub(crate) async fn write_execution_plan(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
@@ -126,7 +126,7 @@ pub(crate) async fn execute_non_empty_expr(
     partition_columns: Vec<String>,
     expression: &Expr,
     rewrite: &[Add],
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
@@ -204,7 +204,7 @@ pub(crate) async fn prepare_predicate_actions(
     state: SessionState,
     partition_columns: Vec<String>,
     file_format_options: Option<&FileFormatRef>,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
@@ -260,7 +260,7 @@ pub(crate) async fn write_execution_plan_v2(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties_factory: Option<Arc<dyn WriterPropertiesFactory>>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,

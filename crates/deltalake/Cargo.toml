@@ -58,11 +58,8 @@ rustls = ["deltalake-core/rustls"]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 tracing = { workspace = true }
-object_store = { workspace = true }
-async-trait = { workspace = true }
 tempfile = "3.21.0"
 parquet-key-management = { version = "0.4.0", features = ["_test_utils", "datafusion"] }
-uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 
 [[example]]
