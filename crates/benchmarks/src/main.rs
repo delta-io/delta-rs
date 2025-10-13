@@ -1,10 +1,12 @@
 use std::{path::PathBuf, time::Instant};
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use delta_benchmarks::{
-    merge_delete, merge_insert, merge_upsert, prepare_source_and_table, MergeOp, MergePerfParams,
+    merge_delete, merge_insert, merge_upsert, prepare_source_and_table, run_smoke_once, MergeOp,
+    MergePerfParams, SmokeParams,
 };
+use deltalake_core::ensure_table_uri;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum OpKind {
@@ -14,53 +16,103 @@ enum OpKind {
 }
 
 #[derive(Parser, Debug)]
-#[command(about = "Run a merge benchmark with configurable parameters")]
+#[command(about = "Run delta-rs benchmarks")]
 struct Cli {
-    /// Operation to benchmark
-    #[arg(value_enum)]
-    op: OpKind,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// Fraction of rows that match an existing key (0.0-1.0)
-    #[arg(long, default_value_t = 0.01)]
-    matched: f32,
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Run a merge benchmark with configurable parameters
+    Merge {
+        /// Operation to benchmark
+        #[arg(value_enum)]
+        op: OpKind,
 
-    /// Fraction of rows that do not match (0.0-1.0)
-    #[arg(long, default_value_t = 0.10)]
-    not_matched: f32,
+        /// Fraction of rows that match an existing key (0.0-1.0)
+        #[arg(long, default_value_t = 0.01)]
+        matched: f32,
+
+        /// Fraction of rows that do not match (0.0-1.0)
+        #[arg(long, default_value_t = 0.10)]
+        not_matched: f32,
+    },
+
+    /// Run the smoke workload to validate delta-rs read/write operations
+    Smoke {
+        /// Number of rows to write into the smoke table
+        #[arg(long, default_value_t = 2)]
+        rows: usize,
+
+        /// Optional table path to reuse for the smoke run (defaults to a temporary directory)
+        #[arg(long)]
+        table_path: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let op_fn: MergeOp = match cli.op {
-        OpKind::Upsert => merge_upsert,
-        OpKind::Delete => merge_delete,
-        OpKind::Insert => merge_insert,
-    };
+    match cli.command {
+        Command::Merge {
+            op,
+            matched,
+            not_matched,
+        } => {
+            let op_fn: MergeOp = match op {
+                OpKind::Upsert => merge_upsert,
+                OpKind::Delete => merge_delete,
+                OpKind::Insert => merge_insert,
+            };
 
-    let params = MergePerfParams {
-        sample_matched_rows: cli.matched,
-        sample_not_matched_rows: cli.not_matched,
-    };
+            let params = MergePerfParams {
+                sample_matched_rows: matched,
+                sample_not_matched_rows: not_matched,
+            };
 
-    let tmp_dir = tempfile::tempdir().expect("create tmp dir");
+            let tmp_dir = tempfile::tempdir()?;
 
-    let parquet_dir = PathBuf::from(
-        std::env::var("TPCDS_PARQUET_DIR")
-            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
-    );
+            let parquet_dir = PathBuf::from(
+                std::env::var("TPCDS_PARQUET_DIR")
+                    .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
+            );
 
-    let (source, table) = prepare_source_and_table(&params, &tmp_dir, &parquet_dir)
-        .await
-        .expect("prepare inputs");
+            let (source, table) = prepare_source_and_table(&params, &tmp_dir, &parquet_dir).await?;
 
-    let start = Instant::now();
-    let (_table, metrics) = op_fn(source, table)
-        .expect("build merge")
-        .await
-        .expect("execute merge");
-    let elapsed = start.elapsed();
+            let start = Instant::now();
+            let (_table, metrics) = op_fn(source, table)?.await?;
+            let elapsed = start.elapsed();
 
-    println!("duration_ms={} metrics={:?}", elapsed.as_millis(), metrics)
+            println!(
+                "merge_duration_ms={} metrics={:?}",
+                elapsed.as_millis(),
+                metrics
+            );
+        }
+        Command::Smoke { rows, table_path } => {
+            let params = SmokeParams { rows };
+            let (table_url, _guard) = match table_path {
+                Some(path) => (ensure_table_uri(path.to_string_lossy().as_ref())?, None),
+                None => {
+                    let dir = tempfile::tempdir()?;
+                    let url = ensure_table_uri(dir.path().to_string_lossy().as_ref())?;
+                    (url, Some(dir))
+                }
+            };
+
+            let start = Instant::now();
+            run_smoke_once(&table_url, &params).await?;
+            let elapsed = start.elapsed();
+
+            println!(
+                "smoke_duration_ms={} table_uri={}",
+                elapsed.as_millis(),
+                table_url
+            );
+        }
+    }
+
+    Ok(())
 }
