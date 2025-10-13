@@ -244,7 +244,7 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, bytes).await?;
+                let actions = get_actions(winning_commit_version, &bytes).await?;
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))
@@ -473,11 +473,7 @@ impl<'a> ConflictChecker<'a> {
                     &self.txn_info.read_predicates,
                     self.txn_info.read_whole_table(),
                 ) {
-                    let arrow_schema = self.txn_info.read_snapshot.arrow_schema().map_err(|err| {
-                        CommitConflictError::CorruptedState {
-                            source: Box::new(err),
-                        }
-                    })?;
+                    let arrow_schema = self.txn_info.read_snapshot.read_schema();
                     let partition_columns = &self
                         .txn_info
                         .read_snapshot

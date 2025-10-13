@@ -27,6 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use datafusion::catalog::Session;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::memory_pool::FairSpillPool;
@@ -227,7 +228,7 @@ pub struct OptimizeBuilder<'a> {
     /// Optimize type
     optimize_type: OptimizeType,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    session: Option<Arc<dyn Session>>,
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -269,7 +270,7 @@ impl<'a> OptimizeBuilder<'a> {
             max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
-            state: None,
+            session: None,
             custom_execute_handler: None,
         }
     }
@@ -339,9 +340,9 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// A session state accompanying a given input plan, containing e.g. registered object stores
-    pub fn with_input_session_state(mut self, state: SessionState) -> Self {
-        self.state = Some(state);
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 }
@@ -360,7 +361,20 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
-
+            let session = this
+                .session
+                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    let memory_pool = FairSpillPool::new(this.max_spill_size);
+                    let runtime = RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::new(memory_pool))
+                        .build_arc()
+                        .unwrap();
+                    SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_runtime_env(runtime)
+                        .build()
+                });
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -368,7 +382,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 this.writer_properties_factory,
-                this.state,
+                session,
             )
             .await?;
 
@@ -377,7 +391,6 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     this.log_store.clone(),
                     &this.snapshot,
                     this.max_concurrent_tasks,
-                    this.max_spill_size,
                     this.min_commit_interval,
                     this.commit_properties.clone(),
                     operation_id,
@@ -464,7 +477,7 @@ enum OptimizeOperations {
     ZOrder(
         Vec<String>,
         HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
-        Box<Option<SessionState>>,
+        Box<SessionState>,
     ),
     // TODO: Sort
 }
@@ -635,19 +648,19 @@ impl MergePlan {
 
     /// Perform the operations outlined in the plan.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(operation = "optimize", version = snapshot.version()))]
     pub async fn execute(
         mut self,
         log_store: LogStoreRef,
         snapshot: &EagerSnapshot,
         max_concurrent_tasks: usize,
-        #[allow(unused_variables)] // used behind a feature flag
-        max_spill_size: usize,
         min_commit_interval: Option<Duration>,
         commit_properties: CommitProperties,
         operation_id: Uuid,
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
+        info!("starting optimize execution");
         let object_store = log_store.object_store(Some(operation_id));
         let ffo = snapshot.load_config().file_format_options.clone();
 
@@ -716,22 +729,9 @@ impl MergePlan {
             OptimizeOperations::ZOrder(zorder_columns, bins, state) => {
                 debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
 
-                let state = if let Some(state) = *state {
-                    state
-                } else {
-                    let memory_pool = FairSpillPool::new(max_spill_size);
-                    let runtime = RuntimeEnvBuilder::new()
-                        .with_memory_pool(Arc::new(memory_pool))
-                        .build_arc()?;
-                    SessionStateBuilder::new()
-                        .with_default_features()
-                        .with_runtime_env(runtime)
-                        .build()
-                };
-
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
-                    state,
+                    *state,
                     object_store,
                 )?);
                 let task_parameters = self.task_parameters.clone();
@@ -742,7 +742,7 @@ impl MergePlan {
 
                 let scan_config = DeltaScanConfigBuilder::default()
                     .with_file_column(false)
-                    .with_schema(snapshot.input_schema()?)
+                    .with_schema(snapshot.input_schema())
                     .build(snapshot)?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
@@ -864,6 +864,7 @@ impl MergePlan {
 }
 
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
+#[instrument(skip_all, fields(operation = "create_merge_plan", version = snapshot.version()))]
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
@@ -871,7 +872,7 @@ pub async fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties_factory: Option<WriterPropertiesFactoryRef>,
-    state: Option<SessionState>,
+    session: Option<SessionState>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
         target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());
@@ -879,27 +880,35 @@ pub async fn create_merge_plan(
 
     let (operations, metrics) = match optimize_type {
         OptimizeType::Compact => {
+            info!("building compaction plan");
             build_compaction_plan(log_store, snapshot, filters, target_size).await?
         }
         OptimizeType::ZOrder(zorder_columns) => {
+            info!("building z-order plan");
             build_zorder_plan(
                 log_store,
                 zorder_columns,
                 snapshot,
                 partitions_keys,
                 filters,
-                state,
+                session,
             )
             .await?
         }
     };
+
+    info!(
+        partitions_optimized = metrics.partitions_optimized,
+        total_considered_files = metrics.total_considered_files,
+        "merge plan created"
+    );
 
     let input_parameters = OptimizeInput {
         target_size,
         predicate: serde_json::to_string(filters).ok(),
     };
     let file_schema = arrow_schema_without_partitions(
-        &Arc::new(snapshot.schema().try_into_arrow()?),
+        &Arc::new(snapshot.schema().as_ref().try_into_arrow()?),
         partitions_keys,
     );
 
@@ -1049,7 +1058,7 @@ async fn build_zorder_plan(
     snapshot: &EagerSnapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
-    state: Option<SessionState>,
+    session: SessionState,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1106,7 +1115,7 @@ async fn build_zorder_plan(
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
-    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(state));
+    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(session));
     Ok((operation, metrics))
 }
 
@@ -1191,12 +1200,12 @@ pub(super) mod zorder {
         impl ZOrderExecContext {
             pub fn new(
                 columns: Vec<String>,
-                session_state: SessionState,
+                session: SessionState,
                 object_store_ref: ObjectStoreRef,
             ) -> Result<Self, DataFusionError> {
                 let columns = columns.into();
 
-                let ctx = SessionContext::new_with_state(session_state);
+                let ctx = SessionContext::new_with_state(session);
                 ctx.register_udf(ScalarUDF::from(datafusion::ZOrderUDF));
                 ctx.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store_ref);
                 Ok(Self { columns, ctx })

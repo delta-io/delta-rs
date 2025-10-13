@@ -69,7 +69,7 @@ tokio = { workspace = true, features = [
 
 # caching
 foyer = { version = "0.20.0", optional = true, features = ["serde"] }
-tempfile = { version = "3.19.1", optional = true }
+tempfile = { workspace = true, optional = true }
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
@@ -80,6 +80,7 @@ indexmap = "2.2.1"
 itertools = "0.14"
 parking_lot = "0.12"
 percent-encoding = "2"
+pin-project-lite = "^0.2.7"
 tracing = { workspace = true }
 rand = "0.8"
 sqlparser = { version = "0.59.0" }
@@ -89,7 +90,7 @@ validator = { version = "0.19", features = ["derive"] }
 [dev-dependencies]
 criterion = "0.5"
 ctor = "0"
-datatest-stable = "0.2"
+datatest-stable = "0.3"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
@@ -99,8 +100,9 @@ pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }
 serial_test = "3"
-tempfile = "3"
+tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
@@ -168,6 +170,10 @@ required-features = ["datafusion"]
 [[test]]
 name = "read_delta_partitions_test"
 required-features = ["datafusion"]
+
+[[bench]]
+name = "json_parsing"
+harness = false
 
 [package.metadata.cargo-machete]
 ignored = ["foyer"]

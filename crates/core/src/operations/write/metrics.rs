@@ -17,6 +17,12 @@ pub(crate) const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 #[derive(Clone, Debug)]
 pub(crate) struct WriteMetricExtensionPlanner {}
 
+impl WriteMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
+
 #[async_trait]
 impl ExtensionPlanner for WriteMetricExtensionPlanner {
     async fn plan_extension(

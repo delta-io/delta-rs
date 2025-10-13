@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 use object_store::ObjectStore;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use tracing::*;
 use url::{ParseError, Url};
 use uuid::Uuid;
 
@@ -141,7 +142,7 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-        let file_stream = self.snapshot.log_data().iter().map(|f| f.add_action());
+        let file_stream = self.snapshot.log_data().into_iter().map(|f| f.add_action());
         for active in file_stream {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
@@ -153,15 +154,24 @@ impl FileSystemCheckBuilder {
         }
 
         let object_store = log_store.object_store(None);
-        let mut files = object_store.list(None);
+        let list_span = info_span!("list_files", operation = "filesystem_check");
+        let mut files = list_span.in_scope(|| object_store.list(None));
+
+        let mut file_count = 0;
         while let Some(result) = files.next().await {
             let file = result?;
+            file_count += 1;
             files_relative.remove(file.location.as_ref());
 
             if files_relative.is_empty() {
                 break;
             }
         }
+        info!(
+            files_scanned = file_count,
+            missing_files = files_relative.len(),
+            "filesystem check listing completed"
+        );
 
         let files_to_remove: Vec<Add> = files_relative
             .into_values()

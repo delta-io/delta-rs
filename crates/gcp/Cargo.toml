@@ -31,7 +31,7 @@ deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
 rand = "0.8"
 serde_json = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 
 [features]
 integration_test = []

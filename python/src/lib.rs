@@ -6,6 +6,7 @@ mod merge;
 mod query;
 mod reader;
 mod schema;
+mod tracing_otlp;
 mod utils;
 mod writer;
 
@@ -27,8 +28,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, StructType,
-    Transaction,
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -469,7 +469,7 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let schema: StructType = self.with_table(|t| {
+        let schema = self.with_table(|t| {
             let snapshot = t
                 .snapshot()
                 .map_err(PythonError::from)
@@ -504,7 +504,7 @@ impl RawDeltaTable {
                     .map_err(PyErr::from),
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }?;
-            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot)
+            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot.snapshot().clone())
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
 
@@ -1269,7 +1269,7 @@ impl RawDeltaTable {
                     }
 
                     // Update metadata with new schema
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         let mut metadata = self.with_table(|t| {
                             let snapshot = t
                                 .snapshot()
@@ -1286,7 +1286,7 @@ impl RawDeltaTable {
                 }
                 _ => {
                     // This should be unreachable from Python
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
                     }
                 }
@@ -1456,7 +1456,7 @@ impl RawDeltaTable {
                 .block_on(async {
                     t.snapshot()?
                         .snapshot()
-                        .files(&log_store, None)
+                        .file_views(&log_store, None)
                         .map_ok(|f| (f.path().to_string(), f.size()))
                         .try_collect()
                         .await
@@ -2158,6 +2158,21 @@ fn rust_core_version() -> &'static str {
     deltalake::crate_version()
 }
 
+/// Initialize OpenTelemetry tracing with OTLP exporter
+#[pyfunction]
+#[pyo3(signature = (endpoint=None))]
+fn init_tracing(endpoint: Option<&str>) -> PyResult<()> {
+    tracing_otlp::init_otlp_tracing(endpoint)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize tracing: {}", e)))
+}
+
+/// Shutdown OpenTelemetry tracing and flush remaining spans
+#[pyfunction]
+fn shutdown_tracing() -> PyResult<()> {
+    tracing_otlp::shutdown_tracing();
+    Ok(())
+}
+
 fn current_timestamp() -> i64 {
     let start = SystemTime::now();
     let since_the_epoch = start
@@ -2567,6 +2582,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(init_tracing, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;

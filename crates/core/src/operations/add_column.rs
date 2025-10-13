@@ -95,7 +95,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
             }
 
             let table_schema = this.snapshot.schema();
-            let new_table_schema = merge_delta_struct(table_schema, fields_right)?;
+            let new_table_schema = merge_delta_struct(table_schema.as_ref(), fields_right)?;
 
             let current_protocol = this.snapshot.protocol();
 

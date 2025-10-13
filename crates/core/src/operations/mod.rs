@@ -280,7 +280,7 @@ impl DeltaOps {
     /// Vacuum stale files from delta table
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
-        VacuumBuilder::new(self.0.log_store, self.0.state.unwrap())
+        VacuumBuilder::new(self.0.log_store, self.0.state.unwrap().snapshot)
     }
 
     /// Audit active files with files present on the filesystem
@@ -451,9 +451,8 @@ pub(crate) fn get_target_file_size(
 
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
-    use datafusion::common::DFSchema;
-    use datafusion::execution::context::SessionState;
     use datafusion::logical_expr::Expr;
+    use datafusion::{catalog::Session, common::DFSchema};
 
     use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
 
@@ -486,21 +485,21 @@ mod datafusion_utils {
     pub(crate) fn into_expr(
         expr: Expression,
         schema: &DFSchema,
-        df_state: &SessionState,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         match expr {
             Expression::DataFusion(expr) => Ok(expr),
-            Expression::String(s) => parse_predicate_expression(schema, s, df_state),
+            Expression::String(s) => parse_predicate_expression(schema, s, session),
         }
     }
 
     pub(crate) fn maybe_into_expr(
         expr: Option<Expression>,
         schema: &DFSchema,
-        df_state: &SessionState,
+        session: &dyn Session,
     ) -> DeltaResult<Option<Expr>> {
         Ok(match expr {
-            Some(predicate) => Some(into_expr(predicate, schema, df_state)?),
+            Some(predicate) => Some(into_expr(predicate, schema, session)?),
             None => None,
         })
     }
