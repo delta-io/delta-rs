@@ -30,6 +30,7 @@ static CHECKPOINT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
 
 /// Creates checkpoint for a given table version, table state and object store
+#[tracing::instrument(skip(log_store), fields(operation = "checkpoint", version = version, table_uri = %log_store.root_uri()))]
 pub(crate) async fn create_checkpoint_for(
     version: u64,
     log_store: &dyn LogStore,

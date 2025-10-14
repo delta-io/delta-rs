@@ -198,7 +198,6 @@ mod tests {
 
     use super::*;
     use crate::table::PeekCommit;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn read_delta_2_0_table_without_version() {

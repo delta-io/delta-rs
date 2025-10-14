@@ -4,14 +4,16 @@ use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
+use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{col, Expr, Volatility};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::ExecutionPlan;
 use itertools::Itertools;
+use tracing::*;
 
 use crate::delta_datafusion::{
     df_logical_schema, get_path_column, DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN,
@@ -30,10 +32,19 @@ pub(crate) struct FindFiles {
 }
 
 /// Finds files in a snapshot that match the provided predicate.
+#[instrument(
+    skip_all,
+    fields(
+        version = snapshot.version(),
+        has_predicate = predicate.is_some(),
+        partition_scan = field::Empty,
+        candidate_count = field::Empty
+    )
+)]
 pub(crate) async fn find_files(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    session: &dyn Session,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
@@ -52,24 +63,35 @@ pub(crate) async fn find_files(
 
             if expr_properties.partition_only {
                 let candidates = scan_memory_table(snapshot, predicate).await?;
-                Ok(FindFiles {
+                let result = FindFiles {
                     candidates,
                     partition_scan: true,
-                })
+                };
+                Span::current().record("partition_scan", result.partition_scan);
+                Span::current().record("candidate_count", result.candidates.len());
+                Ok(result)
             } else {
                 let candidates =
-                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
+                    find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
 
-                Ok(FindFiles {
+                let result = FindFiles {
                     candidates,
                     partition_scan: false,
-                })
+                };
+                Span::current().record("partition_scan", result.partition_scan);
+                Span::current().record("candidate_count", result.candidates.len());
+                Ok(result)
             }
         }
-        None => Ok(FindFiles {
-            candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
-            partition_scan: true,
-        }),
+        None => {
+            let result = FindFiles {
+                candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
+                partition_scan: true,
+            };
+            Span::current().record("partition_scan", result.partition_scan);
+            Span::current().record("candidate_count", result.candidates.len());
+            Ok(result)
+        }
     }
 }
 
@@ -187,18 +209,31 @@ fn join_batches_with_add_actions(
 }
 
 /// Determine which files contain a record that satisfies the predicate
+#[instrument(
+    skip_all,
+    fields(
+        version = snapshot.version(),
+        total_files = field::Empty,
+        matching_files = field::Empty
+    )
+)]
 async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    state: &SessionState,
+    session: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
         .log_data()
         .iter()
         .map(|f| f.add_action())
-        .map(|add| (add.path.clone(), add.to_owned()))
+        .map(|add| {
+            let path = add.path.clone();
+            (path, add)
+        })
         .collect();
+
+    Span::current().record("total_files", candidate_map.len());
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
@@ -215,7 +250,7 @@ async fn find_files_scan(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let scan = DeltaScanBuilder::new(snapshot, log_store, state)
+    let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))
         .with_projection(Some(&used_columns))
         .with_scan_config(scan_config)
@@ -224,25 +259,27 @@ async fn find_files_scan(
     let scan = Arc::new(scan);
 
     let config = &scan.config;
-    let input_schema = scan.logical_schema.as_ref().to_owned();
-    let input_dfschema = input_schema.clone().try_into()?;
+    let input_dfschema = scan.logical_schema.as_ref().to_owned().try_into()?;
 
-    let predicate_expr =
-        state.create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
+    let predicate_expr = session
+        .create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
 
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
-    let task_ctx = Arc::new(TaskContext::from(state));
+    let task_ctx = Arc::new(TaskContext::from(session));
     let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
 
-    join_batches_with_add_actions(
+    let result = join_batches_with_add_actions(
         path_batches,
         candidate_map,
         config.file_column_name.as_ref().unwrap(),
         true,
-    )
+    )?;
+
+    Span::current().record("matching_files", result.len());
+    Ok(result)
 }
 
 async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
@@ -294,7 +331,10 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
 
     let map = actions
         .into_iter()
-        .map(|action| (action.path.clone(), action))
+        .map(|action| {
+            let path = action.path.clone();
+            (path, action)
+        })
         .collect::<HashMap<String, Add>>();
 
     join_batches_with_add_actions(batches, map, PATH_COLUMN, false)

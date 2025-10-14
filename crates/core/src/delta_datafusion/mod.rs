@@ -41,7 +41,7 @@ use datafusion::common::{
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::context::{SessionConfig, SessionContext, SessionState};
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -125,7 +125,7 @@ pub trait DataFusionMixins {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        df_state: &SessionState,
+        session: &impl Session,
     ) -> DeltaResult<Expr>;
 }
 
@@ -149,10 +149,10 @@ impl DataFusionMixins for Snapshot {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        df_state: &SessionState,
+        session: &impl Session,
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
-        parse_predicate_expression(&schema, expr, df_state)
+        parse_predicate_expression(&schema, expr, session)
     }
 }
 
@@ -188,10 +188,10 @@ impl DataFusionMixins for LogDataHandler<'_> {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        df_state: &SessionState,
+        session: &impl Session,
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
-        parse_predicate_expression(&schema, expr, df_state)
+        parse_predicate_expression(&schema, expr, session)
     }
 }
 
@@ -207,9 +207,9 @@ impl DataFusionMixins for EagerSnapshot {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        df_state: &SessionState,
+        session: &impl Session,
     ) -> DeltaResult<Expr> {
-        self.snapshot().parse_predicate_expression(expr, df_state)
+        self.snapshot().parse_predicate_expression(expr, session)
     }
 }
 
@@ -302,7 +302,7 @@ impl DeltaTableState {
 
 // each delta table must register a specific object store, since paths are internally
 // handled relative to the table root.
-pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
+pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
     env.register_object_store(url, store.object_store(None));
