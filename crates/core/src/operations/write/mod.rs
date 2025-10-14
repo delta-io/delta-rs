@@ -448,7 +448,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     .session
                     .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
                     .map(SessionStateBuilder::new_from_existing)
-                    .unwrap_or_default()
+                    .unwrap_or_else(SessionStateBuilder::new_with_default_features)
                     .with_query_planner(write_planner)
                     .build();
                 register_store(this.log_store.clone(), session.runtime_env().as_ref());
