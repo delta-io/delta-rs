@@ -3,8 +3,8 @@ use std::{path::PathBuf, time::Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use delta_benchmarks::{
-    merge_delete, merge_insert, merge_upsert, prepare_source_and_table, run_smoke_once, MergeOp,
-    MergePerfParams, SmokeParams,
+    merge_case_by_name, merge_case_names, merge_delete, merge_insert, merge_upsert,
+    prepare_source_and_table, run_smoke_once, MergeOp, MergePerfParams, MergeTestCase, SmokeParams,
 };
 use deltalake_core::ensure_table_uri;
 
@@ -28,7 +28,7 @@ enum Command {
     Merge {
         /// Operation to benchmark
         #[arg(value_enum)]
-        op: OpKind,
+        op: Option<OpKind>,
 
         /// Fraction of rows that match an existing key (0.0-1.0)
         #[arg(long, default_value_t = 0.01)]
@@ -37,6 +37,10 @@ enum Command {
         /// Fraction of rows that do not match (0.0-1.0)
         #[arg(long, default_value_t = 0.10)]
         not_matched: f32,
+
+        /// Named test case to run (overrides manual parameters)
+        #[arg(long)]
+        case: Option<String>,
     },
 
     /// Run the smoke workload to validate delta-rs read/write operations
@@ -60,36 +64,36 @@ async fn main() -> anyhow::Result<()> {
             op,
             matched,
             not_matched,
+            case,
         } => {
-            let op_fn: MergeOp = match op {
-                OpKind::Upsert => merge_upsert,
-                OpKind::Delete => merge_delete,
-                OpKind::Insert => merge_insert,
-            };
+            if let Some(case_name) = case.as_deref() {
+                let merge_case = merge_case_by_name(case_name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unknown merge case '{}'. Available cases: {}",
+                        case_name,
+                        merge_case_names().join(", ")
+                    )
+                })?;
 
-            let params = MergePerfParams {
-                sample_matched_rows: matched,
-                sample_not_matched_rows: not_matched,
-            };
+                run_merge_case(merge_case).await?;
+            } else {
+                let op = op.ok_or_else(|| {
+                    anyhow::anyhow!("specify an operation (upsert/delete/insert) or provide --case")
+                })?;
 
-            let tmp_dir = tempfile::tempdir()?;
+                let op_fn: MergeOp = match op {
+                    OpKind::Upsert => merge_upsert,
+                    OpKind::Delete => merge_delete,
+                    OpKind::Insert => merge_insert,
+                };
 
-            let parquet_dir = PathBuf::from(
-                std::env::var("TPCDS_PARQUET_DIR")
-                    .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
-            );
+                let params = MergePerfParams {
+                    sample_matched_rows: matched,
+                    sample_not_matched_rows: not_matched,
+                };
 
-            let (source, table) = prepare_source_and_table(&params, &tmp_dir, &parquet_dir).await?;
-
-            let start = Instant::now();
-            let (_table, metrics) = op_fn(source, table)?.await?;
-            let elapsed = start.elapsed();
-
-            println!(
-                "merge_duration_ms={} metrics={:?}",
-                elapsed.as_millis(),
-                metrics
-            );
+                run_merge_with_params(op_fn, &params).await?;
+            }
         }
         Command::Smoke { rows, table_path } => {
             let params = SmokeParams { rows };
@@ -113,6 +117,52 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
+
+    Ok(())
+}
+
+async fn run_merge_with_params(op_fn: MergeOp, params: &MergePerfParams) -> anyhow::Result<()> {
+    let tmp_dir = tempfile::tempdir()?;
+    let parquet_dir = PathBuf::from(
+        std::env::var("TPCDS_PARQUET_DIR")
+            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
+    );
+
+    let (source, table) = prepare_source_and_table(params, &tmp_dir, &parquet_dir).await?;
+
+    let start = Instant::now();
+    let (_table, metrics) = op_fn(source, table)?.await?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "merge_duration_ms={} metrics={:?}",
+        elapsed.as_millis(),
+        metrics
+    );
+
+    Ok(())
+}
+
+async fn run_merge_case(case: &MergeTestCase) -> anyhow::Result<()> {
+    let tmp_dir = tempfile::tempdir()?;
+    let parquet_dir = PathBuf::from(
+        std::env::var("TPCDS_PARQUET_DIR")
+            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
+    );
+
+    let (source, table) = prepare_source_and_table(&case.params, &tmp_dir, &parquet_dir).await?;
+
+    let start = Instant::now();
+    let (_table, metrics) = case.execute(source, table).await?;
+    case.validate(&metrics)?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "merge_case={} merge_duration_ms={} metrics={:?}",
+        case.name,
+        elapsed.as_millis(),
+        metrics
+    );
 
     Ok(())
 }
