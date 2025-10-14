@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use delta_benchmarks::{
     merge_case_by_name, merge_case_names, merge_delete, merge_insert, merge_upsert,
-    prepare_source_and_table, run_smoke_once, MergeOp, MergePerfParams, MergeTestCase, SmokeParams,
+    prepare_source_and_table, register_tpcds_tables, run_smoke_once, tpcds_queries, tpcds_query,
+    MergeOp, MergePerfParams, MergeTestCase, SmokeParams,
 };
 use deltalake_core::ensure_table_uri;
 
@@ -52,6 +53,21 @@ enum Command {
         /// Optional table path to reuse for the smoke run (defaults to a temporary directory)
         #[arg(long)]
         table_path: Option<PathBuf>,
+    },
+
+    /// Inspect the bundled TPC-DS queries
+    Tpcds {
+        /// Query identifier to print (for example `q1`)
+        #[arg(long)]
+        case: Option<String>,
+
+        /// List all available query identifiers
+        #[arg(long, conflicts_with = "case")]
+        list: bool,
+
+        /// Run the query and measure execution time
+        #[arg(long, conflicts_with = "list", requires = "case")]
+        run: bool,
     },
 }
 
@@ -116,6 +132,29 @@ async fn main() -> anyhow::Result<()> {
                 table_url
             );
         }
+        Command::Tpcds { case, list, run } => {
+            if list {
+                for name in tpcds_queries().keys() {
+                    println!("{name}");
+                }
+            } else if let Some(name) = case {
+                let sql = match tpcds_queries().get(name.as_str()) {
+                    Some(sql) => sql,
+                    None => anyhow::bail!(
+                        "unknown TPC-DS query '{name}'. Available: {:?}",
+                        tpcds_queries().keys(),
+                    ),
+                };
+
+                if run {
+                    run_tpcds_query(&name).await?;
+                } else {
+                    println!("-- {name}\n{}", sql.trim());
+                }
+            } else {
+                anyhow::bail!("specify --case <id> or --list");
+            }
+        }
     }
 
     Ok(())
@@ -162,6 +201,40 @@ async fn run_merge_case(case: &MergeTestCase) -> anyhow::Result<()> {
         case.name,
         elapsed.as_millis(),
         metrics
+    );
+
+    Ok(())
+}
+
+async fn run_tpcds_query(query_name: &str) -> anyhow::Result<()> {
+    let tmp_dir = tempfile::tempdir()?;
+    let parquet_dir = PathBuf::from(
+        std::env::var("TPCDS_PARQUET_DIR")
+            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
+    );
+
+    println!("Loading TPC-DS tables from {}...", parquet_dir.display());
+    let setup_start = Instant::now();
+    let ctx = register_tpcds_tables(&tmp_dir, &parquet_dir).await?;
+    let setup_elapsed = setup_start.elapsed();
+    println!("Setup completed in {} ms", setup_elapsed.as_millis());
+
+    let sql = tpcds_query(query_name)
+        .ok_or_else(|| anyhow::anyhow!("query '{}' not found", query_name))?;
+
+    println!("\nExecuting query {}...", query_name);
+    let start = Instant::now();
+    let df = ctx.sql(sql).await?;
+    let batches = df.collect().await?;
+    let elapsed = start.elapsed();
+
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+    println!(
+        "query={} duration_ms={} rows={}",
+        query_name,
+        elapsed.as_millis(),
+        total_rows
     );
 
     Ok(())
