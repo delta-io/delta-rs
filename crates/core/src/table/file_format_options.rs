@@ -279,10 +279,10 @@ impl FileFormatOptions for KmsFileFormatOptions {
     }
 }
 
-/// Code to get builder from existing WriterProperties
-/// Can be removed with PR to arrow-rs
-/// https://github.com/apache/arrow-rs/pull/8272
-/// Released parquet 56.2.0, so still needed for now.
+/// Extension trait to obtain a `WriterPropertiesBuilder` from an existing
+/// `WriterProperties`. This is a temporary workaround until
+/// [arrow-rs PR #8272](https://github.com/apache/arrow-rs/pull/8272) is released
+/// and adopted. Once `parquet` >= 56.2.0 is in use, this trait can be removed.
 pub trait WriterPropertiesExt {
     fn to_builder(&self) -> WriterPropertiesBuilder;
 }

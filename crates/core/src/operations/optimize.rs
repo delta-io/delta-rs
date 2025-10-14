@@ -678,7 +678,7 @@ impl MergePlan {
                         debug!("  file {}", file.path);
                     }
                     let object_store_ref = object_store.clone();
-                    let file_format_options = ffo.clone();
+                    let file_format_options = Arc::new(ffo.clone());
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
@@ -686,14 +686,14 @@ impl MergePlan {
                             let file_format_options = file_format_options.clone();
                             async move {
                                 let decrypt: Option<FileDecryptionProperties> =
-                                    match &file_format_options {
+                                    match &*file_format_options {
                                         Some(ffo) => {
                                             get_file_decryption_properties(ffo, &meta.location)
                                                 .await
                                                 .map_err(|e| {
                                                     ParquetError::General(format!(
-                                                "Error getting file decryption properties: {e}"
-                                            ))
+                                                    "Error getting file decryption properties: {e}"
+                                                ))
                                                 })?
                                         }
                                         None => None,

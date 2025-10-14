@@ -650,22 +650,22 @@ impl std::future::IntoFuture for WriteBuilder {
                             .unwrap()
                             .as_millis() as i64;
 
-                    match &predicate {
-                        Some(pred) => {
-                            let ffo = &snapshot.load_config().file_format_options;
-                            let (predicate_actions, cdf_df) = prepare_predicate_actions(
-                                pred.clone(),
-                                this.log_store.clone(),
-                                snapshot,
-                                session.clone(),
-                                partition_columns.clone(),
-                                ffo.as_ref(),
-                                this.writer_properties_factory.clone(),
-                                deletion_timestamp,
-                                writer_stats_config.clone(),
-                                operation_id,
-                            )
-                            .await?;
+                        match &predicate {
+                            Some(pred) => {
+                                let ffo = &snapshot.load_config().file_format_options;
+                                let (predicate_actions, cdf_df) = prepare_predicate_actions(
+                                    pred.clone(),
+                                    this.log_store.clone(),
+                                    snapshot,
+                                    session.clone(),
+                                    partition_columns.clone(),
+                                    ffo.as_ref(),
+                                    this.writer_properties_factory.clone(),
+                                    deletion_timestamp,
+                                    writer_stats_config.clone(),
+                                    operation_id,
+                                )
+                                .await?;
 
                                 if let Some(cdf_df) = cdf_df {
                                     contains_cdc = true;
@@ -695,21 +695,21 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let source_plan = source.clone().create_physical_plan().await?;
 
-            // Here we need to validate if the new data conforms to a predicate if one is provided
-            let (add_actions, _) = write_execution_plan_v2(
-                this.snapshot.as_ref(),
-                session.clone(),
-                source_plan.clone(),
-                partition_columns.clone(),
-                this.log_store.object_store(Some(operation_id)).clone(),
-                target_file_size,
-                this.write_batch_size,
-                this.writer_properties_factory,
-                writer_stats_config.clone(),
-                predicate.clone(),
-                contains_cdc,
-            )
-            .await?;
+                // Here we need to validate if the new data conforms to a predicate if one is provided
+                let (add_actions, _) = write_execution_plan_v2(
+                    this.snapshot.as_ref(),
+                    session.clone(),
+                    source_plan.clone(),
+                    partition_columns.clone(),
+                    this.log_store.object_store(Some(operation_id)).clone(),
+                    target_file_size,
+                    this.write_batch_size,
+                    this.writer_properties_factory,
+                    writer_stats_config.clone(),
+                    predicate.clone(),
+                    contains_cdc,
+                )
+                .await?;
 
                 let source_count =
                     find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {

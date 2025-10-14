@@ -80,7 +80,7 @@ pub(crate) async fn find_files(
                     file_format_options,
                     predicate.to_owned(),
                 )
-                    .await?;
+                .await?;
 
                 let result = FindFiles {
                     candidates,

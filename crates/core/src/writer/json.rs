@@ -394,7 +394,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
 
-            debug!(path = writer.path.to_string(), size = file_size, rows = metadata.num_rows, "writing data file");
+            debug!(
+                path = writer.path.to_string(),
+                size = file_size,
+                rows = metadata.num_rows,
+                "writing data file"
+            );
 
             self.table
                 .object_store()
