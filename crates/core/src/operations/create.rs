@@ -239,7 +239,7 @@ impl CreateBuilder {
         self
     }
 
-    // Set format options for underlying table files
+    /// Set configuration options for the table
     pub fn with_table_config(mut self, table_config: DeltaTableConfig) -> Self {
         self.table_config = table_config;
         self
