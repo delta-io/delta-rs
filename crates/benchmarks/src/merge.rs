@@ -377,8 +377,8 @@ pub fn merge_upsert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder
         )
         .with_source_alias("source")
         .with_target_alias("target")
-        .when_matched_update(|update| apply_update_projection(update))?
-        .when_not_matched_insert(|insert| apply_insert_projection(insert))
+        .when_matched_update(apply_update_projection)?
+        .when_not_matched_insert(apply_insert_projection)
 }
 
 pub fn merge_insert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
@@ -389,7 +389,7 @@ pub fn merge_insert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder
         )
         .with_source_alias("source")
         .with_target_alias("target")
-        .when_not_matched_insert(|insert| apply_insert_projection(insert))
+        .when_not_matched_insert(apply_insert_projection)
 }
 
 fn merge_multiple_insert(
@@ -406,7 +406,7 @@ fn merge_multiple_insert(
         .when_not_matched_insert(|insert| {
             apply_insert_projection(insert.predicate("source.wr_item_sk % 2 = 0"))
         })?
-        .when_not_matched_insert(|insert| apply_insert_projection(insert))
+        .when_not_matched_insert(apply_insert_projection)
 }
 
 pub fn merge_delete(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {

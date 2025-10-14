@@ -62,21 +62,6 @@ List cases with:
 cargo run --release -p delta-benchmarks -- merge --case single_insert_only_filesMatchedFraction_0.05_rowsNotMatchedFraction_0.05
 ```
 
-## TPC-DS query helper
-
-All 99 TPC-DS SQL statements (matching the Spark benchmark suite) are stored under `queries/tpcds`. The CLI can list or print them:
-
-```bash
-cargo run --release -p delta-benchmarks -- tpcds --list
-cargo run --release -p delta-benchmarks -- tpcds --case q1
-```
-
-There is also a micro-benchmark that iterates over every query string to ensure the include paths stay wired correctly:
-
-```bash
-cargo bench -p delta-benchmarks --bench tpcds
-```
-
 ### Flamegraphs using `samply`
 
 Using `samply`, you can generate flamegraphs from the profile script.
