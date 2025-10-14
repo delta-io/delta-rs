@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -21,6 +24,14 @@ enum OpKind {
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
+    /// Path to the parquet directory
+    #[arg(
+        long,
+        env = "TPCDS_PARQUET_DIR",
+        default_value = "crates/benchmarks/data/tpcds_parquet"
+    )]
+    parquet_dir: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,6 +86,8 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    let parquet_dir = cli.parquet_dir;
+
     match cli.command {
         Command::Merge {
             op,
@@ -91,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
                     )
                 })?;
 
-                run_merge_case(merge_case).await?;
+                run_merge_case(merge_case, &parquet_dir).await?;
             } else {
                 let op = op.ok_or_else(|| {
                     anyhow::anyhow!("specify an operation (upsert/delete/insert) or provide --case")
@@ -108,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
                     sample_not_matched_rows: not_matched,
                 };
 
-                run_merge_with_params(op_fn, &params).await?;
+                run_merge_with_params(op_fn, &params, &parquet_dir).await?;
             }
         }
         Command::Smoke { rows, table_path } => {
@@ -147,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 if run {
-                    run_tpcds_query(&name).await?;
+                    run_tpcds_query(&name, &parquet_dir).await?;
                 } else {
                     println!("-- {name}\n{}", sql.trim());
                 }
@@ -160,14 +173,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_merge_with_params(op_fn: MergeOp, params: &MergePerfParams) -> anyhow::Result<()> {
+async fn run_merge_with_params(
+    op_fn: MergeOp,
+    params: &MergePerfParams,
+    parquet_dir: &Path,
+) -> anyhow::Result<()> {
     let tmp_dir = tempfile::tempdir()?;
-    let parquet_dir = PathBuf::from(
-        std::env::var("TPCDS_PARQUET_DIR")
-            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
-    );
 
-    let (source, table) = prepare_source_and_table(params, &tmp_dir, &parquet_dir).await?;
+    let (source, table) = prepare_source_and_table(params, &tmp_dir, parquet_dir).await?;
 
     let start = Instant::now();
     let (_table, metrics) = op_fn(source, table)?.await?;
@@ -182,13 +195,8 @@ async fn run_merge_with_params(op_fn: MergeOp, params: &MergePerfParams) -> anyh
     Ok(())
 }
 
-async fn run_merge_case(case: &MergeTestCase) -> anyhow::Result<()> {
+async fn run_merge_case(case: &MergeTestCase, parquet_dir: &Path) -> anyhow::Result<()> {
     let tmp_dir = tempfile::tempdir()?;
-    let parquet_dir = PathBuf::from(
-        std::env::var("TPCDS_PARQUET_DIR")
-            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
-    );
-
     let (source, table) = prepare_source_and_table(&case.params, &tmp_dir, &parquet_dir).await?;
 
     let start = Instant::now();
@@ -206,16 +214,12 @@ async fn run_merge_case(case: &MergeTestCase) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_tpcds_query(query_name: &str) -> anyhow::Result<()> {
+async fn run_tpcds_query(query_name: &str, parquet_dir: &Path) -> anyhow::Result<()> {
     let tmp_dir = tempfile::tempdir()?;
-    let parquet_dir = PathBuf::from(
-        std::env::var("TPCDS_PARQUET_DIR")
-            .unwrap_or_else(|_| "crates/benchmarks/data/tpcds_parquet".to_string()),
-    );
 
     println!("Loading TPC-DS tables from {}...", parquet_dir.display());
     let setup_start = Instant::now();
-    let ctx = register_tpcds_tables(&tmp_dir, &parquet_dir).await?;
+    let ctx = register_tpcds_tables(&tmp_dir, parquet_dir).await?;
     let setup_elapsed = setup_start.elapsed();
     println!("Setup completed in {} ms", setup_elapsed.as_millis());
 

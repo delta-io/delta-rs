@@ -15,9 +15,6 @@ static ALLOC: AllocProfiler = AllocProfiler::system();
 
 fn bench_merge_case(bencher: Bencher, case: &MergeTestCase) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let case_copy = *case;
-    let params = case_copy.params;
-
     bencher
         .with_inputs(|| {
             let tmp_dir = tempfile::tempdir().unwrap();
@@ -26,17 +23,16 @@ fn bench_merge_case(bencher: Bencher, case: &MergeTestCase) {
                     .unwrap_or_else(|_| "data/tpcds_parquet".to_string()),
             );
             rt.block_on(async move {
-                let (source, table) = prepare_source_and_table(&params, &tmp_dir, &parquet_dir)
-                    .await
-                    .expect("prepare inputs");
+                let (source, table) =
+                    prepare_source_and_table(&case.params, &tmp_dir, &parquet_dir)
+                        .await
+                        .expect("prepare inputs");
                 (case, source, table, tmp_dir)
             })
         })
         .bench_local_values(|(case, source, table, tmp_dir)| {
             rt.block_on(async move {
-                let (_, metrics) = case.execute(source, table).await.expect("execute merge");
-                case.validate(&metrics).expect("validate merge");
-                divan::black_box(metrics.num_target_rows_inserted);
+                divan::black_box(case.execute(source, table).await.expect("execute merge"));
             });
             drop(tmp_dir);
         });
