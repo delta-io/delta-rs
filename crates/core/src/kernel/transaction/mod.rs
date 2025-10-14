@@ -346,23 +346,18 @@ impl CommitData {
         bytes: &Bytes,
         num_retries: u64,
     ) -> Result<Bytes, TransactionError> {
-        // Convert bytes to string (delta log is UTF-8 JSON)
-        // If this fails, the delta log is corrupted
+        
         let bytes_str = std::str::from_utf8(bytes.as_ref())
             .expect("Delta log bytes should always be valid UTF-8");
 
-        // Split into lines - each action is one line in delta log format
         let lines: Vec<&str> = bytes_str.split('\n').collect();
         let mut updated_lines = Vec::with_capacity(lines.len());
 
         for line in lines {
-            // Find the commitInfo action (contains operationMetrics)
             if line.contains("\"commitInfo\"") {
-                // Parse just this line to JSON
                 let mut action: Value = serde_json::from_str(line)
                     .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
 
-                // Navigate to operationMetrics and update num_retries if it exists
                 if let Some(commit_info) = action.get_mut("commitInfo") {
                     if let Some(Value::Object(metrics)) = commit_info.get_mut("operationMetrics") {
                         metrics.insert(
@@ -371,7 +366,6 @@ impl CommitData {
                         );
                     }
                 }
-
                 // Serialize just this updated line
                 let updated_line = serde_json::to_string(&action)
                     .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
