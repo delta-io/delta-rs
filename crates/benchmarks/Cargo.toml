@@ -14,6 +14,7 @@ clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "io-util"] }
 url = { workspace = true }
 tempfile = { workspace = true }
+anyhow = "1"
 
 [dependencies.deltalake-core]
 path = "../core"
@@ -25,4 +26,8 @@ divan = "0.1"
 
 [[bench]]
 name = "merge"
+harness = false
+
+[[bench]]
+name = "smoke"
 harness = false

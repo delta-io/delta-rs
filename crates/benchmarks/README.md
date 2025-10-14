@@ -48,13 +48,34 @@ A simple CLI is available to run a single merge with configurable parameters (us
 
 Run (from repo root):
 ```bash
-cargo run --profile profiling -p delta-benchmarks -- upsert --matched 0.01 --not-matched 0.10
+cargo run --profile profiling -p delta-benchmarks -- merge --op upsert --matched 0.01 --not-matched 0.10
 ```
 
 Options:
-- `upsert | delete | insert`: operation to benchmark
+- `--op <upsert|delete|insert>`: operation to benchmark
 - `--matched <fraction>`: fraction of rows that match existing keys (default 0.01)
 - `--not-matched <fraction>`: fraction of rows that do not match (default 0.10)
+- `--case <name>`: run one of the predefined merge scenarios mirrored from the Delta Spark suite
+
+List cases with:
+```bash
+cargo run --release -p delta-benchmarks -- merge --case single_insert_only_filesMatchedFraction_0.05_rowsNotMatchedFraction_0.05
+```
+
+## TPC-DS query helper
+
+All 99 TPC-DS SQL statements (matching the Spark benchmark suite) are stored under `queries/tpcds`. The CLI can list or print them:
+
+```bash
+cargo run --release -p delta-benchmarks -- tpcds --list
+cargo run --release -p delta-benchmarks -- tpcds --case q1
+```
+
+There is also a micro-benchmark that iterates over every query string to ensure the include paths stay wired correctly:
+
+```bash
+cargo bench -p delta-benchmarks --bench tpcds
+```
 
 ### Flamegraphs using `samply`
 
