@@ -178,6 +178,9 @@ pub struct WriteMetrics {
     pub num_added_rows: usize,
     /// Time taken to execute the entire operation
     pub execution_time_ms: u64,
+    /// Number of retries before successful commit
+    #[serde(default)]
+    pub num_retries: u64,
 }
 
 impl super::Operation<()> for WriteBuilder {
