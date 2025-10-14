@@ -309,7 +309,7 @@ pub trait LogStore: Send + Sync + AsAny {
             Err(err) => Err(err),
         }?;
 
-        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes).await;
+        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes);
         Ok(PeekCommit::New(next_version, actions?))
     }
 
@@ -564,7 +564,7 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
 }
 
 /// Reads a commit and gets list of actions
-pub async fn get_actions(
+pub fn get_actions(
     version: i64,
     commit_log_bytes: &bytes::Bytes,
 ) -> Result<Vec<Action>, DeltaTableError> {
@@ -1007,7 +1007,7 @@ mod datafusion_tests {
 {"invalid json without closing brace"#,
         );
 
-        let result = get_actions(0, &malformed_json).await;
+        let result = get_actions(0, &malformed_json);
 
         match result {
             Err(DeltaTableError::InvalidJsonLog {
