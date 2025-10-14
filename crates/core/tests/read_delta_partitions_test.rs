@@ -56,26 +56,18 @@ async fn read_null_partitions_from_checkpoint() {
 #[cfg(feature = "datafusion")]
 #[tokio::test]
 async fn load_from_delta_8_0_table_with_special_partition() {
-    use datafusion::physical_plan::SendableRecordBatchStream;
-    use deltalake_core::{DeltaOps, DeltaTable};
-    use futures::{future, StreamExt};
+    use deltalake_core::DeltaOps;
+    use futures::TryStreamExt;
 
-    let path = "../test/tests/data/delta-0.8.0-special-partition";
-    let table = deltalake_core::open_table(
-        Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap(),
-    )
-    .await
-    .unwrap();
+    let path = std::fs::canonicalize("../test/tests/data/delta-0.8.0-special-partition").unwrap();
+    let table = deltalake_core::open_table(Url::from_directory_path(path).unwrap())
+        .await
+        .unwrap();
 
-    let (_, stream): (DeltaTable, SendableRecordBatchStream) = DeltaOps(table)
+    let (_, stream) = DeltaOps(table)
         .load()
         .with_columns(vec!["x", "y"])
         .await
         .unwrap();
-    stream
-        .for_each(|batch| {
-            assert!(batch.is_ok());
-            future::ready(())
-        })
-        .await;
+    let _res: Vec<_> = stream.try_collect().await.unwrap();
 }

@@ -44,6 +44,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use futures::future::BoxFuture;
 use futures::StreamExt as _;
 use itertools::Itertools;
 use object_store::ObjectMeta;
@@ -56,12 +57,15 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove};
+use crate::kernel::{resolve_snapshot, Action, Add, EagerSnapshot, Remove};
+use crate::logstore::LogStore;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
+
+pub(crate) mod next;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
