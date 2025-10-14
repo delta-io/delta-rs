@@ -13,6 +13,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::ExecutionPlan;
 use itertools::Itertools;
+use tracing::*;
 
 use crate::delta_datafusion::{
     df_logical_schema, get_path_column, DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN,
@@ -31,6 +32,15 @@ pub(crate) struct FindFiles {
 }
 
 /// Finds files in a snapshot that match the provided predicate.
+#[instrument(
+    skip_all,
+    fields(
+        version = snapshot.version(),
+        has_predicate = predicate.is_some(),
+        partition_scan = field::Empty,
+        candidate_count = field::Empty
+    )
+)]
 pub(crate) async fn find_files(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
@@ -53,24 +63,35 @@ pub(crate) async fn find_files(
 
             if expr_properties.partition_only {
                 let candidates = scan_memory_table(snapshot, predicate).await?;
-                Ok(FindFiles {
+                let result = FindFiles {
                     candidates,
                     partition_scan: true,
-                })
+                };
+                Span::current().record("partition_scan", result.partition_scan);
+                Span::current().record("candidate_count", result.candidates.len());
+                Ok(result)
             } else {
                 let candidates =
                     find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
 
-                Ok(FindFiles {
+                let result = FindFiles {
                     candidates,
                     partition_scan: false,
-                })
+                };
+                Span::current().record("partition_scan", result.partition_scan);
+                Span::current().record("candidate_count", result.candidates.len());
+                Ok(result)
             }
         }
-        None => Ok(FindFiles {
-            candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
-            partition_scan: true,
-        }),
+        None => {
+            let result = FindFiles {
+                candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
+                partition_scan: true,
+            };
+            Span::current().record("partition_scan", result.partition_scan);
+            Span::current().record("candidate_count", result.candidates.len());
+            Ok(result)
+        }
     }
 }
 
@@ -188,6 +209,14 @@ fn join_batches_with_add_actions(
 }
 
 /// Determine which files contain a record that satisfies the predicate
+#[instrument(
+    skip_all,
+    fields(
+        version = snapshot.version(),
+        total_files = field::Empty,
+        matching_files = field::Empty
+    )
+)]
 async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
@@ -203,6 +232,8 @@ async fn find_files_scan(
             (path, add)
         })
         .collect();
+
+    Span::current().record("total_files", candidate_map.len());
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
@@ -240,12 +271,15 @@ async fn find_files_scan(
     let task_ctx = Arc::new(TaskContext::from(session));
     let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
 
-    join_batches_with_add_actions(
+    let result = join_batches_with_add_actions(
         path_batches,
         candidate_map,
         config.file_column_name.as_ref().unwrap(),
         true,
-    )
+    )?;
+
+    Span::current().record("matching_files", result.len());
+    Ok(result)
 }
 
 async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {

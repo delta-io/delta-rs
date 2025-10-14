@@ -248,6 +248,7 @@ impl ExtensionPlanner for UpdateMetricExtensionPlanner {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(operation = "update", version = snapshot.version(), table_uri = %log_store.root_uri()))]
 async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,

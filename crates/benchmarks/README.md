@@ -4,52 +4,66 @@ The merge benchmarks are similar to the ones used by [Delta Spark](https://githu
 
 ## Dataset
 
-Databricks maintains a public S3 bucket of the TPC-DS dataset with various factor where requesters must pay to download this dataset. Below is an example of how to list the 1gb scale factor 
+To generate the database, `duckdb` can be used. Install `duckdb` by following [these instructions](https://duckdb.org/#quickinstall).
 
-```
-aws s3api list-objects --bucket devrel-delta-datasets --request-payer requester --prefix tpcds-2.13/tpcds_sf1_parquet/web_returns/
-```
+Run the following commands:
 
-You can generate the TPC-DS dataset yourself by downloading and compiling [the generator](https://www.tpc.org/tpc_documents_current_versions/current_specifications5.asp) 
-You may need to update the CFLAGS to include `-fcommon` to compile on newer versions of GCC.
-
-## Commands
-These commands can be executed from the root of the benchmark crate. Some commands depend on the existence of the TPC-DS Dataset existing.
-
-### Convert
-Converts a TPC-DS web_returns csv into a Delta table
-Assumes the dataset is pipe delimited and records do not have a trailing delimiter
-
-```
- cargo run --release --bin merge -- convert data/tpcds/web_returns.dat data/web_returns
+```bash
+❯ duckdb
+D CALL dsdgen(sf = 1);
+100% ▕██████████████████████████████████████▏ (00:00:05.76 elapsed)
+┌─────────┐
+│ Success │
+│ boolean │
+├─────────┤
+│ 0 rows  │
+└─────────┘
+D EXPORT DATABASE 'tpcds_parquet' (FORMAT PARQUET);
 ```
 
-### Standard
-Execute the standard merge bench suite.
-Results can be saved to a delta table for further analysis.
-This table has the following schema:
+This will generate a folder called `tpcds_parquet` containing many parquet files. Place it at `crates/benchmarks/data/tpcds_parquet` (or set `TPCDS_PARQUET_DIR`). Credits to [Xuanwo's Blog](https://xuanwo.io/links/2025/02/duckdb-is-the-best-tpc-data-generator/).
 
-group_id: Used to group all tests that executed as a part of this call. Default value is the timestamp of execution
-name: The benchmark name that was executed
-sample: The iteration number for a given benchmark name
-duration_ms: How long the benchmark took in ms
-data: Free field to pack any additional data
+## Running benchmarks
 
+Benchmarks use Divan and time only the merge operation. A temporary Delta table is created per iteration from `web_returns.parquet` and removed afterwards.
+
+Environment variables:
+- `TPCDS_PARQUET_DIR` (optional): directory containing `web_returns.parquet`. Default: `crates/benchmarks/data/tpcds_parquet`.
+
+From the repo root:
 ```
- cargo run --release --bin merge -- standard data/web_returns 1 data/merge_results 
-```
-
-### Compare
-Compare the results of two different runs.
-The a Delta table paths and the `group_id` of each run and obtain the speedup for each test case
-
-```
- cargo run --release --bin merge -- compare data/benchmarks/ 1698636172801 data/benchmarks/ 1699759539902
+cargo bench -p delta-benchmarks --bench merge
 ```
 
-### Show
-Show all benchmarks results from a delta table
-
+Filter a specific suite:
 ```
- cargo run --release --bin merge -- show data/benchmark
+cargo bench -p delta-benchmarks --bench merge -- delete_only
+cargo bench -p delta-benchmarks --bench merge -- multiple_insert_only
+cargo bench -p delta-benchmarks --bench merge -- upsert_file_matched
+```
+
+## Profiling script
+
+A simple CLI is available to run a single merge with configurable parameters (useful for profiling or ad-hoc runs). It creates a fresh temporary Delta table per sample from `web_returns.parquet`, times only the merge, and prints duration and metrics.
+
+Run (from repo root):
+```bash
+cargo run --profile profiling -p delta-benchmarks -- upsert --matched 0.01 --not-matched 0.10
+```
+
+Options:
+- `upsert | delete | insert`: operation to benchmark
+- `--matched <fraction>`: fraction of rows that match existing keys (default 0.01)
+- `--not-matched <fraction>`: fraction of rows that do not match (default 0.10)
+
+### Flamegraphs using `samply`
+
+Using `samply`, you can generate flamegraphs from the profile script.
+
+To start,
+
+```bash
+cargo install samply --locked
+cargo build --profile profiling -p delta-benchmarks
+samply record ./target/profiling/delta-benchmarks upsert
 ```
