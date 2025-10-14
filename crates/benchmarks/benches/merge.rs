@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use delta_benchmarks::{
-    merge_delete, merge_insert, merge_upsert, prepare_source_and_table, MergeOp, MergePerfParams,
+    delete_only_cases, insert_only_cases, prepare_source_and_table, upsert_cases, MergeTestCase,
 };
 
 use divan::{AllocProfiler, Bencher};
@@ -13,8 +13,11 @@ fn main() {
 #[global_allocator]
 static ALLOC: AllocProfiler = AllocProfiler::system();
 
-fn bench_merge(bencher: Bencher, op: MergeOp, params: &MergePerfParams) {
+fn bench_merge_case(bencher: Bencher, case: &MergeTestCase) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let case_copy = *case;
+    let params = case_copy.params;
+
     bencher
         .with_inputs(|| {
             let tmp_dir = tempfile::tempdir().unwrap();
@@ -23,74 +26,33 @@ fn bench_merge(bencher: Bencher, op: MergeOp, params: &MergePerfParams) {
                     .unwrap_or_else(|_| "data/tpcds_parquet".to_string()),
             );
             rt.block_on(async move {
-                let (source, table) = prepare_source_and_table(params, &tmp_dir, &parquet_dir)
+                let (source, table) = prepare_source_and_table(&params, &tmp_dir, &parquet_dir)
                     .await
-                    .unwrap();
-                (source, table, tmp_dir)
+                    .expect("prepare inputs");
+                (case, source, table, tmp_dir)
             })
         })
-        .bench_local_values(|(source, table, tmp_dir)| {
+        .bench_local_values(|(case, source, table, tmp_dir)| {
             rt.block_on(async move {
-                let _ = divan::black_box(op(source, table).unwrap().await.unwrap());
+                let (_, metrics) = case.execute(source, table).await.expect("execute merge");
+                case.validate(&metrics).expect("validate merge");
+                divan::black_box(metrics.num_target_rows_inserted);
             });
             drop(tmp_dir);
         });
 }
 
-#[divan::bench(args = [
-    MergePerfParams {
-        sample_matched_rows: 0.05,
-        sample_not_matched_rows: 0.0,
-    }
-])]
-fn delete_only(bencher: Bencher, params: &MergePerfParams) {
-    bench_merge(bencher, merge_delete, params);
+#[divan::bench(args = insert_only_cases())]
+fn insert_only(bencher: Bencher, case: &MergeTestCase) {
+    bench_merge_case(bencher, case);
 }
 
-#[divan::bench(args = [
-    MergePerfParams {
-        sample_matched_rows: 0.00,
-        sample_not_matched_rows: 0.05,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.00,
-        sample_not_matched_rows: 0.50,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.00,
-        sample_not_matched_rows: 1.0,
-    },
-])]
-fn multiple_insert_only(bencher: Bencher, params: &MergePerfParams) {
-    bench_merge(bencher, merge_insert, params);
+#[divan::bench(args = delete_only_cases())]
+fn delete_only(bencher: Bencher, case: &MergeTestCase) {
+    bench_merge_case(bencher, case);
 }
 
-#[divan::bench(args = [
-    MergePerfParams {
-        sample_matched_rows: 0.01,
-        sample_not_matched_rows: 0.1,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.1,
-        sample_not_matched_rows: 0.0,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.1,
-        sample_not_matched_rows: 0.01,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.5,
-        sample_not_matched_rows: 0.001,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.99,
-        sample_not_matched_rows: 0.001,
-    },
-    MergePerfParams {
-        sample_matched_rows: 0.001,
-        sample_not_matched_rows: 0.001,
-    },
-])]
-fn upsert_file_matched(bencher: Bencher, params: &MergePerfParams) {
-    bench_merge(bencher, merge_upsert, params);
+#[divan::bench(args = upsert_cases())]
+fn upsert(bencher: Bencher, case: &MergeTestCase) {
+    bench_merge_case(bencher, case);
 }
