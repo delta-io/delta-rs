@@ -63,6 +63,8 @@ use crate::protocol::{DeltaOperation, SaveMode};
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
 
+pub mod next;
+
 const PATH_COLUMN: &str = "__delta_rs_path";
 
 /// DataSink implementation for delta lake
