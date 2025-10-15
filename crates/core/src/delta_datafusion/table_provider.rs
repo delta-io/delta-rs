@@ -371,6 +371,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     filter: Option<Expr>,
     session: &'a dyn Session,
     projection: Option<&'a Vec<usize>>,
+    projection_deep: Option<&'a std::collections::HashMap<usize, Vec<String>>>,
     limit: Option<usize>,
     files: Option<&'a [Add]>,
     config: Option<DeltaScanConfig>,
@@ -388,6 +389,7 @@ impl<'a> DeltaScanBuilder<'a> {
             filter: None,
             session,
             projection: None,
+            projection_deep: None,
             limit: None,
             files: None,
             config: None,
@@ -406,6 +408,14 @@ impl<'a> DeltaScanBuilder<'a> {
 
     pub fn with_projection(mut self, projection: Option<&'a Vec<usize>>) -> Self {
         self.projection = projection;
+        self
+    }
+
+    pub fn with_projection_deep(
+        mut self,
+        projection_deep: Option<&'a std::collections::HashMap<usize, Vec<String>>>,
+    ) -> Self {
+        self.projection_deep = projection_deep;
         self
     }
 
@@ -677,6 +687,7 @@ impl<'a> DeltaScanBuilder<'a> {
                 )
                 .with_statistics(stats)
                 .with_projection_indices(self.projection.cloned())
+                .with_projection_deep(self.projection_deep.cloned())
                 .with_limit(self.limit)
                 .with_table_partition_cols(table_partition_cols)
                 .build();
@@ -735,6 +746,28 @@ impl TableProvider for DeltaTable {
 
         let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_projection(projection)
+            .with_limit(limit)
+            .with_filter(filter_expr)
+            .build()
+            .await?;
+
+        Ok(Arc::new(scan))
+    }
+
+    async fn scan_deep(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        projection_deep: Option<&std::collections::HashMap<usize, Vec<String>>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        register_store(self.log_store(), session.runtime_env().as_ref());
+        let filter_expr = conjunction(filters.iter().cloned());
+
+        let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
+            .with_projection(projection)
+            .with_projection_deep(projection_deep)
             .with_limit(limit)
             .with_filter(filter_expr)
             .build()
@@ -823,6 +856,30 @@ impl TableProvider for DeltaTableProvider {
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_projection(projection)
+            .with_limit(limit)
+            .with_filter(filter_expr)
+            .with_scan_config(self.config.clone());
+
+        if let Some(files) = &self.files {
+            scan = scan.with_files(files);
+        }
+        Ok(Arc::new(scan.build().await?))
+    }
+
+    async fn scan_deep(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        projection_deep: Option<&std::collections::HashMap<usize, Vec<String>>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        let filter_expr = conjunction(filters.iter().cloned());
+
+        let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
+            .with_projection(projection)
+            .with_projection_deep(projection_deep)
             .with_limit(limit)
             .with_filter(filter_expr)
             .with_scan_config(self.config.clone());
