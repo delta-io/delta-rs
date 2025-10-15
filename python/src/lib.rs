@@ -1441,11 +1441,12 @@ impl RawDeltaTable {
         }
         
         self.with_table(|t| {
+            let log_store = t.log_store();
             let snapshot = t.snapshot()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             
-            let mut stream = snapshot.add_actions_table(flatten);
+            let mut stream = snapshot.add_actions_table(log_store, flatten);
             
             // peek at first batch to get the schema
             let first_batch = rt()

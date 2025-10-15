@@ -12,7 +12,7 @@ use futures::{future::ready, stream, stream::BoxStream, StreamExt as _, TryStrea
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
-use super::DeltaTableConfig;
+use super::{builder, DeltaTableConfig};
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
@@ -20,10 +20,10 @@ use crate::kernel::{
     Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol,
     TombstoneView, ARROW_HANDLER,
 };
-use crate::logstore::LogStore;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{open_table, DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,9 +264,22 @@ impl DeltaTableState {
     ///   partition the file corresponds to.
     pub fn add_actions_table(
         &self,
+        log_store: LogStoreRef,
         flatten: bool,
     ) -> BoxStream<'static, DeltaResult<arrow::record_batch::RecordBatch>> {
-        self.snapshot.add_actions_table(flatten)
+        let version = self.version();
+        let config = self.load_config().clone();
+
+        Box::pin(stream::once(async move {
+            let snapshot = EagerSnapshot::try_new(
+                log_store.as_ref(),
+                config,
+                Some(version)
+            ).await?;
+
+            Ok::<_, DeltaTableError>(snapshot.add_actions_table(flatten))
+        })
+        .try_flatten())
     }
 }
 
@@ -378,7 +391,7 @@ impl EagerSnapshot {
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
 
-        let files = self.files.clone();
+        let files = self.files.clone(); // race condition exists here
         stream::iter(files)
             .map(move |file| {
                 let batch = evaluator.evaluate_arrow(file)?;
