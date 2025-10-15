@@ -34,7 +34,6 @@ use arrow_schema::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
-use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{
@@ -77,6 +76,7 @@ pub(crate) use find_files::*;
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
+pub mod engine;
 pub mod expr;
 mod find_files;
 pub mod logical;
@@ -774,7 +774,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 #[derive(Debug)]
 pub struct DeltaTableFactory {}
 
-#[async_trait]
+#[async_trait::async_trait]
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
@@ -1968,7 +1968,7 @@ mod tests {
     }
 
     // Currently only read operations are recorded. Extend as necessary.
-    #[async_trait]
+    #[async_trait::async_trait]
     impl ObjectStore for RecordingObjectStore {
         async fn put(
             &self,

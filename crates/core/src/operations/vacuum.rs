@@ -31,7 +31,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 use serde::Serialize;
-use tracing::log::*;
+use tracing::*;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -291,12 +291,16 @@ impl VacuumBuilder {
         let mut files_to_delete = vec![];
         let mut file_sizes = vec![];
         let object_store = self.log_store.object_store(None);
-        let mut all_files = object_store.list(None);
+
+        let list_span = info_span!("list_files", operation = "vacuum");
+        let mut all_files = list_span.in_scope(|| object_store.list(None));
         let partition_columns = self.snapshot.metadata().partition_columns();
 
+        let mut file_count = 0;
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
             let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
+            file_count += 1;
             // file is still being tracked in table
             if valid_files.contains(&obj_meta.location) {
                 continue;
@@ -339,6 +343,11 @@ impl VacuumBuilder {
             files_to_delete.push(obj_meta.location);
             file_sizes.push(obj_meta.size as i64);
         }
+        info!(
+            files_scanned = file_count,
+            files_to_delete = files_to_delete.len(),
+            "vacuum file listing completed"
+        );
 
         Ok(VacuumPlan {
             files_to_delete,

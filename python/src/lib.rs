@@ -6,6 +6,7 @@ mod merge;
 mod query;
 mod reader;
 mod schema;
+mod tracing_otlp;
 mod utils;
 mod writer;
 
@@ -2176,6 +2177,21 @@ fn rust_core_version() -> &'static str {
     deltalake::crate_version()
 }
 
+/// Initialize OpenTelemetry tracing with OTLP exporter
+#[pyfunction]
+#[pyo3(signature = (endpoint=None))]
+fn init_tracing(endpoint: Option<&str>) -> PyResult<()> {
+    tracing_otlp::init_otlp_tracing(endpoint)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize tracing: {}", e)))
+}
+
+/// Shutdown OpenTelemetry tracing and flush remaining spans
+#[pyfunction]
+fn shutdown_tracing() -> PyResult<()> {
+    tracing_otlp::shutdown_tracing();
+    Ok(())
+}
+
 fn current_timestamp() -> i64 {
     let start = SystemTime::now();
     let since_the_epoch = start
@@ -2585,6 +2601,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(init_tracing, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;

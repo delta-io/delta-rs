@@ -7,23 +7,22 @@ license = "Apache-2.0"
 keywords = ["deltalake", "delta", "datalake"]
 description = "Delta-rs Benchmarks"
 edition = "2021"
+publish = false
 
 [dependencies]
-clap = { version = "4", features = [ "derive" ] }
-chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
-tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
-
-# arrow
-arrow = { workspace = true }
-arrow-array = { workspace = true }
-
-# serde
-serde_json = { workspace = true }
-
-# datafusion
-datafusion = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "io-util"] }
+url = { workspace = true }
+tempfile = { workspace = true }
 
 [dependencies.deltalake-core]
 path = "../core"
 version = "0"
 features = ["datafusion"]
+
+[dev-dependencies]
+divan = "0.1"
+
+[[bench]]
+name = "merge"
+harness = false

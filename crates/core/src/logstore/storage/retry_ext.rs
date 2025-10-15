@@ -2,7 +2,7 @@
 
 use ::object_store::path::Path;
 use ::object_store::{Error, ObjectStore, PutPayload, PutResult, Result};
-use tracing::log::*;
+use tracing::*;
 
 #[cfg(feature = "cloud")]
 use crate::logstore::config;
@@ -31,6 +31,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
     /// bytes to location, or fail. No clients should be able to observe a partially written object
     ///
     /// Note that `put_with_opts` may have precondition semantics, and thus may not be retriable.
+    #[instrument(skip(self, bytes), fields(path = %location, size = bytes.content_length()))]
     async fn put_with_retries(
         &self,
         location: &Path,
@@ -40,8 +41,12 @@ pub trait ObjectStoreRetryExt: ObjectStore {
         let mut attempt_number = 1;
         while attempt_number <= max_retries {
             match self.put(location, bytes.clone()).await {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    debug!(attempt = attempt_number, "put operation succeeded");
+                    return Ok(result);
+                }
                 Err(err) if attempt_number == max_retries => {
+                    warn!(attempt = attempt_number, error = %err, "put operation failed after max retries");
                     return Err(err);
                 }
                 Err(Error::Generic { store, source }) => {
@@ -49,6 +54,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
                     attempt_number += 1;
                 }
                 Err(err) => {
+                    error!(attempt = attempt_number, error = %err, "put operation failed with non-retryable error");
                     return Err(err);
                 }
             }
@@ -57,12 +63,17 @@ pub trait ObjectStoreRetryExt: ObjectStore {
     }
 
     /// Delete the object at the specified location
+    #[instrument(skip(self), fields(path = %location))]
     async fn delete_with_retries(&self, location: &Path, max_retries: usize) -> Result<()> {
         let mut attempt_number = 1;
         while attempt_number <= max_retries {
             match self.delete(location).await {
-                Ok(()) | Err(Error::NotFound { .. }) => return Ok(()),
+                Ok(()) | Err(Error::NotFound { .. }) => {
+                    debug!(attempt = attempt_number, "delete operation succeeded");
+                    return Ok(());
+                }
                 Err(err) if attempt_number == max_retries => {
+                    warn!(attempt = attempt_number, error = %err, "delete operation failed after max retries");
                     return Err(err);
                 }
                 Err(Error::Generic { store, source }) => {
@@ -70,6 +81,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
                     attempt_number += 1;
                 }
                 Err(err) => {
+                    error!(attempt = attempt_number, error = %err, "delete operation failed with non-retryable error");
                     return Err(err);
                 }
             }
