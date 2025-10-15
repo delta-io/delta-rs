@@ -20,6 +20,8 @@ use std::sync::{Arc, LazyLock};
 use arrow::array::RecordBatch;
 use arrow::compute::{filter_record_batch, is_not_null};
 use arrow::datatypes::SchemaRef;
+use arrow_arith::aggregate::sum_array_checked;
+use arrow_array::{Int64Array, StructArray};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -34,12 +36,14 @@ use delta_kernel::{
     Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
 };
 use futures::future::ready;
-use futures::stream::{once, BoxStream};
+use futures::stream::{iter, once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde_json::Deserializer;
 use url::Url;
+
+use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
 
 use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
@@ -496,6 +500,16 @@ pub(crate) async fn resolve_snapshot(
     }
 }
 
+fn read_adds_size(array: &dyn ProvidesColumnByName) -> DeltaResult<usize> {
+    if let Some(arr) = ex::extract_and_cast_opt::<StructArray>(array, "add") {
+        let size = ex::extract_and_cast::<Int64Array>(arr, "size")?;
+        let sum = sum_array_checked::<arrow::array::types::Int64Type, _>(size)?.unwrap_or_default();
+        Ok(sum as usize)
+    } else {
+        Ok(0)
+    }
+}
+
 impl EagerSnapshot {
     /// Create a new [`EagerSnapshot`] instance
     pub async fn try_new(
@@ -619,6 +633,23 @@ impl EagerSnapshot {
     /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
     pub fn log_data(&self) -> LogDataHandler<'_> {
         LogDataHandler::new(&self.files, self.snapshot.table_configuration())
+    }
+
+    /// Get the metadata size in the snapshot
+    pub fn files_metadata_size(&self) -> usize {
+        self
+            .files
+            .iter()
+            .map(|frb| frb.get_array_memory_size()).sum()
+    }
+
+    /// Get the total size of files in the snapshot
+    pub fn files_total_size(&self) -> usize {
+        self
+            .files
+            .iter()
+            .map(|frb| read_adds_size(frb).unwrap_or_default())
+            .sum()
     }
 
     /// Stream the active files in the snapshot
