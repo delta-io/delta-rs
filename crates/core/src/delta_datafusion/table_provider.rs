@@ -48,7 +48,7 @@ use futures::StreamExt as _;
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
-
+use url::Url;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, register_store, to_correct_scalar_value, DataFusionMixins as _,
@@ -62,6 +62,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
+use crate::logstore::{logstore_for, object_store_url, StorageConfig};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -253,6 +254,7 @@ pub struct DeltaScanConfigBuilder {
     pub(super) enable_parquet_pushdown: bool,
     /// Schema to scan table with
     pub(super) schema: Option<SchemaRef>,
+    pub(super) options: std::collections::HashMap<String, String>
 }
 
 impl Default for DeltaScanConfigBuilder {
@@ -263,6 +265,7 @@ impl Default for DeltaScanConfigBuilder {
             wrap_partition_values: None,
             enable_parquet_pushdown: true,
             schema: None,
+            options: std::collections::HashMap::new(),
         }
     }
 }
@@ -307,6 +310,12 @@ impl DeltaScanConfigBuilder {
         self
     }
 
+    /// Use the provided [SchemaRef] for the [DeltaScan]
+    pub fn with_options(mut self, options: std::collections::HashMap<String, String>) -> Self {
+        self.options = options;
+        self
+    }
+
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
     pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
@@ -348,6 +357,7 @@ impl DeltaScanConfigBuilder {
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
+            options: self.options.clone(),
         })
     }
 }
@@ -363,6 +373,7 @@ pub struct DeltaScanConfig {
     pub enable_parquet_pushdown: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
+    pub options: std::collections::HashMap<String, String>,
 }
 
 pub(crate) struct DeltaScanBuilder<'a> {
@@ -743,11 +754,15 @@ impl TableProvider for DeltaTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store(), session.runtime_env().as_ref());
         let filter_expr = conjunction(filters.iter().cloned());
+        let config = DeltaScanConfigBuilder::default()
+            .with_options(self.config.options.clone())
+            .build(self.snapshot()?.snapshot())?;
 
         let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_projection(projection)
             .with_limit(limit)
             .with_filter(filter_expr)
+            .with_scan_config(config)
             .build()
             .await?;
 
@@ -764,12 +779,16 @@ impl TableProvider for DeltaTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store(), session.runtime_env().as_ref());
         let filter_expr = conjunction(filters.iter().cloned());
+        let config = DeltaScanConfigBuilder::default()
+            .with_options(self.config.options.clone())
+            .build(self.snapshot()?.snapshot())?;
 
         let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_projection(projection)
             .with_projection_deep(projection_deep)
             .with_limit(limit)
             .with_filter(filter_expr)
+            .with_scan_config(config)
             .build()
             .await?;
 
@@ -1028,6 +1047,29 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let source_uri = Url::parse(self.table_uri.as_str())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let url_key = object_store_url(&source_uri);
+        let runtime = context.runtime_env();
+        // self.config
+        if runtime.object_store(url_key).is_err() {
+            let storage_config = StorageConfig::parse_options(
+                self.config.options.clone()
+            )?;
+            let source_store = logstore_for(source_uri,storage_config)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let object_store_url = source_store.object_store_url();
+
+            // check if delta store is already registered
+            if runtime.object_store(object_store_url.clone()).is_err() {
+                runtime.register_object_store(
+                    object_store_url.as_ref(),
+                    source_store.object_store(None),
+                );
+            }
+        }
+        // Now that everything is set up, execute the inner Delta
+
         self.parquet_scan.execute(partition, context)
     }
 

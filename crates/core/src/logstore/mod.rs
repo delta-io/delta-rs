@@ -512,7 +512,7 @@ pub(crate) fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
 }
 
 #[cfg(feature = "datafusion")]
-fn object_store_url(location: &Url) -> ObjectStoreUrl {
+pub fn object_store_url(location: &Url) -> ObjectStoreUrl {
     use object_store::path::DELIMITER;
     ObjectStoreUrl::parse(format!(
         "delta-rs://{}-{}{}",
