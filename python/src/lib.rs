@@ -17,7 +17,7 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::arrow::{self, array::RecordBatch, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
@@ -86,6 +86,7 @@ use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
+use crate::reader::{convert_boxstream_to_reader, convert_stream_to_reader};
 use crate::reader::convert_stream_to_reader;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
@@ -1036,7 +1037,7 @@ impl RawDeltaTable {
             match self._table.lock() {
                 Ok(table) => table
                     .history(limit)
-                    .await
+                    .awaituse futures::TryStreamExt;
                     .map_err(PythonError::from)
                     .map_err(PyErr::from),
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
@@ -1435,18 +1436,38 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
-        // replace with Arro3RecordBatch once new release is done for arro3.core
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatchReader> {
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
-        let batch = self.with_table(|t| {
-            Ok(t.snapshot()
-                .map_err(PythonError::from)?
-                .add_actions_table(flatten)
-                .map_err(PythonError::from)?)
-        })?;
-        Ok(batch.into())
+        
+        self.with_table(|t| {
+            let log_store = t.log_store();
+            let snapshot = t.snapshot()
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
+            
+            let mut stream = snapshot.add_actions_table(log_store, flatten);
+            
+            // peek at first batch to get the schema
+            let first_batch = rt()
+                .block_on(async { stream.try_next().await })
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
+            
+            let schema = match &first_batch {
+                Some(batch) => batch.schema(),
+                None => return Err(DeltaError::new_err("No add actions found").into()),
+            };
+            
+            // chain it back to the stream
+            let full_stream = futures::stream::iter(first_batch.into_iter().map(Ok))
+                .chain(stream)
+                .boxed();
+            
+            let reader = convert_boxstream_to_reader(full_stream, schema);
+            Ok(reader.into())
+        })
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {

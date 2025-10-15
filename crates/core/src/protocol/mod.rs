@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
+use futures::TryStreamExt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -739,7 +740,9 @@ mod tests {
             let table_uri =
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 ("path", Arc::new(array::StringArray::from(vec![
@@ -783,7 +786,8 @@ mod tests {
             let path = "../test/tests/data/table_with_deletion_logs";
             let table_uri = Url::from_directory_path(Path::new(path)).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -841,7 +845,8 @@ mod tests {
 
             assert_eq!(expected, actions);
 
-            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(false).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let actions = actions
                 .project(&[
@@ -892,7 +897,8 @@ mod tests {
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
 
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -969,7 +975,8 @@ mod tests {
             let path = "../test/tests/data/table_with_column_mapping";
             let table_uri = Url::from_directory_path(Path::new(path)).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
                     "path",
@@ -1045,7 +1052,8 @@ mod tests {
             let table_uri =
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -1087,7 +1095,8 @@ mod tests {
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             // get column-0 path, and column-4 num_records, and column_5 null_count.integer
             let expected_path: ArrayRef = Arc::new(array::StringArray::from(vec![
@@ -1137,7 +1146,8 @@ mod tests {
             let mut table = crate::open_table(table_uri).await.unwrap();
             table.load_version(1).await.unwrap();
 
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -1306,7 +1316,8 @@ mod tests {
             );
             assert_eq!(expected, actions);
 
-            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
+            let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(false).try_collect().await.unwrap();
+            let actions = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
             // For brevity, just checking a few nested columns in stats
 
             assert_eq!(

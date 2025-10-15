@@ -14,7 +14,7 @@ use futures::{future::ready, StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
-use super::DeltaTableConfig;
+use super::{builder, DeltaTableConfig};
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
@@ -22,10 +22,10 @@ use crate::kernel::{
     Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol,
     TombstoneView, ARROW_HANDLER,
 };
-use crate::logstore::LogStore;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::partitions::PartitionFilter;
 use crate::table::config::TablePropertiesExt;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{open_table, DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,9 +266,22 @@ impl DeltaTableState {
     ///   partition the file corresponds to.
     pub fn add_actions_table(
         &self,
+        log_store: LogStoreRef,
         flatten: bool,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        self.snapshot.add_actions_table(flatten)
+    ) -> BoxStream<'static, DeltaResult<arrow::record_batch::RecordBatch>> {
+        let version = self.version();
+        let config = self.load_config().clone();
+
+        Box::pin(stream::once(async move {
+            let snapshot = EagerSnapshot::try_new(
+                log_store.as_ref(),
+                config,
+                Some(version)
+            ).await?;
+
+            Ok::<_, DeltaTableError>(snapshot.add_actions_table(flatten))
+        })
+        .try_flatten())
     }
 }
 
@@ -302,7 +315,7 @@ impl EagerSnapshot {
     pub fn add_actions_table(
         &self,
         flatten: bool,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+    ) -> BoxStream<'static, DeltaResult<arrow::record_batch::RecordBatch>> {
         let mut expressions = vec![
             column_expr_ref!("path"),
             column_expr_ref!("size"),
@@ -314,13 +327,21 @@ impl EagerSnapshot {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot().inner.stats_schema()?;
-        let num_records_field = stats_schema
-            .field("numRecords")
-            .ok_or_else(|| DeltaTableError::SchemaMismatch {
-                msg: "numRecords field not found".to_string(),
-            })?
-            .with_name("num_records");
+        let stats_schema = match self.snapshot().inner.stats_schema() {
+            Ok(schema) => schema,
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
+        };
+
+        let num_records_field = match stats_schema.field("numRecords") {
+            Some(field) => field.with_name("num_records"),
+            None => {
+                return stream::once(ready(Err(DeltaTableError::SchemaMismatch {
+                    msg: "numRecords field not found".to_string(),
+                })))
+                .boxed()
+            }
+        };
+
 
         expressions.push(column_expr_ref!("stats_parsed.numRecords"));
         fields.push(num_records_field);
@@ -343,34 +364,45 @@ impl EagerSnapshot {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
-            fields.push(StructField::nullable(
-                "partition",
-                DataType::try_struct_type(partition_schema.fields().cloned())?,
-            ));
-            expressions.push(column_expr_ref!("partitionValues_parsed"));
+        if let Some(partition_schema) = self.snapshot().inner.partitions_schema().ok().flatten() {
+            match DataType::try_struct_type(partition_schema.fields().cloned()) {
+                Ok(partition_type) => {
+                    fields.push(StructField::nullable("partition", partition_type));
+                    expressions.push(column_expr_ref!("partitionValues_parsed"));
+                }
+                Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
+            }
         }
 
         let expression = Expression::Struct(expressions);
-        let table_schema = DataType::try_struct_type(fields)?;
+        let table_schema = match DataType::try_struct_type(fields) {
+            Ok(schema) => schema,
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
+        };
 
-        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
-        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+        let input_schema = match self.snapshot().inner.scan_row_parsed_schema_arrow() {
+            Ok(schema) => schema,
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
+        };
+
+        let input_schema = match input_schema.as_ref().try_into_kernel() {
+            Ok(schema) => Arc::new(schema),
+            Err(e) => return stream::once(ready(Err(e.into()))).boxed(),
+        };
+
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
 
-        let results = self
-            .files
-            .iter()
-            .map(|file| evaluator.evaluate_arrow(file.clone()))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let result = concat_batches(results[0].schema_ref(), &results)?;
-
-        if flatten {
-            Ok(result.normalize(".", None)?)
-        } else {
-            Ok(result)
-        }
+        let files = self.files.clone(); // race condition exists here
+        stream::iter(files)
+            .map(move |file| {
+                let batch = evaluator.evaluate_arrow(file)?;
+                if flatten {
+                    Ok(batch.normalize(".", None)?)
+                } else {
+                    Ok(batch)
+                }
+            })
+            .boxed()
     }
 }
