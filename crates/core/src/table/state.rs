@@ -9,7 +9,7 @@ use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use futures::{future::ready, StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};

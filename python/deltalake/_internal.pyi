@@ -12,7 +12,7 @@ from typing import (
 
 from arro3.core import DataType as ArrowDataType
 from arro3.core import Field as ArrowField
-from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core import RecordBatchReader
 from arro3.core import Schema as ArrowSchema
 from arro3.core.types import ArrowSchemaExportable
 

@@ -60,7 +60,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
@@ -87,7 +87,6 @@ use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::reader::{convert_boxstream_to_reader, convert_stream_to_reader};
-use crate::reader::convert_stream_to_reader;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 use crate::writer::to_lazy_table;
@@ -1037,7 +1036,7 @@ impl RawDeltaTable {
             match self._table.lock() {
                 Ok(table) => table
                     .history(limit)
-                    .awaituse futures::TryStreamExt;
+                    .await
                     .map_err(PythonError::from)
                     .map_err(PyErr::from),
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
