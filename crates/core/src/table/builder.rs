@@ -14,6 +14,7 @@ use url::Url;
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::kernel::size_limits::LogSizeLimiter;
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -58,6 +59,9 @@ pub struct DeltaTableConfig {
 
     #[delta(skip)]
     pub options: HashMap<String, String>,
+
+    #[delta(skip)]
+    pub log_size_limiter: Option<LogSizeLimiter>,
 }
 
 impl Default for DeltaTableConfig {
@@ -68,6 +72,7 @@ impl Default for DeltaTableConfig {
             log_batch_size: 1024,
             options: HashMap::new(),
             io_runtime: None,
+            log_size_limiter: None,
         }
     }
 }
@@ -77,6 +82,7 @@ impl PartialEq for DeltaTableConfig {
         self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
+            && self.log_size_limiter == other.log_size_limiter
     }
 }
 
@@ -135,6 +141,12 @@ impl DeltaTableBuilder {
     /// Sets `require_files=false` to the builder
     pub fn without_files(mut self) -> Self {
         self.table_config.require_files = false;
+        self
+    }
+
+    /// Sets `log_size_limiter` to the builder
+    pub fn with_log_size_limiter(mut self, limiter: LogSizeLimiter) -> Self {
+        self.table_config.log_size_limiter = Some(limiter);
         self
     }
 
@@ -200,8 +212,7 @@ impl DeltaTableBuilder {
     /// - [S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
     /// - [Google options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants)
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
-        self.storage_options = Some(
-            storage_options
+        let mut opts: HashMap<String, String> = storage_options
                 .clone()
                 .into_iter()
                 .map(|(k, v)| (k.strip_prefix("deltalake.").map(ToString::to_string).unwrap_or(k), v))
@@ -215,8 +226,12 @@ impl DeltaTableBuilder {
                         (k, v)
                     }
                 })
-                .collect(),
-        );
+                .collect();
+
+        self.table_config.log_size_limiter = LogSizeLimiter::from_storage_options(&mut opts)
+            .expect("Invalid log_size_limiter options");
+
+        self.storage_options = Some(opts);
         self
     }
 
