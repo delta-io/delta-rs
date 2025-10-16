@@ -70,7 +70,6 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::DeltaTable;
 
-pub(crate) mod async_utils;
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
