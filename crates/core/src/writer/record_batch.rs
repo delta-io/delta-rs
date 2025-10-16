@@ -31,6 +31,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::merge_arrow_schema;
+use crate::kernel::transaction::CommitProperties;
 use crate::kernel::MetadataExt as _;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
@@ -49,6 +50,7 @@ pub struct RecordBatchWriter {
     arrow_writers: HashMap<String, PartitionWriter>,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: Option<Vec<String>>,
+    commit_properties: Option<CommitProperties>,
 }
 
 impl std::fmt::Debug for RecordBatchWriter {
@@ -103,7 +105,18 @@ impl RecordBatchWriter {
             stats_columns: configuration
                 .get("delta.dataSkippingStatsColumns")
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            commit_properties: None,
         })
+    }
+
+    /// Add the [CommitProperties] to the [RecordBatchWriter] to be used when the writer flushes
+    /// the write into storage.
+    ///
+    /// This can be useful for situations where slight modifications to the commit behavior are
+    /// required.
+    pub fn with_commit_properties(mut self, properties: CommitProperties) -> Self {
+        self.commit_properties = Some(properties);
+        self
     }
 
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
@@ -142,6 +155,7 @@ impl RecordBatchWriter {
             stats_columns: configuration
                 .get("delta.dataSkippingStatsColumns")
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            commit_properties: None,
         })
     }
 
@@ -306,7 +320,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let metadata = current_meta.with_schema(&schema)?;
             adds.push(Action::Metadata(metadata));
         }
-        super::flush_and_commit(adds, table).await
+        super::flush_and_commit(adds, table, self.commit_properties.clone()).await
     }
 }
 
