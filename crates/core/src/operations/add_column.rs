@@ -1,10 +1,9 @@
 //! Add a new column to a table
 
-use std::sync::Arc;
-
 use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 use itertools::Itertools;
+use std::sync::Arc;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;

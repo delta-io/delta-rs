@@ -39,6 +39,8 @@ use crate::logstore::LogStoreRef;
 use crate::table::builder::ensure_table_uri;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
+use crate::table::file_format_options::FileFormatRef;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use url::Url;
 
@@ -59,6 +61,8 @@ mod cdc;
 pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
+#[cfg(feature = "datafusion")]
+pub mod encryption;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
@@ -181,6 +185,28 @@ impl DeltaOps {
         }
     }
 
+    /// Set options for parquet files
+    pub async fn with_file_format_options(
+        mut self,
+        file_format_options: FileFormatRef,
+    ) -> DeltaResult<Self> {
+        // Update table-level config so future loads/operations use these options
+        self.0.config.file_format_options = Some(file_format_options);
+
+        // Update the in-memory state and snapshot config to match the top level table config
+        if self.0.state.is_some() {
+            self.0.state = Some(
+                DeltaTableState::try_new(
+                    &self.0.log_store,
+                    self.0.config.clone(),
+                    Some(self.0.state.unwrap().version()),
+                )
+                .await?,
+            );
+        }
+        Ok(self)
+    }
+
     /// Create a [`DeltaOps`] instance from uri string with storage options (deprecated)
     #[deprecated(note = "Use try_from_uri_with_storage_options with url::Url instead")]
     pub async fn try_from_uri_str_with_storage_options(
@@ -224,7 +250,9 @@ impl DeltaOps {
     /// ```
     #[must_use]
     pub fn create(self) -> CreateBuilder {
-        CreateBuilder::default().with_log_store(self.0.log_store)
+        CreateBuilder::default()
+            .with_log_store(self.0.log_store)
+            .with_table_config(self.0.config.clone())
     }
 
     /// Load data from a DeltaTable

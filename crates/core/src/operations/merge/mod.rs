@@ -58,7 +58,6 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::{cast, DataFrame, SessionContext},
 };
-
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
@@ -92,6 +91,10 @@ use crate::operations::write::generated_columns::{
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
+use crate::table::file_format_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
+    state_with_file_format_options, WriterPropertiesFactoryRef,
+};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -146,7 +149,7 @@ pub struct MergeBuilder {
     /// Datafusion session state relevant for executing the input plan
     state: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -173,6 +176,8 @@ impl MergeBuilder {
         source: DataFrame,
     ) -> Self {
         let predicate = predicate.into();
+        let file_format_options = snapshot.load_config().file_format_options.clone();
+        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options);
         Self {
             predicate,
             source,
@@ -182,7 +187,7 @@ impl MergeBuilder {
             target_alias: None,
             state: None,
             commit_properties: CommitProperties::default(),
-            writer_properties: None,
+            writer_properties_factory,
             merge_schema: false,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
@@ -395,9 +400,10 @@ impl MergeBuilder {
         self
     }
 
-    /// Writer properties passed to parquet writer for when fiiles are rewritten
+    /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -740,7 +746,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     state: SessionState,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     streaming: bool,
@@ -774,6 +780,9 @@ async fn execute(
 
     let current_metadata = snapshot.metadata();
     let merge_planner = DeltaPlanner::new();
+
+    let file_format_options = snapshot.load_config().file_format_options.clone();
+    let state = state_with_file_format_options(state, file_format_options.as_ref())?;
 
     let state = SessionStateBuilder::new_from_existing(state)
         .with_query_planner(merge_planner)
@@ -832,11 +841,10 @@ async fn execute(
         .with_schema(snapshot.input_schema())
         .build(&snapshot)?;
 
-    let target_provider = Arc::new(DeltaTableProvider::try_new(
-        snapshot.clone(),
-        log_store.clone(),
-        scan_config.clone(),
-    )?);
+    let target_provider = Arc::new(
+        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_file_format_options(file_format_options),
+    );
 
     let target_provider = provider_as_source(target_provider);
     let target =
@@ -1408,7 +1416,7 @@ async fn execute(
         log_store.object_store(Some(operation_id)),
         Some(snapshot.table_properties().target_file_size().get() as usize),
         None,
-        writer_properties.clone(),
+        writer_properties_factory.clone(),
         writer_stats_config.clone(),
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
@@ -1565,7 +1573,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.log_store.clone(),
                 this.snapshot,
                 state,
-                this.writer_properties,
+                this.writer_properties_factory,
                 this.commit_properties,
                 this.safe_cast,
                 this.streaming,

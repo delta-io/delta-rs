@@ -59,6 +59,10 @@ use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
+use crate::table::file_format_options::{
+    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
+    state_with_file_format_options, WriterPropertiesFactoryRef,
+};
 use crate::table::state::DeltaTableState;
 use crate::{
     delta_datafusion::{
@@ -97,7 +101,7 @@ pub struct UpdateBuilder {
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -135,13 +139,16 @@ impl super::Operation<()> for UpdateBuilder {
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
     pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+        let file_format_options = snapshot.load_config().file_format_options.clone();
+        let writer_properties_factory =
+            build_writer_properties_factory_ffo(file_format_options.clone());
         Self {
             predicate: None,
             updates: HashMap::new(),
             snapshot,
             log_store,
             session: None,
-            writer_properties: None,
+            writer_properties_factory,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
             custom_execute_handler: None,
@@ -178,7 +185,8 @@ impl UpdateBuilder {
 
     /// Writer properties passed to parquet writer for when fiiles are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -255,7 +263,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: SessionState,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     operation_id: Uuid,
@@ -282,6 +290,9 @@ async fn execute(
         })
         .cloned()
         .collect();
+
+    let file_format_options = snapshot.load_config().file_format_options.clone();
+    let session = state_with_file_format_options(session, file_format_options.as_ref())?;
 
     let update_planner = DeltaPlanner::new();
 
@@ -319,7 +330,14 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
+    let candidates = find_files(
+        &snapshot,
+        log_store.clone(),
+        &session,
+        file_format_options.as_ref(),
+        predicate.clone(),
+    )
+    .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -337,6 +355,7 @@ async fn execute(
     // to either compute the new value or obtain the old one then write these batches
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
+            .with_file_format_options(file_format_options.clone())
             .with_files(candidates.candidates.clone()),
     );
 
@@ -399,6 +418,12 @@ async fn execute(
 
     let tracker = CDCTracker::new(df, updated_df);
 
+    let writer_properties_factory = if writer_properties_factory.is_some() {
+        writer_properties_factory
+    } else {
+        build_writer_properties_factory_ffo(file_format_options.clone())
+    };
+
     let add_actions = write_execution_plan(
         Some(&snapshot),
         session.clone(),
@@ -407,7 +432,7 @@ async fn execute(
         log_store.object_store(Some(operation_id)).clone(),
         Some(snapshot.table_properties().target_file_size().get() as usize),
         None,
-        writer_properties.clone(),
+        writer_properties_factory.clone(),
         writer_stats_config.clone(),
     )
     .await?;
@@ -469,7 +494,7 @@ async fn execute(
                     log_store.object_store(Some(operation_id)),
                     Some(snapshot.table_properties().target_file_size().get() as usize),
                     None,
-                    writer_properties,
+                    writer_properties_factory,
                     writer_stats_config,
                 )
                 .await?;
@@ -523,7 +548,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.log_store.clone(),
                 this.snapshot,
                 session,
-                this.writer_properties,
+                this.writer_properties_factory,
                 this.commit_properties,
                 this.safe_cast,
                 operation_id,
