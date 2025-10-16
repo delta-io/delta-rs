@@ -15,7 +15,6 @@
 //!
 //!
 
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use arrow::array::RecordBatch;
@@ -31,13 +30,17 @@ use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version};
+use delta_kernel::{
+    Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
+};
 use futures::future::ready;
 use futures::stream::{once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
+use serde_json::Deserializer;
 use tokio::task::spawn_blocking;
+use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
@@ -71,23 +74,12 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Create a new [`Snapshot`] instance
-    pub async fn try_new(
-        log_store: &dyn LogStore,
+    pub async fn try_new_with_engine(
+        engine: Arc<dyn Engine>,
+        table_root: Url,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
-        // TODO: bundle operation_id with logstore ...
-        let engine = log_store.engine(None);
-        let mut table_root = log_store.table_root_url();
-        let version = version.map(|v| v as u64);
-
-        // NB: kernel engine uses Url::join to construct paths,
-        // if the path does not end with a slash, the would override the entire path.
-        // So we need to be extra sure its ends with a slash.
-        if !table_root.path().ends_with('/') {
-            table_root.set_path(&format!("{}/", table_root.path()));
-        }
         let snapshot = match spawn_blocking(move || {
             let mut builder = KernelSnapshot::builder_for(table_root);
             if let Some(version) = version {
@@ -122,6 +114,26 @@ impl Snapshot {
             config,
             schema,
         })
+    }
+
+    /// Create a new [`Snapshot`] instance
+    pub async fn try_new(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+    ) -> DeltaResult<Self> {
+        // TODO: bundle operation_id with logstore ...
+        let engine = log_store.engine(None);
+
+        // NB: kernel engine uses Url::join to construct paths,
+        // if the path does not end with a slash, the would override the entire path.
+        // So we need to be extra sure its ends with a slash.
+        let mut table_root = log_store.table_root_url();
+        if !table_root.path().ends_with('/') {
+            table_root.set_path(&format!("{}/", table_root.path()));
+        }
+
+        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64)).await
     }
 
     pub fn scan_builder(&self) -> ScanBuilder {
@@ -323,9 +335,10 @@ impl Snapshot {
                 let store = store.clone();
                 async move {
                     let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
-                    let reader = BufReader::new(Cursor::new(commit_log_bytes));
-                    for line in reader.lines() {
-                        let action: Action = serde_json::from_str(line?.as_str())?;
+
+                    for result in Deserializer::from_slice(&commit_log_bytes).into_iter::<Action>()
+                    {
+                        let action = result?;
                         if let Action::CommitInfo(commit_info) = action {
                             return Ok::<_, DeltaTableError>(Some(commit_info));
                         }

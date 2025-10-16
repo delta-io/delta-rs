@@ -183,14 +183,22 @@ impl UnitySchemaProvider {
         table: &str,
     ) -> Result<TemporaryTableCredentials, UnityCatalogError> {
         tracing::debug!("Fetching new credential for: {catalog}.{schema}.{table}",);
-        self.client
-            .get_temp_table_credentials(catalog, schema, table)
-            .map(|resp| match resp {
-                Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
-                Ok(TableTempCredentialsResponse::Error(err)) => Err(err.into()),
-                Err(err) => Err(err),
-            })
+        match self
+            .client
+            .get_temp_table_credentials_with_permission(catalog, schema, table, "READ_WRITE")
             .await
+        {
+            Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
+            Ok(TableTempCredentialsResponse::Error(_err)) => match self
+                .client
+                .get_temp_table_credentials(catalog, schema, table)
+                .await?
+            {
+                TableTempCredentialsResponse::Success(temp_creds) => Ok(temp_creds),
+                _ => Err(UnityCatalogError::TemporaryCredentialsFetchFailure),
+            },
+            Err(err) => Err(err),
+        }
     }
 }
 

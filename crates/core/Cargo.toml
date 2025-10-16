@@ -69,7 +69,7 @@ tokio = { workspace = true, features = [
 
 # caching
 foyer = { version = "0.20.0", optional = true, features = ["serde"] }
-tempfile = { version = "3.19.1", optional = true }
+tempfile = { workspace = true, optional = true }
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
@@ -98,8 +98,9 @@ pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }
 serial_test = "3"
-tempfile = "3"
+tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
@@ -163,6 +164,10 @@ required-features = ["datafusion"]
 [[test]]
 name = "read_delta_partitions_test"
 required-features = ["datafusion"]
+
+[[bench]]
+name = "json_parsing"
+harness = false
 
 [package.metadata.cargo-machete]
 ignored = ["foyer"]

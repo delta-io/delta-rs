@@ -128,7 +128,7 @@ impl CdfLoadBuilder {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..self.snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
-                if let Ok(actions) = get_actions(v, bytes).await {
+                if let Ok(actions) = get_actions(v, &bytes).await {
                     if actions.iter().any(|action| {
                         matches!(action, Action::CommitInfo(CommitInfo {
                             timestamp: Some(t), ..
@@ -209,7 +209,7 @@ impl CdfLoadBuilder {
             .ok_or(DeltaTableError::InvalidVersion(latest_version))?;
 
         let latest_version_actions: Vec<Action> =
-            get_actions(latest_version, latest_snapshot_bytes).await?;
+            get_actions(latest_version, &latest_snapshot_bytes).await?;
         let latest_version_commit = latest_version_actions
             .iter()
             .find(|a| matches!(a, Action::CommitInfo(_)));
@@ -240,7 +240,7 @@ impl CdfLoadBuilder {
                 .await?
                 .ok_or(DeltaTableError::InvalidVersion(version));
 
-            let version_actions: Vec<Action> = get_actions(version, snapshot_bytes?).await?;
+            let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?).await?;
 
             let mut ts = 0;
             let mut cdc_actions = vec![];
@@ -953,7 +953,7 @@ pub(crate) mod tests {
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
-        let version_actions = get_actions(2, snapshot_bytes).await?;
+        let version_actions = get_actions(2, &snapshot_bytes).await?;
 
         let cdc_actions = version_actions
             .iter()

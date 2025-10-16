@@ -48,7 +48,6 @@
 //! ## Configuration
 //!
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use bytes::Bytes;
@@ -68,9 +67,10 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
+use serde_json::Deserializer;
 use tokio::runtime::RuntimeFlavor;
 use tokio::task::spawn_blocking;
-use tracing::{debug, error};
+use tracing::*;
 use url::Url;
 use uuid::Uuid;
 
@@ -309,7 +309,7 @@ pub trait LogStore: Send + Sync + AsAny {
             Err(err) => Err(err),
         }?;
 
-        let actions = crate::logstore::get_actions(next_version, commit_log_bytes).await;
+        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes).await;
         Ok(PeekCommit::New(next_version, actions?))
     }
 
@@ -566,23 +566,22 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
 /// Reads a commit and gets list of actions
 pub async fn get_actions(
     version: i64,
-    commit_log_bytes: bytes::Bytes,
+    commit_log_bytes: &bytes::Bytes,
 ) -> Result<Vec<Action>, DeltaTableError> {
     debug!("parsing commit with version {version}...");
-    let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-    let mut actions = Vec::new();
-    for re_line in reader.lines() {
-        let line = re_line?;
-        let lstr = line.as_str();
-        let action = serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-            json_err: e,
-            line,
-            version,
-        })?;
-        actions.push(action);
-    }
-    Ok(actions)
+    Deserializer::from_slice(commit_log_bytes)
+        .into_iter::<Action>()
+        .map(|result| {
+            result.map_err(|e| {
+                let line = format!("Error at line {}, column {}", e.line(), e.column());
+                DeltaTableError::InvalidJsonLog {
+                    json_err: e,
+                    line,
+                    version,
+                }
+            })
+        })
+        .collect()
 }
 
 // TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
@@ -680,19 +679,31 @@ pub async fn get_latest_version(
 }
 
 /// Read delta log for a specific version
+#[instrument(skip(storage), fields(version = version, path = %commit_uri_from_version(version)))]
 pub async fn read_commit_entry(
     storage: &dyn ObjectStore,
     version: i64,
 ) -> DeltaResult<Option<Bytes>> {
     let commit_uri = commit_uri_from_version(version);
     match storage.get(&commit_uri).await {
-        Ok(res) => Ok(Some(res.bytes().await?)),
-        Err(ObjectStoreError::NotFound { .. }) => Ok(None),
-        Err(err) => Err(err.into()),
+        Ok(res) => {
+            let bytes = res.bytes().await?;
+            debug!(size = bytes.len(), "commit entry read successfully");
+            Ok(Some(bytes))
+        }
+        Err(ObjectStoreError::NotFound { .. }) => {
+            debug!("commit entry not found");
+            Ok(None)
+        }
+        Err(err) => {
+            error!(error = %err, version = version, "failed to read commit entry");
+            Err(err.into())
+        }
     }
 }
 
 /// Default implementation for writing a commit entry
+#[instrument(skip(storage), fields(version = version, tmp_path = %tmp_commit, commit_path = %commit_uri_from_version(version)))]
 pub async fn write_commit_entry(
     storage: &dyn ObjectStore,
     version: i64,
@@ -706,21 +717,28 @@ pub async fn write_commit_entry(
         .map_err(|err| -> TransactionError {
             match err {
                 ObjectStoreError::AlreadyExists { .. } => {
+                    warn!("commit entry already exists");
                     TransactionError::VersionAlreadyExists(version)
                 }
-                _ => TransactionError::from(err),
+                _ => {
+                    error!(error = %err, "failed to write commit entry");
+                    TransactionError::from(err)
+                }
             }
         })?;
+    debug!("commit entry written successfully");
     Ok(())
 }
 
 /// Default implementation for aborting a commit entry
+#[instrument(skip(storage), fields(version = _version, tmp_path = %tmp_commit))]
 pub async fn abort_commit_entry(
     storage: &dyn ObjectStore,
     _version: i64,
     tmp_commit: &Path,
 ) -> Result<(), TransactionError> {
     storage.delete_with_retries(tmp_commit, 15).await?;
+    debug!("commit entry aborted successfully");
     Ok(())
 }
 
@@ -979,6 +997,29 @@ mod datafusion_tests {
                 object_store_url(&url_1).as_str(),
                 object_store_url(&url_2).as_str(),
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_actions_malformed_json() {
+        let malformed_json = bytes::Bytes::from(
+            r#"{"add": {"path": "test.parquet", "partitionValues": {}, "size": 100, "modificationTime": 1234567890, "dataChange": true}}
+{"invalid json without closing brace"#,
+        );
+
+        let result = get_actions(0, &malformed_json).await;
+
+        match result {
+            Err(DeltaTableError::InvalidJsonLog {
+                line,
+                version,
+                json_err,
+            }) => {
+                assert_eq!(version, 0);
+                assert!(line.contains("line 2"));
+                assert!(json_err.is_eof());
+            }
+            other => panic!("Expected InvalidJsonLog error, got {:?}", other),
         }
     }
 }
