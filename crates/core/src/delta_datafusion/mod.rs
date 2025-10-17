@@ -26,8 +26,8 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_array::types::UInt16Type;
-use arrow_array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
+use arrow::array::types::UInt16Type;
+use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{
@@ -41,7 +41,7 @@ use datafusion::common::{
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::execution::context::SessionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -50,7 +50,6 @@ use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{ExecutionPlan, Statistics};
-use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -71,6 +70,7 @@ use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
+pub use self::session::*;
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -83,6 +83,7 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 mod schema_adapter;
+mod session;
 mod table_provider;
 
 pub use cdf::scan::DeltaCdfTableProvider;
@@ -125,7 +126,7 @@ pub trait DataFusionMixins {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr>;
 }
 
@@ -149,7 +150,7 @@ impl DataFusionMixins for Snapshot {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, session)
@@ -188,7 +189,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, session)
@@ -207,7 +208,7 @@ impl DataFusionMixins for EagerSnapshot {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         self.snapshot().parse_predicate_expression(expr, session)
     }
@@ -792,67 +793,6 @@ impl TableProviderFactory for DeltaTableFactory {
     }
 }
 
-/// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
-pub struct DeltaParserOptions {
-    inner: ParserOptions,
-}
-
-impl Default for DeltaParserOptions {
-    fn default() -> Self {
-        DeltaParserOptions {
-            inner: ParserOptions {
-                enable_ident_normalization: false,
-                ..ParserOptions::default()
-            },
-        }
-    }
-}
-
-impl From<DeltaParserOptions> for ParserOptions {
-    fn from(value: DeltaParserOptions) -> Self {
-        value.inner
-    }
-}
-
-/// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
-pub struct DeltaSessionConfig {
-    inner: SessionConfig,
-}
-
-impl Default for DeltaSessionConfig {
-    fn default() -> Self {
-        DeltaSessionConfig {
-            inner: SessionConfig::default()
-                .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
-        }
-    }
-}
-
-impl From<DeltaSessionConfig> for SessionConfig {
-    fn from(value: DeltaSessionConfig) -> Self {
-        value.inner
-    }
-}
-
-/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
-pub struct DeltaSessionContext {
-    inner: SessionContext,
-}
-
-impl Default for DeltaSessionContext {
-    fn default() -> Self {
-        DeltaSessionContext {
-            inner: SessionContext::new_with_config(DeltaSessionConfig::default().into()),
-        }
-    }
-}
-
-impl From<DeltaSessionContext> for SessionContext {
-    fn from(value: DeltaSessionContext) -> Self {
-        value.inner
-    }
-}
-
 /// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
 pub struct DeltaColumn {
     inner: Column,
@@ -914,7 +854,7 @@ mod tests {
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion::prelude::col;
+    use datafusion::prelude::{col, SessionConfig};
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};

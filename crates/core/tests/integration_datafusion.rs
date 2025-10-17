@@ -15,7 +15,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::ScalarValue::*;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -51,6 +51,7 @@ pub fn context_with_delta_table_factory() -> SessionContext {
 
 mod local {
     use super::*;
+    use datafusion::catalog::Session;
     use datafusion::common::assert_contains;
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::source::DataSourceExec;
@@ -61,6 +62,7 @@ mod local {
     use datafusion::prelude::SessionConfig;
     use datafusion::{common::stats::Precision, datasource::provider_as_source};
     use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+    use deltalake_core::delta_datafusion::create_session;
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
@@ -412,7 +414,7 @@ mod local {
         };
 
         // Build a new context from scratch and deserialize the plan
-        let ctx = SessionContext::new();
+        let ctx = create_session().into_inner();
         let state = ctx.state();
         let source_scan = Arc::new(logical_plan_from_bytes_with_extension_codec(
             &source_scan_bytes,
@@ -422,7 +424,6 @@ mod local {
         let schema: StructType = source_scan.schema().as_arrow().try_into_kernel().unwrap();
         let fields = schema.fields().cloned();
 
-        dbg!(schema.fields().collect_vec().clone());
         // Create target Delta Table
         let target_table = CreateBuilder::new()
             .with_location("memory:///target")
@@ -653,7 +654,7 @@ mod local {
 
     async fn get_scan_metrics_with_limit(
         table: &DeltaTable,
-        state: &SessionState,
+        state: &dyn Session,
         e: &[Expr],
         limit: Option<usize>,
     ) -> Result<ExecutionMetricsCollector> {
@@ -675,7 +676,7 @@ mod local {
 
     async fn get_scan_metrics(
         table: &DeltaTable,
-        state: &SessionState,
+        state: &dyn Session,
         e: &[Expr],
     ) -> Result<ExecutionMetricsCollector> {
         get_scan_metrics_with_limit(table, state, e, None).await

@@ -28,8 +28,7 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use futures::future::{ready, BoxFuture};
 use futures::{StreamExt, TryStreamExt};
-use object_store::Error;
-use object_store::{path::Path, ObjectStore};
+use object_store::{path::Path, Error, ObjectStore};
 use serde::Serialize;
 use tracing::*;
 
