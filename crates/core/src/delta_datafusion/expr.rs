@@ -49,7 +49,7 @@ use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 use tracing::log::*;
 
-use super::DeltaParserOptions;
+use crate::delta_datafusion::session::DeltaParserOptions;
 use crate::{DeltaResult, DeltaTableError};
 
 /// This struct is like Datafusion's MakeArray but ensures that `element` is used rather than `item
