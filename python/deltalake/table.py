@@ -15,7 +15,7 @@ from typing import (
     Union,
 )
 
-from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core import RecordBatchReader
 from arro3.core.types import (
     ArrowArrayExportable,
     ArrowSchemaExportable,
@@ -542,7 +542,9 @@ class DeltaTable:
         """
         total_rows = 0
 
-        for value in self.get_add_actions().column("num_records").to_pylist():
+        for value in (
+            self.get_add_actions().read_all().column("num_records").to_pylist()
+        ):
             # Add action file statistics are optional and so while most modern
             # tables are _likely_ to have this information it is not
             # guaranteed.
@@ -1018,7 +1020,7 @@ class DeltaTable:
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions(self, flatten: bool = False) -> RecordBatch:
+    def get_add_actions(self, flatten: bool = False) -> RecordBatchReader:
         """
         Return a dataframe with all current add actions.
 

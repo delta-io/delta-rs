@@ -97,6 +97,7 @@ pub mod writer;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use url::Url;
+use futures::TryStreamExt;
 
 pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
@@ -337,7 +338,8 @@ mod tests {
         );
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
-        let stats = table.snapshot().unwrap().add_actions_table(true).unwrap();
+        let batches: Vec<_> = table.snapshot().unwrap().add_actions_table(true).try_collect().await.unwrap();
+        let stats = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
 
         let num_records = stats.column_by_name("num_records").unwrap();
         let num_records = num_records
