@@ -41,7 +41,9 @@ use deltalake::operations::delete::DeleteBuilder;
 use deltalake::operations::drop_constraints::DropConstraintBuilder;
 use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
 use deltalake::operations::load_cdf::CdfLoadBuilder;
-use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::optimize::{
+    create_session_state_for_optimize, OptimizeBuilder, OptimizeType,
+};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
 use deltalake::operations::update::UpdateBuilder;
@@ -593,6 +595,8 @@ impl RawDeltaTable {
         partition_filters = None,
         target_size = None,
         max_concurrent_tasks = None,
+        max_spill_size = None,
+        max_temp_directory_size = None,
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
@@ -605,6 +609,8 @@ impl RawDeltaTable {
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
+        max_spill_size: Option<usize>,
+        max_temp_directory_size: Option<u64>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -613,6 +619,13 @@ impl RawDeltaTable {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+
+            if max_spill_size.is_some() || max_temp_directory_size.is_some() {
+                let session =
+                    create_session_state_for_optimize(max_spill_size, max_temp_directory_size);
+                cmd = cmd.with_session_state(Arc::new(session));
+            }
+
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
             }
@@ -655,7 +668,8 @@ impl RawDeltaTable {
         partition_filters = None,
         target_size = None,
         max_concurrent_tasks = None,
-        max_spill_size = 20 * 1024 * 1024 * 1024,
+        max_spill_size = None,
+        max_temp_directory_size = None,
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
@@ -667,7 +681,8 @@ impl RawDeltaTable {
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
-        max_spill_size: usize,
+        max_spill_size: Option<usize>,
+        max_temp_directory_size: Option<u64>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -676,8 +691,14 @@ impl RawDeltaTable {
         let (table, metrics) = py.allow_threads(|| {
             let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
-                .with_max_spill_size(max_spill_size)
                 .with_type(OptimizeType::ZOrder(z_order_columns));
+
+            if max_spill_size.is_some() || max_temp_directory_size.is_some() {
+                let session =
+                    create_session_state_for_optimize(max_spill_size, max_temp_directory_size);
+                cmd = cmd.with_session_state(Arc::new(session));
+            }
+
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
             }
