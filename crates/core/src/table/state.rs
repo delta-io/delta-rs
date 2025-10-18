@@ -140,12 +140,20 @@ impl DeltaTableState {
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
+    #[deprecated(
+        since = "0.29.1",
+        note = "Use `.snapshot().file_views(log_store, predicate)` instead."
+    )]
     pub async fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
         self.file_actions_iter(log_store).try_collect().await
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
     /// delta table state.
+    #[deprecated(
+        since = "0.29.1",
+        note = "Use `.snapshot().file_views(log_store, predicate)` instead."
+    )]
     pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
         self.snapshot
             .file_views(log_store, None)

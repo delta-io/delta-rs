@@ -527,15 +527,19 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::operations::create::CreateBuilder;
-    use crate::writer::test_utils::*;
-    use crate::{DeltaOps, DeltaResult};
     use arrow::json::ReaderBuilder;
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use delta_kernel::schema::StructType;
+    #[cfg(feature = "datafusion")]
+    use futures::TryStreamExt;
     use std::path::Path;
+
+    use crate::operations::create::CreateBuilder;
+    use crate::writer::test_utils::*;
+    use crate::{DeltaOps, DeltaResult};
+
+    use super::*;
 
     #[tokio::test]
     async fn test_buffer_len_includes_unflushed_row_group() {
@@ -1156,10 +1160,12 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -1170,7 +1176,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()
@@ -1210,10 +1216,12 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -1224,7 +1232,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()

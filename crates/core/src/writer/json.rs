@@ -474,6 +474,8 @@ mod tests {
     use super::*;
 
     use arrow_schema::ArrowError;
+    #[cfg(feature = "datafusion")]
+    use futures::TryStreamExt;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     use std::fs::File;
@@ -784,10 +786,12 @@ mod tests {
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -798,7 +802,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()
@@ -847,10 +851,12 @@ mod tests {
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -861,7 +867,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()
