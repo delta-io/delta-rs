@@ -6,7 +6,6 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
-use futures::FutureExt;
 use moka::future::Cache;
 use moka::Expiry;
 use std::any::Any;

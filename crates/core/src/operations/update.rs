@@ -40,7 +40,6 @@ use datafusion::{
     execution::session_state::SessionStateBuilder,
     physical_plan::{metrics::MetricBuilder, ExecutionPlan},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
-    prelude::SessionContext,
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -54,25 +53,25 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Remove};
+use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{
     delta_datafusion::{
+        create_session,
         expr::fmt_expr_to_sql,
         logical::MetricObserver,
         physical::{find_metric_node, get_metric, MetricObserverExec},
-        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext,
+        session_state_from_session, DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder,
         DeltaTableProvider,
     },
+    kernel::{
+        transaction::{CommitBuilder, CommitProperties, PROTOCOL},
+        Action, EagerSnapshot, Remove,
+    },
     table::config::TablePropertiesExt,
-};
-use crate::{
-    delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
-    kernel::EagerSnapshot,
 };
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -401,7 +400,7 @@ async fn execute(
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
-        session.clone(),
+        &session,
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
@@ -463,7 +462,7 @@ async fn execute(
             Ok(df) => {
                 let cdc_actions = write_execution_plan_cdc(
                     Some(&snapshot),
-                    session,
+                    &session,
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
@@ -510,19 +509,16 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             let session = this
                 .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    let session: SessionContext = DeltaSessionContext::default().into();
-                    session.state()
-                });
+                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
+            let state = session_state_from_session(session.as_ref())?;
 
             let (snapshot, metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
                 this.snapshot,
-                session,
+                state.clone(),
                 this.writer_properties,
                 this.commit_properties,
                 this.safe_cast,

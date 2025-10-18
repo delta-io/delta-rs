@@ -529,7 +529,7 @@ impl MergeOperation {
     fn try_from(
         config: MergeOperationConfig,
         schema: &DFSchema,
-        state: &SessionState,
+        state: &dyn Session,
         target_alias: &Option<String>,
     ) -> DeltaResult<MergeOperation> {
         let mut ops = HashMap::with_capacity(config.operations.capacity());
@@ -1402,7 +1402,7 @@ async fn execute(
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
-        state.clone(),
+        &state,
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),

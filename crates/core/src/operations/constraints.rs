@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::ToDFSchema;
-use datafusion::execution::{SendableRecordBatchStream, SessionState};
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
 use delta_kernel::table_features::WriterFeature;
 use futures::future::BoxFuture;
 use futures::StreamExt;
@@ -14,9 +13,7 @@ use futures::StreamExt;
 use super::datafusion_utils::into_expr;
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{
-    register_store, DeltaDataChecker, DeltaScanBuilder, DeltaSessionContext,
-};
+use crate::delta_datafusion::{create_session, register_store, DeltaDataChecker, DeltaScanBuilder};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner};
 use crate::logstore::LogStoreRef;
@@ -132,19 +129,16 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let session = this
                 .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    let session: SessionContext = DeltaSessionContext::default().into();
-                    session.state()
-                });
+                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
-            let scan = DeltaScanBuilder::new(&this.snapshot, this.log_store.clone(), &session)
-                .build()
-                .await?;
+            let scan =
+                DeltaScanBuilder::new(&this.snapshot, this.log_store.clone(), session.as_ref())
+                    .build()
+                    .await?;
 
             let schema = scan.schema().to_dfschema()?;
-            let expr = into_expr(expr, &schema, &session)?;
+            let expr = into_expr(expr, &schema, session.as_ref())?;
             let expr_str = fmt_expr_to_sql(&expr)?;
 
             // Checker built here with the one time constraint to check.
@@ -156,9 +150,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
             for p in 0..plan.properties().output_partitioning().partition_count() {
                 let inner_plan = plan.clone();
                 let inner_checker = checker.clone();
-                let task_ctx = Arc::new((&session).into());
                 let mut record_stream: SendableRecordBatchStream =
-                    inner_plan.execute(p, task_ctx)?;
+                    inner_plan.execute(p, session.task_ctx())?;
                 let handle: tokio::task::JoinHandle<DeltaResult<()>> =
                     tokio::task::spawn(async move {
                         while let Some(maybe_batch) = record_stream.next().await {

@@ -66,9 +66,9 @@ fn default_parse_url_opts(
 /// Access global registry of object store factories
 pub fn object_store_factories() -> ObjectStoreFactoryRegistry {
     static REGISTRY: OnceLock<ObjectStoreFactoryRegistry> = OnceLock::new();
-    let factory = Arc::new(DefaultObjectStoreFactory::default());
     REGISTRY
         .get_or_init(|| {
+            let factory = Arc::new(DefaultObjectStoreFactory::default());
             let registry = ObjectStoreFactoryRegistry::default();
             registry.insert(Url::parse("memory://").unwrap(), factory.clone());
             registry.insert(Url::parse("file://").unwrap(), factory);
