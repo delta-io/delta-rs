@@ -280,7 +280,7 @@ impl DeltaWriter {
 }
 
 /// Write configuration for partition writers
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PartitionWriterConfig {
     /// Schema of the data written to disk
     file_schema: ArrowSchemaRef,
@@ -331,6 +331,49 @@ impl PartitionWriterConfig {
     }
 }
 
+enum LazyArrowWriter {
+    Initialized(Path, ObjectStoreRef, PartitionWriterConfig),
+    Writing(Path, AsyncArrowWriter<ParquetObjectWriter>),
+}
+
+impl LazyArrowWriter {
+    async fn write_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        match self {
+            LazyArrowWriter::Initialized(path, object_store, config) => {
+                let writer = ParquetObjectWriter::from_buf_writer(
+                    BufWriter::with_capacity(
+                        object_store.clone(),
+                        path.clone(),
+                        upload_part_size(),
+                    )
+                    .with_max_concurrency(config.max_concurrency),
+                );
+                let mut arrow_writer = AsyncArrowWriter::try_new(
+                    writer,
+                    config.file_schema.clone(),
+                    Some(config.writer_properties.clone()),
+                )?;
+                arrow_writer.write(batch).await?;
+                *self = LazyArrowWriter::Writing(path.clone(), arrow_writer);
+            }
+            LazyArrowWriter::Writing(_, arrow_writer) => {
+                arrow_writer.write(batch).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn estimated_size(&self) -> usize {
+        match self {
+            LazyArrowWriter::Initialized(_, _, _) => 0,
+            LazyArrowWriter::Writing(_, arrow_writer) => {
+                arrow_writer.bytes_written() + arrow_writer.in_progress_size()
+            }
+        }
+    }
+}
+
 /// Partition writer implementation
 /// This writer takes in table data as RecordBatches and writes it out to partitioned parquet files.
 /// It buffers data in memory until it reaches a certain size, then writes it out to optimize file sizes.
@@ -339,7 +382,7 @@ pub struct PartitionWriter {
     object_store: ObjectStoreRef,
     writer_id: uuid::Uuid,
     config: PartitionWriterConfig,
-    arrow_writer: (Path, AsyncArrowWriter<ParquetObjectWriter>),
+    writer: LazyArrowWriter,
     part_counter: usize,
     /// Num index cols to collect stats for
     num_indexed_cols: DataSkippingNumIndexedCols,
@@ -364,7 +407,7 @@ impl PartitionWriter {
             object_store,
             writer_id,
             config,
-            arrow_writer: (first_path, writer),
+            writer,
             part_counter: 0,
             num_indexed_cols,
             stats_columns,
@@ -376,16 +419,9 @@ impl PartitionWriter {
         object_store: ObjectStoreRef,
         path: Path,
         config: &PartitionWriterConfig,
-    ) -> DeltaResult<AsyncArrowWriter<ParquetObjectWriter>> {
-        let buf_writer = BufWriter::with_capacity(object_store.clone(), path, upload_part_size())
-            .with_max_concurrency(config.max_concurrency);
-        let parquet_writer = ParquetObjectWriter::from_buf_writer(buf_writer);
-        let writer = AsyncArrowWriter::try_new(
-            parquet_writer,
-            config.file_schema.clone(),
-            Some(config.writer_properties.clone()),
-        )?;
-        Ok(writer)
+    ) -> DeltaResult<LazyArrowWriter> {
+        let state = LazyArrowWriter::Initialized(path, object_store.clone(), config.clone());
+        Ok(state)
     }
 
     fn next_data_path(&mut self) -> Path {
@@ -402,23 +438,14 @@ impl PartitionWriter {
     async fn reset_writer(&mut self) -> DeltaResult<()> {
         let next_path = self.next_data_path();
         let new_writer =
-            Self::create_writer(self.object_store.clone(), next_path.clone(), &self.config)?;
-        let (path, arrow_writer) =
-            std::mem::replace(&mut self.arrow_writer, (next_path, new_writer));
+            Self::create_writer(self.object_store.clone(), next_path, &self.config)?;
+        let state = std::mem::replace(&mut self.writer, new_writer);
 
-        self.in_flight_writers
-            .spawn(upload_parquet_file(arrow_writer, path));
-
+        if let LazyArrowWriter::Writing(path, arrow_writer) = state {
+            self.in_flight_writers
+                .spawn(upload_parquet_file(arrow_writer, path));
+        }
         Ok(())
-    }
-
-    async fn write_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
-        self.arrow_writer.1.write(batch).await?;
-        Ok(())
-    }
-
-    fn estimated_size(&self) -> usize {
-        self.arrow_writer.1.bytes_written() + self.arrow_writer.1.in_progress_size()
     }
 
     /// Buffers record batches in-memory up to appx. `target_file_size`.
@@ -438,9 +465,11 @@ impl PartitionWriter {
         let max_offset = batch.num_rows();
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
-            self.write_batch(&batch.slice(offset, length)).await?;
+            self.writer
+                .write_batch(&batch.slice(offset, length))
+                .await?;
             // flush currently buffered data to disk once we meet or exceed the target file size.
-            let estimated_size = self.estimated_size();
+            let estimated_size = self.writer.estimated_size();
             if estimated_size >= self.config.target_file_size {
                 debug!("Writing file with estimated size {estimated_size:?} in background.");
                 self.reset_writer().await?;
@@ -454,17 +483,9 @@ impl PartitionWriter {
     ///
     /// This will flush any remaining data and collect all Add actions from background tasks.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
-        // Finalize current writer if it has any data
-        let current_size = self.estimated_size();
-        // This is a bit of a hack, but when creating a `ParquetObjectWriter`, internally, it always
-        // adds 4 bytes to the internal size (parquet magic). So, to get an accurate estimate of how many
-        // in-flight / flushed bytes there are, we need to subtract 4 from the estimated size.
-        // See: https://github.com/apache/arrow-rs/blob/d49f017fe1c6712ba32e2222c6f031278b588ca5/parquet/src/file/writer.rs#L194
-        if current_size > 4 {
-            self.in_flight_writers.spawn(upload_parquet_file(
-                self.arrow_writer.1,
-                self.arrow_writer.0,
-            ));
+        if let LazyArrowWriter::Writing(path, arrow_writer) = self.writer {
+            self.in_flight_writers
+                .spawn(upload_parquet_file(arrow_writer, path));
         }
 
         let mut results = Vec::new();
