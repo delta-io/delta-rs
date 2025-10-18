@@ -9,7 +9,7 @@ use deltalake_core::logstore::object_store::{
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
 use futures::stream::BoxStream;
-use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};
 use serial_test::serial;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -237,7 +237,7 @@ impl ObjectStore for DelayedObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }
