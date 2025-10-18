@@ -1,10 +1,12 @@
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::SchemaRef as ArrowSchemaRef;
-use datafusion::datasource::provider_as_source;
-use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion::logical_expr::{lit, when, Expr, LogicalPlanBuilder};
+use arrow::compute::concat_batches;
+use arrow::datatypes::Schema;
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::datasource::{provider_as_source, MemTable};
+use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::{col, lit, when, Expr, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
@@ -16,25 +18,18 @@ use uuid::Uuid;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{find_files, DeltaScanConfigBuilder, DeltaTableProvider};
-use crate::delta_datafusion::{DataFusionMixins, DeltaDataChecker};
+use crate::delta_datafusion::{
+    find_files, session_state_from_session, DataFusionMixins, DeltaDataChecker,
+    DeltaScanConfigBuilder, DeltaTableProvider,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
-use crate::operations::cdc::should_write_cdc;
+use crate::operations::cdc::{should_write_cdc, CDC_COLUMN_NAME};
+use crate::operations::write::{WriteError, WriterStatsConfig};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::Constraint as DeltaConstraint;
 use crate::DeltaTableError;
-
-use arrow::compute::concat_batches;
-use arrow_schema::Schema;
-use datafusion::catalog::TableProvider;
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::col;
-
-use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::{WriteError, WriterStatsConfig};
 
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {
@@ -45,7 +40,7 @@ pub(crate) struct WriteExecutionPlanMetrics {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
     snapshot: Option<&EagerSnapshot>,
-    session: SessionState,
+    session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -92,7 +87,7 @@ pub(crate) async fn write_execution_plan_cdc(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
     snapshot: Option<&EagerSnapshot>,
-    session: SessionState,
+    session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -122,7 +117,7 @@ pub(crate) async fn write_execution_plan(
 pub(crate) async fn execute_non_empty_expr(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    session: SessionState,
+    session: &dyn Session,
     partition_columns: Vec<String>,
     expression: &Expr,
     rewrite: &[Add],
@@ -147,24 +142,20 @@ pub(crate) async fn execute_non_empty_expr(
     );
 
     let target_provider = provider_as_source(target_provider);
-    let source = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
-    // We don't want to verify the predicate against existing data
-
-    let df = DataFrame::new(session.clone(), source);
+    let source =
+        Arc::new(LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?);
 
     let cdf_df = if !partition_scan {
         // Apply the negation of the filter and rewrite files
         let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-
-        let filter = df
-            .clone()
+        let filter = LogicalPlanBuilder::from(source.clone())
             .filter(negated_expression)?
-            .create_physical_plan()
-            .await?;
+            .build()?;
+        let filter = session.create_physical_plan(&filter).await?;
 
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
-            session.clone(),
+            session,
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
@@ -181,6 +172,8 @@ pub(crate) async fn execute_non_empty_expr(
         // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
         // based on the remove actions if a partition got deleted
         if should_write_cdc(snapshot)? {
+            let state = session_state_from_session(session)?;
+            let df = DataFrame::new(state.clone(), source.as_ref().clone());
             Some(
                 df.filter(expression.clone())?
                     .with_column(CDC_COLUMN_NAME, lit("delete"))?,
@@ -201,7 +194,7 @@ pub(crate) async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
     snapshot: &EagerSnapshot,
-    session: SessionState,
+    session: &dyn Session,
     partition_columns: Vec<String>,
     writer_properties: Option<WriterProperties>,
     deletion_timestamp: i64,
@@ -211,7 +204,7 @@ pub(crate) async fn prepare_predicate_actions(
     let candidates = find_files(
         snapshot,
         log_store.clone(),
-        &session,
+        session,
         Some(predicate.clone()),
     )
     .await?;
@@ -252,7 +245,7 @@ pub(crate) async fn prepare_predicate_actions(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
     snapshot: Option<&EagerSnapshot>,
-    session: SessionState,
+    session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -265,7 +258,7 @@ pub(crate) async fn write_execution_plan_v2(
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
-    let schema: ArrowSchemaRef = plan.schema();
+    let schema = plan.schema();
     let mut checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
@@ -290,7 +283,6 @@ pub(crate) async fn write_execution_plan_v2(
         for i in 0..plan.properties().output_partitioning().partition_count() {
             let inner_plan = plan.clone();
             let inner_schema = schema.clone();
-            let task_ctx = Arc::new(TaskContext::from(&session));
             let config = WriterConfig::new(
                 inner_schema.clone(),
                 partition_columns.clone(),
@@ -303,7 +295,7 @@ pub(crate) async fn write_execution_plan_v2(
             let mut writer = DeltaWriter::new(object_store.clone(), config);
             let checker_stream = checker.clone();
             let scan_start = std::time::Instant::now();
-            let mut stream = inner_plan.execute(i, task_ctx)?;
+            let mut stream = inner_plan.execute(i, session.task_ctx())?;
 
             let handle: tokio::task::JoinHandle<
                 DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)>,
@@ -356,7 +348,6 @@ pub(crate) async fn write_execution_plan_v2(
                     .collect::<Vec<_>>(),
             ));
             let cdf_schema = schema.clone();
-            let task_ctx = Arc::new(TaskContext::from(&session));
             let normal_config = WriterConfig::new(
                 write_schema.clone(),
                 partition_columns.clone(),
@@ -383,7 +374,7 @@ pub(crate) async fn write_execution_plan_v2(
 
             let checker_stream = checker.clone();
             let scan_start = std::time::Instant::now();
-            let mut stream = inner_plan.execute(i, task_ctx)?;
+            let mut stream = inner_plan.execute(i, session.task_ctx())?;
 
             let session_context = SessionContext::new();
 

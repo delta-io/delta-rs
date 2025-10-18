@@ -950,11 +950,10 @@ pub(crate) mod tests {
             .await
             .expect("Failed to write log file");
 
-        let table_uri = "memory:///delta-table";
-
-        let table = crate::DeltaTableBuilder::from_valid_uri(table_uri)
+        let table_uri = url::Url::parse("memory:///delta-table").unwrap();
+        let table = crate::DeltaTableBuilder::from_uri(table_uri.clone())
             .unwrap()
-            .with_storage_backend(memory_store, Url::parse(table_uri).unwrap())
+            .with_storage_backend(memory_store, table_uri)
             .build()?;
 
         let result = table.log_store().peek_next_commit(0).await;

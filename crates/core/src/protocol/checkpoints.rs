@@ -677,7 +677,12 @@ mod tests {
             count,
             "Expected {count} transactions"
         );
-        let pre_checkpoint_actions = table.snapshot()?.file_actions(&table.log_store).await?;
+        let pre_checkpoint_actions: Vec<_> = table
+            .snapshot()?
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
+            .await?;
 
         let before = table.version();
         let res = create_checkpoint(&table, None).await;
@@ -692,7 +697,12 @@ mod tests {
             "Why on earth did a checkpoint creata version?"
         );
 
-        let post_checkpoint_actions = table.snapshot()?.file_actions(&table.log_store).await?;
+        let post_checkpoint_actions: Vec<_> = table
+            .snapshot()?
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
+            .await?;
 
         assert_eq!(
             pre_checkpoint_actions.len(),

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-use std::process::Command;
 use url::Url;
 
 #[allow(dead_code)]
@@ -48,7 +46,7 @@ async fn read_null_partitions_from_checkpoint() {
 
     // verify that table loads from checkpoint and handles null partitions
     let table = deltalake_core::open_table(
-        url::Url::from_directory_path(std::path::Path::new(&table.table_uri())).unwrap(),
+        Url::from_directory_path(std::path::Path::new(&table.table_uri())).unwrap(),
     )
     .await
     .unwrap();
@@ -64,7 +62,7 @@ async fn load_from_delta_8_0_table_with_special_partition() {
 
     let path = "../test/tests/data/delta-0.8.0-special-partition";
     let table = deltalake_core::open_table(
-        url::Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap(),
+        Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap(),
     )
     .await
     .unwrap();

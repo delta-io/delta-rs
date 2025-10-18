@@ -25,8 +25,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow_array::RecordBatch;
-use arrow_schema::SchemaRef as ArrowSchemaRef;
+use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::memory_pool::FairSpillPool;
@@ -491,7 +491,7 @@ pub struct MergeTaskParameters {
     /// Parameters passed to optimize operation
     input_parameters: OptimizeInput,
     /// Schema of written files
-    file_schema: ArrowSchemaRef,
+    file_schema: SchemaRef,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
     /// Num index cols to collect stats for

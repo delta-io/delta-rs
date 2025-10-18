@@ -23,34 +23,21 @@
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
-pub(crate) mod async_utils;
-pub mod configs;
-pub(crate) mod execution;
-pub(crate) mod generated_columns;
-pub(crate) mod metrics;
-pub(crate) mod schema_evolution;
-pub mod writer;
-
-use arrow_schema::Schema;
-pub use configs::WriterStatsConfig;
-use datafusion::execution::SessionStateBuilder;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
-use metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::vec;
 
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
+use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::logical_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
 use datafusion::prelude::DataFrame;
-use execution::{prepare_predicate_actions, write_execution_plan_v2};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use schema_evolution::try_cast_schema;
@@ -58,6 +45,10 @@ use serde::{Deserialize, Serialize};
 use tracing::log::*;
 use tracing::Instrument;
 
+pub use self::configs::WriterStatsConfig;
+use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
+use self::generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
+use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
@@ -66,8 +57,8 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
 use crate::delta_datafusion::planner::DeltaPlanner;
-use crate::delta_datafusion::register_store;
-use crate::delta_datafusion::DataFusionMixins;
+use crate::delta_datafusion::{create_session, register_store};
+use crate::delta_datafusion::{session_state_from_session, DataFusionMixins};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
@@ -78,6 +69,14 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::DeltaTable;
+
+pub(crate) mod async_utils;
+pub mod configs;
+pub(crate) mod execution;
+pub(crate) mod generated_columns;
+pub(crate) mod metrics;
+pub(crate) mod schema_evolution;
+pub mod writer;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
@@ -446,18 +445,15 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let session = this
                     .session
-                    .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                    .map(SessionStateBuilder::new_from_existing)
-                    .unwrap_or_default()
-                    .with_query_planner(write_planner)
-                    .build();
+                    .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
                 register_store(this.log_store.clone(), session.runtime_env().as_ref());
+                let state = session_state_from_session(session.as_ref())?;
 
                 let mut schema_drift = false;
                 let mut generated_col_exp = None;
                 let mut missing_gen_col = None;
                 let mut source =
-                    DataFrame::new(session.clone(), this.input.unwrap().as_ref().clone());
+                    DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
                 if let Some(snapshot) = &this.snapshot {
                     if able_to_gc(snapshot)? {
                         let generated_col_expressions =
@@ -546,7 +542,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             source,
                             &generated_columns_exp,
                             &missing_generated_col,
-                            &session,
+                            state,
                         )?;
                     }
                 }
@@ -559,7 +555,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     }),
                 });
 
-                let mut source = DataFrame::new(session.clone(), source);
+                let mut source = DataFrame::new(state.clone(), source);
 
                 let schema = Arc::new(source.schema().as_arrow().clone());
 
@@ -607,7 +603,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             Expression::DataFusion(expr) => expr,
                             Expression::String(s) => {
                                 let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
-                                parse_predicate_expression(&df_schema, s, &session)?
+                                parse_predicate_expression(&df_schema, s, session.as_ref())?
                             }
                         };
                         (Some(fmt_expr_to_sql(&pred)?), Some(pred))
@@ -647,7 +643,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                     pred.clone(),
                                     this.log_store.clone(),
                                     snapshot,
-                                    session.clone(),
+                                    session.as_ref(),
                                     partition_columns.clone(),
                                     this.writer_properties.clone(),
                                     deletion_timestamp,
@@ -687,7 +683,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
-                    session.clone(),
+                    session.as_ref(),
                     source_plan.clone(),
                     partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),

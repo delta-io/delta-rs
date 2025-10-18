@@ -937,6 +937,15 @@ pub struct FinalizedCommit {
     pub metrics: Metrics,
 }
 
+impl std::fmt::Debug for FinalizedCommit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FinalizedCommit")
+            .field("version", &self.version)
+            .field("metrics", &self.metrics)
+            .finish()
+    }
+}
+
 impl FinalizedCommit {
     /// The new table state after a commit
     pub fn snapshot(&self) -> DeltaTableState {

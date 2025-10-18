@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
+use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
-use datafusion::execution::context::SessionState;
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
 use datafusion::logical_expr::{lit, Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator};
@@ -325,7 +325,7 @@ pub(crate) fn generalize_filter(
 pub(crate) async fn try_construct_early_filter(
     join_predicate: Expr,
     table_snapshot: &EagerSnapshot,
-    session_state: &SessionState,
+    session_state: &dyn Session,
     source: &LogicalPlan,
     source_name: &TableReference,
     target_name: &TableReference,
@@ -397,7 +397,7 @@ pub(crate) async fn try_construct_early_filter(
 }
 
 async fn execute_plan_to_batch(
-    state: &SessionState,
+    state: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<arrow::record_batch::RecordBatch> {
     let data = futures::future::try_join_all(
