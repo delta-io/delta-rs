@@ -323,22 +323,6 @@ impl DeltaTable {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
     }
 
-    /// Returns current table protocol
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.protocol()` instead")]
-    pub fn protocol(&self) -> DeltaResult<&Protocol> {
-        Ok(self
-            .state
-            .as_ref()
-            .ok_or(DeltaTableError::NotInitialized)?
-            .protocol())
-    }
-
-    /// Returns the metadata associated with the loaded state.
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.metadata()` instead")]
-    pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
-        Ok(self.snapshot()?.metadata())
-    }
-
     /// Time travel Delta table to the latest version that's created at or before provided
     /// `datetime` argument.
     ///
