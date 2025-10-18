@@ -988,10 +988,7 @@ impl ExecutionPlan for DeltaScan {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::from_children(
-            parent_filters,
-            &self.children(),
-        )?)
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 }
 
