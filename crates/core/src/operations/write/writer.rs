@@ -456,7 +456,11 @@ impl PartitionWriter {
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         // Finalize current writer if it has any data
         let current_size = self.estimated_size();
-        if current_size > 0 {
+        // This is a bit of a hack, but when creating a `ParquetObjectWriter`, internally, it always
+        // adds 4 bytes to the internal size (parquet magic). So, to get an accurate estimate of how many
+        // in-flight / flushed bytes there are, we need to subtract 4 from the estimated size.
+        // See: https://github.com/apache/arrow-rs/blob/d49f017fe1c6712ba32e2222c6f031278b588ca5/parquet/src/file/writer.rs#L194
+        if current_size > 4 {
             self.in_flight_writers.spawn(upload_parquet_file(
                 self.arrow_writer.1,
                 self.arrow_writer.0,
@@ -660,7 +664,7 @@ mod tests {
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();
-        assert!(adds.len() == 1);
+        assert_eq!(adds.len(), 1);
     }
 
     #[tokio::test]
