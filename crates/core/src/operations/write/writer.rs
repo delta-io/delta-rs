@@ -417,6 +417,10 @@ impl PartitionWriter {
         Ok(())
     }
 
+    fn estimated_size(&self) -> usize {
+        self.arrow_writer.1.bytes_written() + self.arrow_writer.1.in_progress_size()
+    }
+
     /// Buffers record batches in-memory up to appx. `target_file_size`.
     /// Flushes data to storage once a full file can be written.
     ///
@@ -436,8 +440,7 @@ impl PartitionWriter {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length)).await?;
             // flush currently buffered data to disk once we meet or exceed the target file size.
-            let estimated_size =
-                self.arrow_writer.1.bytes_written() + self.arrow_writer.1.in_progress_size();
+            let estimated_size = self.estimated_size();
             if estimated_size >= self.config.target_file_size {
                 debug!("Writing file with estimated size {estimated_size:?} in background.");
                 self.reset_writer().await?;
@@ -452,7 +455,7 @@ impl PartitionWriter {
     /// This will flush any remaining data and collect all Add actions from background tasks.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         // Finalize current writer if it has any data
-        let current_size = self.arrow_writer.1.in_progress_size();
+        let current_size = self.estimated_size();
         if current_size > 0 {
             self.in_flight_writers.spawn(upload_parquet_file(
                 self.arrow_writer.1,
