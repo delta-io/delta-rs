@@ -1,4 +1,5 @@
-# Merge
+# Benchmarks
+
 The merge benchmarks are similar to the ones used by [Delta Spark](https://github.com/delta-io/delta/pull/1835).
 
 
