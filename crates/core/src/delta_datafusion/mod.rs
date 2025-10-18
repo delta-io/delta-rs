@@ -72,6 +72,7 @@ use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
 pub use self::session::*;
 pub(crate) use find_files::*;
+pub use table_provider::next;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
