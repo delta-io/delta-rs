@@ -3,14 +3,13 @@
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
-use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
-use futures::{future::ready, StreamExt as _, TryStreamExt as _};
+use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +23,6 @@ use crate::kernel::{
 };
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;
-use crate::table::config::TablePropertiesExt;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -138,26 +136,6 @@ impl DeltaTableState {
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
         self.snapshot.snapshot().tombstones(log_store)
-    }
-
-    /// List of unexpired tombstones (remove actions) representing files removed from table state.
-    /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    #[deprecated(
-        since = "0.29.0",
-        note = "Use `all_tombstones` instead and filter by retention timestamp."
-    )]
-    pub fn unexpired_tombstones(
-        &self,
-        log_store: &dyn LogStore,
-    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
-        let retention_timestamp = Utc::now().timestamp_millis()
-            - self
-                .table_config()
-                .deleted_file_retention_duration()
-                .as_millis() as i64;
-        self.all_tombstones(log_store)
-            .try_filter(move |t| ready(t.deletion_timestamp().unwrap_or(0) > retention_timestamp))
-            .boxed()
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
