@@ -76,6 +76,7 @@ markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
     "azure: marks tests as integration tests with Azure Blob Store",
+    "benchmark: marks tests as benchmark tests (deselect with '-m \"not benchmark\"')",
     "pandas: marks tests that require pandas",
     "polars: marks tests that require polars",
     "lakefs: marks tests that require lakefs",
@@ -102,6 +103,7 @@ dev = [
     "mypy==1.10.1",
     "ruff>=0.11.2,<0.11.12",
     "types-deprecated>=1.2.15.20250304",
+    "testcontainers[minio]>=4.13.0",
 ]
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.32"]

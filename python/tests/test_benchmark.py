@@ -1,11 +1,18 @@
+from __future__ import annotations
+
 import os
+import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from arro3.core import Array, ChunkedArray, DataType, Table
 from numpy.random import standard_normal
 
-from deltalake import DeltaTable, QueryBuilder, write_deltalake
+from deltalake import DeltaTable, write_deltalake
+
+if TYPE_CHECKING:
+    from minio import Minio
 
 # NOTE: make sure to run these in release mode with
 # MATURIN_EXTRA_ARGS=--release make develop
@@ -25,17 +32,47 @@ def sample_table() -> Table:
 
 @pytest.mark.benchmark(group="write")
 def test_benchmark_write(benchmark, sample_table: Table, tmp_path: Path):
-    benchmark(write_deltalake, str(tmp_path), sample_table, mode="overwrite")
+    def setup() -> None:
+        table_path = tmp_path / str(uuid.uuid4())
+        table_path.mkdir()
+        return (table_path,), dict()
 
-    dt = DeltaTable(str(tmp_path))
-    table = (
-        QueryBuilder()
-        .register("tbl", dt)
-        .execute("select * from tbl order by i asc")
-        .read_all()
-    )
+    def func(table_path: str) -> None:
+        write_deltalake(table_path, sample_table)
+
+    benchmark.pedantic(func, setup=setup, rounds=5)
+
     # TODO: figure out why this assert is failing
+    # dt = DeltaTable(str(tmp_path))
+    # table = (
+    #     QueryBuilder()
+    #     .register("tbl", dt)
+    #     .execute("select * from tbl order by i asc")
+    #     .read_all()
+    # )
     # assert table == sample_table
+
+
+@pytest.mark.benchmark(group="write")
+def test_benchmark_write_minio(
+    benchmark, sample_table: Table, minio_container: tuple[dict, Minio]
+):
+    import uuid
+
+    bucket_name = f"delta-bench-{uuid.uuid4()}"
+    storage_options, minio = minio_container
+    minio.make_bucket(bucket_name)
+
+    def setup() -> None:
+        table_path = f"s3://{bucket_name}/{uuid.uuid4()}"
+        return (table_path,), dict()
+
+    def func(table_path: str) -> None:
+        write_deltalake(
+            table_path, sample_table, storage_options=storage_options
+        )
+
+    benchmark.pedantic(func, setup=setup, rounds=5)
 
 
 @pytest.mark.pyarrow
@@ -83,9 +120,6 @@ def test_benchmark_optimize(
         for _ in range(files_per_part):
             write_deltalake(tmp_path, tab, mode="append", partition_by=["part"])
 
-        dt = DeltaTable(tmp_path)
-        dt = DeltaTable(tmp_path)
-
     dt = DeltaTable(tmp_path)
 
     assert len(dt.files()) == files_per_part * len(parts)
@@ -114,6 +148,67 @@ def test_benchmark_optimize(
         )
 
     # We need to recreate the table for each benchmark run
+    results = benchmark.pedantic(func, setup=setup, rounds=5)
+
+    assert results["numFilesRemoved"] == 50
+    assert results["numFilesAdded"] == 5
+    assert results["partitionsOptimized"] == 5
+
+
+@pytest.mark.benchmark(group="optimize", warmup=False)
+@pytest.mark.parametrize("max_tasks", [1, 5])
+def test_benchmark_optimize_minio(
+    benchmark, sample_table: Table, minio_container: tuple[dict, Minio], max_tasks: int
+):
+    bucket_name = f"delta-bench-{uuid.uuid4()}"
+    table_path = f"s3://{bucket_name}/optimize-test"
+
+    storage_options, minio = minio_container
+    minio.make_bucket(bucket_name)
+
+    # Create 2 partitions, each partition with 10 files.
+    # Each file is about 100MB, so the total size is 2GB.
+    files_per_part = 10
+    parts = ["a", "b", "c", "d", "e"]
+
+    nrows = int(sample_table.num_rows / files_per_part)
+    for part in parts:
+        tab = sample_table.slice(0, nrows)
+        tab = tab.append_column(
+            "part", ChunkedArray(Array([part] * nrows, type=DataType.utf8()))
+        )
+        for _ in range(files_per_part):
+            write_deltalake(
+                table_path,
+                tab,
+                mode="append",
+                partition_by=["part"],
+                storage_options=storage_options,
+            )
+
+    dt = DeltaTable(table_path, storage_options=storage_options)
+
+    assert len(dt.files()) == files_per_part * len(parts)
+    initial_version = dt.version()
+
+    def setup():
+        # Instead of recreating the table for each benchmark run, we just delete
+        # the optimize log file
+        optimize_version = initial_version + 1
+        try:
+            minio.remove_object(
+                bucket_name, f"optimize-test/_delta_log/{optimize_version:020}.json"
+            )
+        except Exception:
+            pass
+        dt = DeltaTable(table_path, storage_options=storage_options)
+        return (dt,), dict(max_concurrent_tasks=max_tasks)
+
+    def func(dt, max_concurrent_tasks):
+        return dt.optimize.compact(
+            max_concurrent_tasks=max_concurrent_tasks, target_size=1024 * 1024 * 1024
+        )
+
     results = benchmark.pedantic(func, setup=setup, rounds=5)
 
     assert results["numFilesRemoved"] == 50

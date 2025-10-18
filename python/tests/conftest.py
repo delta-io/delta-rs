@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import pathlib
 import subprocess
@@ -5,7 +7,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from time import sleep
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generator
 
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
@@ -15,6 +17,7 @@ from deltalake import DeltaTable, WriterProperties, write_deltalake
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from minio import Minio
 
 
 def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
@@ -275,6 +278,44 @@ def sample_table_with_spaces_numbers() -> Table:
             ]
         ),
     )
+
+
+@pytest.fixture(scope="session")
+def minio_container() -> Generator[tuple[dict, Minio], None, None]:
+    """Start a MinIO test container for S3-compatible object storage."""
+    from testcontainers.minio import MinioContainer
+
+    container = MinioContainer(
+        image="minio/minio:latest",
+        access_key="minioadmin",
+        secret_key="minioadmin",
+    )
+    container.start()
+
+    client = container.get_client()
+
+    container_config = container.get_config()
+
+    config = {
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": container_config["access_key"],
+        "AWS_SECRET_ACCESS_KEY": container_config["secret_key"],
+        "AWS_ENDPOINT_URL": "http://" + container_config["endpoint"],
+        "AWS_ALLOW_HTTP": "TRUE",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+    }
+
+    yield (config, client)
+
+    container.stop()
+
+
+@pytest.fixture()
+def minio_s3_env(monkeypatch, minio_container):
+    """Set up environment variables for MinIO S3-compatible storage."""
+    for key, value in minio_container.items():
+        monkeypatch.setenv(key, value)
+    return minio_container
 
 
 @pytest.fixture()
