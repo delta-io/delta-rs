@@ -68,9 +68,7 @@ def test_benchmark_write_minio(
         return (table_path,), dict()
 
     def func(table_path: str) -> None:
-        write_deltalake(
-            table_path, sample_table, storage_options=storage_options
-        )
+        write_deltalake(table_path, sample_table, storage_options=storage_options)
 
     benchmark.pedantic(func, setup=setup, rounds=5)
 
