@@ -858,6 +858,7 @@ mod tests {
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
+    use delta_kernel::schema::ArrayType;
     use futures::{stream::BoxStream, StreamExt};
     use object_store::ObjectMeta;
     use object_store::{
@@ -1848,6 +1849,49 @@ mod tests {
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;
         assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn test_push_down_filter_panic_2602() -> DeltaResult<()> {
+        use crate::kernel::schema::{DataType, PrimitiveType};
+        let ctx = SessionContext::new();
+        let table = crate::DeltaOps::new_in_memory()
+            .create()
+            .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
+            .with_column(
+                "name",
+                DataType::Primitive(PrimitiveType::String),
+                true,
+                None,
+            )
+            .with_column("b", DataType::Primitive(PrimitiveType::Boolean), true, None)
+            .with_column(
+                "ts",
+                DataType::Primitive(PrimitiveType::Timestamp),
+                true,
+                None,
+            )
+            .with_column("dt", DataType::Primitive(PrimitiveType::Date), true, None)
+            .with_column(
+                "zap",
+                DataType::Array(Box::new(ArrayType::new(
+                    DataType::Primitive(PrimitiveType::Boolean),
+                    true,
+                ))),
+                true,
+                None,
+            )
+            .await?;
+
+        ctx.register_table("snapshot", Arc::new(table)).unwrap();
+
+        let df = ctx
+            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .await
+            .unwrap();
+
+        let _ = df.collect().await?;
+        Ok(())
     }
 
     /// Records operations made by the inner object store on a channel obtained at construction
