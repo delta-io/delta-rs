@@ -33,23 +33,10 @@ use deltalake::kernel::{
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
 use deltalake::logstore::{IORuntime, ObjectStoreRef};
-use deltalake::operations::add_column::AddColumnBuilder;
-use deltalake::operations::add_feature::AddTableFeatureBuilder;
-use deltalake::operations::constraints::ConstraintBuilder;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
-use deltalake::operations::delete::DeleteBuilder;
-use deltalake::operations::drop_constraints::DropConstraintBuilder;
-use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
-use deltalake::operations::load_cdf::CdfLoadBuilder;
-use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
-use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
-use deltalake::operations::update::UpdateBuilder;
-use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
-use deltalake::operations::update_table_metadata::{
-    TableMetadataUpdate, UpdateTableMetadataBuilder,
-};
-use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
+use deltalake::operations::optimize::OptimizeType;
+use deltalake::operations::update_table_metadata::TableMetadataUpdate;
+use deltalake::operations::vacuum::VacuumMode;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::{Compression, Encoding};
@@ -81,7 +68,7 @@ use uuid::Uuid;
 
 use writer::maybe_lazy_cast_reader;
 
-use crate::error::{DeltaError, DeltaProtocolError, PythonError};
+use crate::error::{to_rt_err, DeltaError, DeltaProtocolError, PythonError};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
@@ -497,15 +484,9 @@ impl RawDeltaTable {
         keep_versions: Option<Vec<i64>>,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
-            let snapshot = match self._table.lock() {
-                Ok(table) => table
-                    .snapshot()
-                    .cloned()
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from),
-                Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-            }?;
-            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot.snapshot().clone())
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .vacuum()
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
 
@@ -560,8 +541,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = UpdateBuilder::new(self.log_store()?, self.cloned_state()?)
-                .with_safe_cast(safe_cast);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).update().with_safe_cast(safe_cast);
 
             if let Some(writer_props) = writer_properties {
                 cmd = cmd.with_writer_properties(
@@ -619,8 +600,11 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
             }
@@ -683,10 +667,13 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table.clone())
+                .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
                 .with_max_spill_size(max_spill_size)
                 .with_type(OptimizeType::ZOrder(z_order_columns));
+
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
             }
@@ -732,7 +719,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = AddColumnBuilder::new(self.log_store()?, self.cloned_state()?);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).add_columns();
 
             let new_fields = fields
                 .iter()
@@ -771,7 +759,9 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = AddTableFeatureBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .add_feature()
                 .with_features(feature)
                 .with_allow_protocol_versions_increase(allow_protocol_versions_increase);
 
@@ -802,7 +792,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = ConstraintBuilder::new(self.log_store()?, self.cloned_state()?);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).add_constraint();
 
             for (col_name, expression) in constraints {
                 cmd = cmd.with_constraint(col_name.clone(), expression.clone());
@@ -836,7 +827,9 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = DropConstraintBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .drop_constraints()
                 .with_constraint(name)
                 .with_raise_if_not_exists(raise_if_not_exists);
 
@@ -880,33 +873,34 @@ impl RawDeltaTable {
         allow_out_of_range: bool,
     ) -> PyResult<Arro3RecordBatchReader> {
         let ctx = SessionContext::new();
-        let mut cdf_read = CdfLoadBuilder::new(self.log_store()?, self.cloned_state()?);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).load_cdf();
 
         if let Some(sv) = starting_version {
-            cdf_read = cdf_read.with_starting_version(sv);
+            cmd = cmd.with_starting_version(sv);
         }
         if let Some(ev) = ending_version {
-            cdf_read = cdf_read.with_ending_version(ev);
+            cmd = cmd.with_ending_version(ev);
         }
         if let Some(st) = starting_timestamp {
             let starting_ts: DateTime<Utc> = DateTime::<Utc>::from_str(&st)
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
-            cdf_read = cdf_read.with_starting_timestamp(starting_ts);
+            cmd = cmd.with_starting_timestamp(starting_ts);
         }
         if let Some(et) = ending_timestamp {
             let ending_ts = DateTime::<Utc>::from_str(&et)
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
-            cdf_read = cdf_read.with_ending_timestamp(ending_ts);
+            cmd = cmd.with_ending_timestamp(ending_ts);
         }
 
         if allow_out_of_range {
-            cdf_read = cdf_read.with_allow_out_of_range();
+            cmd = cmd.with_allow_out_of_range();
         }
 
         let table_provider: Arc<dyn TableProvider> =
-            Arc::new(DeltaCdfTableProvider::try_new(cdf_read).map_err(PythonError::from)?);
+            Arc::new(DeltaCdfTableProvider::try_new(cmd).map_err(PythonError::from)?);
 
         let table_name: String = "source".to_string();
 
@@ -1017,7 +1011,8 @@ impl RawDeltaTable {
         protocol_downgrade_allowed: bool,
         commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<String> {
-        let mut cmd = RestoreBuilder::new(self.log_store()?, self.cloned_state()?);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).restore();
         if let Some(val) = target {
             if let Ok(version) = val.extract::<i64>() {
                 cmd = cmd.with_version_to_restore(version)
@@ -1509,7 +1504,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = DeleteBuilder::new(self.log_store()?, self.cloned_state()?);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).delete();
             if let Some(predicate) = predicate {
                 cmd = cmd.with_predicate(predicate);
             }
@@ -1543,7 +1539,9 @@ impl RawDeltaTable {
         raise_if_not_exists: bool,
         commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<()> {
-        let mut cmd = SetTablePropertiesBuilder::new(self.log_store()?, self.cloned_state()?)
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table)
+            .set_tbl_properties()
             .with_properties(properties)
             .with_raise_if_not_exists(raise_if_not_exists);
 
@@ -1572,8 +1570,8 @@ impl RawDeltaTable {
             name: Some(name),
             description: None,
         };
-        let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_update(update);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).update_table_metadata().with_update(update);
 
         if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
             cmd = cmd.with_commit_properties(commit_properties);
@@ -1600,8 +1598,8 @@ impl RawDeltaTable {
             name: None,
             description: Some(description),
         };
-        let mut cmd = UpdateTableMetadataBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_update(update);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).update_table_metadata().with_update(update);
 
         if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
             cmd = cmd.with_commit_properties(commit_properties);
@@ -1627,8 +1625,8 @@ impl RawDeltaTable {
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
-        let mut cmd = FileSystemCheckBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_dry_run(dry_run);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).filesystem_check().with_dry_run(dry_run);
 
         if let Some(commit_properties) =
             maybe_create_commit_properties(commit_properties, post_commithook_properties)
@@ -1669,14 +1667,16 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = UpdateFieldMetadataBuilder::new(self.log_store()?, self.cloned_state()?);
-
-            cmd = cmd.with_field_name(field_name).with_metadata(
-                metadata
-                    .iter()
-                    .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
-                    .collect(),
-            );
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .update_field_metadata()
+                .with_field_name(field_name)
+                .with_metadata(
+                    metadata
+                        .iter()
+                        .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
+                        .collect(),
+                );
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(commit_properties, post_commithook_properties)

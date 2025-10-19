@@ -9,7 +9,9 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt};
+use crate::kernel::{
+    resolve_snapshot, EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -17,7 +19,7 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 /// Add new columns and/or nested fields to a table
 pub struct AddColumnBuilder {
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Fields to add/merge into schema
     fields: Option<Vec<StructField>>,
     /// Delta object store for handling data files
@@ -38,7 +40,7 @@ impl Operation<()> for AddColumnBuilder {
 
 impl AddColumnBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -75,7 +77,9 @@ impl std::future::IntoFuture for AddColumnBuilder {
         let this = self;
 
         Box::pin(async move {
-            let mut metadata = this.snapshot.metadata().clone();
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+
+            let mut metadata = snapshot.metadata().clone();
             let fields = match this.fields.clone() {
                 Some(v) => v,
                 None => return Err(DeltaTableError::Generic("No fields provided".to_string())),
@@ -95,10 +99,10 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 ));
             }
 
-            let table_schema = this.snapshot.schema();
+            let table_schema = snapshot.schema();
             let new_table_schema = merge_delta_struct(table_schema.as_ref(), fields_right)?;
 
-            let current_protocol = this.snapshot.protocol();
+            let current_protocol = snapshot.protocol();
 
             let new_protocol = current_protocol
                 .clone()
@@ -121,7 +125,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 .with_actions(actions)
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.get_custom_execute_handler())
-                .build(Some(&this.snapshot), this.log_store.clone(), operation)
+                .build(Some(&snapshot), this.log_store.clone(), operation)
                 .await?;
 
             this.post_execute(operation_id).await?;

@@ -52,7 +52,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove};
+use crate::kernel::{resolve_snapshot, Action, Add, EagerSnapshot, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::operations::write::WriterStatsConfig;
@@ -72,7 +72,7 @@ pub struct DeleteBuilder {
     /// Which records to delete
     predicate: Option<Expression>,
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -125,7 +125,7 @@ impl super::Operation<()> for DeleteBuilder {
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             predicate: None,
             snapshot,
@@ -176,8 +176,9 @@ impl std::future::IntoFuture for DeleteBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            PROTOCOL.check_append_only(&snapshot)?;
+            PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -191,10 +192,9 @@ impl std::future::IntoFuture for DeleteBuilder {
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
                     Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => Some(
-                        this.snapshot
-                            .parse_predicate_expression(s, session.as_ref())?,
-                    ),
+                    Expression::String(s) => {
+                        Some(snapshot.parse_predicate_expression(s, session.as_ref())?)
+                    }
                 },
                 None => None,
             };
@@ -202,7 +202,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             let (new_snapshot, metrics) = execute(
                 predicate,
                 this.log_store.clone(),
-                this.snapshot,
+                snapshot,
                 session.as_ref(),
                 this.writer_properties,
                 this.commit_properties,

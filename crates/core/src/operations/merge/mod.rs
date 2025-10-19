@@ -81,7 +81,7 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{new_metadata, Action, EagerSnapshot, StructTypeExt};
+use crate::kernel::{new_metadata, resolve_snapshot, Action, EagerSnapshot, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -134,7 +134,7 @@ pub struct MergeBuilder {
     ///Prefix target columns with a user provided prefix
     target_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// The source data
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
@@ -168,7 +168,7 @@ impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
         log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
+        snapshot: Option<EagerSnapshot>,
         predicate: E,
         source: DataFrame,
     ) -> Self {
@@ -1540,11 +1540,9 @@ impl std::future::IntoFuture for MergeBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
 
-            if !this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
-            }
+            PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -1563,7 +1561,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
-                this.snapshot,
+                snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,

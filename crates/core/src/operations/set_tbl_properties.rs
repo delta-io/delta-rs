@@ -7,7 +7,7 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
+use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::DeltaResult;
@@ -16,7 +16,7 @@ use crate::DeltaTable;
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Name of the property
     properties: HashMap<String, String>,
     /// Raise if property doesn't exist
@@ -39,7 +39,7 @@ impl super::Operation<()> for SetTablePropertiesBuilder {
 
 impl SetTablePropertiesBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             properties: HashMap::new(),
             raise_if_not_exists: true,
@@ -84,12 +84,14 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
         let this = self;
 
         Box::pin(async move {
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let mut metadata = this.snapshot.metadata().clone();
+            let mut metadata = snapshot.metadata().clone();
 
-            let current_protocol = this.snapshot.protocol();
+            let current_protocol = snapshot.protocol();
             let properties = this.properties;
 
             let new_protocol = current_protocol
@@ -115,11 +117,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                 .with_actions(actions.clone())
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                .build(
-                    Some(&this.snapshot),
-                    this.log_store.clone(),
-                    operation.clone(),
-                )
+                .build(Some(&snapshot), this.log_store.clone(), operation.clone())
                 .await?;
 
             if let Some(handler) = this.custom_execute_handler {
