@@ -343,7 +343,7 @@ impl DeltaOps {
     /// ```
     /// use deltalake_core::DeltaOps;
     ///
-    /// let ops = DeltaTable::new_in_memory();
+    /// let ops = DeltaOps::new_in_memory();
     /// ```
     #[must_use]
     pub fn new_in_memory() -> Self {
