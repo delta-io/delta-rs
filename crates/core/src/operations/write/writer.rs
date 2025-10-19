@@ -35,6 +35,7 @@ use parquet::format::FileMetaData;
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 const DEFAULT_UPLOAD_PART_SIZE: usize = 1024 * 1024 * 5;
+const DEFAULT_MAX_CONCURRENCY_TASKS: usize = 10;
 
 fn upload_part_size() -> usize {
     static UPLOAD_SIZE: OnceLock<usize> = OnceLock::new();
@@ -56,6 +57,16 @@ fn upload_part_size() -> usize {
                 }
             })
             .unwrap_or(DEFAULT_UPLOAD_PART_SIZE)
+    })
+}
+
+fn get_max_concurrency_tasks() -> usize {
+    static MAX_CONCURRENCY_TASKS: OnceLock<usize> = OnceLock::new();
+    *MAX_CONCURRENCY_TASKS.get_or_init(|| {
+        std::env::var("DELTARS_MAX_CONCURRENCY_TASKS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_MAX_CONCURRENCY_TASKS)
     })
 }
 
@@ -296,7 +307,7 @@ pub struct PartitionWriterConfig {
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
     /// Concurrency level for writing to object store
-    max_concurrency: usize,
+    max_concurrency_tasks: usize,
 }
 
 impl PartitionWriterConfig {
@@ -307,7 +318,7 @@ impl PartitionWriterConfig {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
-        max_concurrency: Option<usize>,
+        max_concurrency_tasks: Option<usize>,
     ) -> DeltaResult<Self> {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
@@ -326,7 +337,7 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
-            max_concurrency: max_concurrency.unwrap_or(10),
+            max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
         })
     }
 }
@@ -346,7 +357,7 @@ impl LazyArrowWriter {
                         path.clone(),
                         upload_part_size(),
                     )
-                    .with_max_concurrency(config.max_concurrency),
+                    .with_max_concurrency(config.max_concurrency_tasks),
                 );
                 let mut arrow_writer = AsyncArrowWriter::try_new(
                     writer,
