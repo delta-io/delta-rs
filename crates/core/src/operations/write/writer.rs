@@ -437,8 +437,7 @@ impl PartitionWriter {
 
     async fn reset_writer(&mut self) -> DeltaResult<()> {
         let next_path = self.next_data_path();
-        let new_writer =
-            Self::create_writer(self.object_store.clone(), next_path, &self.config)?;
+        let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config)?;
         let state = std::mem::replace(&mut self.writer, new_writer);
 
         if let LazyArrowWriter::Writing(path, arrow_writer) = state {
