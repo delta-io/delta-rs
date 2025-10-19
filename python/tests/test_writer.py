@@ -2510,3 +2510,49 @@ def test_tilde_path_works_with_writes():
         expanded_path = os.path.expanduser(tilde_path)
         if os.path.exists(expanded_path):
             shutil.rmtree(expanded_path)
+
+
+@pytest.mark.pyarrow
+def test_dots_in_column_names_2624(tmp_path: pathlib.Path):
+    """
+    <https://github.com/delta-io/delta-rs/issues/2624>
+    """
+    import pyarrow as pa
+    initial = pa.Table.from_pydict(
+        {
+            "Product.Id": ['x-0', 'x-1', 'x-2', 'x-3'],
+            'Cost' : [10, 11, 12, 13],
+        }
+    )
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=initial,
+        partition_by=["Product.Id"],
+    )
+
+    update = pa.Table.from_pydict(
+        {
+            "Product.Id": ['x-1'],
+            'Cost' : [101],
+        }
+    )
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=update,
+        partition_by=["Product.Id"],
+        mode="overwrite",
+        predicate="\"Product.Id\" = 'x-1'"
+    )
+
+    dt = DeltaTable(tmp_path)
+    expected = pa.Table.from_pydict(
+        {
+            "Product.Id": ['x-0', 'x-1', 'x-2', 'x-3'],
+            'Cost' : [10, 101, 12, 13],
+        }
+    )
+    # Sorting just to make sure the equivalency matches up
+    actual = dt.to_pyarrow_table().sort_by('Product.Id')
+    assert expected == actual
