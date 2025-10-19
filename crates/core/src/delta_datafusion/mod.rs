@@ -70,7 +70,11 @@ use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
-pub use self::session::*;
+pub(crate) use self::session::session_state_from_session;
+pub use self::session::{
+    create_session, DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig,
+    DeltaSessionContext,
+};
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
