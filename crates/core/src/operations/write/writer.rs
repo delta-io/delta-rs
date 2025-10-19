@@ -295,7 +295,7 @@ pub struct PartitionWriterConfig {
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
-    /// Concurency level for writing to object store
+    /// Concurrency level for writing to object store
     max_concurrency: usize,
 }
 
