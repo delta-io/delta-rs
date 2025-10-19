@@ -1,4 +1,5 @@
-# Merge
+# Benchmarks
+
 The merge benchmarks are similar to the ones used by [Delta Spark](https://github.com/delta-io/delta/pull/1835).
 
 
@@ -48,13 +49,19 @@ A simple CLI is available to run a single merge with configurable parameters (us
 
 Run (from repo root):
 ```bash
-cargo run --profile profiling -p delta-benchmarks -- upsert --matched 0.01 --not-matched 0.10
+cargo run --profile profiling -p delta-benchmarks -- merge --op upsert --matched 0.01 --not-matched 0.10
 ```
 
 Options:
-- `upsert | delete | insert`: operation to benchmark
+- `--op <upsert|delete|insert>`: operation to benchmark
 - `--matched <fraction>`: fraction of rows that match existing keys (default 0.01)
 - `--not-matched <fraction>`: fraction of rows that do not match (default 0.10)
+- `--case <name>`: run one of the predefined merge scenarios mirrored from the Delta Spark suite
+
+List cases with:
+```bash
+cargo run --release -p delta-benchmarks -- merge --case single_insert_only_filesMatchedFraction_0.05_rowsNotMatchedFraction_0.05
+```
 
 ### Flamegraphs using `samply`
 
