@@ -331,6 +331,11 @@ class DeltaTable:
             ("z", "not in", ["a","b"])
             ```
         """
+        warnings.warn(
+            "Method `files` is deprecated, Use DeltaTable.file_uris(predicate) instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
         return self._table.files(self._stringify_partition_values(partition_filters))
 
     def file_uris(
@@ -467,13 +472,17 @@ class DeltaTable:
         """
         return self._table.schema
 
+    @deprecated(
+        version="1.2.1",
+        reason="Not compatible with modern Delta features (e.g. shallow clones). Use `file_uris` instead.",
+    )
     def files_by_partitions(self, partition_filters: PartitionFilterType) -> list[str]:
         """
         Get the files for each partition
 
         """
         warnings.warn(
-            "files_by_partitions is deprecated, please use DeltaTable.files() instead.",
+            "Method `files_by_partitions` is deprecated, please use DeltaTable.file_uris() instead.",
             category=DeprecationWarning,
             stacklevel=2,
         )
@@ -881,6 +890,24 @@ class DeltaTable:
                     f"The table has set these reader features: {missing_features} "
                     "but these are not yet supported by the deltalake reader."
                 )
+
+        if (
+            table_protocol.reader_features
+            and "columnMapping" in table_protocol.reader_features
+        ):
+            raise DeltaProtocolError(
+                "The table requires reader feature 'columnMapping' "
+                "but this is not supported using pyarrow Datasets."
+            )
+
+        if (
+            table_protocol.reader_features
+            and "deletionVectors" in table_protocol.reader_features
+        ):
+            raise DeltaProtocolError(
+                "The table requires reader feature 'deletionVectors' "
+                "but this is not supported using pyarrow Datasets."
+            )
 
         import pyarrow
         import pyarrow.fs as pa_fs

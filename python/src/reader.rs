@@ -1,16 +1,15 @@
 use arrow_schema::{ArrowError, SchemaRef};
 use deltalake::arrow::array::RecordBatchReader;
 use deltalake::arrow::record_batch::RecordBatch;
-use deltalake::datafusion::execution::RecordBatchStream;
+use deltalake::datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
-use std::pin::Pin;
 
 use crate::utils::rt;
 
 /// A lazy adapter to convert an async RecordBatchStream into a sync RecordBatchReader
 struct StreamToReaderAdapter {
     schema: SchemaRef,
-    stream: Pin<Box<dyn RecordBatchStream + Send>>,
+    stream: SendableRecordBatchStream,
 }
 
 impl Iterator for StreamToReaderAdapter {
@@ -28,9 +27,9 @@ impl RecordBatchReader for StreamToReaderAdapter {
     }
 }
 
-/// Converts a RecordBatchStream into a lazy RecordBatchReader
+/// Converts a [`SendableRecordBatchStream`] into a lazy RecordBatchReader
 pub(crate) fn convert_stream_to_reader(
-    stream: Pin<Box<dyn RecordBatchStream + Send>>,
+    stream: SendableRecordBatchStream,
 ) -> Box<dyn RecordBatchReader + Send> {
     Box::new(StreamToReaderAdapter {
         schema: stream.schema(),
