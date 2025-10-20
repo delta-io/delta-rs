@@ -36,7 +36,9 @@ use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use crate::kernel::{Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove};
+use crate::kernel::{
+    resolve_snapshot, Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -77,7 +79,7 @@ pub struct RestoreMetrics {
 /// See this module's documentation for more information
 pub struct RestoreBuilder {
     /// A snapshot of the to-be-restored table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to restore
@@ -93,7 +95,7 @@ pub struct RestoreBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for RestoreBuilder {
+impl super::Operation for RestoreBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -104,7 +106,7 @@ impl super::Operation<()> for RestoreBuilder {
 
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -345,12 +347,14 @@ impl std::future::IntoFuture for RestoreBuilder {
         let this = self;
 
         Box::pin(async move {
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
             let metrics = execute(
                 this.log_store.clone(),
-                this.snapshot.clone(),
+                snapshot.clone(),
                 this.version_to_restore,
                 this.datetime_to_restore,
                 this.ignore_missing_files,
@@ -362,12 +366,8 @@ impl std::future::IntoFuture for RestoreBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(
-                this.log_store,
-                DeltaTableState {
-                    snapshot: this.snapshot,
-                },
-            );
+            let mut table =
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             table.update().await?;
             Ok((table, metrics))
         })

@@ -54,7 +54,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::EagerSnapshot;
+use crate::kernel::{resolve_snapshot, EagerSnapshot};
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
@@ -200,7 +200,7 @@ pub enum OptimizeType {
 /// table's configuration is read. Otherwise a default value is used.
 pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
@@ -225,7 +225,7 @@ pub struct OptimizeBuilder<'a> {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for OptimizeBuilder<'_> {
+impl super::Operation for OptimizeBuilder<'_> {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -236,7 +236,7 @@ impl super::Operation<()> for OptimizeBuilder<'_> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -333,10 +333,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
-            if !&this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
-            }
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            PROTOCOL.can_write_to(&snapshot)?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
@@ -363,7 +362,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
-                &this.snapshot,
+                &snapshot,
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
@@ -374,7 +373,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let metrics = plan
                 .execute(
                     this.log_store.clone(),
-                    &this.snapshot,
+                    &snapshot,
                     this.max_concurrent_tasks,
                     this.min_commit_interval,
                     this.commit_properties.clone(),
@@ -387,7 +386,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
             let mut table =
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(this.snapshot));
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             table.update().await?;
             Ok((table, metrics))
         })
