@@ -7,7 +7,7 @@ use validator::Validate;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt};
+use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::DeltaTable;
@@ -45,7 +45,7 @@ fn validate_at_least_one_field(
 /// Update table metadata operation
 pub struct UpdateTableMetadataBuilder {
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// The metadata update to apply
     update: Option<TableMetadataUpdate>,
     /// Delta object store for handling data files
@@ -55,7 +55,7 @@ pub struct UpdateTableMetadataBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for UpdateTableMetadataBuilder {
+impl super::Operation for UpdateTableMetadataBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -66,7 +66,7 @@ impl super::Operation<()> for UpdateTableMetadataBuilder {
 
 impl UpdateTableMetadataBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             update: None,
             snapshot,
@@ -104,6 +104,8 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
@@ -114,7 +116,7 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
                 .validate()
                 .map_err(|e| DeltaTableError::MetadataError(format!("{e}")))?;
 
-            let mut metadata = this.snapshot.metadata().clone();
+            let mut metadata = snapshot.metadata().clone();
 
             if let Some(name) = &update.name {
                 metadata = metadata.with_name(name.clone())?;
@@ -133,11 +135,7 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
                 .with_actions(actions)
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                .build(
-                    Some(&this.snapshot),
-                    this.log_store.clone(),
-                    operation.clone(),
-                )
+                .build(Some(&snapshot), this.log_store.clone(), operation.clone())
                 .await?;
 
             if let Some(handler) = this.custom_execute_handler {

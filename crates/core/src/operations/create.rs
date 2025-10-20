@@ -68,7 +68,7 @@ pub struct CreateBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for CreateBuilder {
+impl super::Operation for CreateBuilder {
     fn log_store(&self) -> &LogStoreRef {
         self.log_store
             .as_ref()

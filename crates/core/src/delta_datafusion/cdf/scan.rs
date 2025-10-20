@@ -28,7 +28,15 @@ pub struct DeltaCdfTableProvider {
 impl DeltaCdfTableProvider {
     /// Build a DeltaCDFTableProvider
     pub fn try_new(cdf_builder: CdfLoadBuilder) -> DeltaResult<Self> {
-        let mut fields = cdf_builder.snapshot.input_schema().fields().to_vec();
+        let mut fields = cdf_builder
+            .snapshot
+            .as_ref()
+            .ok_or(DeltaTableError::generic(
+                "expected initialized snapshot for DeltaCdfTableProvider",
+            ))?
+            .input_schema()
+            .fields()
+            .to_vec();
         for f in ADD_PARTITION_SCHEMA.clone() {
             fields.push(f.into());
         }

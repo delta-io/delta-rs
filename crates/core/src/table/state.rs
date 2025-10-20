@@ -346,7 +346,7 @@ impl EagerSnapshot {
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
 
         let results = self
-            .files
+            .files()?
             .iter()
             .map(|file| evaluator.evaluate_arrow(file.clone()))
             .collect::<Result<Vec<_>, _>>()?;

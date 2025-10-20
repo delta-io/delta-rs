@@ -626,7 +626,7 @@ impl<'a> DeltaScanBuilder<'a> {
             let mut pruned_batches = Vec::new();
             let mut mask_offset = 0;
 
-            for batch in &self.snapshot.files {
+            for batch in self.snapshot.files()? {
                 let batch_size = batch.num_rows();
                 let batch_mask = &mask[mask_offset..mask_offset + batch_size];
                 let batch_mask_array = BooleanArray::from(batch_mask.to_vec());

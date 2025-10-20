@@ -168,7 +168,7 @@ impl Default for ConvertToDeltaBuilder {
     }
 }
 
-impl super::Operation<()> for ConvertToDeltaBuilder {
+impl super::Operation for ConvertToDeltaBuilder {
     fn log_store(&self) -> &LogStoreRef {
         self.log_store
             .as_ref()

@@ -178,7 +178,7 @@ pub struct WriteMetrics {
     pub execution_time_ms: u64,
 }
 
-impl super::Operation<()> for WriteBuilder {
+impl super::Operation for WriteBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

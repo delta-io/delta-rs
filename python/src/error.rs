@@ -1,9 +1,9 @@
 use arrow_schema::ArrowError;
 use deltalake::datafusion::error::DataFusionError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::{
-    PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
+    PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyRuntimeError,
+    PyValueError,
 };
 use pyo3::{create_exception, PyErr};
 use std::error::Error;
@@ -14,6 +14,10 @@ create_exception!(_internal, TableNotFoundError, DeltaError);
 create_exception!(_internal, DeltaProtocolError, DeltaError);
 create_exception!(_internal, CommitFailedError, DeltaError);
 create_exception!(_internal, SchemaMismatchError, DeltaError);
+
+pub(crate) fn to_rt_err(msg: impl ToString) -> PyErr {
+    PyRuntimeError::new_err(msg.to_string())
+}
 
 fn inner_to_py_err(err: DeltaTableError) -> PyErr {
     match err {

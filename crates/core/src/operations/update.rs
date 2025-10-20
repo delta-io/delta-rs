@@ -53,7 +53,6 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use crate::delta_datafusion::{find_files, planner::DeltaPlanner, register_store};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
@@ -73,6 +72,10 @@ use crate::{
     },
     table::config::TablePropertiesExt,
 };
+use crate::{
+    delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
+    kernel::resolve_snapshot,
+};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -90,7 +93,7 @@ pub struct UpdateBuilder {
     /// How to update columns in a record that match the predicate
     updates: HashMap<Column, Expression>,
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -122,7 +125,7 @@ pub struct UpdateMetrics {
     pub scan_time_ms: u64,
 }
 
-impl super::Operation<()> for UpdateBuilder {
+impl super::Operation for UpdateBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -133,7 +136,7 @@ impl super::Operation<()> for UpdateBuilder {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             predicate: None,
             updates: HashMap::new(),
@@ -497,10 +500,11 @@ impl std::future::IntoFuture for UpdateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            PROTOCOL.check_append_only(&snapshot)?;
+            PROTOCOL.can_write_to(&snapshot)?;
 
-            if !&this.snapshot.load_config().require_files {
+            if !&snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
             }
 
@@ -517,7 +521,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
-                this.snapshot,
+                snapshot,
                 state.clone(),
                 this.writer_properties,
                 this.commit_properties,

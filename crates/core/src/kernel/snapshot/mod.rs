@@ -463,7 +463,25 @@ impl Snapshot {
 pub struct EagerSnapshot {
     snapshot: Snapshot,
     // logical files in the snapshot
-    pub(crate) files: Vec<RecordBatch>,
+    files: Vec<RecordBatch>,
+}
+
+pub(crate) async fn resolve_snapshot(
+    log_store: &dyn LogStore,
+    maybe_snapshot: Option<EagerSnapshot>,
+    require_files: bool,
+) -> DeltaResult<EagerSnapshot> {
+    if let Some(snapshot) = maybe_snapshot {
+        if require_files {
+            snapshot.with_files(log_store).await
+        } else {
+            Ok(snapshot)
+        }
+    } else {
+        let mut config = DeltaTableConfig::default();
+        config.require_files = require_files;
+        EagerSnapshot::try_new(log_store, config, None).await
+    }
 }
 
 impl EagerSnapshot {
@@ -474,13 +492,34 @@ impl EagerSnapshot {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
+        Self::try_new_with_snapshot(log_store, snapshot).await
+    }
 
-        let files = match config.require_files {
+    pub(crate) async fn try_new_with_snapshot(
+        log_store: &dyn LogStore,
+        snapshot: Snapshot,
+    ) -> DeltaResult<Self> {
+        let files = match snapshot.load_config().require_files {
             true => snapshot.files(log_store, None).try_collect().await?,
             false => vec![],
         };
-
         Ok(Self { snapshot, files })
+    }
+
+    pub(crate) async fn with_files(mut self, log_store: &dyn LogStore) -> DeltaResult<Self> {
+        if self.snapshot.config.require_files {
+            return Ok(self);
+        }
+        self.snapshot.config.require_files = true;
+        Self::try_new_with_snapshot(log_store, self.snapshot).await
+    }
+
+    pub(crate) fn files(&self) -> DeltaResult<&[RecordBatch]> {
+        if self.snapshot.config.require_files {
+            Ok(&self.files)
+        } else {
+            Err(DeltaTableError::NotInitializedWithFiles("files".into()))
+        }
     }
 
     /// Update the snapshot to the given version
@@ -588,6 +627,12 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        if !self.snapshot.load_config().require_files {
+            return Box::pin(once(ready(Err(DeltaTableError::NotInitializedWithFiles(
+                "file_views".into(),
+            )))));
+        }
+
         self.snapshot
             .files_from(
                 log_store,
