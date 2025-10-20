@@ -155,7 +155,7 @@ pub struct MergeBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for MergeBuilder {
+impl super::Operation for MergeBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

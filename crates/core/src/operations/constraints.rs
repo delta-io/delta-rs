@@ -41,7 +41,7 @@ pub struct ConstraintBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for ConstraintBuilder {
+impl super::Operation for ConstraintBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

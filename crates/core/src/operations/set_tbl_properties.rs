@@ -28,7 +28,7 @@ pub struct SetTablePropertiesBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for SetTablePropertiesBuilder {
+impl super::Operation for SetTablePropertiesBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

@@ -30,7 +30,7 @@ pub struct UpdateFieldMetadataBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for UpdateFieldMetadataBuilder {
+impl super::Operation for UpdateFieldMetadataBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

@@ -55,7 +55,7 @@ pub struct UpdateTableMetadataBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for UpdateTableMetadataBuilder {
+impl super::Operation for UpdateTableMetadataBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

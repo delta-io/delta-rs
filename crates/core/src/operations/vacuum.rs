@@ -113,7 +113,7 @@ pub struct VacuumBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for VacuumBuilder {
+impl super::Operation for VacuumBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

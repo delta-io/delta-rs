@@ -101,7 +101,7 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     }
 }
 
-impl super::Operation<()> for FileSystemCheckBuilder {
+impl super::Operation for FileSystemCheckBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

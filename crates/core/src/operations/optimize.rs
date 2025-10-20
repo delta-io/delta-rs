@@ -225,7 +225,7 @@ pub struct OptimizeBuilder<'a> {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for OptimizeBuilder<'_> {
+impl super::Operation for OptimizeBuilder<'_> {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

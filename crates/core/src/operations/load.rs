@@ -36,7 +36,7 @@ impl std::fmt::Debug for LoadBuilder {
     }
 }
 
-impl super::Operation<()> for LoadBuilder {
+impl super::Operation for LoadBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

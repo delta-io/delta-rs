@@ -114,7 +114,7 @@ pub struct DeleteMetrics {
     pub rewrite_time_ms: u64,
 }
 
-impl super::Operation<()> for DeleteBuilder {
+impl super::Operation for DeleteBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

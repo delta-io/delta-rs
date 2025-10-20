@@ -95,7 +95,7 @@ pub struct RestoreBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for RestoreBuilder {
+impl super::Operation for RestoreBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

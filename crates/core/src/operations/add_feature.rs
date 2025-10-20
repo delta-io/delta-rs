@@ -29,7 +29,7 @@ pub struct AddTableFeatureBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for AddTableFeatureBuilder {
+impl super::Operation for AddTableFeatureBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

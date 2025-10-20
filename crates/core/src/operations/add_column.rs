@@ -29,7 +29,7 @@ pub struct AddColumnBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl Operation<()> for AddColumnBuilder {
+impl Operation for AddColumnBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

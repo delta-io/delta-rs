@@ -28,7 +28,7 @@ pub struct DropConstraintBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for DropConstraintBuilder {
+impl super::Operation for DropConstraintBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

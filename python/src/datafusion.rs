@@ -138,7 +138,6 @@ mod tests {
     // A dummy LazyBatchGenerator implementation for testing
     #[derive(Debug)]
     struct TestBatchGenerator {
-        schema: Arc<ArrowSchema>,
         data: Vec<RecordBatch>,
         current_index: usize,
     }
@@ -150,9 +149,8 @@ mod tests {
     }
 
     impl TestBatchGenerator {
-        fn new(schema: Arc<ArrowSchema>, data: Vec<RecordBatch>) -> Self {
+        fn new(data: Vec<RecordBatch>) -> Self {
             Self {
-                schema,
                 data,
                 current_index: 0,
             }
@@ -164,13 +162,11 @@ mod tests {
             let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
             let name_array = StringArray::from(vec!["Alice", "Bob", "Carol", "Dave", "Eve"]);
 
-            let batch = RecordBatch::try_new(
-                schema.clone(),
-                vec![Arc::new(id_array), Arc::new(name_array)],
-            )
-            .unwrap();
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(name_array)])
+                    .unwrap();
 
-            Arc::new(RwLock::new(TestBatchGenerator::new(schema, vec![batch])))
+            Arc::new(RwLock::new(TestBatchGenerator::new(vec![batch])))
         }
     }
 

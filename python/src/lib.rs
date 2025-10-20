@@ -63,7 +63,6 @@ use std::future::IntoFuture;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use writer::maybe_lazy_cast_reader;

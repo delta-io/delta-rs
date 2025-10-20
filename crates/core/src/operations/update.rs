@@ -125,7 +125,7 @@ pub struct UpdateMetrics {
     pub scan_time_ms: u64,
 }
 
-impl super::Operation<()> for UpdateBuilder {
+impl super::Operation for UpdateBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }

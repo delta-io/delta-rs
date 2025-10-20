@@ -96,7 +96,7 @@ pub trait CustomExecuteHandler: Send + Sync {
 #[allow(unused)]
 /// The [Operation] trait defines common behaviors that all operations builders
 /// should have consistent
-pub(crate) trait Operation<State>: std::future::IntoFuture {
+pub(crate) trait Operation: std::future::IntoFuture {
     fn log_store(&self) -> &LogStoreRef;
     fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>>;
     async fn pre_execute(&self, operation_id: Uuid) -> DeltaResult<()> {
