@@ -19,10 +19,12 @@ use crate::kernel::{
     resolve_snapshot, EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner,
 };
 use crate::logstore::LogStoreRef;
+use crate::operations::constraints;
 use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
 use crate::table::Constraint;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DataCheck, DeltaResult, DeltaTable, DeltaTableError};
+use std::collections::HashMap;
 
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {
@@ -32,6 +34,8 @@ pub struct ConstraintBuilder {
     name: Option<String>,
     /// Constraint expression
     expr: Option<Expression>,
+    /// Hashmap containing an name of the constraint and expression
+    check_constraints: HashMap<String, Expression>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -56,6 +60,7 @@ impl ConstraintBuilder {
         Self {
             name: None,
             expr: None,
+            check_constraints: Default::default(),
             snapshot,
             log_store,
             session: None,
@@ -70,8 +75,22 @@ impl ConstraintBuilder {
         name: S,
         expression: E,
     ) -> Self {
-        self.name = Some(name.into());
-        self.expr = Some(expression.into());
+        // self.name = Some(name.into());
+        // self.expr = Some(expression.into());
+        self.check_constraints
+            .insert(name.into(), expression.into());
+        self
+    }
+
+    pub fn with_multiple_constraints<S: Into<String>, E: Into<Expression>>(
+        mut self,
+        constraints: impl IntoIterator<Item = (S, E)>,
+    ) -> Self {
+        self.check_constraints.extend(
+            constraints
+                .into_iter()
+                .map(|(name, expression)| (name.into(), expression.into())),
+        );
         self
     }
 
@@ -108,22 +127,41 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let name = match this.name {
-                Some(v) => v,
-                None => return Err(DeltaTableError::Generic("No name provided".to_string())),
-            };
+            // TODO if hashmap then we need to check if name and express are provided
+            // let name = match this.name {
+            //     Some(v) => v,
+            //     None => return Err(DeltaTableError::Generic("No name provided".to_string())),
+            // };
 
-            let expr = this
-                .expr
-                .ok_or_else(|| DeltaTableError::Generic("No Expression provided".to_string()))?;
+            // let expr = this
+            //     .expr
+            //     .ok_or_else(|| DeltaTableError::Generic("No Expression provided".to_string()))?;
+
+            if this.check_constraints.is_empty() {
+                return Err(DeltaTableError::Generic(
+                    "No check constraint (Name and Expression) provided".to_string(),
+                ));
+            }
 
             let mut metadata = snapshot.metadata().clone();
-            let configuration_key = format!("delta.constraints.{name}");
 
-            if metadata.configuration().contains_key(&configuration_key) {
-                return Err(DeltaTableError::Generic(format!(
-                    "Constraint with name: {name} already exists"
-                )));
+            let configuration_key_mapper: HashMap<String, String> = HashMap::from_iter(
+                this.check_constraints
+                    .iter()
+                    .map(|(name, _)| (name.clone(), format!("delta.constraints.{name}"))),
+            );
+            dbg!(&configuration_key_mapper);
+
+            // constraint key must be unique so we would need to check with all the hashmap keys
+            //TODO maybe do an iterator instead of an for loop
+            // Should error out the whole process for one duplicated constraint or filter it out?
+            // How should duplicated expression handle
+            for (name, configuration_key) in configuration_key_mapper.iter() {
+                if metadata.configuration().contains_key(configuration_key) {
+                    return Err(DeltaTableError::Generic(format!(
+                        "Constraint with name: {name} already exists"
+                    )));
+                }
             }
 
             let session = this
@@ -136,13 +174,27 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .await?;
 
             let schema = scan.schema().to_dfschema()?;
-            let expr = into_expr(expr, &schema, session.as_ref())?;
-            let expr_str = fmt_expr_to_sql(&expr)?;
 
+            let mut constraints_sql_mapper = HashMap::with_capacity(this.check_constraints.len());
+            for (name, _) in configuration_key_mapper.iter() {
+                let converted_expr = into_expr(
+                    this.check_constraints[name].clone(),
+                    &schema,
+                    session.as_ref(),
+                )?;
+                let constraint_sql = fmt_expr_to_sql(&converted_expr)?;
+                constraints_sql_mapper.insert(name, constraint_sql);
+            }
+            dbg!(&constraints_sql_mapper);
+
+            let constraints_checker: Vec<Constraint> = constraints_sql_mapper
+                .iter()
+                .map(|(_, sql)| Constraint::new("*", sql))
+                .collect();
+
+            dbg!(&constraints_checker);
             // Checker built here with the one time constraint to check.
-            let checker =
-                DeltaDataChecker::new_with_constraints(vec![Constraint::new("*", &expr_str)]);
-
+            let checker = DeltaDataChecker::new_with_constraints(constraints_checker);
             let plan: Arc<dyn ExecutionPlan> = Arc::new(scan);
             let mut tasks = vec![];
             for p in 0..plan.properties().output_partitioning().partition_count() {
@@ -170,8 +222,15 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             // We have validated the table passes it's constraints, now to add the constraint to
             // the table.
-            metadata =
-                metadata.add_config_key(format!("delta.constraints.{name}"), expr_str.clone())?;
+            for (name, configuration_key) in configuration_key_mapper.iter() {
+                dbg!(&name);
+                dbg!(&constraints_sql_mapper[&name].clone());
+
+                metadata = metadata.add_config_key(
+                    configuration_key.to_string(),
+                    constraints_sql_mapper[&name].clone(),
+                )?;
+            }
 
             let old_protocol = snapshot.protocol();
             let protocol = ProtocolInner {
@@ -199,10 +258,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 },
             }
             .as_kernel();
-
             let operation = DeltaOperation::AddConstraint {
-                name: name.clone(),
-                expr: expr_str.clone(),
+                constraints: constraints_sql_mapper
+                    .into_iter()
+                    .map(|(name, sql)| Constraint::new(name, &sql))
+                    .collect(),
             };
 
             let actions = vec![metadata.into(), protocol.into()];
@@ -250,17 +310,24 @@ mod tests {
             .unwrap()
     }
 
-    async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
+    async fn get_constraint_op_params(table: &mut DeltaTable) -> Vec<String> {
         let last_commit = table.last_commit().await.unwrap();
-        last_commit
+        let constraints_str = last_commit
             .operation_parameters
             .as_ref()
             .unwrap()
-            .get("expr")
+            .get("constraints")
             .unwrap()
             .as_str()
+            .unwrap();
+
+        let constraints: serde_json::Value = serde_json::from_str(constraints_str).unwrap();
+        constraints
+            .as_array()
             .unwrap()
-            .to_owned()
+            .iter()
+            .map(|value| value.get("expr").unwrap().as_str().unwrap().to_owned())
+            .collect()
     }
 
     #[tokio::test]
@@ -320,11 +387,11 @@ mod tests {
         let version = table.version();
         assert_eq!(version, Some(1));
 
-        let expected_expr = "value < 1000";
+        let expected_expr = vec!["value < 1000"];
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
         assert_eq!(
             get_constraint(&table, "delta.constraints.id"),
-            expected_expr
+            expected_expr[0]
         );
         Ok(())
     }
@@ -345,11 +412,11 @@ mod tests {
         let version = table.version();
         assert_eq!(version, Some(1));
 
-        let expected_expr = "value < 1000";
+        let expected_expr = vec!["value < 1000"];
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
         assert_eq!(
             get_constraint(&table, "delta.constraints.valid_values"),
-            expected_expr
+            expected_expr[0]
         );
 
         Ok(())
@@ -386,11 +453,11 @@ mod tests {
         let version = table.version();
         assert_eq!(version, Some(1));
 
-        let expected_expr = "\"vAlue\" < 1000"; // spellchecker:disable-line
+        let expected_expr = vec!["\"vAlue\" < 1000"]; // spellchecker:disable-line
         assert_eq!(get_constraint_op_params(&mut table).await, expected_expr);
         assert_eq!(
             get_constraint(&table, "delta.constraints.valid_values"),
-            expected_expr
+            expected_expr[0]
         );
 
         Ok(())
