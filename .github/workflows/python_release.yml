@@ -87,30 +87,6 @@ jobs:
           command: publish
           args: --skip-existing -m python/Cargo.toml
 
-  release-pypi-manylinux-217-aarch64:
-    needs: validate-release-tag
-    name: PyPI release manylinux-2_17 aarch64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
-      - name: Publish manylinux to pypi aarch64 (without sdist)
-        uses: messense/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        with:
-          target: aarch64-unknown-linux-gnu
-          command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist
-          before-script-linux: |
-            # We can remove this once we upgrade to 2_28.
-            # https://github.com/briansmith/ring/issues/1728
-            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
-
   release-pypi-manylinux-228-aarch64:
     needs: validate-release-tag
     name: PyPI release manylinux-2_28 aarch64
