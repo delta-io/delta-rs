@@ -135,8 +135,8 @@ jobs:
       [
         validate-release-tag,
         release-pypi-manylinux-x86-64,
-        release-pypi-manylinux-217-aarch64,
         release-pypi-manylinux-228-aarch64,
+        release-pypi-musl-x86-64,
         release-pypi-mac,
         release-pypi-windows,
       ]
