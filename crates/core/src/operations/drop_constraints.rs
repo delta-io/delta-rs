@@ -135,6 +135,8 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 
@@ -162,7 +164,7 @@ mod tests {
 
         let table = table
             .add_constraint()
-            .with_constraint("id", "value < 1000")
+            .with_constraint(HashMap::from([("id", "value < 1000")]))
             .await?;
 
         let mut table = DeltaOps(table)

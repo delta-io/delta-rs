@@ -385,6 +385,8 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "datafusion")]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
+        use std::collections::HashMap;
+
         use crate::table::config::TablePropertiesExt as _;
 
         let batch = get_record_batch(None, false);
@@ -395,7 +397,7 @@ mod tests {
 
         let constraint = DeltaOps(table)
             .add_constraint()
-            .with_constraint("my_custom_constraint", "value < 100")
+            .with_constraint(HashMap::from([("my_custom_constraint", "value < 100")]))
             .await;
         let table = constraint.expect("Failed to add constraint to table");
 
