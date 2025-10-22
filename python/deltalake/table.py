@@ -506,6 +506,16 @@ class DeltaTable:
             the current ProtocolVersions registered in the transaction log
         """
         return ProtocolVersions(*self._table.protocol_versions())
+    
+    def generate(self) -> None:
+        """
+        Generate symlink manifest for engines that cannot read native Delta Lake tables.
+        
+        Creates symbolic links to Delta table data files, enabling compatibility with
+        processing engines that require direct file access instead of Delta protocol support.
+        """
+        pass
+    
 
     def history(self, limit: int | None = None) -> list[dict[str, Any]]:
         """

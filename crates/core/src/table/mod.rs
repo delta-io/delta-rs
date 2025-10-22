@@ -15,6 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
+use crate::logstore::object_store::PutPayload;
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -196,6 +197,22 @@ impl DeltaTable {
                 Ok(())
             }
         }
+    }
+
+    pub async fn generate(&mut self) -> Result<(), DeltaTableError> {
+        // Dumb solution ///
+        let manifest = self.get_file_uris()?.collect::<Vec<_>>().join("\n");
+
+        let path = Path::from("/_symlink_format_manifest/manifest");
+        let payload = PutPayload::from_iter(manifest.into_bytes());
+
+        let obj_store = self.object_store();
+        obj_store.put(&path, payload).await?;
+        ////
+
+        // We will need probably need an metadata commit and an better way to incrementing update the file instead of overwriting the file
+
+        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.
