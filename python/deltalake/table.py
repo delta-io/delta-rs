@@ -1794,12 +1794,6 @@ class TableAlterer:
             {'delta.constraints.value_gt_5': 'value > 5'}
             ```
         """
-        if len(constraints.keys()) > 1:
-            raise ValueError(
-                """add_constraints is limited to a single constraint addition at once for now.
-                Please execute add_constraints multiple times with each time a different constraint."""
-            )
-
         self.table._table.add_constraints(
             constraints,
             commit_properties,
