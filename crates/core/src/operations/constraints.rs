@@ -158,9 +158,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 // when the expression is different in the conflicted constraint --> error out due not knowing how to resolve it
                 if !metadata.configuration()[configuration_key].eq(&constraints_sql_mapper[name]) {
                     return Err(DeltaTableError::Generic(format!(
-                        "Constraint with name: {name} already exists and Expression is different"
-                    )));
+                                    "Cannot add constraint '{name}': a constraint with this name already exists with a different expression. Existing: '{}', New: '{}'", 
+                                        metadata.configuration()[configuration_key],constraints_sql_mapper[name]
+                                    )));
                 }
+                tracing::warn!("Skipping constraint '{name}': identical constraint already exists with expression '{}'",constraints_sql_mapper[name]);
             }
             let constraints_checker: Vec<Constraint> = constraints_sql_mapper
                 .iter()
