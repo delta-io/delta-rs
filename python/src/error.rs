@@ -1,5 +1,6 @@
 use arrow_schema::ArrowError;
 use deltalake::datafusion::error::DataFusionError;
+use deltalake::kernel::Error as KernelError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyRuntimeError,
@@ -35,7 +36,12 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         DeltaTableError::Transaction { source } => CommitFailedError::new_err(source.to_string()),
 
         // python exceptions
-        DeltaTableError::ObjectStore { source } => object_store_to_py(source),
+        DeltaTableError::ObjectStore { source } => object_store_to_py(source, None),
+        DeltaTableError::Kernel { source } => match source {
+            KernelError::ObjectStore(e) => object_store_to_py(e, Some("Kernel error".to_string())),
+            other => DeltaError::new_err(DeltaTableError::Kernel { source: other }.to_string()),
+        },
+
         DeltaTableError::Io { source } => PyIOError::new_err(source.to_string()),
 
         DeltaTableError::Arrow { source } => arrow_to_py(source),
@@ -91,27 +97,37 @@ impl<T: Error + 'static> Display for DisplaySourceChain<T> {
     }
 }
 
-fn object_store_to_py(err: ObjectStoreError) -> PyErr {
-    match err {
-        ObjectStoreError::NotFound { .. } => PyFileNotFoundError::new_err(
+fn object_store_to_py(err: ObjectStoreError, source_error: Option<String>) -> PyErr {
+    if let Some(source_error) = source_error {
+        PyIOError::new_err(
             DisplaySourceChain {
                 err,
-                error_name: "FileNotFoundError".to_string(),
+                error_name: format!("{} -> IOError", source_error),
             }
             .to_string(),
-        ),
-        ObjectStoreError::Generic { source, .. }
-            if source.to_string().contains("AWS_S3_ALLOW_UNSAFE_RENAME") =>
-        {
-            DeltaProtocolError::new_err(source.to_string())
+        )
+    } else {
+        match err {
+            ObjectStoreError::NotFound { .. } => PyFileNotFoundError::new_err(
+                DisplaySourceChain {
+                    err,
+                    error_name: "FileNotFoundError".to_string(),
+                }
+                .to_string(),
+            ),
+            ObjectStoreError::Generic { source, .. }
+                if source.to_string().contains("AWS_S3_ALLOW_UNSAFE_RENAME") =>
+            {
+                DeltaProtocolError::new_err(source.to_string())
+            }
+            _ => PyIOError::new_err(
+                DisplaySourceChain {
+                    err,
+                    error_name: "IOError".to_string(),
+                }
+                .to_string(),
+            ),
         }
-        _ => PyIOError::new_err(
-            DisplaySourceChain {
-                err,
-                error_name: "IOError".to_string(),
-            }
-            .to_string(),
-        ),
     }
 }
 
@@ -154,7 +170,7 @@ impl From<PythonError> for pyo3::PyErr {
     fn from(value: PythonError) -> Self {
         match value {
             PythonError::DeltaTable(err) => inner_to_py_err(err),
-            PythonError::ObjectStore(err) => object_store_to_py(err),
+            PythonError::ObjectStore(err) => object_store_to_py(err, None),
             PythonError::Arrow(err) => arrow_to_py(err),
             PythonError::DataFusion(err) => datafusion_to_py(err),
             PythonError::ThreadingError(err) => PyRuntimeError::new_err(err),

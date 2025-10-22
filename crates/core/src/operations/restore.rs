@@ -385,6 +385,8 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "datafusion")]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
+        use std::collections::HashMap;
+
         use crate::table::config::TablePropertiesExt as _;
 
         let batch = get_record_batch(None, false);

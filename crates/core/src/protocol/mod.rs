@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::table::Constraint;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -267,10 +268,8 @@ pub enum DeltaOperation {
     },
     /// Add constraints to a table
     AddConstraint {
-        /// Constraints name
-        name: String,
-        /// Expression to check against
-        expr: String,
+        /// Constraints with Name and Expression
+        constraints: Vec<Constraint>,
     },
 
     /// Add table features to a table
