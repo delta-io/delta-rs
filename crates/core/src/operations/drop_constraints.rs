@@ -164,7 +164,7 @@ mod tests {
 
         let table = table
             .add_constraint()
-            .with_constraint(HashMap::from([("id", "value < 1000")]))
+            .with_constraint("id", "value < 1000")
             .await?;
 
         let mut table = DeltaOps(table)

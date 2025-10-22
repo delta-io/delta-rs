@@ -397,7 +397,7 @@ mod tests {
 
         let constraint = DeltaOps(table)
             .add_constraint()
-            .with_constraint(HashMap::from([("my_custom_constraint", "value < 100")]))
+            .with_constraint("my_custom_constraint", "value < 100")
             .await;
         let table = constraint.expect("Failed to add constraint to table");
 

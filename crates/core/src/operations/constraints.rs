@@ -65,12 +65,24 @@ impl ConstraintBuilder {
     /// Specify the constraint to be added
     pub fn with_constraint<S: Into<String>, E: Into<Expression>>(
         mut self,
+        name: S,
+        expression: E,
+    ) -> Self {
+        self.check_constraints
+            .insert(name.into(), expression.into());
+        self
+    }
+
+    /// Specify multiple constraints to be added
+    pub fn with_constraints<S: Into<String>, E: Into<Expression>>(
+        mut self,
         constraints: HashMap<S, E>,
     ) -> Self {
-        self.check_constraints = constraints
-            .into_iter()
-            .map(|(name, expression)| (name.into(), expression.into()))
-            .collect();
+        self.check_constraints.extend(
+            constraints
+                .into_iter()
+                .map(|(name, expr)| (name.into(), expr.into())),
+        );
         self
     }
 
@@ -321,7 +333,7 @@ mod tests {
 
         let constraint = table
             .add_constraint()
-            .with_constraint(HashMap::from([("my_custom_constraint", "value < 100")]))
+            .with_constraint("my_custom_constraint", "value < 100")
             .await;
         assert!(constraint.is_ok());
         let constraints = constraint
@@ -345,7 +357,7 @@ mod tests {
 
         let constraint = table
             .add_constraint()
-            .with_constraint(HashMap::from([("id", "value > 5")]))
+            .with_constraint("id", "value > 5")
             .await;
         assert!(constraint.is_err());
         Ok(())
@@ -361,7 +373,7 @@ mod tests {
 
         let mut table = table
             .add_constraint()
-            .with_constraint(HashMap::from([("id", "value <    1000")]))
+            .with_constraint("id", "value <    1000")
             .await?;
         let version = table.version();
         assert_eq!(version, Some(1));
@@ -391,7 +403,7 @@ mod tests {
 
         let constraints = HashMap::from([("id", "value <    1000"), ("id2", "value <    20")]);
 
-        let mut table = table.add_constraint().with_constraint(constraints).await?;
+        let mut table = table.add_constraint().with_constraints(constraints).await?;
         let version = table.version();
         assert_eq!(version, Some(1));
 
@@ -422,10 +434,7 @@ mod tests {
 
         let mut table = table
             .add_constraint()
-            .with_constraint(HashMap::from([(
-                "valid_values",
-                col("value").lt(lit(1000)),
-            )]))
+            .with_constraint("valid_values", col("value").lt(lit(1000)))
             .await?;
         let version = table.version();
         assert_eq!(version, Some(1));
@@ -472,7 +481,7 @@ mod tests {
 
         let mut table = DeltaOps(table)
             .add_constraint()
-            .with_constraint(HashMap::from([("valid_values", "vAlue < 1000")])) // spellchecker:disable-line
+            .with_constraint("valid_values", "vAlue < 1000") // spellchecker:disable-line
             .await?;
         let version = table.version();
         assert_eq!(version, Some(1));
@@ -503,13 +512,13 @@ mod tests {
 
         let new_table = table
             .add_constraint()
-            .with_constraint(HashMap::from([("id", "value < 60")]))
+            .with_constraint("id", "value < 60")
             .await?;
 
         let new_table = DeltaOps(new_table);
         let second_constraint = new_table
             .add_constraint()
-            .with_constraint(HashMap::from([("id", "value < 10")]))
+            .with_constraint("id", "value < 10")
             .await;
         assert!(second_constraint.is_err());
         Ok(())
@@ -524,7 +533,7 @@ mod tests {
 
         let table = DeltaOps(write)
             .add_constraint()
-            .with_constraint(HashMap::from([("id", "value > 0")]))
+            .with_constraint("id", "value > 0")
             .await?;
         let table = DeltaOps(table);
         let invalid_values: Vec<Arc<dyn Array>> = vec![
@@ -546,7 +555,7 @@ mod tests {
 
         let table = DeltaOps(write)
             .add_constraint()
-            .with_constraint(HashMap::from([
+            .with_constraints(HashMap::from([
                 ("id", "value > 0"),
                 ("custom_cons", "value < 30"),
             ]))
