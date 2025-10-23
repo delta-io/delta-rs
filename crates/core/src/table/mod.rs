@@ -208,9 +208,12 @@ impl DeltaTable {
 
         let obj_store = self.object_store();
         obj_store.put(&path, payload).await?;
-        ////
 
-        // We will need probably need an metadata commit and an better way to incrementing update the file instead of overwriting the file
+        // We will need an metadata commit and an better way to incrementing update the file instead of overwriting the file
+        // https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/hooks/GenerateSymlinkManifest.scala#L50
+        // 1. create an builder function for the generate command
+        // 2. move to the DeltaOps
+        // 3. need the generate command to be idempotent
 
         Ok(())
     }
