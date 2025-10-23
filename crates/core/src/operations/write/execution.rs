@@ -327,7 +327,7 @@ pub(crate) async fn write_execution_plan_v2(
         });
 
         // spawn one worker per partition stream to drive DataFusion concurrently
-        let mut worker_handles = Vec::new();
+        let mut worker_handles = Vec::with_capacity(partition_streams.len());
         let scan_start = std::time::Instant::now();
         for mut partition_stream in partition_streams {
             let tx_clone = tx.clone();
@@ -444,7 +444,7 @@ pub(crate) async fn write_execution_plan_v2(
         });
 
         // spawn partition workers that split batches and send to appropriate writer channel
-        let mut worker_handles = Vec::new();
+        let mut worker_handles = Vec::with_capacity(partition_streams.len());
         let scan_start = std::time::Instant::now();
         for mut partition_stream in partition_streams {
             let txn = tx_normal.clone();

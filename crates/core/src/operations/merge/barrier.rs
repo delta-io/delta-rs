@@ -16,7 +16,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::array::{builder::UInt64Builder, ArrayRef, RecordBatch};
+use arrow::array::{builder::UInt64Builder, Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use dashmap::DashSet;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
@@ -253,7 +253,7 @@ impl Stream for MergeBarrierStream {
                             // However this approach exposes the cost of hashing so we want to minimize that as much as possible.
                             // A map from an arrow dictionary key to the correct index of `file_partition` is created for each batch that's processed.
                             // This ensures we only need to hash each file path at most once per batch.
-                            let mut key_map = Vec::new();
+                            let mut key_map = Vec::with_capacity(file_dictionary.len());
 
                             for file_name in file_dictionary.values().into_iter() {
                                 let key = match file_name {
@@ -273,9 +273,11 @@ impl Stream for MergeBarrierStream {
                                 key_map.push(key)
                             }
 
-                            let mut indices: Vec<_> = (0..(self.file_partitions.len()))
-                                .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
-                                .collect();
+                            let mut indices: Vec<_> =
+                                Vec::with_capacity(self.file_partitions.len());
+                            for _ in 0..self.file_partitions.len() {
+                                indices.push(UInt64Builder::with_capacity(batch.num_rows()));
+                            }
 
                             for (idx, key) in file_dictionary.keys().iter().enumerate() {
                                 match key {
