@@ -597,7 +597,7 @@ impl DeltaDataChecker {
 
     /// Return true if all the nullability checks are valid
     fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
-        let mut violations = Vec::new();
+        let mut violations = Vec::with_capacity(self.non_nullable_columns.len());
         for col in self.non_nullable_columns.iter() {
             if let Some(arr) = record_batch.column_by_name(col) {
                 if arr.null_count() > 0 {
@@ -633,7 +633,7 @@ impl DeltaDataChecker {
         let table_name: String = uuid::Uuid::new_v4().to_string();
         self.ctx.register_table(&table_name, Arc::new(table))?;
 
-        let mut violations: Vec<String> = Vec::new();
+        let mut violations: Vec<String> = Vec::with_capacity(checks.len());
 
         for check in checks {
             if check.get_name().contains('.') {
