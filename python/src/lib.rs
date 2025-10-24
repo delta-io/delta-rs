@@ -794,9 +794,7 @@ impl RawDeltaTable {
             let table = self._table.lock().map_err(to_rt_err)?.clone();
             let mut cmd = DeltaOps(table).add_constraint();
 
-            for (col_name, expression) in constraints {
-                cmd = cmd.with_constraint(col_name.clone(), expression.clone());
-            }
+            cmd = cmd.with_constraints(constraints);
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(commit_properties, post_commithook_properties)
