@@ -438,7 +438,7 @@ impl<'a> DeltaScanBuilder<'a> {
         )?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
-            let mut fields = vec![];
+            let mut fields = Vec::with_capacity(used_columns.len());
             for idx in used_columns {
                 fields.push(logical_schema.field(*idx).to_owned());
             }
@@ -517,9 +517,9 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     // needed to enforce limit and deal with missing statistics
                     // rust port of https://github.com/delta-io/delta/pull/1495
-                    let mut pruned_without_stats = vec![];
+                    let mut pruned_without_stats = Vec::new();
                     let mut rows_collected = 0;
-                    let mut files = vec![];
+                    let mut files = Vec::with_capacity(num_containers);
 
                     let file_actions: Vec<_> = self
                         .snapshot

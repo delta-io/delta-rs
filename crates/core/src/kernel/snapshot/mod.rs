@@ -40,11 +40,12 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use serde_json::Deserializer;
 use tokio::task::spawn_blocking;
+use tracing::Instrument;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
-use crate::kernel::{StructType, ARROW_HANDLER};
+use crate::kernel::{spawn_blocking_with_span, StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
@@ -80,7 +81,7 @@ impl Snapshot {
         config: DeltaTableConfig,
         version: Option<Version>,
     ) -> DeltaResult<Self> {
-        let snapshot = match spawn_blocking(move || {
+        let snapshot = match spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_for(table_root);
             if let Some(version) = version {
                 builder = builder.at_version(version);
@@ -162,7 +163,7 @@ impl Snapshot {
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
         let current = self.inner.clone();
-        let snapshot = spawn_blocking(move || {
+        let snapshot = spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_from(current);
             if let Some(version) = target_version {
                 builder = builder.at_version(version);
@@ -432,9 +433,10 @@ impl Snapshot {
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
         let inner = self.inner.clone();
-        let version = spawn_blocking(move || inner.get_app_id_version(&app_id, engine.as_ref()))
-            .await
-            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        let version =
+            spawn_blocking_with_span(move || inner.get_app_id_version(&app_id, engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(version)
     }
 
@@ -451,9 +453,10 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let inner = self.inner.clone();
         let domain = domain.to_string();
-        let metadata = spawn_blocking(move || inner.get_domain_metadata(&domain, engine.as_ref()))
-            .await
-            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        let metadata =
+            spawn_blocking_with_span(move || inner.get_domain_metadata(&domain, engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
     }
 }

@@ -69,13 +69,12 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use tokio::runtime::RuntimeFlavor;
-use tokio::task::spawn_blocking;
 use tracing::*;
 use url::Url;
 use uuid::Uuid;
 
 use crate::kernel::transaction::TransactionError;
-use crate::kernel::Action;
+use crate::kernel::{spawn_blocking_with_span, Action};
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::config::StorageConfig;
@@ -660,7 +659,7 @@ pub async fn get_latest_version(
     let storage = log_store.engine(None).storage_handler();
     let log_root = log_store.log_root_url();
 
-    let segment = spawn_blocking(move || {
+    let segment = spawn_blocking_with_span(move || {
         LogSegment::for_table_changes(storage.as_ref(), log_root, current_version as u64, None)
     })
     .await
