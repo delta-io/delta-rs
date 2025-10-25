@@ -113,7 +113,7 @@ debug = true
 
 [profile.release-python]
 inherits = "release"
-opt-level = "s"
+opt-level = 3
 codegen-units = 1
 lto = "fat"
 strip = true
