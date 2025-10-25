@@ -1955,6 +1955,8 @@ class TableOptimizer:
         partition_filters: FilterConjunctionType | None = None,
         target_size: int | None = None,
         max_concurrent_tasks: int | None = None,
+        max_spill_size: int | None = None,
+        max_temp_directory_size: int | None = None,
         min_commit_interval: int | timedelta | None = None,
         writer_properties: WriterProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
@@ -1977,6 +1979,8 @@ class TableOptimizer:
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
+            max_spill_size: the maximum number of bytes allowed in memory before spilling to disk. If not specified, uses DataFusion's default.
+            max_temp_directory_size: the maximum disk space for temporary spill files. If not specified, uses DataFusion's default.
             min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
@@ -2010,6 +2014,8 @@ class TableOptimizer:
             self.table._stringify_partition_values(partition_filters),
             target_size,
             max_concurrent_tasks,
+            max_spill_size,
+            max_temp_directory_size,
             min_commit_interval,
             writer_properties,
             commit_properties,
@@ -2024,7 +2030,8 @@ class TableOptimizer:
         partition_filters: FilterConjunctionType | None = None,
         target_size: int | None = None,
         max_concurrent_tasks: int | None = None,
-        max_spill_size: int = 20 * 1024 * 1024 * 1024,
+        max_spill_size: int | None = None,
+        max_temp_directory_size: int | None = None,
         min_commit_interval: int | timedelta | None = None,
         writer_properties: WriterProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
@@ -2044,7 +2051,8 @@ class TableOptimizer:
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
-            max_spill_size: the maximum number of bytes allowed in memory before spilling to disk. Defaults to 20GB.
+            max_spill_size: the maximum number of bytes allowed in memory before spilling to disk. If not specified, uses DataFusion's default.
+            max_temp_directory_size: the maximum disk space for temporary spill files. If not specified, uses DataFusion's default.
             min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
@@ -2080,6 +2088,7 @@ class TableOptimizer:
             target_size,
             max_concurrent_tasks,
             max_spill_size,
+            max_temp_directory_size,
             min_commit_interval,
             writer_properties,
             commit_properties,
