@@ -40,7 +40,7 @@ def test_benchmark_write(benchmark, sample_table: Table, tmp_path: Path):
     def func(table_path: str) -> None:
         write_deltalake(table_path, sample_table)
 
-    benchmark.pedantic(func, setup=setup, rounds=5)
+    benchmark.pedantic(func, setup=setup, rounds=5, warmup_rounds=3)
 
     # TODO: figure out why this assert is failing
     # dt = DeltaTable(str(tmp_path))
@@ -70,7 +70,7 @@ def test_benchmark_write_minio(
     def func(table_path: str) -> None:
         write_deltalake(table_path, sample_table, storage_options=storage_options)
 
-    benchmark.pedantic(func, setup=setup, rounds=5)
+    benchmark.pedantic(func, setup=setup, rounds=5, warmup_rounds=3)
 
 
 @pytest.mark.pyarrow
@@ -146,7 +146,7 @@ def test_benchmark_optimize(
         )
 
     # We need to recreate the table for each benchmark run
-    results = benchmark.pedantic(func, setup=setup, rounds=5)
+    results = benchmark.pedantic(func, setup=setup, rounds=5, warmup_rounds=3)
 
     assert results["numFilesRemoved"] == 50
     assert results["numFilesAdded"] == 5
@@ -207,7 +207,7 @@ def test_benchmark_optimize_minio(
             max_concurrent_tasks=max_concurrent_tasks, target_size=1024 * 1024 * 1024
         )
 
-    results = benchmark.pedantic(func, setup=setup, rounds=5)
+    results = benchmark.pedantic(func, setup=setup, rounds=5, warmup_rounds=3)
 
     assert results["numFilesRemoved"] == 50
     assert results["numFilesAdded"] == 5
