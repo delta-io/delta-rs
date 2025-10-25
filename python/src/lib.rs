@@ -848,6 +848,14 @@ impl RawDeltaTable {
         Ok(())
     }
 
+    #[pyo3()]
+    pub fn generate(&self, _py: Python) -> PyResult<()> {
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        rt().block_on(async { DeltaOps(table).generate().await })
+            .map_err(PythonError::from)?;
+        Ok(())
+    }
+
     #[pyo3(signature = (
         starting_version = None,
         ending_version = None,
