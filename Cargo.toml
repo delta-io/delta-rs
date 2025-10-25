@@ -15,10 +15,6 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
-[profile.release-with-debug]
-inherits = "release"
-debug = true
-
 # Reducing the debuginfo for the test profile in order to trim the disk and RAM
 # usage during development
 # <https://github.com/delta-io/delta-rs/issues/1550?
@@ -103,6 +99,10 @@ AKS = "AKS"
 # to avoid using 'type' as a field name.
 tpe = "tpe"
 
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
 # for better flamegraphs when benchmarking
 [profile.bench]
 debug = true
@@ -110,3 +110,10 @@ debug = true
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[profile.release-python]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+strip = true
