@@ -115,11 +115,13 @@ impl std::future::IntoFuture for LoadBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::delta_datafusion::create_session;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::writer::test_utils::{get_record_batch, TestResult};
     use crate::DeltaTableBuilder;
     use datafusion::assert_batches_sorted_eq;
     use std::path::Path;
+    use std::sync::Arc;
     use url::Url;
 
     #[tokio::test]
@@ -155,7 +157,16 @@ mod tests {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory().write(vec![batch.clone()]).await?;
 
-        let (_table, stream) = DeltaOps(table).load().await?;
+        let session = create_session().into_inner();
+        session.runtime_env().register_object_store(
+            &url::Url::parse("memory:///")?,
+            table.log_store().object_store(None),
+        );
+
+        let (_table, stream) = DeltaOps(table)
+            .load()
+            .with_session_state(Arc::new(session.state()))
+            .await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![
@@ -186,7 +197,17 @@ mod tests {
         let batch = get_record_batch(None, false);
         let table = DeltaOps::new_in_memory().write(vec![batch.clone()]).await?;
 
-        let (_table, stream) = DeltaOps(table).load().with_columns(["id", "value"]).await?;
+        let session = create_session().into_inner();
+        session.runtime_env().register_object_store(
+            &url::Url::parse("memory:///")?,
+            table.log_store().object_store(None),
+        );
+
+        let (_table, stream) = DeltaOps(table)
+            .load()
+            .with_columns(["id", "value"])
+            .with_session_state(Arc::new(session.state()))
+            .await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![
