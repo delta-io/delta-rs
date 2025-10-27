@@ -580,19 +580,58 @@ pub fn get_num_idx_cols_and_stats_columns(
     )
 }
 
-/// Get the target_file_size from the table configuration in the sates
-/// If table_config does not exist (only can occur in the first write action) it takes
-/// the configuration that was passed to the writerBuilder.
 #[cfg(feature = "datafusion")]
-pub(crate) fn get_target_file_size(
-    config: Option<&TableProperties>,
-    configuration: &HashMap<String, Option<String>>,
-) -> u64 {
-    match &config {
-        Some(conf) => conf.target_file_size().get(),
-        _ => configuration
-            .get("delta.targetFileSize")
-            .and_then(|v| v.clone().map(|v| v.parse::<u64>().unwrap()))
-            .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
+mod datafusion_utils {
+    use datafusion::logical_expr::Expr;
+    use datafusion::{catalog::Session, common::DFSchema};
+
+    use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
+
+    /// Used to represent user input of either a Datafusion expression or string expression
+    #[derive(Debug, Clone)]
+    pub enum Expression {
+        /// Datafusion Expression
+        DataFusion(Expr),
+        /// String Expression
+        String(String),
+    }
+
+    impl From<Expr> for Expression {
+        fn from(val: Expr) -> Self {
+            Expression::DataFusion(val)
+        }
+    }
+
+    impl From<&str> for Expression {
+        fn from(val: &str) -> Self {
+            Expression::String(val.to_string())
+        }
+    }
+    impl From<String> for Expression {
+        fn from(val: String) -> Self {
+            Expression::String(val)
+        }
+    }
+
+    pub(crate) fn into_expr(
+        expr: Expression,
+        schema: &DFSchema,
+        session: &dyn Session,
+    ) -> DeltaResult<Expr> {
+        match expr {
+            Expression::DataFusion(expr) => Ok(expr),
+            Expression::String(s) => parse_predicate_expression(schema, s, session),
+        }
+    }
+
+    pub(crate) fn maybe_into_expr(
+        expr: Option<Expression>,
+        schema: &DFSchema,
+        session: &dyn Session,
+    ) -> DeltaResult<Option<Expr>> {
+        Ok(match expr {
+            Some(predicate) => Some(into_expr(predicate, schema, session)?),
+            None => None,
+        })
     }
 }
