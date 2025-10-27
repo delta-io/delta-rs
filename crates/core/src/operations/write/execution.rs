@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
@@ -60,7 +61,7 @@ pub(crate) async fn write_execution_plan_cdc(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroUsize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -107,7 +108,7 @@ pub(crate) async fn write_execution_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroUsize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -175,7 +176,11 @@ pub(crate) async fn execute_non_empty_expr(
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
+            snapshot
+                .table_properties()
+                .target_file_size()
+                .try_into()
+                .ok(),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -265,7 +270,7 @@ pub(crate) async fn write_execution_plan_v2(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroUsize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,

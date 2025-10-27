@@ -549,7 +549,8 @@ impl MergePlan {
             task_parameters.file_schema.clone(),
             partition_values.clone(),
             Some(task_parameters.writer_properties.clone()),
-            Some(task_parameters.input_parameters.target_size as usize),
+            // Since we know the total size of the bin, we can set the target file size to None.
+            None,
             None,
             None,
         )?;
