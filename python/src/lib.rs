@@ -60,6 +60,7 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::future::IntoFuture;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
@@ -1784,7 +1785,7 @@ impl RawDeltaTable {
             };
 
             if let Some(target_file_size) = target_file_size {
-                builder = builder.with_target_file_size(target_file_size)
+                builder = builder.with_target_file_size(NonZeroUsize::new(target_file_size));
             };
 
             if let Some(config) = configuration {

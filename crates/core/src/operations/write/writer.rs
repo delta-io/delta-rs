@@ -1,6 +1,7 @@
 //! Abstractions and implementations for writing data to delta tables
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
@@ -31,8 +32,6 @@ use crate::writer::utils::{
 
 use parquet::file::metadata::ParquetMetaData;
 
-// TODO databricks often suggests a file size of 100mb, should we set this default?
-const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 const DEFAULT_UPLOAD_PART_SIZE: usize = 1024 * 1024 * 5;
 const DEFAULT_MAX_CONCURRENCY_TASKS: usize = 10;
@@ -132,7 +131,8 @@ pub struct WriterConfig {
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
-    target_file_size: usize,
+    /// If None, the writer will not create a new file until the writer is closed.
+    target_file_size: Option<NonZeroUsize>,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -148,7 +148,7 @@ impl WriterConfig {
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
+        target_file_size: Option<NonZeroUsize>,
         write_batch_size: Option<usize>,
         num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
@@ -158,7 +158,6 @@ impl WriterConfig {
                 .set_compression(Compression::SNAPPY)
                 .build()
         });
-        let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Self {
@@ -238,7 +237,7 @@ impl DeltaWriter {
                     self.config.file_schema(),
                     partition_values.clone(),
                     Some(self.config.writer_properties.clone()),
-                    Some(self.config.target_file_size),
+                    self.config.target_file_size,
                     Some(self.config.write_batch_size),
                     None,
                 )?;
@@ -302,7 +301,8 @@ pub struct PartitionWriterConfig {
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
-    target_file_size: usize,
+    /// If None, the writer will not create a new file until the writer is closed.
+    target_file_size: Option<NonZeroUsize>,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -316,7 +316,7 @@ impl PartitionWriterConfig {
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
+        target_file_size: Option<NonZeroUsize>,
         write_batch_size: Option<usize>,
         max_concurrency_tasks: Option<usize>,
     ) -> DeltaResult<Self> {
@@ -327,7 +327,6 @@ impl PartitionWriterConfig {
                 .set_created_by(format!("delta-rs version {}", crate_version()))
                 .build()
         });
-        let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
@@ -446,7 +445,7 @@ impl PartitionWriter {
         )
     }
 
-    async fn reset_writer(&mut self) -> DeltaResult<()> {
+    fn reset_writer(&mut self) -> DeltaResult<()> {
         let next_path = self.next_data_path();
         let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config)?;
         let state = std::mem::replace(&mut self.writer, new_writer);
@@ -478,11 +477,13 @@ impl PartitionWriter {
             self.writer
                 .write_batch(&batch.slice(offset, length))
                 .await?;
-            // flush currently buffered data to disk once we meet or exceed the target file size.
-            let estimated_size = self.writer.estimated_size();
-            if estimated_size >= self.config.target_file_size {
-                debug!("Writing file with estimated size {estimated_size:?} in background.");
-                self.reset_writer().await?;
+            if let Some(target_file_size) = self.config.target_file_size {
+                let estimated_size = self.writer.estimated_size();
+                // flush currently buffered data to disk once we meet or exceed the target file size.
+                if estimated_size >= target_file_size.into() {
+                    debug!("Writing file with estimated size {estimated_size:?} in background.");
+                    self.reset_writer()?;
+                }
             }
         }
 
@@ -549,7 +550,7 @@ mod tests {
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
+        target_file_size: Option<NonZeroUsize>,
         write_batch_size: Option<usize>,
     ) -> DeltaWriter {
         let config = WriterConfig::new(
@@ -568,7 +569,7 @@ mod tests {
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
+        target_file_size: Option<NonZeroUsize>,
         write_batch_size: Option<usize>,
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
@@ -633,8 +634,13 @@ mod tests {
             .set_max_row_group_size(1024)
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
-        let mut writer =
-            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None);
+        let mut writer = get_partition_writer(
+            object_store,
+            &batch,
+            Some(properties),
+            Some(NonZeroUsize::new(10_000).unwrap()),
+            None,
+        );
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -662,7 +668,13 @@ mod tests {
             .unwrap()
             .object_store(None);
         // configure small target file size so we can observe multiple files written
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
+        let mut writer = get_partition_writer(
+            object_store,
+            &batch,
+            None,
+            Some(NonZeroUsize::new(10_000).unwrap()),
+            None,
+        );
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -691,7 +703,13 @@ mod tests {
             .object_store(None);
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
+        let mut writer = get_partition_writer(
+            object_store,
+            &batch,
+            None,
+            Some(NonZeroUsize::new(9000).unwrap()),
+            Some(10000),
+        );
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();

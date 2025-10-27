@@ -320,7 +320,11 @@ async fn execute_non_empty_expr(
             filter.clone(),
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
+            snapshot
+                .table_properties()
+                .target_file_size()
+                .try_into()
+                .ok(),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -357,7 +361,11 @@ async fn execute_non_empty_expr(
             cdc_filter,
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
+            snapshot
+                .table_properties()
+                .target_file_size()
+                .try_into()
+                .ok(),
             None,
             writer_properties,
             writer_stats_config,

@@ -1,5 +1,5 @@
 //! Delta Table configuration
-use std::num::NonZero;
+use std::num::{NonZero, NonZeroU64};
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -201,7 +201,7 @@ pub enum DeltaConfigError {
 /// Default num index cols
 pub const DEFAULT_NUM_INDEX_COLS: u64 = 32;
 /// Default target file size
-pub const DEFAULT_TARGET_FILE_SIZE: u64 = 100 * 1024 * 1024;
+pub const DEFAULT_TARGET_FILE_SIZE: NonZeroU64 = NonZeroU64::new(100 * 1024 * 1024).unwrap();
 
 pub trait TablePropertiesExt {
     /// true for this Delta table to be append-only. If append-only, existing records cannot be
@@ -268,10 +268,8 @@ impl TablePropertiesExt for TableProperties {
             .unwrap_or(DataSkippingNumIndexedCols::NumColumns(32))
     }
 
-    fn target_file_size(&self) -> NonZero<u64> {
-        static DEFAULT_SIZE: LazyLock<NonZero<u64>> =
-            LazyLock::new(|| NonZero::new(100 * 1024 * 1024).unwrap());
-        self.target_file_size.unwrap_or(DEFAULT_SIZE.to_owned())
+    fn target_file_size(&self) -> NonZeroU64 {
+        self.target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE)
     }
 
     fn enable_change_data_feed(&self) -> bool {
