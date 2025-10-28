@@ -17,10 +17,10 @@ use object_store::ObjectStore;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
-use tokio::task::spawn_blocking;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+use crate::kernel::spawn_blocking_with_span;
 use crate::logstore::{LogStore, LogStoreExt, DELTA_LOG_REGEX};
 use crate::table::config::TablePropertiesExt as _;
 use crate::{open_table_with_version, DeltaTable};
@@ -45,7 +45,7 @@ pub(crate) async fn create_checkpoint_for(
     let engine = log_store.engine(operation_id);
 
     let task_engine = engine.clone();
-    let snapshot = spawn_blocking(move || {
+    let snapshot = spawn_blocking_with_span(move || {
         Snapshot::builder_for(table_root)
             .at_version(version)
             .build(task_engine.as_ref())
@@ -59,7 +59,7 @@ pub(crate) async fn create_checkpoint_for(
     let cp_path = Path::from_url_path(cp_url.path())?;
     let mut cp_data = cp_writer.checkpoint_data(engine.as_ref())?;
 
-    let (first_batch, mut cp_data) = spawn_blocking(move || {
+    let (first_batch, mut cp_data) = spawn_blocking_with_span(move || {
         let Some(first_batch) = cp_data.next() else {
             return Err(DeltaTableError::Generic("No data".to_string()));
         };
@@ -82,7 +82,7 @@ pub(crate) async fn create_checkpoint_for(
 
     let mut current_batch;
     loop {
-        (current_batch, cp_data) = spawn_blocking(move || {
+        (current_batch, cp_data) = spawn_blocking_with_span(move || {
             let Some(first_batch) = cp_data.next() else {
                 return Ok::<_, DeltaTableError>((None, cp_data));
             };
@@ -116,7 +116,7 @@ pub(crate) async fn create_checkpoint_for(
         last_modified: file_meta.last_modified.timestamp_millis(),
     };
 
-    spawn_blocking(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data))
+    spawn_blocking_with_span(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data))
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 

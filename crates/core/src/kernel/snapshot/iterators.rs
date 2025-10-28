@@ -334,8 +334,8 @@ where
         Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
         Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
         Scalar::Struct(struct_data) => {
-            let mut fields = Vec::new();
-            let mut scalars = Vec::new();
+            let mut fields = Vec::with_capacity(struct_data.fields().len());
+            let mut scalars = Vec::with_capacity(struct_data.values().len());
 
             for (field, value) in struct_data.fields().iter().zip(struct_data.values().iter()) {
                 fields.push(field.clone());

@@ -1,6 +1,5 @@
 use arrow_schema::ArrowError;
 use deltalake::datafusion::error::DataFusionError;
-use deltalake::kernel::Error as KernelError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyRuntimeError,
@@ -38,10 +37,14 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         // python exceptions
         DeltaTableError::ObjectStore { source } => object_store_to_py(source, None),
         DeltaTableError::Kernel { source } => match source {
-            KernelError::ObjectStore(e) => object_store_to_py(e, Some("Kernel error".to_string())),
+            deltalake::kernel::Error::ObjectStore(e) => object_store_to_py(e, Some("Kernel error")),
             other => DeltaError::new_err(DeltaTableError::Kernel { source: other }.to_string()),
         },
-
+        // delta-kernel-rs error propagation
+        DeltaTableError::KernelError(source) => match source {
+            delta_kernel::Error::ObjectStore(e) => object_store_to_py(e, Some("Kernel error")),
+            other => DeltaError::new_err(DeltaTableError::KernelError(other).to_string()),
+        },
         DeltaTableError::Io { source } => PyIOError::new_err(source.to_string()),
 
         DeltaTableError::Arrow { source } => arrow_to_py(source),
@@ -97,36 +100,35 @@ impl<T: Error + 'static> Display for DisplaySourceChain<T> {
     }
 }
 
-fn object_store_to_py(err: ObjectStoreError, source_error: Option<String>) -> PyErr {
-    if let Some(source_error) = source_error {
-        PyIOError::new_err(
-            DisplaySourceChain {
+fn object_store_to_py(err: ObjectStoreError, source_error_name: Option<&str>) -> PyErr {
+    match err {
+        ObjectStoreError::NotFound { .. } => {
+            let mut error = DisplaySourceChain {
                 err,
-                error_name: format!("{} -> IOError", source_error),
+                error_name: "FileNotFoundError".to_string(),
             }
-            .to_string(),
-        )
-    } else {
-        match err {
-            ObjectStoreError::NotFound { .. } => PyFileNotFoundError::new_err(
-                DisplaySourceChain {
-                    err,
-                    error_name: "FileNotFoundError".to_string(),
-                }
-                .to_string(),
-            ),
-            ObjectStoreError::Generic { source, .. }
-                if source.to_string().contains("AWS_S3_ALLOW_UNSAFE_RENAME") =>
-            {
-                DeltaProtocolError::new_err(source.to_string())
+            .to_string();
+            if let Some(source_error_name) = source_error_name {
+                error = format!("{} -> {}", source_error_name, error)
             }
-            _ => PyIOError::new_err(
-                DisplaySourceChain {
-                    err,
-                    error_name: "IOError".to_string(),
-                }
-                .to_string(),
-            ),
+            PyFileNotFoundError::new_err(error)
+        }
+
+        ObjectStoreError::Generic { source, .. }
+            if source.to_string().contains("AWS_S3_ALLOW_UNSAFE_RENAME") =>
+        {
+            DeltaProtocolError::new_err(source.to_string())
+        }
+        _ => {
+            let mut error = DisplaySourceChain {
+                err,
+                error_name: "IOError".to_string(),
+            }
+            .to_string();
+            if let Some(source_error_name) = source_error_name {
+                error = format!("{} -> {}", source_error_name, error)
+            }
+            PyIOError::new_err(error)
         }
     }
 }

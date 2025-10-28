@@ -141,7 +141,7 @@ impl DeltaFileSystemHandler {
             fs.call_method("FileInfo", (loc, type_), Some(&kwargs.into_py_dict(py)?))
         };
 
-        let mut infos = Vec::new();
+        let mut infos = Vec::with_capacity(paths.len());
         for file_path in paths {
             let path = Self::parse_path(&file_path);
             let listed = py.allow_threads(|| {

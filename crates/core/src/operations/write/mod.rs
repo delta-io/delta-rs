@@ -508,7 +508,8 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                 }
                 if let Some(new_schema) = new_schema {
-                    let mut schema_evolution_projection = Vec::new();
+                    let mut schema_evolution_projection =
+                        Vec::with_capacity(new_schema.fields().len());
                     for field in new_schema.fields() {
                         // If field exist in source data, we cast to new datatype
                         if source_schema.index_of(field.name()).is_ok() {

@@ -290,10 +290,9 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         .collect_vec();
 
     let batch = snapshot.add_actions_table(true)?;
-    let mut arrays = Vec::new();
-    let mut fields = Vec::new();
-
     let schema = batch.schema();
+    let mut arrays = Vec::with_capacity(schema.fields().len());
+    let mut fields = Vec::with_capacity(schema.fields().len());
 
     arrays.push(
         batch

@@ -53,7 +53,6 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
         write_deltalake(tmp_path, data, mode="append")
 
 
-
 def test_add_constraint_roundtrip_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 

@@ -274,7 +274,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
         let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::new();
+        let mut actions = Vec::with_capacity(writers.len());
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;

@@ -90,8 +90,3 @@ features = [
 default = ["rustls"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
-
-[profile.release]
-opt-level = 3
-codegen-units = 1
-lto = "fat"

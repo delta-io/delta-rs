@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.12.0"
+version = "0.12.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -32,7 +32,7 @@ url = { workspace = true }
 aws-smithy-runtime-api = { version = "1.8" }
 aws-smithy-runtime = { version = "1.8", optional = true }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
-aws-config = { version = "1.8", default-features = false, features = [
+aws-config = { version = "1.8", features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
