@@ -25,16 +25,14 @@ use tracing::log::*;
 use typed_builder::TypedBuilder;
 use url::Url;
 
-use crate::constants;
+use crate::constants::{
+    self, DEFAULT_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, DEFAULT_S3_POOL_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS,
+};
 use crate::credentials::AWSForObjectStore;
 use crate::errors::DynamoDbConfigError;
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
-
-// Default values for S3StorageOptions
-const DEFAULT_S3_POOL_IDLE_TIMEOUT_SECONDS: u64 = 15;
-const DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS: u64 = 10;
-const DEFAULT_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: usize = 10;
 
 #[derive(Clone, Default, Debug)]
 pub struct S3ObjectStoreFactory {}
