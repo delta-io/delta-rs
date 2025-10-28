@@ -264,6 +264,17 @@ impl DeltaTable {
         Ok(infos.into_iter().flatten())
     }
 
+    pub async fn history_stream(
+        &self,
+        limit: Option<usize>,
+    ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
+        self.snapshot()?
+            .snapshot()
+            .snapshot()
+            .commit_infos(&self.log_store(), limit)
+            .await
+    }
+
     #[cfg(test)]
     /// We have enough internal tests that just need to check the last commit of the table.
     ///
