@@ -511,8 +511,30 @@ class DeltaTable:
         """
         Generate symlink manifest for engines that cannot read native Delta Lake tables.
 
-        Creates symbolic links to Delta table data files, enabling compatibility with
-        processing engines that require direct file access instead of Delta protocol support.
+        The generate supports the fairly simple "GENERATE" operation which produces a
+        [symlink_format_manifest](https://docs.delta.io/delta-utility/#generate-a-manifest-file) file
+        when needed for an external engine such as Presto or BigQuery.
+
+        The "symlink_format_manifest" is not something that has been well documented, but for
+        enon-partitioned tables this will generate a `_symlink_format_manifest/manifest` file next to
+        the `_delta_log`, for example:
+
+        ```
+        COVID-19_NYT
+        ├── _delta_log
+        │   ├── 00000000000000000000.crc
+        │   └── 00000000000000000000.json
+        ├── part-00000-a496f40c-e091-413a-85f9-b1b69d4b3b4e-c000.snappy.parquet
+        ├── part-00001-9d9d980b-c500-4f0b-bb96-771a515fbccc-c000.snappy.parquet
+        ├── part-00002-8826af84-73bd-49a6-a4b9-e39ffed9c15a-c000.snappy.parquet
+        ├── part-00003-539aff30-2349-4b0d-9726-c18630c6ad90-c000.snappy.parquet
+        ├── part-00004-1bb9c3e3-c5b0-4d60-8420-23261f58a5eb-c000.snappy.parquet
+        ├── part-00005-4d47f8ff-94db-4d32-806c-781a1cf123d2-c000.snappy.parquet
+        ├── part-00006-d0ec7722-b30c-4e1c-92cd-b4fe8d3bb954-c000.snappy.parquet
+        ├── part-00007-4582392f-9fc2-41b0-ba97-a74b3afc8239-c000.snappy.parquet
+        └── _symlink_format_manifest
+            └── manifest
+        ```
         """
         return self._table.generate()
 

@@ -6,7 +6,6 @@ use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use indexmap::IndexMap;
-use itertools::Itertools;
 
 use super::super::scalars::ScalarExt;
 use super::iterators::LogicalFileView;
@@ -123,6 +122,7 @@ mod datafusion {
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
     use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
+    use itertools::Itertools;
 
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
