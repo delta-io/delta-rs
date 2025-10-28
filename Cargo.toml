@@ -116,4 +116,4 @@ inherits = "release"
 opt-level = 3
 codegen-units = 1
 lto = "fat"
-strip = true
+strip = "debuginfo"
