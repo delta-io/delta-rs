@@ -608,7 +608,6 @@ impl TryFrom<&HashMap<String, AttributeValue>> for CommitEntry {
                 .map(epoch_to_system_time);
         let complete = extract_required_string_field(item, constants::ATTR_COMPLETE)? == "true";
 
-        // Construct directly to avoid TypedBuilder's type state issues with conditional fields
         Ok(Self {
             version,
             temp_path,
