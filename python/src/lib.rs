@@ -605,8 +605,11 @@ impl RawDeltaTable {
                 .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
 
-            if let Some(size) = target_size {
-                cmd = cmd.with_target_size(size);
+            if let Some(target_size) = target_size {
+                let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
+                    PyValueError::new_err("target_file_size must be greater than 0")
+                })?;
+                cmd = cmd.with_target_size(target_size);
             }
             if let Some(commit_interval) = min_commit_interval {
                 cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
@@ -674,8 +677,11 @@ impl RawDeltaTable {
                 .with_max_spill_size(max_spill_size)
                 .with_type(OptimizeType::ZOrder(z_order_columns));
 
-            if let Some(size) = target_size {
-                cmd = cmd.with_target_size(size);
+            if let Some(target_size) = target_size {
+                let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
+                    PyValueError::new_err("target_file_size must be greater than 0")
+                })?;
+                cmd = cmd.with_target_size(target_size);
             }
             if let Some(commit_interval) = min_commit_interval {
                 cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
