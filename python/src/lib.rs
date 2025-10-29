@@ -69,7 +69,7 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::future::IntoFuture;
-use std::num::NonZeroUsize;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time;
@@ -2022,7 +2022,7 @@ impl RawDeltaTable {
         schema_mode: Option<String>,
         partition_by: Option<Vec<String>>,
         predicate: Option<String>,
-        target_file_size: Option<usize>,
+        target_file_size: Option<u64>,
         name: Option<String>,
         description: Option<String>,
         configuration: Option<HashMap<String, Option<String>>>,
@@ -2080,7 +2080,9 @@ impl RawDeltaTable {
             };
 
             if let Some(target_file_size) = target_file_size {
-                builder = builder.with_target_file_size(NonZeroUsize::new(target_file_size));
+                let target_file_size = NonZeroU64::new(target_file_size)
+                    .ok_or_else(|| PyValueError::new("target_file_size must be greater than 0"))?;
+                builder = builder.with_target_file_size(target_file_size);
             };
 
             if let Some(config) = configuration {
