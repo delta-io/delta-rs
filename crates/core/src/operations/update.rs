@@ -348,7 +348,6 @@ async fn execute(
     // to either compute the new value or obtain the old one then write these batches
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_file_format_options(file_format_options.clone())
             .with_files(candidates.candidates.clone()),
     );
 

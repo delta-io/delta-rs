@@ -246,7 +246,6 @@ async fn execute_non_empty_expr(
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_file_format_options(file_format_options)
             .with_files(rewrite.to_vec()),
     );
     let target_provider = provider_as_source(target_provider);

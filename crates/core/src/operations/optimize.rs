@@ -757,7 +757,7 @@ impl MergePlan {
                             scan_config.clone(),
                         )
                         .unwrap()
-                        .with_file_format_options(ffo.clone());
+                        ;
 
                         let batch_stream =
                             Self::read_zorder(files.clone(), exec_context.clone(), dtp);
