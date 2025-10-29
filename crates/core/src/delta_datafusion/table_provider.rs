@@ -59,7 +59,6 @@ use crate::kernel::{Action, Add, EagerSnapshot, Remove};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::file_format_options::FileFormatRef;
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
 
@@ -654,15 +653,10 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
-        let parquet_options: TableParquetOptions = self.config.as_ref()
-            .unwrap().table_parquet_options.unwrap_or_else(|| self.session.table_options().parquet.clone());
-
-        /*
-        let parquet_options = self
-            .parquet_options
+        let parquet_options: TableParquetOptions = config
+            .table_parquet_options
+            .clone()
             .unwrap_or_else(|| self.session.table_options().parquet.clone());
-
-         */
 
         // We have to set the encryption factory on the ParquetSource based on the Parquet options,
         // as this is usually handled by the ParquetFormat type in DataFusion,
@@ -855,6 +849,9 @@ impl TableProvider for DeltaTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        if let Some(format_options) = &self.snapshot.load_config().file_format_options {
+            format_options.update_session(session)?;
+        }
 
         let filter_expr = conjunction(filters.iter().cloned());
 
