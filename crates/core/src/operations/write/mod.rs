@@ -78,8 +78,7 @@ use crate::kernel::{
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    WriterPropertiesFactoryRef,
+    build_writer_properties_factory_wp, WriterPropertiesFactoryRef,
 };
 use crate::DeltaTable;
 
@@ -199,7 +198,7 @@ impl WriteBuilder {
         let ffo = snapshot
             .as_ref()
             .and_then(|s| s.load_config().file_format_options.clone());
-        let writer_properties_factory = build_writer_properties_factory_ffo(ffo);
+        let writer_properties_factory = ffo.map(|ffo| ffo.writer_properties_factory());
         Self {
             snapshot,
             log_store,

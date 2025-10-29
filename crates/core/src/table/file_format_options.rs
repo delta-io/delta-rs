@@ -65,16 +65,11 @@ impl FileFormatOptions for SimpleFileFormatOptions {
     }
 }
 
-pub fn build_writer_properties_factory_ffo(
-    file_format_options: Option<FileFormatRef>,
-) -> Option<WriterPropertiesFactoryRef> {
-    file_format_options.map(|ffo| ffo.writer_properties_factory())
-}
-
 pub fn build_writer_properties_factory_or_default_ffo(
     file_format_options: Option<FileFormatRef>,
 ) -> WriterPropertiesFactoryRef {
-    build_writer_properties_factory_ffo(file_format_options)
+    file_format_options
+        .map(|ffo| ffo.writer_properties_factory())
         .unwrap_or_else(|| build_writer_properties_factory_default())
 }
 

@@ -62,8 +62,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, WriterPropertiesFactoryRef,
+    build_writer_properties_factory_wp, state_with_file_format_options, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
@@ -134,7 +133,7 @@ impl DeleteBuilder {
     pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         let file_format_options = &snapshot.load_config().file_format_options;
         let writer_properties_factory =
-            build_writer_properties_factory_ffo(file_format_options.clone());
+            file_format_options.clone().map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate: None,
             snapshot,

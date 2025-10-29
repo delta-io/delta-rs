@@ -60,8 +60,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, WriterPropertiesFactoryRef,
+    build_writer_properties_factory_wp, state_with_file_format_options, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::{
@@ -141,7 +140,7 @@ impl UpdateBuilder {
     pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         let file_format_options = snapshot.load_config().file_format_options.clone();
         let writer_properties_factory =
-            build_writer_properties_factory_ffo(file_format_options.clone());
+            file_format_options.clone().map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate: None,
             updates: HashMap::new(),
@@ -421,7 +420,7 @@ async fn execute(
     let writer_properties_factory = if writer_properties_factory.is_some() {
         writer_properties_factory
     } else {
-        build_writer_properties_factory_ffo(file_format_options.clone())
+        file_format_options.clone().map(|ffo| ffo.writer_properties_factory())
     };
 
     let add_actions = write_execution_plan(

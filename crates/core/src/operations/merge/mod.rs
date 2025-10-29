@@ -92,8 +92,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp,
-    state_with_file_format_options, WriterPropertiesFactoryRef,
+    build_writer_properties_factory_wp, state_with_file_format_options, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -177,7 +176,7 @@ impl MergeBuilder {
     ) -> Self {
         let predicate = predicate.into();
         let file_format_options = snapshot.load_config().file_format_options.clone();
-        let writer_properties_factory = build_writer_properties_factory_ffo(file_format_options);
+        let writer_properties_factory = file_format_options.map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate,
             source,

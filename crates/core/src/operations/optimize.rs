@@ -64,8 +64,7 @@ use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
-    build_writer_properties_factory_ffo, build_writer_properties_factory_wp, FileFormatRef,
-    WriterPropertiesFactoryRef,
+    build_writer_properties_factory_wp, FileFormatRef, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -255,7 +254,7 @@ impl<'a> OptimizeBuilder<'a> {
                 let wpf = build_writer_properties_factory_wp(wp);
                 Some(wpf)
             }
-            _ => build_writer_properties_factory_ffo(file_format_options.clone()),
+            _ => file_format_options.clone().map(|ffo| ffo.writer_properties_factory()),
         };
 
         Self {
