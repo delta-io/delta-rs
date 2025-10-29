@@ -24,7 +24,7 @@
 //! ````
 
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -145,7 +145,7 @@ pub struct WriteBuilder {
     predicate: Option<Expression>,
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
-    target_file_size: Option<Option<NonZeroUsize>>,
+    target_file_size: Option<Option<NonZeroU64>>,
     /// Number of records to be written in single batch to underlying writer
     write_batch_size: Option<usize>,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
@@ -261,7 +261,7 @@ impl WriteBuilder {
     }
 
     /// Specify the target file size for data files written to the delta table.
-    pub fn with_target_file_size(mut self, target_file_size: Option<NonZeroUsize>) -> Self {
+    pub fn with_target_file_size(mut self, target_file_size: Option<NonZeroU64>) -> Self {
         self.target_file_size = Some(target_file_size);
         self
     }

@@ -480,6 +480,8 @@ pub struct MergePlan {
     metrics: Metrics,
     /// Parameters passed down to merge tasks
     task_parameters: Arc<MergeTaskParameters>,
+    /// Input parameters for the optimize operation
+    input_parameters: OptimizeInput,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: i64,
 }
@@ -487,8 +489,6 @@ pub struct MergePlan {
 /// Parameters passed to individual merge tasks
 #[derive(Debug)]
 pub struct MergeTaskParameters {
-    /// Parameters passed to optimize operation
-    input_parameters: OptimizeInput,
     /// Schema of written files
     file_schema: SchemaRef,
     /// Properties passed to parquet writer
@@ -509,6 +509,7 @@ impl MergePlan {
     /// collected during the operation.
     async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
+        input_parameters: OptimizeInput,
         partition_values: IndexMap<String, Scalar>,
         files: MergeBin,
         object_store: ObjectStoreRef,
@@ -550,7 +551,7 @@ impl MergePlan {
             partition_values.clone(),
             Some(task_parameters.writer_properties.clone()),
             // Since we know the total size of the bin, we can set the target file size to None.
-            None,
+            Some(input_parameters.target_size),
             None,
             None,
         )?;
@@ -680,6 +681,7 @@ impl MergePlan {
 
                     let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                         self.task_parameters.clone(),
+                        self.input_parameters.clone(),
                         partition,
                         files,
                         object_store.clone(),
@@ -724,6 +726,7 @@ impl MergePlan {
                         );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
+                            self.input_parameters.clone(),
                             partition,
                             files,
                             log_store.object_store(Some(operation_id)),
@@ -877,8 +880,8 @@ pub async fn create_merge_plan(
     Ok(MergePlan {
         operations,
         metrics,
+        input_parameters,
         task_parameters: Arc::new(MergeTaskParameters {
-            input_parameters,
             file_schema,
             writer_properties,
             num_indexed_cols: snapshot.table_properties().num_indexed_cols(),
