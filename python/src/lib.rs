@@ -2368,7 +2368,7 @@ fn write_to_deltalake(
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
-    target_file_size: Option<usize>,
+    target_file_size: Option<u64>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
