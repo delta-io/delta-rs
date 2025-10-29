@@ -41,7 +41,7 @@ pub(crate) struct ScanMetadataArrow {
     /// - `None`: No transformation is needed; the data is already in the correct logical form.
     ///
     /// Note: This vector can be indexed by row number.
-    pub scan_file_transforms: Vec<Option<ExpressionRef>>,
+    scan_file_transforms: Vec<Option<ExpressionRef>>,
 }
 
 /// Internal extension traits to the Kernel Snapshot.

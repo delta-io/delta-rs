@@ -33,6 +33,7 @@ use self::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
+use crate::operations::generate::GenerateBuilder;
 use crate::table::builder::{ensure_table_uri, DeltaTableBuilder};
 use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
 use crate::DeltaTable;
@@ -43,6 +44,7 @@ pub mod convert_to_delta;
 pub mod create;
 pub mod drop_constraints;
 pub mod filesystem_check;
+pub mod generate;
 pub mod restore;
 pub mod update_field_metadata;
 pub mod update_table_metadata;
@@ -220,6 +222,11 @@ impl DeltaOps {
     #[must_use]
     pub fn create(self) -> CreateBuilder {
         CreateBuilder::default().with_log_store(self.0.log_store)
+    }
+
+    /// Generate a symlink_format_manifest for other engines
+    pub fn generate(self) -> GenerateBuilder {
+        GenerateBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Load data from a DeltaTable
