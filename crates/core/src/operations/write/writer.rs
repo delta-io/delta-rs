@@ -480,7 +480,7 @@ impl PartitionWriter {
             if let Some(target_file_size) = self.config.target_file_size {
                 let estimated_size = self.writer.estimated_size();
                 // flush currently buffered data to disk once we meet or exceed the target file size.
-                if estimated_size >= target_file_size.into() {
+                if estimated_size as u64 >= target_file_size.get() {
                     debug!("Writing file with estimated size {estimated_size:?} in background.");
                     self.reset_writer()?;
                 }

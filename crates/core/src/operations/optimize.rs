@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -206,7 +207,7 @@ pub struct OptimizeBuilder<'a> {
     /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter],
     /// Desired file size after bin-packing files
-    target_size: Option<u64>,
+    target_size: Option<NonZeroU64>,
     /// Properties passed to underlying parquet writer
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
@@ -267,7 +268,7 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Set the target file size
-    pub fn with_target_size(mut self, target: u64) -> Self {
+    pub fn with_target_size(mut self, target: NonZeroU64) -> Self {
         self.target_size = Some(target);
         self
     }
@@ -395,14 +396,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
 #[derive(Debug, Clone)]
 struct OptimizeInput {
-    target_size: u64,
+    target_size: NonZeroU64,
     predicate: Option<String>,
 }
 
 impl From<OptimizeInput> for DeltaOperation {
     fn from(opt_input: OptimizeInput) -> Self {
         DeltaOperation::Optimize {
-            target_size: opt_input.target_size as i64,
+            target_size: opt_input.target_size.get() as i64,
             predicate: opt_input.predicate,
         }
     }
@@ -480,8 +481,6 @@ pub struct MergePlan {
     metrics: Metrics,
     /// Parameters passed down to merge tasks
     task_parameters: Arc<MergeTaskParameters>,
-    /// Input parameters for the optimize operation
-    input_parameters: OptimizeInput,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: i64,
 }
@@ -493,6 +492,8 @@ pub struct MergeTaskParameters {
     file_schema: SchemaRef,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
+    /// Input parameters for the optimize operation
+    input_parameters: OptimizeInput,
     /// Num index cols to collect stats for
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
@@ -509,11 +510,11 @@ impl MergePlan {
     /// collected during the operation.
     async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
-        input_parameters: OptimizeInput,
         partition_values: IndexMap<String, Scalar>,
         files: MergeBin,
         object_store: ObjectStoreRef,
         read_stream: F,
+        ignore_target_size: bool,
     ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError>
     where
         F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
@@ -551,7 +552,11 @@ impl MergePlan {
             partition_values.clone(),
             Some(task_parameters.writer_properties.clone()),
             // Since we know the total size of the bin, we can set the target file size to None.
-            Some(input_parameters.target_size),
+            if ignore_target_size {
+                None
+            } else {
+                Some(task_parameters.input_parameters.target_size)
+            },
             None,
             None,
         )?;
@@ -681,11 +686,11 @@ impl MergePlan {
 
                     let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                         self.task_parameters.clone(),
-                        self.input_parameters.clone(),
                         partition,
                         files,
                         object_store.clone(),
                         futures::future::ready(Ok(batch_stream)),
+                        true,
                     ));
                     util::flatten_join_error(rewrite_result)
                 })
@@ -726,11 +731,11 @@ impl MergePlan {
                         );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
-                            self.input_parameters.clone(),
                             partition,
                             files,
                             log_store.object_store(Some(operation_id)),
                             batch_stream,
+                            false,
                         ));
                         util::flatten_join_error(rewrite_result)
                     })
@@ -835,12 +840,11 @@ pub async fn create_merge_plan(
     optimize_type: OptimizeType,
     snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
-    target_size: Option<u64>,
+    target_size: Option<NonZeroU64>,
     writer_properties: WriterProperties,
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size =
-        target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());
+    let target_size = target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size());
     let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics) = match optimize_type {
@@ -880,10 +884,10 @@ pub async fn create_merge_plan(
     Ok(MergePlan {
         operations,
         metrics,
-        input_parameters,
         task_parameters: Arc::new(MergeTaskParameters {
             file_schema,
             writer_properties,
+            input_parameters,
             num_indexed_cols: snapshot.table_properties().num_indexed_cols(),
             stats_columns: snapshot
                 .table_properties()
@@ -941,7 +945,7 @@ async fn build_compaction_plan(
     log_store: &dyn LogStore,
     snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
-    target_size: u64,
+    target_size: NonZeroU64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
@@ -951,7 +955,7 @@ async fn build_compaction_plan(
         let file = file?;
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&file)?;
-        if object_meta.size > target_size {
+        if object_meta.size > target_size.get() {
             metrics.total_files_skipped += 1;
             continue;
         }
@@ -984,7 +988,7 @@ async fn build_compaction_plan(
 
         'files: for file in files {
             for bin in merge_bins.iter_mut() {
-                if bin.total_file_size() + file.size as u64 <= target_size {
+                if bin.total_file_size() + file.size as u64 <= target_size.get() {
                     bin.add(file);
                     // Move to next file
                     continue 'files;
