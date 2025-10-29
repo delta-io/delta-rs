@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::time::Duration;
 use std::{error::Error, sync::Arc};
 
@@ -175,7 +176,9 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     let version = dt.version().unwrap();
     assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 5);
 
-    let optimize = dt.optimize().with_target_size(2_000_000);
+    let optimize = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(2_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
 
     assert_eq!(version + 1, dt.version().unwrap());
@@ -490,7 +493,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -499,7 +502,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 0);
@@ -524,7 +527,9 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version();
-    let optimize = dt.optimize().with_target_size(10_000_000);
+    let optimize = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
 
     let expected_metric_details = MetricDetails {
@@ -599,7 +604,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 2);
     assert_eq!(metrics.num_files_removed, 4);
@@ -608,7 +613,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 0);
     assert_eq!(metrics.num_files_removed, 0);
@@ -644,7 +649,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
 
     let optimize = dt
         .optimize()
-        .with_target_size(2_000_000)
+        .with_target_size(NonZeroU64::new(2_000_000).unwrap())
         .with_filters(&filter);
     let (dt, metrics) = optimize.await?;
 
@@ -879,7 +884,7 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
                 .build(),
         )
         .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (_, metrics) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 2);
