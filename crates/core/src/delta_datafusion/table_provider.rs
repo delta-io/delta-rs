@@ -342,11 +342,11 @@ impl DeltaScanConfigBuilder {
             None
         };
 
-        let table_parquet_options =
-            snapshot.load_config()
-                .file_format_options
-                .as_ref()
-                .map(|ffo| ffo.table_options().parquet);
+        let table_parquet_options = snapshot
+            .load_config()
+            .file_format_options
+            .as_ref()
+            .map(|ffo| ffo.table_options().parquet);
 
         Ok(DeltaScanConfig {
             file_column_name,
