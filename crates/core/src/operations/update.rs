@@ -407,11 +407,7 @@ async fn execute(
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
-        snapshot
-            .table_properties()
-            .target_file_size()
-            .try_into()
-            .ok(),
+        Some(snapshot.table_properties().target_file_size()),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -473,11 +469,7 @@ async fn execute(
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
-                    snapshot
-                        .table_properties()
-                        .target_file_size()
-                        .try_into()
-                        .ok(),
+                    Some(snapshot.table_properties().target_file_size()),
                     None,
                     writer_properties,
                     writer_stats_config,

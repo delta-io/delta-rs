@@ -176,11 +176,7 @@ pub(crate) async fn execute_non_empty_expr(
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
-            snapshot
-                .table_properties()
-                .target_file_size()
-                .try_into()
-                .ok(),
+            Some(snapshot.table_properties().target_file_size()),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),

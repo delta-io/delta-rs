@@ -68,7 +68,7 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::config::TablePropertiesExt;
+use crate::table::config::{TablePropertiesExt, DEFAULT_TARGET_FILE_SIZE};
 use crate::DeltaTable;
 
 pub mod configs;
@@ -617,13 +617,12 @@ impl std::future::IntoFuture for WriteBuilder {
                     .map(|snapshot| snapshot.table_properties());
 
                 let target_file_size = this.target_file_size.unwrap_or_else(|| {
-                    this.snapshot.as_ref().and_then(|snapshot| {
-                        snapshot
-                            .table_properties()
-                            .target_file_size()
-                            .try_into()
-                            .ok()
-                    })
+                    Some(
+                        this.snapshot
+                            .as_ref()
+                            .map(|snapshot| snapshot.table_properties().target_file_size())
+                            .unwrap_or(DEFAULT_TARGET_FILE_SIZE),
+                    )
                 });
 
                 let (num_indexed_cols, stats_columns) =

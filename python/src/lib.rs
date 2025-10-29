@@ -1785,9 +1785,10 @@ impl RawDeltaTable {
             };
 
             if let Some(target_file_size) = target_file_size {
-                let target_file_size = NonZeroU64::new(target_file_size)
-                    .ok_or_else(|| PyValueError::new("target_file_size must be greater than 0"))?;
-                builder = builder.with_target_file_size(target_file_size);
+                let target_file_size = NonZeroU64::new(target_file_size).ok_or_else(|| {
+                    PyValueError::new_err("target_file_size must be greater than 0")
+                })?;
+                builder = builder.with_target_file_size(Some(target_file_size));
             };
 
             if let Some(config) = configuration {
