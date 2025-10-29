@@ -176,7 +176,8 @@ impl MergeBuilder {
     ) -> Self {
         let predicate = predicate.into();
         let file_format_options = snapshot.load_config().file_format_options.clone();
-        let writer_properties_factory = file_format_options.map(|ffo| ffo.writer_properties_factory());
+        let writer_properties_factory =
+            file_format_options.map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate,
             source,

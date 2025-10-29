@@ -865,8 +865,10 @@ impl TableProvider for DeltaTableProvider {
 
         let filter_expr = conjunction(filters.iter().cloned());
 
-        let table_parquet_options =
-            self.file_format_options.as_ref().map(|ffo| ffo.table_options().parquet);
+        let table_parquet_options = self
+            .file_format_options
+            .as_ref()
+            .map(|ffo| ffo.table_options().parquet);
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_parquet_options(table_parquet_options)

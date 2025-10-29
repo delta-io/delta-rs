@@ -139,8 +139,9 @@ impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
     pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         let file_format_options = snapshot.load_config().file_format_options.clone();
-        let writer_properties_factory =
-            file_format_options.clone().map(|ffo| ffo.writer_properties_factory());
+        let writer_properties_factory = file_format_options
+            .clone()
+            .map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate: None,
             updates: HashMap::new(),
@@ -329,13 +330,7 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(
-        &snapshot,
-        log_store.clone(),
-        &session,
-        predicate.clone(),
-    )
-    .await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -419,7 +414,9 @@ async fn execute(
     let writer_properties_factory = if writer_properties_factory.is_some() {
         writer_properties_factory
     } else {
-        file_format_options.clone().map(|ffo| ffo.writer_properties_factory())
+        file_format_options
+            .clone()
+            .map(|ffo| ffo.writer_properties_factory())
     };
 
     let add_actions = write_execution_plan(

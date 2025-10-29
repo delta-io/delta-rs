@@ -254,7 +254,9 @@ impl<'a> OptimizeBuilder<'a> {
                 let wpf = build_writer_properties_factory_wp(wp);
                 Some(wpf)
             }
-            _ => file_format_options.clone().map(|ffo| ffo.writer_properties_factory()),
+            _ => file_format_options
+                .clone()
+                .map(|ffo| ffo.writer_properties_factory()),
         };
 
         Self {

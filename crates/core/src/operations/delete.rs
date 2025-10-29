@@ -132,8 +132,9 @@ impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
         let file_format_options = &snapshot.load_config().file_format_options;
-        let writer_properties_factory =
-            file_format_options.clone().map(|ffo| ffo.writer_properties_factory());
+        let writer_properties_factory = file_format_options
+            .clone()
+            .map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate: None,
             snapshot,
@@ -349,18 +350,12 @@ async fn execute(
     if !&snapshot.load_config().require_files {
         return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
     }
-    
+
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(
-        &snapshot,
-        log_store.clone(),
-        &session,
-        predicate.clone(),
-    )
-    .await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(lit(true));

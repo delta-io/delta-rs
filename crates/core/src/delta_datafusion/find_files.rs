@@ -71,13 +71,8 @@ pub(crate) async fn find_files(
                 Span::current().record("candidate_count", result.candidates.len());
                 Ok(result)
             } else {
-                let candidates = find_files_scan(
-                    snapshot,
-                    log_store,
-                    session,
-                    predicate.to_owned(),
-                )
-                .await?;
+                let candidates =
+                    find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
 
                 let result = FindFiles {
                     candidates,

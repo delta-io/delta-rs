@@ -73,7 +73,6 @@ pub fn build_writer_properties_factory_or_default_ffo(
         .unwrap_or_else(|| build_writer_properties_factory_default())
 }
 
-
 #[cfg(feature = "datafusion")]
 pub fn state_with_file_format_options(
     state: SessionState,
