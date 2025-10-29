@@ -1,7 +1,7 @@
 //! Abstractions and implementations for writing data to delta tables
 
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
+use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
@@ -132,7 +132,7 @@ pub struct WriterConfig {
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
-    target_file_size: Option<NonZeroUsize>,
+    target_file_size: Option<NonZeroU64>,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -148,7 +148,7 @@ impl WriterConfig {
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<NonZeroUsize>,
+        target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
         num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
@@ -302,7 +302,7 @@ pub struct PartitionWriterConfig {
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
-    target_file_size: Option<NonZeroUsize>,
+    target_file_size: Option<NonZeroU64>,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -316,7 +316,7 @@ impl PartitionWriterConfig {
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<NonZeroUsize>,
+        target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
         max_concurrency_tasks: Option<usize>,
     ) -> DeltaResult<Self> {
@@ -551,7 +551,7 @@ mod tests {
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<NonZeroUsize>,
+        target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
     ) -> DeltaWriter {
         let config = WriterConfig::new(
@@ -570,7 +570,7 @@ mod tests {
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<NonZeroUsize>,
+        target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
     ) -> PartitionWriter {
         let config = PartitionWriterConfig::try_new(
@@ -639,7 +639,7 @@ mod tests {
             object_store,
             &batch,
             Some(properties),
-            Some(NonZeroUsize::new(10_000).unwrap()),
+            Some(NonZeroU64::new(10_000).unwrap()),
             None,
         );
         writer.write(&batch).await.unwrap();
@@ -673,7 +673,7 @@ mod tests {
             object_store,
             &batch,
             None,
-            Some(NonZeroUsize::new(10_000).unwrap()),
+            Some(NonZeroU64::new(10_000).unwrap()),
             None,
         );
         writer.write(&batch).await.unwrap();
@@ -708,7 +708,7 @@ mod tests {
             object_store,
             &batch,
             None,
-            Some(NonZeroUsize::new(9000).unwrap()),
+            Some(NonZeroU64::new(9000).unwrap()),
             Some(10000),
         );
         writer.write(&batch).await.unwrap();
