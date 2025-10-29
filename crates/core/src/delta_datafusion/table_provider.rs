@@ -59,7 +59,7 @@ use crate::kernel::{Action, Add, EagerSnapshot, Remove};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
+use crate::table::file_format_options::FileFormatRef;
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
 
@@ -762,9 +762,10 @@ impl TableProvider for DeltaTable {
 
         let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
             .with_parquet_options(
-                crate::table::file_format_options::to_table_parquet_options_from_ffo(
-                    self.config.file_format_options.as_ref(),
-                ),
+                self.config
+                    .file_format_options
+                    .as_ref()
+                    .map(|ffo| ffo.table_options().parquet),
             )
             .with_projection(projection)
             .with_limit(limit)
@@ -865,7 +866,7 @@ impl TableProvider for DeltaTableProvider {
         let filter_expr = conjunction(filters.iter().cloned());
 
         let table_parquet_options =
-            to_table_parquet_options_from_ffo(self.file_format_options.as_ref());
+            self.file_format_options.as_ref().map(|ffo| ffo.table_options().parquet);
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
             .with_parquet_options(table_parquet_options)

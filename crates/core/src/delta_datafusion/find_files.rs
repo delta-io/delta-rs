@@ -21,7 +21,7 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot};
 use crate::logstore::LogStoreRef;
-use crate::table::file_format_options::{to_table_parquet_options_from_ffo, FileFormatRef};
+use crate::table::file_format_options::FileFormatRef;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
@@ -259,7 +259,7 @@ async fn find_files_scan(
     // Add path column
     used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
 
-    let table_parquet_options = to_table_parquet_options_from_ffo(file_format_options);
+    let table_parquet_options = file_format_options.map(|ffo| ffo.table_options().parquet);
 
     let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))

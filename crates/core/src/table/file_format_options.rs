@@ -73,12 +73,6 @@ pub fn build_writer_properties_factory_or_default_ffo(
         .unwrap_or_else(|| build_writer_properties_factory_default())
 }
 
-#[cfg(feature = "datafusion")]
-pub fn to_table_parquet_options_from_ffo(
-    file_format_options: Option<&FileFormatRef>,
-) -> Option<TableParquetOptions> {
-    file_format_options.map(|ffo| ffo.table_options().parquet)
-}
 
 #[cfg(feature = "datafusion")]
 pub fn state_with_file_format_options(
