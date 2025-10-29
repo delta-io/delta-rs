@@ -34,7 +34,7 @@ use datafusion::logical_expr::col;
 
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::{WriteError, WriterStatsConfig};
-use crate::table::file_format_options::{FileFormatRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options:: WriterPropertiesFactoryRef;
 
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {
@@ -203,7 +203,6 @@ pub(crate) async fn prepare_predicate_actions(
     snapshot: &EagerSnapshot,
     session: SessionState,
     partition_columns: Vec<String>,
-    file_format_options: Option<&FileFormatRef>,
     writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
@@ -213,7 +212,6 @@ pub(crate) async fn prepare_predicate_actions(
         snapshot,
         log_store.clone(),
         &session,
-        file_format_options,
         Some(predicate.clone()),
     )
     .await?;

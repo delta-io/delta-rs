@@ -333,7 +333,6 @@ async fn execute(
         &snapshot,
         log_store.clone(),
         &session,
-        file_format_options.as_ref(),
         predicate.clone(),
     )
     .await?;

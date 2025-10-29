@@ -349,9 +349,7 @@ async fn execute(
     if !&snapshot.load_config().require_files {
         return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
     }
-
-    let file_format_options = snapshot.load_config().file_format_options.clone();
-
+    
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
 
@@ -360,7 +358,6 @@ async fn execute(
         &snapshot,
         log_store.clone(),
         &session,
-        file_format_options.as_ref(),
         predicate.clone(),
     )
     .await?;
