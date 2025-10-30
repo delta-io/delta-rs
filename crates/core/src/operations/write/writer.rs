@@ -370,7 +370,7 @@ impl LazyArrowWriter {
                 );
                 let writer_properties = config
                     .writer_properties_factory
-                    .create_writer_properties(&path, &config.file_schema)
+                    .create_writer_properties(path, &config.file_schema)
                     .await?;
                 let mut arrow_writer = AsyncArrowWriter::try_new(
                     writer,

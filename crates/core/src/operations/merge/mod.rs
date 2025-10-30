@@ -175,7 +175,9 @@ impl MergeBuilder {
         source: DataFrame,
     ) -> Self {
         let predicate = predicate.into();
-        let file_format_options = snapshot.as_ref().map(|ss| ss.load_config().file_format_options.clone());
+        let file_format_options = snapshot
+            .as_ref()
+            .map(|ss| ss.load_config().file_format_options.clone());
         let writer_properties_factory = match file_format_options {
             Some(file_format_options) => file_format_options
                 .clone()

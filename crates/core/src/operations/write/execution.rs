@@ -14,7 +14,6 @@ use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::StreamExt;
 use object_store::prefix::PrefixStore;
-use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
 use tracing::log::*;
 use uuid::Uuid;
@@ -31,8 +30,8 @@ use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{should_write_cdc, CDC_COLUMN_NAME};
 use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::Constraint as DeltaConstraint;
 use crate::table::file_format_options::WriterPropertiesFactoryRef;
+use crate::table::Constraint as DeltaConstraint;
 use crate::DeltaTableError;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;

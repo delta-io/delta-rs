@@ -129,7 +129,9 @@ impl super::Operation for DeleteBuilder {
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
-        let file_format_options = snapshot.as_ref().map(|ss| ss.load_config().file_format_options.clone());
+        let file_format_options = snapshot
+            .as_ref()
+            .map(|ss| ss.load_config().file_format_options.clone());
         let writer_properties_factory = match file_format_options {
             Some(file_format_options) => file_format_options
                 .clone()
@@ -179,7 +181,6 @@ impl DeleteBuilder {
     }
 }
 
-
 impl std::future::IntoFuture for DeleteBuilder {
     type Output = DeltaResult<(DeltaTable, DeleteMetrics)>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -202,11 +203,18 @@ impl std::future::IntoFuture for DeleteBuilder {
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
             let file_format_options = &snapshot.load_config().file_format_options;
-            let session_state = session.as_any()
-                .downcast_ref::<SessionState>()
-                .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))?;
+            let session_state =
+                session
+                    .as_any()
+                    .downcast_ref::<SessionState>()
+                    .ok_or_else(|| {
+                        exec_datafusion_err!("Failed to downcast Session to SessionState")
+                    })?;
 
-            let session = Arc::new(state_with_file_format_options(session_state.clone(), file_format_options.as_ref())?);
+            let session = Arc::new(state_with_file_format_options(
+                session_state.clone(),
+                file_format_options.as_ref(),
+            )?);
 
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
