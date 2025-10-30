@@ -242,8 +242,6 @@ async fn execute_non_empty_expr(
         .with_schema(snapshot.input_schema())
         .build(snapshot)?;
 
-    let file_format_options = snapshot.load_config().file_format_options.clone();
-
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
             .with_files(rewrite.to_vec()),
