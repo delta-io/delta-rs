@@ -200,7 +200,7 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
         file_path: &Path,
         file_schema: &Arc<ArrowSchema>,
     ) -> DeltaResult<WriterProperties> {
-        let mut builder = self.writer_properties.to_builder();
+        let mut builder: WriterPropertiesBuilder = self.writer_properties.clone().into();
         if let Some(encryption) = self.encryption.as_ref() {
             builder = encryption
                 .update_writer_properties(builder, file_path, file_schema)
@@ -264,69 +264,5 @@ impl FileFormatOptions for KmsFileFormatOptions {
             Arc::clone(self.table_encryption.encryption_factory()),
         );
         Ok(())
-    }
-}
-
-/// Extension trait to obtain a `WriterPropertiesBuilder` from an existing
-/// `WriterProperties`. This is a temporary workaround until
-/// [arrow-rs PR #8272](https://github.com/apache/arrow-rs/pull/8272) is released
-/// and adopted. Once `parquet` >= 56.2.0 is in use, this trait can be removed.
-pub trait WriterPropertiesExt {
-    fn to_builder(&self) -> WriterPropertiesBuilder;
-}
-
-impl WriterPropertiesExt for WriterProperties {
-    fn to_builder(&self) -> WriterPropertiesBuilder {
-        // Start with copying top-level writer properties
-        let mut builder = WriterProperties::builder()
-            .set_writer_version(self.writer_version())
-            .set_data_page_size_limit(self.data_page_size_limit())
-            .set_data_page_row_count_limit(self.data_page_row_count_limit())
-            .set_dictionary_page_size_limit(self.dictionary_page_size_limit())
-            .set_write_batch_size(self.write_batch_size())
-            .set_max_row_group_size(self.max_row_group_size())
-            .set_bloom_filter_position(self.bloom_filter_position())
-            .set_created_by(self.created_by().to_string())
-            .set_offset_index_disabled(self.offset_index_disabled())
-            .set_key_value_metadata(self.key_value_metadata().cloned())
-            .set_sorting_columns(self.sorting_columns().cloned())
-            .set_column_index_truncate_length(self.column_index_truncate_length())
-            .set_statistics_truncate_length(self.statistics_truncate_length())
-            .set_coerce_types(self.coerce_types());
-
-        // Use an empty ColumnPath to read default column-level properties
-        let empty = ColumnPath::new(Vec::new());
-
-        // Default compression
-        let default_compression = self.compression(&empty);
-        builder = builder.set_compression(default_compression);
-
-        // Default encoding (if explicitly set)
-        if let Some(enc) = self.encoding(&empty) {
-            builder = builder.set_encoding(enc);
-        }
-
-        // Default dictionary enabled
-        builder = builder.set_dictionary_enabled(self.dictionary_enabled(&empty));
-
-        // Default statistics setting
-        builder = builder.set_statistics_enabled(self.statistics_enabled(&empty));
-
-        // Default bloom filter settings
-        if let Some(bfp) = self.bloom_filter_properties(&empty) {
-            builder = builder
-                .set_bloom_filter_enabled(true)
-                .set_bloom_filter_fpp(bfp.fpp)
-                .set_bloom_filter_ndv(bfp.ndv);
-        } else {
-            // Ensure bloom filters are disabled if not present
-            builder = builder.set_bloom_filter_enabled(false);
-        }
-
-        // Preserve encryption properties if present
-        if let Some(fep) = self.file_encryption_properties() {
-            builder = builder.with_file_encryption_properties(fep.clone());
-        }
-        builder
     }
 }
