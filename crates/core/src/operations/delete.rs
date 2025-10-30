@@ -19,7 +19,7 @@
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::ScalarValue;
+use datafusion::common::{exec_datafusion_err, ScalarValue};
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -129,10 +129,13 @@ impl super::Operation for DeleteBuilder {
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
-        let file_format_options = &snapshot.map(|ss| ss.load_config().file_format_options);
-        let writer_properties_factory = file_format_options
-            .clone()
-            .map(|ffo| ffo.writer_properties_factory());
+        let file_format_options = snapshot.as_ref().map(|ss| ss.load_config().file_format_options.clone());
+        let writer_properties_factory = match file_format_options {
+            Some(file_format_options) => file_format_options
+                .clone()
+                .map(|ffo| ffo.writer_properties_factory()),
+            None => None,
+        };
         Self {
             predicate: None,
             snapshot,
@@ -176,6 +179,7 @@ impl DeleteBuilder {
     }
 }
 
+
 impl std::future::IntoFuture for DeleteBuilder {
     type Output = DeltaResult<(DeltaTable, DeleteMetrics)>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -197,6 +201,13 @@ impl std::future::IntoFuture for DeleteBuilder {
 
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
+            let file_format_options = &snapshot.load_config().file_format_options;
+            let session_state = session.as_any()
+                .downcast_ref::<SessionState>()
+                .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))?;
+
+            let session = Arc::new(state_with_file_format_options(session_state.clone(), file_format_options.as_ref())?);
+
             let predicate = match this.predicate {
                 Some(predicate) => match predicate {
                     Expression::DataFusion(expr) => Some(expr),
@@ -211,8 +222,8 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot,
-                session.as_ref(),
-                this.writer_properties,
+                session.as_ref().clone(),
+                this.writer_properties_factory,
                 this.commit_properties,
                 operation_id,
                 this.custom_execute_handler.as_ref(),
@@ -397,7 +408,7 @@ async fn execute(
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), session, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(lit(true));
@@ -407,7 +418,7 @@ async fn execute(
         let add = execute_non_empty_expr(
             &snapshot,
             log_store.clone(),
-            session,
+            &session,
             &predicate,
             &candidates.candidates,
             &mut metrics,
@@ -473,69 +484,6 @@ async fn execute(
         handler.post_execute(&log_store, operation_id).await?;
     }
     Ok((commit.snapshot().snapshot, metrics))
-}
-
-impl std::future::IntoFuture for DeleteBuilder {
-    type Output = DeltaResult<(DeltaTable, DeleteMetrics)>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        let this = self;
-
-        Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-            PROTOCOL.can_write_to(&this.snapshot)?;
-
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
-            let session = this
-                .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    let session: SessionContext = DeltaSessionContext::default().into();
-                    session.state()
-                });
-
-            register_store(this.log_store.clone(), session.runtime_env().as_ref());
-
-            let file_format_options = &this.snapshot.load_config().file_format_options;
-
-            let session = state_with_file_format_options(session, file_format_options.as_ref())?;
-
-            let predicate = match this.predicate {
-                Some(predicate) => match predicate {
-                    Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => {
-                        Some(this.snapshot.parse_predicate_expression(s, &session)?)
-                    }
-                },
-                None => None,
-            };
-
-            let (new_snapshot, metrics) = execute(
-                predicate,
-                this.log_store.clone(),
-                this.snapshot,
-                session,
-                this.writer_properties_factory,
-                this.commit_properties,
-                operation_id,
-                this.custom_execute_handler.as_ref(),
-            )
-            .await?;
-
-            Ok((
-                DeltaTable::new_with_state(
-                    this.log_store,
-                    DeltaTableState {
-                        snapshot: new_snapshot,
-                    },
-                ),
-                metrics,
-            ))
-        })
-    }
 }
 
 #[cfg(test)]

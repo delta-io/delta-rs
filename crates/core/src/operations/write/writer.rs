@@ -368,10 +368,14 @@ impl LazyArrowWriter {
                     )
                     .with_max_concurrency(config.max_concurrency_tasks),
                 );
+                let writer_properties = config
+                    .writer_properties_factory
+                    .create_writer_properties(&path, &config.file_schema)
+                    .await?;
                 let mut arrow_writer = AsyncArrowWriter::try_new(
                     writer,
                     config.file_schema.clone(),
-                    Some(config.writer_properties.clone()),
+                    Some(writer_properties),
                 )?;
                 arrow_writer.write(batch).await?;
                 *self = LazyArrowWriter::Writing(path.clone(), arrow_writer);
@@ -420,7 +424,6 @@ impl PartitionWriter {
         num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
-        let buffer = AsyncShareableBuffer::default();
         let writer_id = uuid::Uuid::new_v4();
         let data_path = next_data_path(
             &config.prefix,
@@ -428,16 +431,8 @@ impl PartitionWriter {
             &writer_id,
             config.writer_properties_factory.clone(),
         );
-        let writer_properties = config
-            .writer_properties_factory
-            .create_writer_properties(&data_path, &config.file_schema)
-            .await?;
-        let arrow_writer = AsyncArrowWriter::try_new(
-            buffer.clone(),
-            config.file_schema.clone(),
-            Some(writer_properties),
-        )?;
 
+        let writer = Self::create_writer(object_store.clone(), data_path.clone(), &config)?;
         Ok(Self {
             object_store,
             writer_id,

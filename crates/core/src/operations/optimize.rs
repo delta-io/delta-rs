@@ -244,7 +244,7 @@ impl super::Operation for OptimizeBuilder<'_> {
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
-        let file_format_options = snapshot.map(|ss| ss.load_config().file_format_options.clone());
+        let file_format_options = snapshot.as_ref().map(|ss| ss.load_config().file_format_options.clone());
         let writer_properties_factory = match file_format_options.as_ref() {
             None => {
                 let wp = WriterProperties::builder()
@@ -254,7 +254,7 @@ impl<'a> OptimizeBuilder<'a> {
                 let wpf = build_writer_properties_factory_wp(wp);
                 Some(wpf)
             }
-            _ => file_format_options
+            Some(file_format_options) => file_format_options
                 .clone()
                 .map(|ffo| ffo.writer_properties_factory()),
         };
