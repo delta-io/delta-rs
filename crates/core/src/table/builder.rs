@@ -128,60 +128,12 @@ impl DeltaTableBuilder {
         })
     }
 
-    /// Creates `DeltaTableBuilder` from table uri string (deprecated)
-    ///
-    /// Can panic on an invalid URI
-    ///
-    /// ```rust
-    /// # use deltalake_core::table::builder::*;
-    /// let builder = DeltaTableBuilder::from_uri_str("../test/tests/data/delta-0.8.0");
-    /// assert!(true);
-    /// ```
-    #[deprecated(note = "Use from_uri with url::Url instead")]
-    pub fn from_uri_str(table_uri: impl AsRef<str>) -> Self {
-        let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
-        DeltaTableBuilder::from_uri(url).expect("Failed to create valid builder")
-    }
-
-    /// Creates `DeltaTableBuilder` from verified table uri string (deprecated).
-    ///
-    /// ```rust
-    /// # use deltalake_core::table::builder::*;
-    /// let builder = DeltaTableBuilder::from_valid_uri("memory:///");
-    /// assert!(builder.is_ok(), "Builder failed with {builder:?}");
-    /// ```
-    #[deprecated(note = "Use from_uri with url::Url instead")]
-    pub fn from_valid_uri(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
-        if let Ok(url) = Url::parse(table_uri.as_ref()) {
-            if url.scheme() == "file" {
-                let path = url.to_file_path().map_err(|_| {
-                    DeltaTableError::InvalidTableLocation(table_uri.as_ref().to_string())
-                })?;
-                ensure_file_location_exists(path)?;
-            }
-        } else {
-            let expanded_path = expand_tilde_path(table_uri.as_ref())?;
-            ensure_file_location_exists(expanded_path)?;
-        }
-
-        let url = ensure_table_uri(&table_uri)?;
-        debug!("creating table builder with {url}");
-
-        Ok(Self {
-            table_uri: url.into(),
-            storage_backend: None,
-            version: DeltaVersion::default(),
-            storage_options: None,
-            allow_http: None,
-            table_config: DeltaTableConfig::default(),
-        })
-    }
-
     /// Sets the overall table configuration
     pub fn with_table_config(mut self, table_config: DeltaTableConfig) -> Self {
         self.table_config = table_config;
         self
     }
+
     /// Sets `require_files=false` to the builder
     pub fn without_files(mut self) -> Self {
         self.table_config.require_files = false;
@@ -626,13 +578,6 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
-    }
-
-    #[test]
-    fn test_invalid_uri() {
-        // Urls should round trips as-is
-        DeltaTableBuilder::from_valid_uri("this://is.nonsense")
-            .expect_err("this should be an error");
     }
 
     #[test]

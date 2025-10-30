@@ -2,17 +2,15 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::TaskContext;
-use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
-use crate::delta_datafusion::{DataFusionMixins as _, DeltaSessionConfig};
+use crate::delta_datafusion::{create_session, DataFusionMixins as _};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::EagerSnapshot;
+use crate::kernel::{resolve_snapshot, EagerSnapshot};
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
@@ -20,7 +18,7 @@ use crate::DeltaTable;
 #[derive(Clone)]
 pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
@@ -38,7 +36,7 @@ impl std::fmt::Debug for LoadBuilder {
     }
 }
 
-impl super::Operation<()> for LoadBuilder {
+impl super::Operation for LoadBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -49,7 +47,7 @@ impl super::Operation<()> for LoadBuilder {
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -79,18 +77,10 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_read_from(&this.snapshot)?;
-            if !this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("reading".into()));
-            }
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, true).await?;
+            PROTOCOL.can_read_from(&snapshot)?;
 
-            let table = DeltaTable::new_with_state(
-                this.log_store,
-                DeltaTableState {
-                    snapshot: this.snapshot,
-                },
-            );
-            let schema = table.snapshot()?.snapshot().read_schema();
+            let schema = snapshot.read_schema();
             let projection = this
                 .columns
                 .map(|cols| {
@@ -108,17 +98,15 @@ impl std::future::IntoFuture for LoadBuilder {
 
             let session = this
                 .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    SessionStateBuilder::new()
-                        .with_default_features()
-                        .with_config(DeltaSessionConfig::default().into())
-                        .build()
-                });
-            let scan_plan = table.scan(&session, projection.as_ref(), &[], None).await?;
+                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
+
+            let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
+            let scan_plan = table
+                .scan(session.as_ref(), projection.as_ref(), &[], None)
+                .await?;
+
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&session));
-            let stream = plan.execute(0, task_ctx)?;
+            let stream = plan.execute(0, session.task_ctx())?;
 
             Ok((table, stream))
         })

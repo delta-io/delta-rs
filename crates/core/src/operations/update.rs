@@ -40,7 +40,6 @@ use datafusion::{
     execution::session_state::SessionStateBuilder,
     physical_plan::{metrics::MetricBuilder, ExecutionPlan},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
-    prelude::SessionContext,
 };
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -54,8 +53,6 @@ use super::{
     write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
 };
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
@@ -65,17 +62,22 @@ use crate::table::file_format_options::{
 use crate::table::state::DeltaTableState;
 use crate::{
     delta_datafusion::{
+        create_session,
         expr::fmt_expr_to_sql,
         logical::MetricObserver,
         physical::{find_metric_node, get_metric, MetricObserverExec},
-        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaSessionContext,
+        session_state_from_session, DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder,
         DeltaTableProvider,
+    },
+    kernel::{
+        transaction::{CommitBuilder, CommitProperties, PROTOCOL},
+        Action, EagerSnapshot, Remove,
     },
     table::config::TablePropertiesExt,
 };
 use crate::{
     delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
-    kernel::EagerSnapshot,
+    kernel::resolve_snapshot,
 };
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -94,7 +96,7 @@ pub struct UpdateBuilder {
     /// How to update columns in a record that match the predicate
     updates: HashMap<Column, Expression>,
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -126,7 +128,7 @@ pub struct UpdateMetrics {
     pub scan_time_ms: u64,
 }
 
-impl super::Operation<()> for UpdateBuilder {
+impl super::Operation for UpdateBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -137,8 +139,8 @@ impl super::Operation<()> for UpdateBuilder {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
-        let file_format_options = snapshot.load_config().file_format_options.clone();
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let file_format_options = snapshot.map(|ss| ss.load_config().file_format_options.clone());
         let writer_properties_factory = file_format_options
             .clone()
             .map(|ffo| ffo.writer_properties_factory());
@@ -420,7 +422,7 @@ async fn execute(
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
-        session.clone(),
+        &session,
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
@@ -482,7 +484,7 @@ async fn execute(
             Ok(df) => {
                 let cdc_actions = write_execution_plan_cdc(
                     Some(&snapshot),
-                    session,
+                    &session,
                     df.create_physical_plan().await?,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
@@ -517,10 +519,11 @@ impl std::future::IntoFuture for UpdateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            PROTOCOL.check_append_only(&this.snapshot)?;
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            PROTOCOL.check_append_only(&snapshot)?;
+            PROTOCOL.can_write_to(&snapshot)?;
 
-            if !&this.snapshot.load_config().require_files {
+            if !&snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("UPDATE".into()));
             }
 
@@ -529,19 +532,16 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             let session = this
                 .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    let session: SessionContext = DeltaSessionContext::default().into();
-                    session.state()
-                });
+                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
+            let state = session_state_from_session(session.as_ref())?;
 
             let (snapshot, metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
-                this.snapshot,
-                session,
+                snapshot,
+                state.clone(),
                 this.writer_properties_factory,
                 this.commit_properties,
                 this.safe_cast,

@@ -25,8 +25,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow_array::RecordBatch;
-use arrow_schema::SchemaRef as ArrowSchemaRef;
+use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionState;
@@ -58,7 +58,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::EagerSnapshot;
+use crate::kernel::{resolve_snapshot, EagerSnapshot};
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
@@ -207,7 +207,7 @@ pub enum OptimizeType {
 /// table's configuration is read. Otherwise a default value is used.
 pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
@@ -232,7 +232,7 @@ pub struct OptimizeBuilder<'a> {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for OptimizeBuilder<'_> {
+impl super::Operation for OptimizeBuilder<'_> {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -243,8 +243,8 @@ impl super::Operation<()> for OptimizeBuilder<'_> {
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
-        let file_format_options = snapshot.load_config().file_format_options.clone();
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let file_format_options = snapshot.map(|ss| ss.load_config().file_format_options.clone());
         let writer_properties_factory = match file_format_options.as_ref() {
             None => {
                 let wp = WriterProperties::builder()
@@ -356,10 +356,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
-            if !&this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("OPTIMIZE".into()));
-            }
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            PROTOCOL.can_write_to(&snapshot)?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
             let session = this
@@ -379,7 +378,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
-                &this.snapshot,
+                &snapshot,
                 this.filters,
                 this.target_size.to_owned(),
                 this.writer_properties_factory,
@@ -390,7 +389,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let metrics = plan
                 .execute(
                     this.log_store.clone(),
-                    &this.snapshot,
+                    &snapshot,
                     this.max_concurrent_tasks,
                     this.min_commit_interval,
                     this.commit_properties.clone(),
@@ -403,7 +402,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 handler.post_execute(&this.log_store, operation_id).await?;
             }
             let mut table =
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(this.snapshot));
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             table.update().await?;
             Ok((table, metrics))
         })
@@ -507,7 +506,7 @@ pub struct MergeTaskParameters {
     /// Parameters passed to optimize operation
     input_parameters: OptimizeInput,
     /// Schema of written files
-    file_schema: ArrowSchemaRef,
+    file_schema: SchemaRef,
     /// Properties passed to parquet writer
     writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Num index cols to collect stats for
@@ -567,6 +566,7 @@ impl MergePlan {
             partition_values.clone(),
             task_parameters.writer_properties_factory.clone(),
             Some(task_parameters.input_parameters.target_size as usize),
+            None,
             None,
         )?;
         let mut writer = PartitionWriter::try_with_config(

@@ -26,15 +26,14 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_array::types::UInt16Type;
-use arrow_array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
+use arrow::array::types::UInt16Type;
+use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
-use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{
@@ -42,7 +41,7 @@ use datafusion::common::{
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::execution::context::SessionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -51,7 +50,6 @@ use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{ExecutionPlan, Statistics};
-use datafusion::sql::planner::ParserOptions;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -72,17 +70,20 @@ use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{open_table, open_table_with_storage_options, DeltaTable};
 
+pub use self::session::*;
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
+pub mod engine;
 pub mod expr;
 mod find_files;
 pub mod logical;
 pub mod physical;
 pub mod planner;
 mod schema_adapter;
+mod session;
 mod table_provider;
 
 pub use cdf::scan::DeltaCdfTableProvider;
@@ -125,7 +126,7 @@ pub trait DataFusionMixins {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr>;
 }
 
@@ -149,7 +150,7 @@ impl DataFusionMixins for Snapshot {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, session)
@@ -188,7 +189,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, session)
@@ -207,7 +208,7 @@ impl DataFusionMixins for EagerSnapshot {
     fn parse_predicate_expression(
         &self,
         expr: impl AsRef<str>,
-        session: &impl Session,
+        session: &dyn Session,
     ) -> DeltaResult<Expr> {
         self.snapshot().parse_predicate_expression(expr, session)
     }
@@ -596,7 +597,7 @@ impl DeltaDataChecker {
 
     /// Return true if all the nullability checks are valid
     fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
-        let mut violations = Vec::new();
+        let mut violations = Vec::with_capacity(self.non_nullable_columns.len());
         for col in self.non_nullable_columns.iter() {
             if let Some(arr) = record_batch.column_by_name(col) {
                 if arr.null_count() > 0 {
@@ -632,7 +633,7 @@ impl DeltaDataChecker {
         let table_name: String = uuid::Uuid::new_v4().to_string();
         self.ctx.register_table(&table_name, Arc::new(table))?;
 
-        let mut violations: Vec<String> = Vec::new();
+        let mut violations: Vec<String> = Vec::with_capacity(checks.len());
 
         for check in checks {
             if check.get_name().contains('.') {
@@ -774,7 +775,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
 #[derive(Debug)]
 pub struct DeltaTableFactory {}
 
-#[async_trait]
+#[async_trait::async_trait]
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
@@ -789,67 +790,6 @@ impl TableProviderFactory for DeltaTableFactory {
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
         Ok(Arc::new(provider))
-    }
-}
-
-/// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
-pub struct DeltaParserOptions {
-    inner: ParserOptions,
-}
-
-impl Default for DeltaParserOptions {
-    fn default() -> Self {
-        DeltaParserOptions {
-            inner: ParserOptions {
-                enable_ident_normalization: false,
-                ..ParserOptions::default()
-            },
-        }
-    }
-}
-
-impl From<DeltaParserOptions> for ParserOptions {
-    fn from(value: DeltaParserOptions) -> Self {
-        value.inner
-    }
-}
-
-/// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
-pub struct DeltaSessionConfig {
-    inner: SessionConfig,
-}
-
-impl Default for DeltaSessionConfig {
-    fn default() -> Self {
-        DeltaSessionConfig {
-            inner: SessionConfig::default()
-                .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
-        }
-    }
-}
-
-impl From<DeltaSessionConfig> for SessionConfig {
-    fn from(value: DeltaSessionConfig) -> Self {
-        value.inner
-    }
-}
-
-/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
-pub struct DeltaSessionContext {
-    inner: SessionContext,
-}
-
-impl Default for DeltaSessionContext {
-    fn default() -> Self {
-        DeltaSessionContext {
-            inner: SessionContext::new_with_config(DeltaSessionConfig::default().into()),
-        }
-    }
-}
-
-impl From<DeltaSessionContext> for SessionContext {
-    fn from(value: DeltaSessionContext) -> Self {
-        value.inner
     }
 }
 
@@ -914,10 +854,11 @@ mod tests {
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion::prelude::col;
+    use datafusion::prelude::{col, SessionConfig};
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
+    use delta_kernel::schema::ArrayType;
     use futures::{stream::BoxStream, StreamExt};
     use object_store::ObjectMeta;
     use object_store::{
@@ -1910,6 +1851,49 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    #[tokio::test]
+    async fn test_push_down_filter_panic_2602() -> DeltaResult<()> {
+        use crate::kernel::schema::{DataType, PrimitiveType};
+        let ctx = SessionContext::new();
+        let table = crate::DeltaOps::new_in_memory()
+            .create()
+            .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
+            .with_column(
+                "name",
+                DataType::Primitive(PrimitiveType::String),
+                true,
+                None,
+            )
+            .with_column("b", DataType::Primitive(PrimitiveType::Boolean), true, None)
+            .with_column(
+                "ts",
+                DataType::Primitive(PrimitiveType::Timestamp),
+                true,
+                None,
+            )
+            .with_column("dt", DataType::Primitive(PrimitiveType::Date), true, None)
+            .with_column(
+                "zap",
+                DataType::Array(Box::new(ArrayType::new(
+                    DataType::Primitive(PrimitiveType::Boolean),
+                    true,
+                ))),
+                true,
+                None,
+            )
+            .await?;
+
+        ctx.register_table("snapshot", Arc::new(table)).unwrap();
+
+        let df = ctx
+            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .await
+            .unwrap();
+
+        let _ = df.collect().await?;
+        Ok(())
+    }
+
     /// Records operations made by the inner object store on a channel obtained at construction
     struct RecordingObjectStore {
         inner: ObjectStoreRef,
@@ -1968,7 +1952,7 @@ mod tests {
     }
 
     // Currently only read operations are recorded. Extend as necessary.
-    #[async_trait]
+    #[async_trait::async_trait]
     impl ObjectStore for RecordingObjectStore {
         async fn put(
             &self,

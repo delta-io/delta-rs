@@ -125,3 +125,36 @@ def test_add_constraint(tmp_path, sample_table: Table, sql_string: str):
         )
 
         write_deltalake(tmp_path, data, mode="append")
+
+def test_add_multiple_constraint(tmp_path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    dt.alter.add_constraint({"check_price": '"high price" >= 0', "min_price": '"high price" < 5'})
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "ADD CONSTRAINT"
+    assert dt.version() == 1
+    assert dt.metadata().configuration == {
+        "delta.constraints.check_price": '"high price" >= 0',
+        "delta.constraints.min_price": '"high price" < 5'
+
+    }
+    assert dt.protocol().min_writer_version == 3
+
+    with pytest.raises(DeltaProtocolError):
+        data = Table(
+            {
+                "id": Array(["1"], DataType.string()),
+                "high price": Array([5], DataType.int64()),
+            },
+            schema=Schema(
+                fields=[
+                    Field("id", type=DataType.string(), nullable=True),
+                    Field("high price", type=DataType.int64(), nullable=True),
+                ]
+            ),
+        )
+
+        write_deltalake(tmp_path, data, mode="append")

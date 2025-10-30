@@ -384,7 +384,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     #[instrument(skip(self), fields(writer_count = 0))]
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
         let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::new();
+        let mut actions = Vec::with_capacity(writers.len());
 
         Span::current().record("writer_count", writers.len());
 
@@ -442,8 +442,8 @@ fn quarantine_failed_parquet_rows(
     arrow_schema: Arc<ArrowSchema>,
     values: Vec<Value>,
 ) -> Result<(Vec<Value>, Vec<BadValue>), DeltaWriterError> {
-    let mut good: Vec<Value> = Vec::new();
-    let mut bad: Vec<BadValue> = Vec::new();
+    let mut good: Vec<Value> = Vec::with_capacity(values.len());
+    let mut bad: Vec<BadValue> = Vec::with_capacity(values.len());
 
     for value in values {
         let record_batch =
@@ -484,6 +484,8 @@ mod tests {
     use super::*;
 
     use arrow_schema::ArrowError;
+    #[cfg(feature = "datafusion")]
+    use futures::TryStreamExt;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     use std::fs::File;
@@ -794,10 +796,12 @@ mod tests {
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -808,7 +812,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()
@@ -857,10 +861,12 @@ mod tests {
         writer.write(vec![data]).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -871,7 +877,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()

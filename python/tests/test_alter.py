@@ -53,17 +53,6 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
         write_deltalake(tmp_path, data, mode="append")
 
 
-def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: Table):
-    write_deltalake(tmp_path, sample_table)
-
-    dt = DeltaTable(tmp_path)
-
-    with pytest.raises(ValueError):
-        dt.alter.add_constraint(
-            {"check_price": "price >= 0", "check_price2": "price >= 0"}
-        )
-
-
 def test_add_constraint_roundtrip_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 

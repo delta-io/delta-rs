@@ -30,7 +30,9 @@ use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version};
+use delta_kernel::{
+    Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
+};
 use futures::future::ready;
 use futures::stream::{once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
@@ -38,10 +40,12 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use serde_json::Deserializer;
 use tokio::task::spawn_blocking;
+use tracing::Instrument;
+use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
-use crate::kernel::{StructType, ARROW_HANDLER};
+use crate::kernel::{spawn_blocking_with_span, StructType, ARROW_HANDLER};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
 
@@ -71,24 +75,13 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Create a new [`Snapshot`] instance
-    pub async fn try_new(
-        log_store: &dyn LogStore,
+    pub async fn try_new_with_engine(
+        engine: Arc<dyn Engine>,
+        table_root: Url,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
-        // TODO: bundle operation_id with logstore ...
-        let engine = log_store.engine(None);
-        let mut table_root = log_store.table_root_url();
-        let version = version.map(|v| v as u64);
-
-        // NB: kernel engine uses Url::join to construct paths,
-        // if the path does not end with a slash, the would override the entire path.
-        // So we need to be extra sure its ends with a slash.
-        if !table_root.path().ends_with('/') {
-            table_root.set_path(&format!("{}/", table_root.path()));
-        }
-        let snapshot = match spawn_blocking(move || {
+        let snapshot = match spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_for(table_root);
             if let Some(version) = version {
                 builder = builder.at_version(version);
@@ -124,6 +117,26 @@ impl Snapshot {
         })
     }
 
+    /// Create a new [`Snapshot`] instance
+    pub async fn try_new(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        version: Option<i64>,
+    ) -> DeltaResult<Self> {
+        // TODO: bundle operation_id with logstore ...
+        let engine = log_store.engine(None);
+
+        // NB: kernel engine uses Url::join to construct paths,
+        // if the path does not end with a slash, the would override the entire path.
+        // So we need to be extra sure its ends with a slash.
+        let mut table_root = log_store.table_root_url();
+        if !table_root.path().ends_with('/') {
+            table_root.set_path(&format!("{}/", table_root.path()));
+        }
+
+        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64)).await
+    }
+
     pub fn scan_builder(&self) -> ScanBuilder {
         ScanBuilder::new(self.inner.clone())
     }
@@ -150,7 +163,7 @@ impl Snapshot {
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
         let current = self.inner.clone();
-        let snapshot = spawn_blocking(move || {
+        let snapshot = spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_from(current);
             if let Some(version) = target_version {
                 builder = builder.at_version(version);
@@ -420,9 +433,10 @@ impl Snapshot {
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
         let inner = self.inner.clone();
-        let version = spawn_blocking(move || inner.get_app_id_version(&app_id, engine.as_ref()))
-            .await
-            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        let version =
+            spawn_blocking_with_span(move || inner.get_app_id_version(&app_id, engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(version)
     }
 
@@ -439,9 +453,10 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let inner = self.inner.clone();
         let domain = domain.to_string();
-        let metadata = spawn_blocking(move || inner.get_domain_metadata(&domain, engine.as_ref()))
-            .await
-            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        let metadata =
+            spawn_blocking_with_span(move || inner.get_domain_metadata(&domain, engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
     }
 }
@@ -451,7 +466,25 @@ impl Snapshot {
 pub struct EagerSnapshot {
     snapshot: Snapshot,
     // logical files in the snapshot
-    pub(crate) files: Vec<RecordBatch>,
+    files: Vec<RecordBatch>,
+}
+
+pub(crate) async fn resolve_snapshot(
+    log_store: &dyn LogStore,
+    maybe_snapshot: Option<EagerSnapshot>,
+    require_files: bool,
+) -> DeltaResult<EagerSnapshot> {
+    if let Some(snapshot) = maybe_snapshot {
+        if require_files {
+            snapshot.with_files(log_store).await
+        } else {
+            Ok(snapshot)
+        }
+    } else {
+        let mut config = DeltaTableConfig::default();
+        config.require_files = require_files;
+        EagerSnapshot::try_new(log_store, config, None).await
+    }
 }
 
 impl EagerSnapshot {
@@ -462,13 +495,34 @@ impl EagerSnapshot {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
+        Self::try_new_with_snapshot(log_store, snapshot).await
+    }
 
-        let files = match config.require_files {
+    pub(crate) async fn try_new_with_snapshot(
+        log_store: &dyn LogStore,
+        snapshot: Snapshot,
+    ) -> DeltaResult<Self> {
+        let files = match snapshot.load_config().require_files {
             true => snapshot.files(log_store, None).try_collect().await?,
             false => vec![],
         };
-
         Ok(Self { snapshot, files })
+    }
+
+    pub(crate) async fn with_files(mut self, log_store: &dyn LogStore) -> DeltaResult<Self> {
+        if self.snapshot.config.require_files {
+            return Ok(self);
+        }
+        self.snapshot.config.require_files = true;
+        Self::try_new_with_snapshot(log_store, self.snapshot).await
+    }
+
+    pub(crate) fn files(&self) -> DeltaResult<&[RecordBatch]> {
+        if self.snapshot.config.require_files {
+            Ok(&self.files)
+        } else {
+            Err(DeltaTableError::NotInitializedWithFiles("files".into()))
+        }
     }
 
     /// Update the snapshot to the given version
@@ -490,7 +544,7 @@ impl EagerSnapshot {
                 log_store,
                 None,
                 current_version,
-                Box::new(self.files.clone().into_iter()),
+                Box::new(std::mem::take(&mut self.files).into_iter()),
                 None,
             )
             .try_collect()
@@ -576,6 +630,12 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        if !self.snapshot.load_config().require_files {
+            return Box::pin(once(ready(Err(DeltaTableError::NotInitializedWithFiles(
+                "file_views".into(),
+            )))));
+        }
+
         self.snapshot
             .files_from(
                 log_store,

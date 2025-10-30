@@ -80,7 +80,7 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{new_metadata, Action, EagerSnapshot, StructTypeExt};
+use crate::kernel::{new_metadata, resolve_snapshot, Action, EagerSnapshot, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -136,7 +136,7 @@ pub struct MergeBuilder {
     ///Prefix target columns with a user provided prefix
     target_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// The source data
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
@@ -157,7 +157,7 @@ pub struct MergeBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for MergeBuilder {
+impl super::Operation for MergeBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -170,7 +170,7 @@ impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
         log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
+        snapshot: Option<EagerSnapshot>,
         predicate: E,
         source: DataFrame,
     ) -> Self {
@@ -535,7 +535,7 @@ impl MergeOperation {
     fn try_from(
         config: MergeOperationConfig,
         schema: &DFSchema,
-        state: &SessionState,
+        state: &dyn Session,
         target_alias: &Option<String>,
     ) -> DeltaResult<MergeOperation> {
         let mut ops = HashMap::with_capacity(config.operations.capacity());
@@ -1411,7 +1411,7 @@ async fn execute(
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
-        state.clone(),
+        &state,
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
@@ -1549,11 +1549,9 @@ impl std::future::IntoFuture for MergeBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot)?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
 
-            if !this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
-            }
+            PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -1572,7 +1570,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
-                this.snapshot,
+                snapshot,
                 state,
                 this.writer_properties_factory,
                 this.commit_properties,
@@ -2017,9 +2015,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, &snapshot_bytes)
-            .await
-            .unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -2093,9 +2089,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, &snapshot_bytes)
-            .await
-            .unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -2204,9 +2198,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, &snapshot_bytes)
-            .await
-            .unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()

@@ -33,7 +33,7 @@ use tracing::log;
 use crate::delta_datafusion::{register_store, DataFusionMixins};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
+use crate::kernel::{resolve_snapshot, Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
 use crate::logstore::{get_actions, LogStoreRef};
 use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
@@ -42,7 +42,7 @@ use crate::{delta_datafusion::cdf::*, kernel::Remove};
 #[derive(Clone)]
 pub struct CdfLoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    pub snapshot: EagerSnapshot,
+    pub(crate) snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to read from
@@ -74,8 +74,8 @@ impl std::fmt::Debug for CdfLoadBuilder {
 }
 
 impl CdfLoadBuilder {
-    /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    /// Create a new [`CdfLoadBuilder`]
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -124,11 +124,11 @@ impl CdfLoadBuilder {
         self
     }
 
-    async fn calculate_earliest_version(&self) -> DeltaResult<i64> {
+    async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<i64> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
-        for v in 0..self.snapshot.version() {
+        for v in 0..snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
-                if let Ok(actions) = get_actions(v, &bytes).await {
+                if let Ok(actions) = get_actions(v, &bytes) {
                     if actions.iter().any(|action| {
                         matches!(action, Action::CommitInfo(CommitInfo {
                             timestamp: Some(t), ..
@@ -148,6 +148,7 @@ impl CdfLoadBuilder {
     /// than I have right now. I plan to extend the checks once we have a stable state of the initial implementation.
     async fn determine_files_to_read(
         &self,
+        snapshot: &EagerSnapshot,
     ) -> DeltaResult<(
         Vec<CdcDataSpec<AddCDCFile>>,
         Vec<CdcDataSpec<Add>>,
@@ -159,7 +160,7 @@ impl CdfLoadBuilder {
         let start = if let Some(s) = self.starting_version {
             s
         } else {
-            self.calculate_earliest_version().await?
+            self.calculate_earliest_version(snapshot).await?
         };
 
         let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
@@ -209,7 +210,7 @@ impl CdfLoadBuilder {
             .ok_or(DeltaTableError::InvalidVersion(latest_version))?;
 
         let latest_version_actions: Vec<Action> =
-            get_actions(latest_version, &latest_snapshot_bytes).await?;
+            get_actions(latest_version, &latest_snapshot_bytes)?;
         let latest_version_commit = latest_version_actions
             .iter()
             .find(|a| matches!(a, Action::CommitInfo(_)));
@@ -240,7 +241,7 @@ impl CdfLoadBuilder {
                 .await?
                 .ok_or(DeltaTableError::InvalidVersion(version));
 
-            let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?).await?;
+            let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?)?;
 
             let mut ts = 0;
             let mut cdc_actions = vec![];
@@ -351,13 +352,14 @@ impl CdfLoadBuilder {
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-        PROTOCOL.can_read_from(&self.snapshot)?;
+        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true).await?;
+        PROTOCOL.can_read_from(&snapshot)?;
 
-        let (cdc, add, remove) = self.determine_files_to_read().await?;
+        let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
         register_store(self.log_store.clone(), session.runtime_env().as_ref());
 
-        let partition_values = self.snapshot.metadata().partition_columns().clone();
-        let schema = self.snapshot.input_schema();
+        let partition_values = snapshot.metadata().partition_columns().clone();
+        let schema = snapshot.input_schema();
         let schema_fields: Vec<Arc<Field>> = schema
             .fields()
             .into_iter()
@@ -953,7 +955,7 @@ pub(crate) mod tests {
             .read_commit_entry(2)
             .await?
             .expect("failed to get snapshot bytes");
-        let version_actions = get_actions(2, &snapshot_bytes).await?;
+        let version_actions = get_actions(2, &snapshot_bytes)?;
 
         let cdc_actions = version_actions
             .iter()

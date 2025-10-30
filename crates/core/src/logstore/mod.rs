@@ -69,13 +69,12 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use tokio::runtime::RuntimeFlavor;
-use tokio::task::spawn_blocking;
 use tracing::*;
 use url::Url;
 use uuid::Uuid;
 
 use crate::kernel::transaction::TransactionError;
-use crate::kernel::Action;
+use crate::kernel::{spawn_blocking_with_span, Action};
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::config::StorageConfig;
@@ -309,7 +308,7 @@ pub trait LogStore: Send + Sync + AsAny {
             Err(err) => Err(err),
         }?;
 
-        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes).await;
+        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes);
         Ok(PeekCommit::New(next_version, actions?))
     }
 
@@ -564,7 +563,7 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
 }
 
 /// Reads a commit and gets list of actions
-pub async fn get_actions(
+pub fn get_actions(
     version: i64,
     commit_log_bytes: &bytes::Bytes,
 ) -> Result<Vec<Action>, DeltaTableError> {
@@ -660,7 +659,7 @@ pub async fn get_latest_version(
     let storage = log_store.engine(None).storage_handler();
     let log_root = log_store.log_root_url();
 
-    let segment = spawn_blocking(move || {
+    let segment = spawn_blocking_with_span(move || {
         LogSegment::for_table_changes(storage.as_ref(), log_root, current_version as u64, None)
     })
     .await
@@ -950,11 +949,10 @@ pub(crate) mod tests {
             .await
             .expect("Failed to write log file");
 
-        let table_uri = "memory:///delta-table";
-
-        let table = crate::DeltaTableBuilder::from_valid_uri(table_uri)
+        let table_uri = url::Url::parse("memory:///delta-table").unwrap();
+        let table = crate::DeltaTableBuilder::from_uri(table_uri.clone())
             .unwrap()
-            .with_storage_backend(memory_store, Url::parse(table_uri).unwrap())
+            .with_storage_backend(memory_store, table_uri)
             .build()?;
 
         let result = table.log_store().peek_next_commit(0).await;
@@ -1007,7 +1005,7 @@ mod datafusion_tests {
 {"invalid json without closing brace"#,
         );
 
-        let result = get_actions(0, &malformed_json).await;
+        let result = get_actions(0, &malformed_json);
 
         match result {
             Err(DeltaTableError::InvalidJsonLog {

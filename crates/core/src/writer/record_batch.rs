@@ -31,6 +31,7 @@ use super::utils::{
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::merge_arrow_schema;
+use crate::kernel::transaction::CommitProperties;
 use crate::kernel::MetadataExt as _;
 use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
@@ -53,6 +54,7 @@ pub struct RecordBatchWriter {
     arrow_writers: HashMap<String, PartitionWriter>,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: Option<Vec<String>>,
+    commit_properties: Option<CommitProperties>,
 }
 
 impl std::fmt::Debug for RecordBatchWriter {
@@ -109,7 +111,18 @@ impl RecordBatchWriter {
             stats_columns: configuration
                 .get("delta.dataSkippingStatsColumns")
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            commit_properties: None,
         })
+    }
+
+    /// Add the [CommitProperties] to the [RecordBatchWriter] to be used when the writer flushes
+    /// the write into storage.
+    ///
+    /// This can be useful for situations where slight modifications to the commit behavior are
+    /// required.
+    pub fn with_commit_properties(mut self, properties: CommitProperties) -> Self {
+        self.commit_properties = Some(properties);
+        self
     }
 
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
@@ -147,6 +160,7 @@ impl RecordBatchWriter {
             stats_columns: configuration
                 .get("delta.dataSkippingStatsColumns")
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            commit_properties: None,
         })
     }
 
@@ -274,7 +288,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
         let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::new();
+        let mut actions = Vec::with_capacity(writers.len());
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
@@ -317,7 +331,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let metadata = current_meta.with_schema(&schema)?;
             adds.push(Action::Metadata(metadata));
         }
-        super::flush_and_commit(adds, table).await
+        super::flush_and_commit(adds, table, self.commit_properties.clone()).await
     }
 }
 
@@ -527,15 +541,19 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::operations::create::CreateBuilder;
-    use crate::writer::test_utils::*;
-    use crate::{DeltaOps, DeltaResult};
     use arrow::json::ReaderBuilder;
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use delta_kernel::schema::StructType;
+    #[cfg(feature = "datafusion")]
+    use futures::TryStreamExt;
     use std::path::Path;
+
+    use crate::operations::create::CreateBuilder;
+    use crate::writer::test_utils::*;
+    use crate::{DeltaOps, DeltaResult};
+
+    use super::*;
 
     #[tokio::test]
     async fn test_buffer_len_includes_unflushed_row_group() {
@@ -1156,10 +1174,12 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -1170,7 +1190,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()
@@ -1210,10 +1230,12 @@ mod tests {
         writer.write(batch).await.unwrap();
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let add_actions = table
-            .state
+        let add_actions: Vec<_> = table
+            .snapshot()
             .unwrap()
-            .file_actions(&table.log_store)
+            .snapshot()
+            .file_views(&table.log_store, None)
+            .try_collect()
             .await
             .unwrap();
         assert_eq!(add_actions.len(), 1);
@@ -1224,7 +1246,7 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap()
-                .stats
+                .stats()
                 .unwrap()
                 .parse::<serde_json::Value>()
                 .unwrap()

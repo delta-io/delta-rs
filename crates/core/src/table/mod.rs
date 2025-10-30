@@ -13,7 +13,7 @@ use std::fmt::Formatter;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Metadata, Protocol};
+use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
@@ -321,22 +321,6 @@ impl DeltaTable {
     /// Returns [`NotInitialized`](DeltaTableError::NotInitialized) if the table has not been initialized.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
-    }
-
-    /// Returns current table protocol
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.protocol()` instead")]
-    pub fn protocol(&self) -> DeltaResult<&Protocol> {
-        Ok(self
-            .state
-            .as_ref()
-            .ok_or(DeltaTableError::NotInitialized)?
-            .protocol())
-    }
-
-    /// Returns the metadata associated with the loaded state.
-    #[deprecated(since = "0.27.1", note = "Use `snapshot()?.metadata()` instead")]
-    pub fn metadata(&self) -> Result<&Metadata, DeltaTableError> {
-        Ok(self.snapshot()?.metadata())
     }
 
     /// Time travel Delta table to the latest version that's created at or before provided

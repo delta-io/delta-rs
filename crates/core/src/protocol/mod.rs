@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::table::Constraint;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -267,10 +268,8 @@ pub enum DeltaOperation {
     },
     /// Add constraints to a table
     AddConstraint {
-        /// Constraints name
-        name: String,
-        /// Expression to check against
-        expr: String,
+        /// Constraints with Name and Expression
+        constraints: Vec<Constraint>,
     },
 
     /// Add table features to a table
@@ -710,6 +709,7 @@ mod tests {
         use arrow::compute::sort_to_indices;
         use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
         use arrow::record_batch::RecordBatch;
+        use futures::TryStreamExt;
         use pretty_assertions::assert_eq;
         use std::path::Path;
         use std::sync::Arc;
@@ -1116,16 +1116,14 @@ mod tests {
             let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
 
-            assert_eq!(
-                2,
-                table
-                    .snapshot()
-                    .unwrap()
-                    .file_actions(&table.log_store)
-                    .await
-                    .unwrap()
-                    .len()
-            );
+            let snapshot = table.snapshot().unwrap().snapshot();
+            let files: Vec<_> = snapshot
+                .file_views(&table.log_store, None)
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(2, files.len());
         }
 
         #[tokio::test]

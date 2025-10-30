@@ -15,10 +15,6 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
-[profile.release-with-debug]
-inherits = "release"
-debug = true
-
 # Reducing the debuginfo for the test profile in order to trim the disk and RAM
 # usage during development
 # <https://github.com/delta-io/delta-rs/issues/1550?
@@ -34,24 +30,24 @@ delta_kernel = { version = "0.16.0", features = [
 
 
 # arrow
-arrow = { version = "56.0.0" }
-arrow-arith = { version = "56.0.0" }
-arrow-array = { version = "56.0.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "56.0.0" }
-arrow-cast = { version = "56.0.0" }
-arrow-ipc = { version = "56.0.0" }
-arrow-json = { version = "56.0.0" }
-arrow-ord = { version = "56.0.0" }
-arrow-row = { version = "56.0.0" }
-arrow-schema = { version = "56.0.0" }
-arrow-select = { version = "56.0.0" }
+arrow = { version = "56.2" }
+arrow-arith = { version = "56.2" }
+arrow-array = { version = "56.2", features = ["chrono-tz"] }
+arrow-buffer = { version = "56.2" }
+arrow-cast = { version = "56.2" }
+arrow-ipc = { version = "56.2" }
+arrow-json = { version = "56.2" }
+arrow-ord = { version = "56.2" }
+arrow-row = { version = "56.2" }
+arrow-schema = { version = "56.2" }
+arrow-select = { version = "56.2" }
 object_store = { version = "0.12.1" }
-parquet = { version = "56.0.0" }
+parquet = { version = "56.2" }
 
 # datafusion
-datafusion = { version = "50.0.0" , features = ["parquet_encryption", "default"]}
-datafusion-ffi = "50.0.0"
-datafusion-proto = "50.0.0"
+datafusion = "50.2"
+datafusion-ffi = "50.2"
+datafusion-proto = "50.2"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -83,7 +79,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 num_cpus = { version = "1" }
 
 [workspace.metadata.typos]
-files.extend-exclude = ["CHANGELOG.md"]
+files.extend-exclude = ["CHANGELOG.md", "crates/benchmarks/queries/tpcds/*.sql"]
 default.extend-ignore-re = [
     # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
     "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
@@ -103,6 +99,10 @@ AKS = "AKS"
 # to avoid using 'type' as a field name.
 tpe = "tpe"
 
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
 # for better flamegraphs when benchmarking
 [profile.bench]
 debug = true
@@ -110,3 +110,9 @@ debug = true
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[profile.release-python]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+lto = "fat"
