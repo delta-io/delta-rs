@@ -571,6 +571,11 @@ impl<'a> DeltaScanBuilder<'a> {
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+        let mut file_group_index: HashMap<Vec<ScalarValue>, u32> = HashMap::new();
+        let max_files_in_file_group: usize = std::env::var("MAX_FILES_IN_FILE_GROUP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(usize::MAX);
 
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
@@ -586,10 +591,18 @@ impl<'a> DeltaScanBuilder<'a> {
                 part.partition_values.push(partition_value);
             }
 
-            file_groups
+            let index = file_group_index
                 .entry(part.partition_values.clone())
-                .or_default()
-                .push(part);
+                .or_insert(0);
+            let mut file_groups_key = part.partition_values.clone();
+            file_groups_key.push(ScalarValue::UInt32(Some(*index)));
+
+            let file_group = file_groups.entry(file_groups_key).or_default();
+            file_group.push(part);
+
+            if file_group.len() >= max_files_in_file_group {
+                *index = *index + 1;
+            }
         }
 
         let file_schema = Arc::new(Schema::new(
