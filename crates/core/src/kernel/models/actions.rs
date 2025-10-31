@@ -13,7 +13,6 @@ use crate::TableProperty;
 pub use delta_kernel::actions::{Metadata, Protocol};
 
 /// Please don't use, this API will be leaving shortly!
-#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub fn new_metadata(
     schema: &StructType,
     partition_columns: impl IntoIterator<Item = impl ToString>,
@@ -38,7 +37,6 @@ pub fn new_metadata(
 /// This trait is a stop-gap to adopt the Metadata action from delta-kernel-rs
 /// while the update / mutation APIs are being implemented. It allows us to implement
 /// additional APIs on the Metadata action and hide specifics of how we do the updates.
-#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub trait MetadataExt {
     fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
@@ -160,7 +158,6 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
 ///
 /// Allows us to extend the Protocol struct with additional methods
 /// to update the protocol actions.
-#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub(crate) trait ProtocolExt {
     fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>>;
     fn writer_features_set(&self) -> Option<HashSet<WriterFeature>>;
@@ -236,10 +233,6 @@ impl ProtocolExt for Protocol {
 /// use it to proxy updates to the kernel protocol action.
 ///
 // TODO: Remove once we can use kernel protocol update APIs.
-#[deprecated(
-    since = "0.27.0",
-    note = "Just an internal shim for adopting kernel actions"
-)]
 pub(crate) struct ProtocolInner {
     /// The minimum version of the Delta read protocol that a client must implement
     /// in order to correctly read this table
