@@ -13,6 +13,11 @@ use crate::TableProperty;
 pub use delta_kernel::actions::{Metadata, Protocol};
 
 /// Please don't use, this API will be leaving shortly!
+///
+/// Since the adoption of delta-kernel-rs we lost the direct ability to create [Metadata] actions
+/// which is required for some use-cases.
+///
+/// Upstream tracked here: <https://github.com/delta-io/delta-kernel-rs/issues/1055>
 pub fn new_metadata(
     schema: &StructType,
     partition_columns: impl IntoIterator<Item = impl ToString>,
@@ -263,7 +268,7 @@ impl Default for ProtocolInner {
 
 impl ProtocolInner {
     /// Create a new protocol action
-    pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
+    pub(crate) fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
             min_writer_version,

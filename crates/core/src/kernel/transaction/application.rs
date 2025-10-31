@@ -1,3 +1,4 @@
+#[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -5,7 +6,6 @@ mod tests {
         protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
     };
 
-    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_app_txn_workload() {
         // Test that the transaction ids can be read from different scenarios

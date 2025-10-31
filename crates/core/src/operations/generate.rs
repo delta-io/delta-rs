@@ -7,7 +7,7 @@
 //! enon-partitioned tables this will generate a `_symlink_format_manifest/manifest` file next to
 //! the `_delta_log`, for example:
 //!
-//! ```
+//! ```ignore
 //! COVID-19_NYT
 //! ├── _delta_log
 //! │   ├── 00000000000000000000.crc
@@ -27,7 +27,7 @@
 //! For partitioned tables, a `manifest` file will be generated inside a hive-style partitioned
 //! tree structure, e.g.:
 //!
-//! ```
+//! ```ignore
 //! delta-0.8.0-partitioned
 //! ├── _delta_log
 //! │   └── 00000000000000000000.json
@@ -74,12 +74,10 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use itertools::Itertools;
 use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{resolve_snapshot, EagerSnapshot};
 use crate::logstore::object_store::PutPayload;
 use crate::logstore::LogStoreRef;
