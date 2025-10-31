@@ -404,7 +404,7 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::table::config::TableProperty;
-    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use crate::writer::test_utils::get_delta_schema;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -517,138 +517,141 @@ mod tests {
     }
 
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn test_create_table_save_mode() {
-        let tmp_dir = tempfile::tempdir().unwrap();
+    mod datafusion_tests {
+        use super::*;
 
-        let schema = get_delta_schema();
-        let table = CreateBuilder::new()
-            .with_location(tmp_dir.path().to_str().unwrap())
-            .with_columns(schema.fields().cloned())
-            .await
-            .unwrap();
-        assert_eq!(table.version(), Some(0));
-        let first_id = table.snapshot().unwrap().metadata().id().to_string();
+        use crate::writer::test_utils::get_record_batch;
+        #[tokio::test]
+        async fn test_create_table_save_mode() {
+            let tmp_dir = tempfile::tempdir().unwrap();
 
-        let log_store = table.log_store;
+            let schema = get_delta_schema();
+            let table = CreateBuilder::new()
+                .with_location(tmp_dir.path().to_str().unwrap())
+                .with_columns(schema.fields().cloned())
+                .await
+                .unwrap();
+            assert_eq!(table.version(), Some(0));
+            let first_id = table.snapshot().unwrap().metadata().id().to_string();
 
-        // Check an error is raised when a table exists at location
-        let table = CreateBuilder::new()
-            .with_log_store(log_store.clone())
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::ErrorIfExists)
-            .await;
-        assert!(table.is_err());
+            let log_store = table.log_store;
 
-        // Check current table is returned when ignore option is chosen.
-        let table = CreateBuilder::new()
-            .with_log_store(log_store.clone())
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Ignore)
-            .await
-            .unwrap();
-        assert_eq!(table.snapshot().unwrap().metadata().id(), first_id);
+            // Check an error is raised when a table exists at location
+            let table = CreateBuilder::new()
+                .with_log_store(log_store.clone())
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::ErrorIfExists)
+                .await;
+            assert!(table.is_err());
 
-        // Check table is overwritten
-        let table = CreateBuilder::new()
-            .with_log_store(log_store)
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .unwrap();
-        assert_ne!(table.snapshot().unwrap().metadata().id(), first_id)
-    }
+            // Check current table is returned when ignore option is chosen.
+            let table = CreateBuilder::new()
+                .with_log_store(log_store.clone())
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Ignore)
+                .await
+                .unwrap();
+            assert_eq!(table.snapshot().unwrap().metadata().id(), first_id);
 
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn test_create_or_replace_existing_table() {
-        let batch = get_record_batch(None, false);
-        let schema = get_delta_schema();
-        let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::ErrorIfExists)
-            .await
-            .unwrap();
-        let state = table.snapshot().unwrap();
-        assert_eq!(state.version(), 0);
-        assert_eq!(state.log_data().num_files(), 1);
+            // Check table is overwritten
+            let table = CreateBuilder::new()
+                .with_log_store(log_store)
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .await
+                .unwrap();
+            assert_ne!(table.snapshot().unwrap().metadata().id(), first_id)
+        }
 
-        let mut table = DeltaOps(table)
-            .create()
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .unwrap();
-        table.load().await.unwrap();
-        let state = table.snapshot().unwrap();
-        assert_eq!(state.version(), 1);
-        // Checks if files got removed after overwrite
-        assert_eq!(state.log_data().num_files(), 0);
-    }
+        #[tokio::test]
+        async fn test_create_or_replace_existing_table() {
+            let batch = get_record_batch(None, false);
+            let schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::ErrorIfExists)
+                .await
+                .unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 0);
+            assert_eq!(state.log_data().num_files(), 1);
 
-    #[tokio::test]
-    #[cfg(feature = "datafusion")]
-    async fn test_create_or_replace_existing_table_partitioned() {
-        let batch = get_record_batch(None, false);
-        let schema = get_delta_schema();
-        let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::ErrorIfExists)
-            .await
-            .unwrap();
-        let state = table.snapshot().unwrap();
-        assert_eq!(state.version(), 0);
-        assert_eq!(state.log_data().num_files(), 1);
+            let mut table = DeltaOps(table)
+                .create()
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .await
+                .unwrap();
+            table.load().await.unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 1);
+            // Checks if files got removed after overwrite
+            assert_eq!(state.log_data().num_files(), 0);
+        }
 
-        let mut table = DeltaOps(table)
-            .create()
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Overwrite)
-            .with_partition_columns(vec!["id"])
-            .await
-            .unwrap();
-        table.load().await.unwrap();
-        let state = table.snapshot().unwrap();
-        assert_eq!(state.version(), 1);
-        // Checks if files got removed after overwrite
-        assert_eq!(state.log_data().num_files(), 0);
-    }
+        #[tokio::test]
+        async fn test_create_or_replace_existing_table_partitioned() {
+            let batch = get_record_batch(None, false);
+            let schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::ErrorIfExists)
+                .await
+                .unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 0);
+            assert_eq!(state.log_data().num_files(), 1);
 
-    #[tokio::test]
-    async fn test_create_table_metadata_raise_if_key_not_exists() {
-        let schema = get_delta_schema();
-        let config: HashMap<String, Option<String>> =
-            vec![("key".to_string(), Some("value".to_string()))]
-                .into_iter()
-                .collect();
+            let mut table = DeltaOps(table)
+                .create()
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .with_partition_columns(vec!["id"])
+                .await
+                .unwrap();
+            table.load().await.unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 1);
+            // Checks if files got removed after overwrite
+            assert_eq!(state.log_data().num_files(), 0);
+        }
 
-        // Fail to create table with unknown Delta key
-        let table = CreateBuilder::new()
-            .with_location("memory:///")
-            .with_columns(schema.fields().cloned())
-            .with_configuration(config.clone())
-            .await;
-        assert!(table.is_err());
+        #[tokio::test]
+        async fn test_create_table_metadata_raise_if_key_not_exists() {
+            let schema = get_delta_schema();
+            let config: HashMap<String, Option<String>> =
+                vec![("key".to_string(), Some("value".to_string()))]
+                    .into_iter()
+                    .collect();
 
-        // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
-        let table = CreateBuilder::new()
-            .with_location("memory:///")
-            .with_columns(schema.fields().cloned())
-            .with_raise_if_key_not_exists(false)
-            .with_configuration(config)
-            .await;
-        assert!(table.is_ok());
+            // Fail to create table with unknown Delta key
+            let table = CreateBuilder::new()
+                .with_location("memory:///")
+                .with_columns(schema.fields().cloned())
+                .with_configuration(config.clone())
+                .await;
+            assert!(table.is_err());
 
-        // Ensure the non-Delta key was set correctly
-        let value = table
-            .unwrap()
-            .snapshot()
-            .unwrap()
-            .metadata()
-            .configuration()
-            .get("key")
-            .unwrap()
-            .clone();
-        assert_eq!(String::from("value"), value);
+            // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
+            let table = CreateBuilder::new()
+                .with_location("memory:///")
+                .with_columns(schema.fields().cloned())
+                .with_raise_if_key_not_exists(false)
+                .with_configuration(config)
+                .await;
+            assert!(table.is_ok());
+
+            // Ensure the non-Delta key was set correctly
+            let value = table
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .metadata()
+                .configuration()
+                .get("key")
+                .unwrap()
+                .clone();
+            assert_eq!(String::from("value"), value);
+        }
     }
 }
