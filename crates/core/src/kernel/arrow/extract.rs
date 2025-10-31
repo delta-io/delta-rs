@@ -5,8 +5,6 @@ use std::sync::Arc;
 use arrow_array::{Array, ListArray, MapArray, RecordBatch, StructArray};
 use arrow_schema::{ArrowError, DataType};
 
-use crate::{DeltaResult, DeltaTableError};
-
 /// Trait to extract a column by name from a record batch or nested / complex array.
 pub(crate) trait ProvidesColumnByName {
     fn column_by_name(&self, name: &str) -> Option<&Arc<dyn Array>>;
@@ -27,12 +25,16 @@ impl ProvidesColumnByName for StructArray {
 /// Extracts a column by name and casts it to the given type array type `T`.
 ///
 /// Returns an error if the column does not exist or if the column is not of type `T`.
+///
+/// Note: this is currently only used in the datafusion build so disabled elsewhere
+#[cfg(feature = "datafusion")]
 pub(crate) fn extract_and_cast<'a, T: Array + 'static>(
     arr: &'a dyn ProvidesColumnByName,
     name: &'a str,
-) -> DeltaResult<&'a T> {
-    extract_and_cast_opt::<T>(arr, name)
-        .ok_or(DeltaTableError::Generic(format!("missing-column: {name}")))
+) -> crate::DeltaResult<&'a T> {
+    extract_and_cast_opt::<T>(arr, name).ok_or(crate::DeltaTableError::Generic(format!(
+        "missing-column: {name}"
+    )))
 }
 
 /// Extracts a column by name and casts it to the given type array type `T`.
