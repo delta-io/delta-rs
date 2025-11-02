@@ -184,7 +184,7 @@ impl TryFrom<&str> for DeltaTablePartition {
 }
 
 #[allow(unused)] // TODO: remove once we use this in kernel log replay
-pub fn to_kernel_predicate(
+pub(crate) fn to_kernel_predicate(
     filters: &[PartitionFilter],
     table_schema: &StructType,
 ) -> DeltaResult<Predicate> {

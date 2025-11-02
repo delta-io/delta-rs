@@ -5,6 +5,7 @@ use std::fmt;
 use std::fmt::Formatter;
 
 use chrono::{DateTime, Utc};
+use deltalake_logstore::LogStoreError;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
@@ -14,12 +15,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::schema::partitions::PartitionFilter;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
 };
+use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
 
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
@@ -369,9 +370,15 @@ impl DeltaTable {
         let mut max_version = match self
             .log_store
             .get_latest_version(self.version().unwrap_or(min_version))
-            .await?
+            .await
         {
-            version => version,
+            Ok(version) => version,
+            Err(LogStoreError::InvalidVersion(_)) => {
+                return Err(DeltaTableError::NotATable(
+                    log_store.table_root_url().to_string(),
+                ))
+            }
+            Err(e) => return Err(e.into()),
         };
         let mut version = min_version;
         let lowest_table_version = min_version;

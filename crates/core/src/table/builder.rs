@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
 
-use crate::logstore::IORuntime;
+use crate::logstore::storage::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 

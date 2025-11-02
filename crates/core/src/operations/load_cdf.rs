@@ -33,10 +33,9 @@ use tracing::log;
 
 use crate::delta_datafusion::{register_store, DataFusionMixins, DatafusionLogStore};
 use crate::errors::DeltaResult;
-use crate::kernel::get_actions;
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{resolve_snapshot, Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
-use crate::logstore::LogStoreRef;
+use crate::logstore::{get_actions, LogStoreRef};
 use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 

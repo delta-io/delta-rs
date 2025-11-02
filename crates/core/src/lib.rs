@@ -85,12 +85,7 @@ pub mod operations;
 pub mod protocol;
 pub use kernel::schema;
 pub mod table;
-pub mod logstore {
-    pub use deltalake_logstore::*;
-    pub mod default_logstore {
-        pub use deltalake_logstore::DefaultLogStore;
-    }
-}
+pub use deltalake_logstore as logstore;
 
 #[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
