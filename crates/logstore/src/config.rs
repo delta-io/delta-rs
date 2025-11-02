@@ -10,6 +10,7 @@
 use ::object_store::RetryConfig;
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::storage::LimitConfig;
 use super::{storage::runtime::RuntimeConfig, IORuntime};
@@ -33,6 +34,8 @@ pub trait TryUpdateKey: Default {
     fn load_from_environment(&mut self) -> LogStoreResult<()>;
 }
 
+type ParseErrors = Vec<(String, Arc<LogStoreError>)>;
+
 #[derive(Debug)]
 /// Generic container for parsing configuration
 pub struct ParseResult<T: std::fmt::Debug> {
@@ -41,7 +44,7 @@ pub struct ParseResult<T: std::fmt::Debug> {
     /// Unrecognized key value pairs.
     pub unparsed: HashMap<String, String>,
     /// Errors encountered during parsing
-    pub errors: Vec<(String, String)>,
+    pub errors: ParseErrors,
     /// Whether the configuration is defaults only - i.e. no custom values were provided
     pub is_default: bool,
 }
@@ -49,11 +52,9 @@ pub struct ParseResult<T: std::fmt::Debug> {
 impl<T: std::fmt::Debug> ParseResult<T> {
     pub fn raise_errors(&self) -> LogStoreResult<()> {
         if !self.errors.is_empty() {
-            todo!()
-            // let error: Box<dyn std::error::Error + Send + Sync + 'static> = format!("Failed to parse config: {:?}", self.errors).into();
-            // return Err(LogStoreError::Generic {
-            //     source: Box::new(error),
-            // });
+            return Err(LogStoreError::ParseErrors {
+                errors: self.errors.clone(),
+            });
         }
         Ok(())
     }
@@ -76,7 +77,7 @@ where
                     unparsed.insert(k.into(), v.into());
                 }
                 Ok(Some(_)) => is_default = false,
-                Err(e) => errors.push((k.into(), e.to_string())),
+                Err(e) => errors.push((k.into(), Arc::new(e))),
             }
         }
         ParseResult {
@@ -289,7 +290,7 @@ pub fn parse_string(value: &str) -> LogStoreResult<String> {
 /// aka YAML booleans
 ///
 /// ```rust
-/// # use deltalake_core::logstore::config::*;
+/// # use deltalake_logstore::config::*;
 /// for value in ["1", "true", "on", "YES", "Y"] {
 ///     assert!(str_is_truthy(value));
 /// }

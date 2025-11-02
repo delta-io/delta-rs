@@ -5,7 +5,7 @@ use object_store::path::Path;
 /// Return the uri of commit version.
 ///
 /// ```rust
-/// # use deltalake_core::logstore::*;
+/// # use deltalake_logstore::*;
 /// use object_store::path::Path;
 /// let uri = commit_uri_from_version(1);
 /// assert_eq!(uri, Path::from("_delta_log/00000000000000000001.json"));

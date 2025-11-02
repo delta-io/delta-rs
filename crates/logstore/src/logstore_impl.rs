@@ -180,7 +180,7 @@ pub static DELTA_LOG_REGEX: LazyLock<Regex> =
 /// This will use the built-in process global [crate::storage::ObjectStoreRegistry] by default
 ///
 /// ```rust
-/// # use deltalake_core::logstore::*;
+/// # use deltalake_logstore::*;
 /// # use std::collections::HashMap;
 /// # use url::Url;
 /// let location = Url::parse("memory:///").expect("Failed to make location");

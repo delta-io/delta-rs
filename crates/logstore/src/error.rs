@@ -1,5 +1,7 @@
 //! Error types for logstore operations
 
+use std::sync::Arc;
+
 use object_store::Error as ObjectStoreError;
 use thiserror::Error;
 
@@ -64,6 +66,13 @@ pub enum LogStoreError {
         type_name: String,
         /// Source error details.
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// Error returned when multiple errors occurred during parsing.
+    #[error("Failed to parse configuration: {errors:?}")]
+    ParseErrors {
+        /// The errors that occurred during parsing.
+        errors: Vec<(String, Arc<LogStoreError>)>,
     },
 
     /// Error returned when an object store is not found for a URL.
