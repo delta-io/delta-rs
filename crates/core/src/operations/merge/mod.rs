@@ -2006,7 +2006,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::kernel::get_actions(2, &snapshot_bytes).unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -2080,7 +2080,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::kernel::get_actions(2, &snapshot_bytes).unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -2189,7 +2189,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::kernel::get_actions(2, &snapshot_bytes).unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
