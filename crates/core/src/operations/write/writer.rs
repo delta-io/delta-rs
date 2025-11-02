@@ -537,8 +537,8 @@ impl PartitionWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logstore::tests::flatten_list_stream as list;
     use crate::table::config::DEFAULT_NUM_INDEX_COLS;
+    use crate::test_utils::flatten_list_stream as list;
     use crate::writer::test_utils::*;
     use crate::DeltaTableBuilder;
     use arrow::array::{Int32Array, StringArray};

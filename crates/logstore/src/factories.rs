@@ -31,7 +31,7 @@ pub trait ObjectStoreFactory: Send + Sync {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DefaultObjectStoreFactory {}
+pub struct DefaultObjectStoreFactory {}
 
 impl ObjectStoreFactory for DefaultObjectStoreFactory {
     fn parse_url_opts(

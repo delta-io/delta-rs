@@ -1,6 +1,7 @@
 use dashmap::DashMap;
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::DeltaResult;
+use deltalake_logstore::LogStoreResult;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -278,7 +279,7 @@ impl LakeFSClient {
         debug!("{}", format!("LakeFS Transaction `{id}` has been set."));
     }
 
-    pub fn get_transaction(&self, id: Uuid) -> Result<String, TransactionError> {
+    pub fn get_transaction(&self, id: Uuid) -> LogStoreResult<String> {
         let transaction_branch = self
             .transactions
             .get(&id)

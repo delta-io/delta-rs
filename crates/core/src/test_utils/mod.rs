@@ -2,12 +2,26 @@ mod factories;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
+use deltalake_logstore::Path;
+use futures::TryStreamExt;
 use url::Url;
 
 pub use self::factories::*;
 use crate::{DeltaResult, DeltaTableBuilder};
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
+
+/// Collect list stream
+pub async fn flatten_list_stream(
+    storage: &object_store::DynObjectStore,
+    prefix: Option<&Path>,
+) -> object_store::Result<Vec<Path>> {
+    storage
+        .list(prefix)
+        .map_ok(|meta| meta.location)
+        .try_collect::<Vec<Path>>()
+        .await
+}
 
 /// Reference tables from the test data folder
 pub enum TestTables {

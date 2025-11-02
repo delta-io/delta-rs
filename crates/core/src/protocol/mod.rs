@@ -683,6 +683,35 @@ mod tests {
             serde_json::from_str(buf).expect("Expected to be able to deserialize");
     }
 
+    #[test]
+    fn test_object_meta_from_add_action() {
+        let add = Add {
+            path: "x=A%252FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+                .to_string(),
+            size: 123,
+            modification_time: 123456789,
+            data_change: true,
+            stats: None,
+            partition_values: Default::default(),
+            tags: Default::default(),
+            base_row_id: None,
+            default_row_commit_version: None,
+            deletion_vector: None,
+            clustering_provider: None,
+        };
+
+        let meta: ObjectMeta = (&add).try_into_object_meta().unwrap();
+        assert_eq!(
+            meta.location,
+            Path::parse(
+                "x=A%252FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+            )
+            .unwrap()
+        );
+        assert_eq!(meta.size, 123);
+        assert_eq!(meta.last_modified.timestamp_millis(), 123456789);
+    }
+
     mod arrow_tests {
         use arrow::array::{self, ArrayRef, StructArray};
         use arrow::compute::kernels::cast_utils::Parser;

@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use deltalake_core::logstore::DeltaIOStorageBackend;
-use deltalake_core::logstore::{
+use deltalake_logstore::Path;
+use deltalake_logstore::{
     config::str_is_truthy, default_logstore, logstore_factories, object_store_factories, LogStore,
     LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
-use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use deltalake_logstore::{DeltaIOStorageBackend, LogStoreError, LogStoreResult};
 use object_store::local::LocalFileSystem;
 use object_store::DynObjectStore;
 use url::Url;
@@ -41,7 +41,7 @@ impl ObjectStoreFactory for MountFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let mount_config =
             config::MountConfigHelper::try_new(config.raw.as_mount_options())?.build()?;
 
@@ -51,31 +51,41 @@ impl ObjectStoreFactory for MountFactory {
                 .unwrap_or(&String::new()),
         );
 
-        let (mut store, prefix) = match url.scheme() {
-            "dbfs" => {
-                if !allow_unsafe_rename {
-                    // Just let the user know that they need to set the allow_unsafe_rename option
-                    return Err(error::Error::AllowUnsafeRenameNotSpecified.into());
-                }
-                // We need to convert the dbfs url to a file url
-                Url::parse(&format!("file:///dbfs{}", url.path())).unwrap();
-                let store = Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef;
-                Ok((store, Path::from("/")))
-            }
-            "file" => {
-                if allow_unsafe_rename {
+        let (mut store, prefix) =
+            match url.scheme() {
+                "dbfs" => {
+                    if !allow_unsafe_rename {
+                        // Just let the user know that they need to set the allow_unsafe_rename option
+                        return Err(error::Error::AllowUnsafeRenameNotSpecified.into());
+                    }
+                    // We need to convert the dbfs url to a file url
+                    Url::parse(&format!("file:///dbfs{}", url.path())).unwrap();
                     let store =
                         Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef;
-                    let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
-                    Ok((store, prefix))
-                } else {
-                    let store = Arc::new(LocalFileSystem::new()) as ObjectStoreRef;
-                    let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
-                    Ok((store, prefix))
+                    Ok((store, Path::from("/")))
                 }
-            }
-            _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
-        }?;
+                "file" => {
+                    if allow_unsafe_rename {
+                        let store =
+                            Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef;
+                        let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())
+                            .map_err(|e| LogStoreError::InvalidPath {
+                                path: url.to_string(),
+                                source: Box::new(e),
+                            })?;
+                        Ok((store, prefix))
+                    } else {
+                        let store = Arc::new(LocalFileSystem::new()) as ObjectStoreRef;
+                        let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())
+                            .map_err(|e| LogStoreError::InvalidPath {
+                                path: url.to_string(),
+                                source: Box::new(e),
+                            })?;
+                        Ok((store, prefix))
+                    }
+                }
+                _ => Err(LogStoreError::InvalidTableLocation(url.to_string())),
+            }?;
 
         if let Some(runtime) = &config.runtime {
             store =
@@ -92,7 +102,7 @@ impl LogStoreFactory for MountFactory {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
+    ) -> LogStoreResult<Arc<dyn LogStore>> {
         Ok(default_logstore(
             prefixed_store,
             root_store,

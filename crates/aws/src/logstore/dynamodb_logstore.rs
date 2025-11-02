@@ -107,7 +107,7 @@ impl S3DynamoDbLogStore {
                     warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
                     return self.try_complete_entry(entry, false).await;
                 }
-                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(LogStoreError::from(err)),
+                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
                 Err(err) => {
                     debug!("retry #{retry} on log entry {entry:?} failed to move commit: '{err}'")
                 }
@@ -136,7 +136,7 @@ impl S3DynamoDbLogStore {
                     source: Box::new(err),
                 }) {
                 Ok(x) => return Ok(Self::map_retry_result(x, copy_performed)),
-                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(LogStoreError::from(err)),
+                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
                 Err(err) => error!(
                     "retry #{retry} on log entry {entry:?} failed to update lock db: '{err}'"
                 ),

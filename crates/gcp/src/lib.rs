@@ -13,7 +13,6 @@ use object_store::client::SpawnedReqwestConnector;
 use url::Url;
 
 mod config;
-pub mod error;
 mod storage;
 
 trait GcpOptions {
@@ -51,11 +50,10 @@ impl ObjectStoreFactory for GcpFactory {
         }
         let config = config::GcpConfigHelper::try_new(config.raw.as_gcp_options())?.build()?;
 
-        let (_, path) =
-            ObjectStoreScheme::parse(url).map_err(|e| DeltaTableError::GenericError {
-                source: Box::new(e),
-            })?;
-        let prefix = Path::parse(path)?;
+        let (_, path) = ObjectStoreScheme::parse(url)
+            .map_err(|e| LogStoreError::Generic { source: e.into() })?;
+        let prefix =
+            Path::parse(path).map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());

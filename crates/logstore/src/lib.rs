@@ -7,11 +7,11 @@
 //! and access patterns to optimize our operations in terms of cost and performance.
 
 pub mod config;
-pub(crate) mod default_logstore;
+pub mod default_logstore;
 pub mod error;
-pub(crate) mod factories;
+pub mod factories;
 mod logstore_impl;
-pub(crate) mod storage;
+pub mod storage;
 
 // Compatibility shim for DeltaConfig derive macro which expects crate::logstore::config
 pub mod logstore {

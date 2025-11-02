@@ -102,7 +102,7 @@ mod tests {
     use rstest::*;
 
     use super::*;
-    use deltalake_logstore::config::TryUpdateKey;
+    use crate::config::TryUpdateKey;
     // Note: test_utils::with_env removed - this requires core
     // For testing, use environment variables directly or mock them
 

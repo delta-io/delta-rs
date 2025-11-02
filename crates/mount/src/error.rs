@@ -1,4 +1,4 @@
-use deltalake_core::errors::DeltaTableError;
+use deltalake_logstore::LogStoreError;
 
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -19,15 +19,22 @@ pub enum Error {
     ObjectStore(#[from] object_store::Error),
 }
 
-impl From<Error> for DeltaTableError {
+impl From<Error> for LogStoreError {
     fn from(e: Error) -> Self {
         match e {
-            Error::Parse(msg) => DeltaTableError::Generic(msg),
-            Error::UnknownConfigKey(msg) => DeltaTableError::Generic(msg),
-            Error::AllowUnsafeRenameNotSpecified => DeltaTableError::Generic(
-                "The `allow_unsafe_rename` parameter must be specified".to_string(),
-            ),
-            Error::ObjectStore(e) => DeltaTableError::ObjectStore { source: e },
+            Error::Parse(msg) => LogStoreError::Generic {
+                source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg)),
+            },
+            Error::UnknownConfigKey(msg) => LogStoreError::Generic {
+                source: Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg)),
+            },
+            Error::AllowUnsafeRenameNotSpecified => LogStoreError::Generic {
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "The `allow_unsafe_rename` parameter must be specified",
+                )),
+            },
+            Error::ObjectStore(e) => LogStoreError::ObjectStore { source: e },
         }
     }
 }

@@ -9,6 +9,7 @@ use deltalake_core::{
     kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
 };
 use deltalake_core::{logstore::*, DeltaTableError};
+use deltalake_logstore::LogStoreError;
 use object_store::{Error as ObjectStoreError, ObjectStore, PutOptions};
 use tracing::debug;
 use url::Url;
@@ -24,7 +25,7 @@ pub fn lakefs_logstore(
     root_store: ObjectStoreRef,
     location: &Url,
     options: &StorageConfig,
-) -> DeltaResult<Arc<dyn LogStore>> {
+) -> LogStoreResult<Arc<dyn LogStore>> {
     let host = options
         .raw
         .get("aws_endpoint")
@@ -92,17 +93,17 @@ impl LakeFSLogStore {
 
     /// Build a new object store for an URL using the existing storage options. After
     /// branch creation a new object store needs to be created for the branch uri
-    fn build_new_store(&self, url: &Url) -> DeltaResult<ObjectStoreRef> {
+    fn build_new_store(&self, url: &Url) -> LogStoreResult<ObjectStoreRef> {
         // turn location into scheme
         let scheme = Url::parse(&format!("{}://", url.scheme()))
-            .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
+            .map_err(|_| LogStoreError::InvalidTableLocation(url.clone().into()))?;
 
         if let Some(entry) = self.config().object_store_factory().get(&scheme) {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
             let (store, _prefix) = entry.value().parse_url_opts(url, &self.config().options)?;
             return Ok(store);
         }
-        Err(DeltaTableError::InvalidTableLocation(url.to_string()))
+        Err(LogStoreError::InvalidTableLocation(url.to_string()))
     }
 
     fn register_object_store(&self, url: &Url, store: ObjectStoreRef) {
@@ -113,19 +114,22 @@ impl LakeFSLogStore {
         self.root_registry.register_store(url, store);
     }
 
-    fn get_transaction_url(&self, operation_id: Uuid, base: String) -> DeltaResult<Url> {
+    fn get_transaction_url(&self, operation_id: Uuid, base: String) -> LogStoreResult<Url> {
         let (repo, _, table) = self.client.decompose_url(base);
-        let string_url = format!(
-            "lakefs://{repo}/{}/{table}",
-            self.client.get_transaction(operation_id)?,
-        );
+        let transaction_id =
+            self.client
+                .get_transaction(operation_id)
+                .map_err(|e| LogStoreError::Generic {
+                    source: Box::new(e),
+                })?;
+        let string_url = format!("lakefs://{repo}/{}/{table}", transaction_id,);
         Ok(Url::parse(&string_url).unwrap())
     }
 
     fn get_transaction_objectstore(
         &self,
         operation_id: Uuid,
-    ) -> DeltaResult<(String, ObjectStoreRef, ObjectStoreRef)> {
+    ) -> LogStoreResult<(String, ObjectStoreRef, ObjectStoreRef)> {
         let transaction_url =
             self.get_transaction_url(operation_id, self.config.location.to_string())?;
         Ok((
@@ -233,7 +237,7 @@ impl LogStore for LakeFSLogStore {
         "LakeFSLogStore".into()
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: i64) -> LogStoreResult<Option<Bytes>> {
         read_commit_entry(
             &self.prefixed_registry.get_store(&self.config.location)?,
             version,
@@ -251,12 +255,12 @@ impl LogStore for LakeFSLogStore {
         version: i64,
         commit_or_bytes: CommitOrBytes,
         operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> LogStoreResult<()> {
         let (transaction_url, store, _root_store) = self
             .get_transaction_objectstore(operation_id)
-            .map_err(|e| TransactionError::LogStoreError {
+            .map_err(|e| LogStoreError::LogStoreError {
                 msg: e.to_string(),
-                source: Box::new(e),
+                source: e.into(),
             })?;
 
         match commit_or_bytes {
@@ -269,12 +273,12 @@ impl LogStore for LakeFSLogStore {
                         put_options().clone(),
                     )
                     .await
-                    .map_err(|err| -> TransactionError {
+                    .map_err(|err| -> LogStoreError {
                         match err {
                             ObjectStoreError::AlreadyExists { .. } => {
-                                TransactionError::VersionAlreadyExists(version)
+                                LogStoreError::VersionAlreadyExists(version)
                             }
-                            _ => TransactionError::from(err),
+                            _ => LogStoreError::ObjectStore { source: err },
                         }
                     })?;
 
@@ -288,7 +292,7 @@ impl LogStore for LakeFSLogStore {
                         false,
                     )
                     .await
-                    .map_err(|e| TransactionError::LogStoreError {
+                    .map_err(|e| LogStoreError::LogStoreError {
                         msg: e.to_string(),
                         source: Box::new(e),
                     })?;
@@ -296,12 +300,16 @@ impl LogStore for LakeFSLogStore {
                 // Try LakeFS Branch merge of transaction branch in source branch
                 let (repo, target_branch, table) =
                     self.client.decompose_url(self.config.location.to_string());
+                let transaction_id = self
+                    .client
+                    .get_transaction(operation_id)
+                    .map_err(LogStoreError::from)?;
                 match self
                     .client
                     .merge(
                         repo,
                         target_branch,
-                        self.client.get_transaction(operation_id)?,
+                        transaction_id,
                         version,
                         format!("Finished deltalake transaction {{ table: {table}, version: {version} }}"),
                         false,
@@ -313,10 +321,10 @@ impl LogStore for LakeFSLogStore {
                         store
                             .delete(&commit_uri_from_version(version))
                             .await
-                            .map_err(TransactionError::from)?;
-                        return Err(TransactionError::VersionAlreadyExists(version));
+                            .map_err(|e| LogStoreError::ObjectStore { source: e })?;
+                        return Err(LogStoreError::VersionAlreadyExists(version));
                     }
-                    Err(err) => Err(err),
+                    Err(err) => Err(LogStoreError::from(err)),
                 }?;
             }
             _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
@@ -329,13 +337,18 @@ impl LogStore for LakeFSLogStore {
         _version: i64,
         commit_or_bytes: CommitOrBytes,
         operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(), LogStoreError> {
         match &commit_or_bytes {
             CommitOrBytes::LogBytes(_) => {
                 let (repo, _, _) = self.client.decompose_url(self.config.location.to_string());
+                let transaction_id = self
+                    .client
+                    .get_transaction(operation_id)
+                    .map_err(LogStoreError::from)?;
                 self.client
-                    .delete_branch(repo, self.client.get_transaction(operation_id)?)
-                    .await?;
+                    .delete_branch(repo, transaction_id)
+                    .await
+                    .map_err(|e| LogStoreError::from(DeltaTableError::from(e)))?;
                 self.client.clear_transaction(operation_id);
                 Ok(())
             }
@@ -343,7 +356,7 @@ impl LogStore for LakeFSLogStore {
         }
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: i64) -> LogStoreResult<i64> {
         get_latest_version(self, current_version).await
     }
 
@@ -374,7 +387,7 @@ impl LogStore for LakeFSLogStore {
         &self.config
     }
 
-    fn transaction_url(&self, operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
+    fn transaction_url(&self, operation_id: Uuid, base: &Url) -> LogStoreResult<Url> {
         self.get_transaction_url(operation_id, base.to_string())
     }
 }

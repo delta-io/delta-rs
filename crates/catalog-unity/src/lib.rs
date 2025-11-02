@@ -7,10 +7,12 @@ compile_error!(
     for this crate to function properly."
 );
 
+use deltalake_core::logstore::LogStoreResult;
 use deltalake_core::logstore::{
     default_logstore, logstore_factories, object_store::RetryConfig, LogStore, LogStoreFactory,
     StorageConfig,
 };
+use deltalake_logstore::LogStoreError;
 use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use reqwest::Url;
 use std::collections::HashMap;
@@ -155,6 +157,14 @@ impl From<UnityCatalogError> for DataCatalogError {
 impl From<UnityCatalogError> for DeltaTableError {
     fn from(value: UnityCatalogError) -> Self {
         DeltaTableError::GenericError {
+            source: Box::new(value),
+        }
+    }
+}
+
+impl From<UnityCatalogError> for LogStoreError {
+    fn from(value: UnityCatalogError) -> Self {
+        LogStoreError::Generic {
             source: Box::new(value),
         }
     }
@@ -500,7 +510,7 @@ impl UnityCatalogBuilder {
         self
     }
 
-    fn execute_uc_future<F, T>(future: F) -> DeltaResult<T>
+    fn execute_uc_future<F, T>(future: F) -> LogStoreResult<T>
     where
         T: Send,
         F: Future<Output = T> + Send,
@@ -517,7 +527,7 @@ impl UnityCatalogBuilder {
                             cfg = Some(handle.block_on(future));
                         });
                     });
-                    cfg.ok_or(DeltaTableError::ObjectStore {
+                    cfg.ok_or(LogStoreError::ObjectStore {
                         source: ObjectStoreError::Generic {
                             store: STORE_NAME,
                             source: Box::new(UnityCatalogError::InitializationError),
@@ -885,7 +895,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         &self,
         table_uri: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
             UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str(), Some(&config.raw)),
         )??;
@@ -895,8 +905,13 @@ impl ObjectStoreFactory for UnityCatalogFactory {
 
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
-        let table_url = ensure_table_uri(&table_path)?;
-        let mut builder = DeltaTableBuilder::from_uri(table_url)?;
+        let table_url = ensure_table_uri(&table_path).map_err(|e| LogStoreError::Generic {
+            source: Box::new(e),
+        })?;
+        let mut builder =
+            DeltaTableBuilder::from_uri(table_url).map_err(|e| LogStoreError::Generic {
+                source: Box::new(e),
+            })?;
 
         if let Some(runtime) = &config.runtime {
             builder = builder.with_io_runtime(runtime.clone());
@@ -905,8 +920,16 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         if !storage_options.is_empty() {
             builder = builder.with_storage_options(storage_options.clone());
         }
-        let prefix = Path::parse(table_uri.path())?;
-        let store = builder.build_storage()?.object_store(None);
+        let prefix = Path::parse(table_uri.path()).map_err(|e| LogStoreError::InvalidPath {
+            path: table_uri.path().to_string(),
+            source: Box::new(e),
+        })?;
+        let store = builder
+            .build_storage()
+            .map_err(|e| LogStoreError::Generic {
+                source: Box::new(e),
+            })?
+            .object_store(None);
 
         Ok((store, prefix))
     }
@@ -919,7 +942,7 @@ impl LogStoreFactory for UnityCatalogFactory {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
+    ) -> LogStoreResult<Arc<dyn LogStore>> {
         Ok(default_logstore(
             prefixed_store,
             root_store,

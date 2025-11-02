@@ -446,7 +446,7 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logstore::factories::DefaultObjectStoreFactory;
+    use deltalake_logstore::factories::DefaultObjectStoreFactory;
 
     #[test]
     fn test_ensure_table_uri() {

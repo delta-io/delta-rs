@@ -925,43 +925,6 @@ pub(crate) mod tests {
             .expect("Failed to identify table"));
     }
 
-    /// <https://github.com/delta-io/delta-rs/issues/3297>:w
-    #[tokio::test]
-    async fn test_peek_with_invalid_json() -> LogStoreResult<()> {
-        use deltalake_logstore::object_store::memory::InMemory;
-        let memory_store = Arc::new(InMemory::new());
-        let log_path = Path::from("delta-table/_delta_log/00000000000000000001.json");
-
-        let log_content = r#"{invalid_json"#;
-
-        memory_store
-            .put(&log_path, log_content.into())
-            .await
-            .expect("Failed to write log file");
-
-        let table_uri = url::Url::parse("memory:///delta-table").unwrap();
-        let table = crate::DeltaTableBuilder::from_uri(table_uri.clone())
-            .unwrap()
-            .with_storage_backend(memory_store, table_uri)
-            .build()?;
-
-        let result = table.log_store().peek_next_commit(0).await;
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    /// Collect list stream
-    pub(crate) async fn flatten_list_stream(
-        storage: &object_store::DynObjectStore,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<Vec<Path>> {
-        storage
-            .list(prefix)
-            .map_ok(|meta| meta.location)
-            .try_collect::<Vec<Path>>()
-            .await
-    }
-
     #[tokio::test]
     async fn test_get_actions_malformed_json() {
         use super::*;

@@ -92,9 +92,6 @@ pub mod logstore {
     }
 }
 
-// Compatibility shim for DeltaConfig derive macro which expects crate::DeltaResult
-pub type DeltaResult<T> = crate::errors::DeltaResult<T>;
-
 #[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
 

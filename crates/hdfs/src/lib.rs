@@ -27,7 +27,8 @@ impl ObjectStoreFactory for HdfsFactory {
 
         let store = Arc::new(builder.build()?);
 
-        let prefix = Path::parse(url.path())?;
+        let prefix =
+            Path::parse(url.path()).map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
         Ok((store, prefix))
     }
 }

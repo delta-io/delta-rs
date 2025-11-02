@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 use object_store::gcp::GoogleConfigKey;
 use object_store::Error as ObjectStoreError;
 
-use crate::error::Result;
+use deltalake_logstore::LogStoreResult;
 
 static CREDENTIAL_KEYS: LazyLock<Vec<GoogleConfigKey>> = LazyLock::new(|| {
     Vec::from_iter([
@@ -54,7 +54,7 @@ impl GcpConfigHelper {
     /// Create a new [`ConfigHelper`]
     pub fn try_new(
         config: impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    ) -> Result<Self> {
+    ) -> LogStoreResult<Self> {
         let mut env_config = HashMap::new();
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
@@ -70,7 +70,7 @@ impl GcpConfigHelper {
             config: config
                 .into_iter()
                 .map(|(key, value)| Ok((GoogleConfigKey::from_str(key.as_ref())?, value.into())))
-                .collect::<Result<_, ObjectStoreError>>()?,
+                .collect::<LogStoreResult<_>>()?,
             env_config,
             priority: Vec::from_iter([
                 GcpCredential::ServiceAccountKey,
@@ -97,7 +97,7 @@ impl GcpConfigHelper {
     }
 
     /// Generate a configuration augmented with options from the environment
-    pub fn build(mut self) -> Result<HashMap<GoogleConfigKey, String>> {
+    pub fn build(mut self) -> LogStoreResult<HashMap<GoogleConfigKey, String>> {
         let mut has_credential = false;
 
         // try using only passed config options
