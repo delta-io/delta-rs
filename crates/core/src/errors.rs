@@ -14,6 +14,9 @@ pub enum DeltaTableError {
     #[error("Kernel error: {0}")]
     KernelError(#[from] delta_kernel::error::Error),
 
+    #[error("LogStore error: {0}")]
+    LogStore(#[from] crate::logstore::error::LogStoreError),
+
     /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]
     ObjectStore {

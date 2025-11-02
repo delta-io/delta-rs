@@ -165,7 +165,7 @@ fn generate_try_update_key(name: &Ident, fields: &[&Field]) -> Result<proc_macro
     Ok(quote! {
         #[automatically_derived]
         impl crate::logstore::config::TryUpdateKey for #name {
-            fn try_update_key(&mut self, key: &str, v: &str) -> crate::DeltaResult<Option<()>> {
+            fn try_update_key(&mut self, key: &str, v: &str) -> crate::logstore::error::LogStoreResult<Option<()>> {
                 match key {
                     #(#match_arms)*
                     _ => return Ok(None),
@@ -173,7 +173,7 @@ fn generate_try_update_key(name: &Ident, fields: &[&Field]) -> Result<proc_macro
                 Ok(Some(()))
             }
 
-            fn load_from_environment(&mut self) -> crate::DeltaResult<()> {
+            fn load_from_environment(&mut self) -> crate::logstore::error::LogStoreResult<()> {
                 let default_values = Self::default();
                 #(#env_setters)*
                 Ok(())

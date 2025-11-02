@@ -7,7 +7,7 @@ use futures::stream::BoxStream;
 use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};
 use std::ops::Range;
 
-use deltalake_core::logstore::object_store::{
+use deltalake_logstore::object_store::{
     GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutOptions, PutResult,
     Result as ObjectStoreResult,
 };

@@ -81,11 +81,19 @@
 pub mod data_catalog;
 pub mod errors;
 pub mod kernel;
-pub mod logstore;
 pub mod operations;
 pub mod protocol;
 pub use kernel::schema;
 pub mod table;
+pub mod logstore {
+    pub use deltalake_logstore::*;
+    pub mod default_logstore {
+        pub use deltalake_logstore::DefaultLogStore;
+    }
+}
+
+// Compatibility shim for DeltaConfig derive macro which expects crate::DeltaResult
+pub type DeltaResult<T> = crate::errors::DeltaResult<T>;
 
 #[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
@@ -111,6 +119,7 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use operations::DeltaOps;
 
 pub use protocol::checkpoints;
+pub use protocol::AddStatsExt;
 
 // convenience exports for consumers to avoid aligning crate versions
 pub use arrow;

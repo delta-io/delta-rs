@@ -1,11 +1,6 @@
 //! Utility functions for working across Delta tables
 
-use chrono::DateTime;
 use object_store::path::Path;
-use object_store::ObjectMeta;
-
-use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::Add;
 
 /// Return the uri of commit version.
 ///
@@ -17,38 +12,11 @@ use crate::kernel::Add;
 /// ```
 pub fn commit_uri_from_version(version: i64) -> Path {
     let version = format!("{version:020}.json");
-    super::DELTA_LOG_PATH.child(version.as_str())
+    crate::DELTA_LOG_PATH.child(version.as_str())
 }
 
-impl TryFrom<Add> for ObjectMeta {
-    type Error = DeltaTableError;
-
-    fn try_from(value: Add) -> DeltaResult<Self> {
-        (&value).try_into()
-    }
-}
-
-impl TryFrom<&Add> for ObjectMeta {
-    type Error = DeltaTableError;
-
-    fn try_from(value: &Add) -> DeltaResult<Self> {
-        let last_modified = DateTime::from_timestamp_millis(value.modification_time).ok_or(
-            DeltaTableError::MetadataError(format!(
-                "invalid modification_time: {:?}",
-                value.modification_time
-            )),
-        )?;
-
-        Ok(Self {
-            // TODO this won't work for absolute paths, since Paths are always relative to store.
-            location: Path::parse(value.path.as_str())?,
-            last_modified,
-            size: value.size as u64,
-            e_tag: None,
-            version: None,
-        })
-    }
-}
+// Note: Add type conversion removed - this requires core's Action type
+// For logstore usage, work with ObjectMeta directly
 
 #[cfg(test)]
 mod tests {

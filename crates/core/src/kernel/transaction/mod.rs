@@ -80,6 +80,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use delta_kernel::table_properties::TableProperties;
+use deltalake_logstore::LogStoreError;
 use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
@@ -758,7 +759,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 },
                             });
                         }
-                        Err(TransactionError::VersionAlreadyExists(version)) => {
+                        Err(LogStoreError::VersionAlreadyExists(version)) => {
                             warn!(
                                 version = version,
                                 attempt = attempt_number,

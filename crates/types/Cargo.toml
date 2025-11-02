@@ -1,0 +1,27 @@
+[package]
+name = "deltalake-types"
+version = "0.29.2"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description = "Delta Lake action types"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+delta_kernel.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+percent-encoding = "2"
+strum = { workspace = true }
+object_store = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+

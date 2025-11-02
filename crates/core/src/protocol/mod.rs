@@ -3,18 +3,19 @@
 #![allow(non_camel_case_types)]
 
 use crate::table::Constraint;
-use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
 
+use chrono::DateTime;
+use object_store::path::Path;
+use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
+use crate::kernel::{Add, CommitInfo, Metadata, Protocol, StructField, TableFeatures};
 
 pub mod checkpoints;
 
@@ -140,67 +141,46 @@ pub struct StatsParsed {
     pub null_count: HashMap<String, i64>,
 }
 
-impl Hash for Add {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.path.hash(state);
-    }
-}
-
-impl PartialEq for Add {
-    fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.size == other.size
-            && self.partition_values == other.partition_values
-            && self.modification_time == other.modification_time
-            && self.data_change == other.data_change
-            && self.stats == other.stats
-            && self.tags == other.tags
-            && self.deletion_vector == other.deletion_vector
-    }
-}
-
-impl Eq for Add {}
-
-impl Add {
+/// Extension trait for Add actions to provide stats functionality
+pub trait AddStatsExt {
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.get_json_stats()
-    }
+    fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error>;
 
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
+    fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error>;
+
+    fn try_into_object_meta(&self) -> Result<ObjectMeta, DeltaTableError>;
+}
+
+impl AddStatsExt for Add {
+    fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        self.get_json_stats()
+    }
+
     fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
             .map(|stats| serde_json::from_str(stats).map(|mut ps: PartialStats| ps.as_stats()))
             .transpose()
     }
-}
 
-impl Hash for Remove {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.path.hash(state);
-    }
-}
+    fn try_into_object_meta(&self) -> Result<ObjectMeta, DeltaTableError> {
+        let last_modified = DateTime::from_timestamp_millis(self.modification_time).ok_or(
+            DeltaTableError::MetadataError(format!(
+                "invalid modification_time: {:?}",
+                self.modification_time
+            )),
+        )?;
 
-/// Borrow `Remove` as str so we can look at tombstones hashset in `DeltaTableState` by using
-/// a path from action `Add`.
-impl Borrow<str> for Remove {
-    fn borrow(&self) -> &str {
-        self.path.as_ref()
-    }
-}
-
-impl PartialEq for Remove {
-    fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.deletion_timestamp == other.deletion_timestamp
-            && self.data_change == other.data_change
-            && self.extended_file_metadata == other.extended_file_metadata
-            && self.partition_values == other.partition_values
-            && self.size == other.size
-            && self.tags == other.tags
-            && self.deletion_vector == other.deletion_vector
+        Ok(ObjectMeta {
+            // TODO this won't work for absolute paths, since Paths are always relative to store.
+            location: Path::parse(self.path.as_str())?,
+            last_modified,
+            size: self.size as u64,
+            e_tag: None,
+            version: None,
+        })
     }
 }
 

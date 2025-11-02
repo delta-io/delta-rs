@@ -2,11 +2,11 @@
 
 use bytes::Bytes;
 use deltalake_aws::storage::S3StorageBackend;
-use deltalake_core::logstore::object_store::{
+use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
+use deltalake_logstore::object_store::{
     DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta,
     PutOptions, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
 use futures::stream::BoxStream;
 use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};

@@ -8,7 +8,7 @@ use object_store::{path::Path, DynObjectStore};
 use url::Url;
 
 use super::{default_logstore, DeltaIOStorageBackend, LogStore, ObjectStoreRef, StorageConfig};
-use crate::{DeltaResult, DeltaTableError};
+use crate::error::{LogStoreError, LogStoreResult};
 
 /// Factory registry to manage [`ObjectStoreFactory`] instances
 pub type ObjectStoreFactoryRegistry = Arc<DashMap<Url, Arc<dyn ObjectStoreFactory>>>;
@@ -27,7 +27,7 @@ pub trait ObjectStoreFactory: Send + Sync {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)>;
+    ) -> LogStoreResult<(ObjectStoreRef, Path)>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -38,7 +38,7 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let (mut store, path) = default_parse_url_opts(url, &config.raw)?;
 
         if let Some(runtime) = &config.runtime {
@@ -52,14 +52,14 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
 fn default_parse_url_opts(
     url: &Url,
     options: &HashMap<String, String>,
-) -> DeltaResult<(ObjectStoreRef, Path)> {
+) -> LogStoreResult<(ObjectStoreRef, Path)> {
     match url.scheme() {
         "memory" | "file" => {
             let (store, path) = object_store::parse_url_opts(url, options)?;
             tracing::debug!("building store with:\n\tParsed URL: {url}\n\tPath in store: {path}");
             Ok((Arc::new(store), path))
         }
-        _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
+        _ => Err(LogStoreError::InvalidTableLocation(url.to_string())),
     }
 }
 
@@ -78,7 +78,7 @@ pub fn object_store_factories() -> ObjectStoreFactoryRegistry {
 }
 
 /// Simpler access pattern for the [ObjectStoreFactoryRegistry] to get a single store
-pub fn store_for<K, V, I>(url: &Url, options: I) -> DeltaResult<ObjectStoreRef>
+pub fn store_for<K, V, I>(url: &Url, options: I) -> LogStoreResult<ObjectStoreRef>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
@@ -91,7 +91,7 @@ where
         let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
-        Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
+        Err(LogStoreError::InvalidTableLocation(url.to_string()))
     }
 }
 
@@ -109,14 +109,14 @@ pub trait LogStoreFactory: Send + Sync {
     /// - `location`: A reference to the URL of the location.
     /// - `options`: A reference to the storage configuration options.
     ///
-    /// It returns a [DeltaResult] containing an [Arc] to the newly created [LogStore] implementation.
+    /// It returns a [LogStoreResult] containing an [Arc] to the newly created [LogStore] implementation.
     fn with_options(
         &self,
         prefixed_store: ObjectStoreRef,
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>>;
+    ) -> LogStoreResult<Arc<dyn LogStore>>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -129,7 +129,7 @@ impl LogStoreFactory for DefaultLogStoreFactory {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
+    ) -> LogStoreResult<Arc<dyn LogStore>> {
         Ok(default_logstore(
             prefixed_store,
             root_store,

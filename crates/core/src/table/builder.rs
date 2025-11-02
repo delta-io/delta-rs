@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
 
-use crate::logstore::storage::IORuntime;
+use crate::logstore::IORuntime;
 use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -248,11 +248,13 @@ impl DeltaTableBuilder {
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), location, storage_config)
+            let result = crate::logstore::logstore_with(store.clone(), location, storage_config)?;
+            Ok(result)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
             debug!("Loading a logstore based off the location: {location:?}");
-            crate::logstore::logstore_for(location, storage_config)
+            let result = crate::logstore::logstore_for(location, storage_config)?;
+            Ok(result)
         }
     }
 

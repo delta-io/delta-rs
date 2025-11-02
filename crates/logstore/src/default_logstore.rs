@@ -8,8 +8,7 @@ use uuid::Uuid;
 
 use super::storage::{utils::commit_uri_from_version, ObjectStoreRef};
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
-use crate::kernel::transaction::TransactionError;
-use crate::DeltaResult;
+use crate::error::{LogStoreError, LogStoreResult};
 
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
@@ -58,11 +57,11 @@ impl LogStore for DefaultLogStore {
         "DefaultLogStore".into()
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: i64) -> LogStoreResult<Option<Bytes>> {
         super::read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
-    /// Tries to commit a prepared commit file. Returns [`TransactionError`]
+    /// Tries to commit a prepared commit file. Returns [`LogStoreError`]
     /// if the given `version` already exists. The caller should handle the retry logic itself.
     /// This is low-level transaction API. If user does not want to maintain the commit loop then
     /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
@@ -72,7 +71,7 @@ impl LogStore for DefaultLogStore {
         version: i64,
         commit_or_bytes: CommitOrBytes,
         _: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(), LogStoreError> {
         match commit_or_bytes {
             CommitOrBytes::LogBytes(log_bytes) => self
                 .object_store(None)
@@ -82,12 +81,12 @@ impl LogStore for DefaultLogStore {
                     put_options().clone(),
                 )
                 .await
-                .map_err(|err| -> TransactionError {
+                .map_err(|err| -> LogStoreError {
                     match err {
                         ObjectStoreError::AlreadyExists { .. } => {
-                            TransactionError::VersionAlreadyExists(version)
+                            LogStoreError::VersionAlreadyExists(version)
                         }
-                        _ => TransactionError::from(err),
+                        _ => LogStoreError::from(err),
                     }
                 })?,
             _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
@@ -100,14 +99,14 @@ impl LogStore for DefaultLogStore {
         _version: i64,
         commit_or_bytes: CommitOrBytes,
         _: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(), LogStoreError> {
         match &commit_or_bytes {
             CommitOrBytes::LogBytes(_) => Ok(()),
             _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
         }
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: i64) -> LogStoreResult<i64> {
         super::get_latest_version(self, current_version).await
     }
 

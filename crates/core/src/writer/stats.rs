@@ -21,6 +21,7 @@ use tracing::warn;
 
 use super::*;
 use crate::kernel::{scalars::ScalarExt, Add};
+use crate::protocol::AddStatsExt;
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.

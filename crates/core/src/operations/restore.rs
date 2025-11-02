@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
+use deltalake_logstore::LogStoreError;
 use futures::future::BoxFuture;
 use futures::TryStreamExt;
 use object_store::path::Path;
@@ -307,8 +308,8 @@ async fn execute(
         .await
     {
         Ok(_) => {}
-        Err(err @ TransactionError::VersionAlreadyExists(_)) => {
-            return Err(err.into());
+        Err(LogStoreError::VersionAlreadyExists(version)) => {
+            return Err(DeltaTableError::VersionAlreadyExists(version));
         }
         Err(err) => {
             log_store

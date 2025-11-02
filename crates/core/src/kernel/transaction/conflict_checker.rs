@@ -7,8 +7,9 @@ use super::CommitInfo;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
+use crate::kernel::get_actions;
 use crate::kernel::{Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction};
-use crate::logstore::{get_actions, LogStore};
+use crate::logstore::LogStore;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::DeltaTableError;

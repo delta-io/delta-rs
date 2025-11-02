@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 use object_store::azure::AzureConfigKey;
 use object_store::Error as ObjectStoreError;
 
-use crate::error::Result;
+use deltalake_logstore::LogStoreResult;
 
 static CREDENTIAL_KEYS: LazyLock<Vec<AzureConfigKey>> = LazyLock::new(|| {
     Vec::from_iter([
@@ -79,7 +79,7 @@ impl AzureConfigHelper {
     /// Create a new [`ConfigHelper`]
     pub fn try_new(
         config: impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    ) -> Result<Self> {
+    ) -> LogStoreResult<Self> {
         let mut env_config = HashMap::new();
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
@@ -125,7 +125,7 @@ impl AzureConfigHelper {
     }
 
     /// Generate a configuration augmented with options from the environment
-    pub fn build(mut self) -> Result<HashMap<AzureConfigKey, String>> {
+    pub fn build(mut self) -> LogStoreResult<HashMap<AzureConfigKey, String>> {
         let mut has_credential = false;
 
         if self.config.contains_key(&AzureConfigKey::UseAzureCli) {

@@ -3,10 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use deltalake_core::logstore::*;
-use deltalake_core::{
-    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
-};
+use deltalake_logstore::*;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use url::Url;
 use uuid::Uuid;
@@ -65,7 +62,7 @@ impl LogStore for S3LogStore {
         "S3LogStore".into()
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: i64) -> LogStoreResult<Option<Bytes>> {
         read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
@@ -79,7 +76,7 @@ impl LogStore for S3LogStore {
         version: i64,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> LogStoreResult<()> {
         match commit_or_bytes {
             CommitOrBytes::TmpCommit(tmp_commit) => {
                 Ok(
@@ -89,12 +86,12 @@ impl LogStore for S3LogStore {
             }
             _ => unreachable!(), // S3 Log Store should never receive bytes
         }
-        .map_err(|err| -> TransactionError {
+        .map_err(|err| -> LogStoreError {
             match err {
                 ObjectStoreError::AlreadyExists { .. } => {
-                    TransactionError::VersionAlreadyExists(version)
+                    LogStoreError::VersionAlreadyExists(version)
                 }
-                _ => TransactionError::from(err),
+                _ => LogStoreError::from(err),
             }
         })?;
         Ok(())
@@ -105,7 +102,7 @@ impl LogStore for S3LogStore {
         version: i64,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> LogStoreResult<()> {
         match &commit_or_bytes {
             CommitOrBytes::TmpCommit(tmp_commit) => {
                 abort_commit_entry(self.object_store(None).as_ref(), version, tmp_commit).await
@@ -114,7 +111,7 @@ impl LogStore for S3LogStore {
         }
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: i64) -> LogStoreResult<i64> {
         get_latest_version(self, current_version).await
     }
 

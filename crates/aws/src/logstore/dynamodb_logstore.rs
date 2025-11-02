@@ -8,14 +8,11 @@ use crate::storage::S3StorageOptions;
 use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 
 use bytes::Bytes;
-use deltalake_core::{ObjectStoreError, Path};
+use deltalake_logstore::{ObjectStoreError, Path};
 use tracing::{debug, error, warn};
 use url::Url;
 
-use deltalake_core::logstore::*;
-use deltalake_core::{
-    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult, DeltaTableError,
-};
+use deltalake_logstore::*;
 use uuid::Uuid;
 
 const STORE_NAME: &str = "DeltaS3ObjectStore";
@@ -44,7 +41,7 @@ impl S3DynamoDbLogStore {
         s3_options: &S3StorageOptions,
         prefixed_store: ObjectStoreRef,
         root_store: ObjectStoreRef,
-    ) -> DeltaResult<Self> {
+    ) -> LogStoreResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
             &s3_options.sdk_config.clone().unwrap(),
             s3_options
@@ -65,7 +62,7 @@ impl S3DynamoDbLogStore {
             s3_options.dynamodb_secret_access_key.clone(),
             s3_options.dynamodb_session_token.clone(),
         )
-        .map_err(|err| DeltaTableError::ObjectStore {
+        .map_err(|err| LogStoreError::ObjectStore {
             source: ObjectStoreError::Generic {
                 store: STORE_NAME,
                 source: Box::new(err),
@@ -86,10 +83,7 @@ impl S3DynamoDbLogStore {
 
     /// Attempt to repair an incomplete log entry by moving the temporary commit file
     /// to `N.json` and update the associated log entry to mark it as completed.
-    pub async fn repair_entry(
-        &self,
-        entry: &CommitEntry,
-    ) -> Result<RepairLogEntryResult, TransactionError> {
+    pub async fn repair_entry(&self, entry: &CommitEntry) -> LogStoreResult<RepairLogEntryResult> {
         // java does this, do we need it?
         if entry.complete {
             return Ok(RepairLogEntryResult::AlreadyCompleted);
@@ -107,13 +101,13 @@ impl S3DynamoDbLogStore {
                     return self.try_complete_entry(entry, true).await;
                 }
                 // `N.json` has already been moved, complete the entry in DynamoDb just in case
-                Err(TransactionError::ObjectStore {
+                Err(LogStoreError::ObjectStore {
                     source: ObjectStoreError::NotFound { .. },
                 }) => {
                     warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
                     return self.try_complete_entry(entry, false).await;
                 }
-                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
+                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(LogStoreError::from(err)),
                 Err(err) => {
                     debug!("retry #{retry} on log entry {entry:?} failed to move commit: '{err}'")
                 }
@@ -127,14 +121,14 @@ impl S3DynamoDbLogStore {
         &self,
         entry: &CommitEntry,
         copy_performed: bool,
-    ) -> Result<RepairLogEntryResult, TransactionError> {
+    ) -> LogStoreResult<RepairLogEntryResult> {
         debug!("try_complete_entry for {entry:?}, {copy_performed}");
         for retry in 0..=MAX_REPAIR_RETRIES {
             match self
                 .lock_client
                 .update_commit_entry(entry.version, &self.table_path)
                 .await
-                .map_err(|err| TransactionError::LogStoreError {
+                .map_err(|err| LogStoreError::LogStoreError {
                     msg: format!(
                         "unable to complete entry for '{}': failure to write to DynamoDb",
                         entry.version
@@ -142,7 +136,7 @@ impl S3DynamoDbLogStore {
                     source: Box::new(err),
                 }) {
                 Ok(x) => return Ok(Self::map_retry_result(x, copy_performed)),
-                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
+                Err(err) if retry == MAX_REPAIR_RETRIES => return Err(LogStoreError::from(err)),
                 Err(err) => error!(
                     "retry #{retry} on log entry {entry:?} failed to update lock db: '{err}'"
                 ),
@@ -178,12 +172,12 @@ impl LogStore for S3DynamoDbLogStore {
         self.table_path.clone()
     }
 
-    async fn refresh(&self) -> DeltaResult<()> {
+    async fn refresh(&self) -> LogStoreResult<()> {
         let entry = self
             .lock_client
             .get_latest_entry(&self.table_path)
             .await
-            .map_err(|err| DeltaTableError::GenericError {
+            .map_err(|err| LogStoreError::Generic {
                 source: Box::new(err),
             })?;
         if let Some(entry) = entry {
@@ -192,7 +186,7 @@ impl LogStore for S3DynamoDbLogStore {
         Ok(())
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: i64) -> LogStoreResult<Option<Bytes>> {
         let entry = self
             .lock_client
             .get_commit_entry(&self.table_path, version)
@@ -203,7 +197,7 @@ impl LogStore for S3DynamoDbLogStore {
         read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
-    /// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
+    /// Tries to commit a prepared commit file. Returns [LogStoreError::VersionAlreadyExists]
     /// if the given `version` already exists. The caller should handle the retry logic itself.
     /// This is low-level transaction API. If user does not want to maintain the commit loop then
     /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
@@ -213,7 +207,7 @@ impl LogStore for S3DynamoDbLogStore {
         version: i64,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> LogStoreResult<()> {
         let tmp_commit = match commit_or_bytes {
             CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
             _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
@@ -227,7 +221,7 @@ impl LogStore for S3DynamoDbLogStore {
             .map_err(|err| match err {
                 LockClientError::VersionAlreadyExists { version, .. } => {
                     warn!("LockClientError::VersionAlreadyExists({version})");
-                    TransactionError::VersionAlreadyExists(version)
+                    LogStoreError::VersionAlreadyExists(version)
                 }
                 LockClientError::ProvisionedThroughputExceeded => todo!(
                     "deltalake-aws does not yet handle DynamoDB provisioned throughput errors"
@@ -235,14 +229,14 @@ impl LogStore for S3DynamoDbLogStore {
                 LockClientError::LockTableNotFound => {
                     let table_name = self.lock_client.get_lock_table_name();
                     error!("Lock table '{table_name}' not found");
-                    TransactionError::LogStoreError {
+                    LogStoreError::LogStoreError {
                         msg: format!("lock table '{table_name}' not found"),
                         source: Box::new(err),
                     }
                 }
                 err => {
                     error!("dynamodb client failed to write log entry: {err:?}");
-                    TransactionError::LogStoreError {
+                    LogStoreError::LogStoreError {
                         msg: "dynamodb client failed to write log entry".to_owned(),
                         source: Box::new(err),
                     }
@@ -263,7 +257,7 @@ impl LogStore for S3DynamoDbLogStore {
         version: i64,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
+    ) -> LogStoreResult<()> {
         let tmp_commit = match commit_or_bytes {
             CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
             _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
@@ -277,12 +271,12 @@ impl LogStore for S3DynamoDbLogStore {
                 ),
                 LockClientError::VersionAlreadyCompleted { version, .. } => {
                     error!("Trying to abort a completed commit");
-                    TransactionError::LogStoreError {
+                    LogStoreError::LogStoreError {
                         msg: format!("trying to abort a completed log entry: {version}"),
                         source: Box::new(err),
                     }
                 }
-                err => TransactionError::LogStoreError {
+                err => LogStoreError::LogStoreError {
                     msg: "dynamodb client failed to delete log entry".to_owned(),
                     source: Box::new(err),
                 },
@@ -292,13 +286,13 @@ impl LogStore for S3DynamoDbLogStore {
         Ok(())
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: i64) -> LogStoreResult<i64> {
         debug!("Retrieving latest version of {self:?} at v{current_version}");
         let entry = self
             .lock_client
             .get_latest_entry(&self.table_path)
             .await
-            .map_err(|err| DeltaTableError::GenericError {
+            .map_err(|err| LogStoreError::Generic {
                 source: Box::new(err),
             })?;
         // when there is a latest entry in DynamoDb, we can avoid the file listing in S3.

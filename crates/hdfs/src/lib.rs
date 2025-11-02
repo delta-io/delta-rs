@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use deltalake_core::logstore::{
+use deltalake_logstore::{
     default_logstore, logstore_factories, LogStore, LogStoreFactory, StorageConfig,
 };
-use deltalake_core::logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
-use deltalake_core::{DeltaResult, Path};
+use deltalake_logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
+use deltalake_logstore::{LogStoreError, LogStoreResult, Path};
 use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use url::Url;
 
@@ -16,7 +16,7 @@ impl ObjectStoreFactory for HdfsFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let mut builder = HdfsObjectStoreBuilder::new()
             .with_url(url.as_str())
             .with_config(&config.raw);
@@ -39,7 +39,7 @@ impl LogStoreFactory for HdfsFactory {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
+    ) -> LogStoreResult<Arc<dyn LogStore>> {
         Ok(default_logstore(
             prefixed_store,
             root_store,
@@ -64,7 +64,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_url_opts() -> DeltaResult<()> {
+    fn test_parse_url_opts() -> LogStoreResult<()> {
         let factory = HdfsFactory::default();
         let _ = factory.parse_url_opts(
             &Url::parse("hdfs://localhost:9000").expect("Failed to parse hdfs://"),

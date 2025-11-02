@@ -28,13 +28,15 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use deltalake_logstore::LogStoreError;
 use tracing::log;
 
-use crate::delta_datafusion::{register_store, DataFusionMixins};
+use crate::delta_datafusion::{register_store, DataFusionMixins, DatafusionLogStore};
 use crate::errors::DeltaResult;
+use crate::kernel::get_actions;
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{resolve_snapshot, Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
-use crate::logstore::{get_actions, LogStoreRef};
+use crate::logstore::LogStoreRef;
 use crate::DeltaTableError;
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
@@ -170,10 +172,10 @@ impl CdfLoadBuilder {
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
             Ok(latest_version) => latest_version,
-            Err(DeltaTableError::InvalidVersion(_)) if self.allow_out_of_range => {
+            Err(LogStoreError::InvalidVersion(_)) if self.allow_out_of_range => {
                 return Ok((change_files, add_files, remove_files));
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
 
         let mut end = self.ending_version.unwrap_or(latest_version);

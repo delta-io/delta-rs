@@ -757,8 +757,8 @@ impl std::future::IntoFuture for WriteBuilder {
 mod tests {
     use super::*;
     use crate::ensure_table_uri;
+    use crate::kernel::get_actions;
     use crate::kernel::CommitInfo;
-    use crate::logstore::get_actions;
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;

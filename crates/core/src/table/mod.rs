@@ -14,12 +14,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
+use crate::kernel::schema::partitions::PartitionFilter;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
 use crate::logstore::{
     commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
     LogStoreRef, ObjectStoreRef,
 };
-use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
 
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
@@ -141,7 +141,10 @@ impl DeltaTable {
 
     /// Check if the [`DeltaTable`] exists
     pub async fn verify_deltatable_existence(&self) -> DeltaResult<bool> {
-        self.log_store.is_delta_table_location().await
+        self.log_store
+            .is_delta_table_location()
+            .await
+            .map_err(Into::into)
     }
 
     /// The URI of the underlying data
@@ -159,6 +162,7 @@ impl DeltaTable {
         self.log_store
             .get_latest_version(self.version().unwrap_or(0))
             .await
+            .map_err(Into::into)
     }
 
     /// Currently loaded version of the table - if any.
@@ -365,15 +369,9 @@ impl DeltaTable {
         let mut max_version = match self
             .log_store
             .get_latest_version(self.version().unwrap_or(min_version))
-            .await
+            .await?
         {
-            Ok(version) => version,
-            Err(DeltaTableError::InvalidVersion(_)) => {
-                return Err(DeltaTableError::NotATable(
-                    log_store.table_root_url().to_string(),
-                ))
-            }
-            Err(e) => return Err(e),
+            version => version,
         };
         let mut version = min_version;
         let lowest_table_version = min_version;

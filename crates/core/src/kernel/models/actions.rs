@@ -827,7 +827,7 @@ pub struct Add {
 }
 
 /// Represents a tombstone (deleted file) in the Delta log.
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file

@@ -107,6 +107,8 @@ enum Error {
     MissingLocation,
     #[error("The location provided must be a valid URL")]
     InvalidLocation(#[from] url::ParseError),
+    #[error("LogStore error: {0}")]
+    LogStore(#[from] crate::logstore::error::LogStoreError),
 }
 
 impl From<Error> for DeltaTableError {
