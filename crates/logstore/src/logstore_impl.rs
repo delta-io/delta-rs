@@ -80,14 +80,11 @@ use crate::config::StorageConfig;
 use crate::default_logstore::DefaultLogStore;
 use crate::error::{LogStoreError, LogStoreResult};
 use crate::factories::{
-    logstore_factories, object_store_factories, store_for, LogStoreFactory,
-    LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
+    logstore_factories, object_store_factories, LogStoreFactory, ObjectStoreFactory,
+    ObjectStoreFactoryRegistry,
 };
 use crate::storage::utils::commit_uri_from_version;
-use crate::storage::{
-    DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
-    ObjectStoreRegistry, ObjectStoreRetryExt,
-};
+use crate::storage::{ObjectStoreRef, ObjectStoreRegistry, ObjectStoreRetryExt};
 
 /// Helper function to spawn blocking tasks with tracing span context
 pub(crate) fn spawn_blocking_with_span<F, R>(f: F) -> tokio::task::JoinHandle<R>

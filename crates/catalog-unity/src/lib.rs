@@ -32,8 +32,8 @@ use crate::models::{
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
-    ensure_table_uri, DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder,
-    DeltaTableError, ObjectStoreError, Path,
+    ensure_table_uri, DataCatalog, DataCatalogError, DeltaTableBuilder, DeltaTableError,
+    ObjectStoreError, Path,
 };
 
 use crate::client::retry::*;

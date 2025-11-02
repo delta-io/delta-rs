@@ -36,7 +36,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
     resolve_snapshot, Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove,
 };

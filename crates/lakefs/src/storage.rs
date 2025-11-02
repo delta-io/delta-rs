@@ -4,7 +4,7 @@ use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{
     LogStoreError, LogStoreResult, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
-use deltalake_core::{DeltaTableError, Path};
+use deltalake_core::Path;
 use object_store::aws::AmazonS3Builder;
 use object_store::client::SpawnedReqwestConnector;
 use object_store::ObjectStoreScheme;

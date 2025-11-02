@@ -1,6 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Display};
-use std::str::FromStr;
 
 use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};
