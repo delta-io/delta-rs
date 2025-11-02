@@ -308,6 +308,7 @@ pub fn str_is_truthy(val: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "cloud")]
     use std::time::Duration;
 
     // Test retry config parsing

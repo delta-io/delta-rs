@@ -309,7 +309,9 @@ impl DeltaTable {
             .state
             .as_ref()
             .ok_or(DeltaTableError::NotInitialized)?
-            .file_paths_iter()
+            .log_data()
+            .into_iter()
+            .map(|add| add.object_store_path())
             .map(|path| self.log_store.to_uri(&path)))
     }
 

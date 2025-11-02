@@ -39,8 +39,6 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde_json::Deserializer;
-use tokio::task::spawn_blocking;
-use tracing::Instrument;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
@@ -544,7 +542,7 @@ impl EagerSnapshot {
                 log_store,
                 None,
                 current_version,
-                Box::new(self.files.clone().into_iter()),
+                Box::new(std::mem::take(&mut self.files).into_iter()),
                 None,
             )
             .try_collect()

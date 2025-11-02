@@ -14,6 +14,7 @@ use reqwest::{ClientBuilder, Proxy};
 use reqwest_middleware::ClientWithMiddleware;
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::time::Duration;
+use typed_builder::TypedBuilder;
 
 fn map_client_error(e: reqwest::Error) -> super::DataCatalogError {
     super::DataCatalogError::Generic {
@@ -25,154 +26,57 @@ fn map_client_error(e: reqwest::Error) -> super::DataCatalogError {
 static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 /// HTTP client configuration for remote catalogs
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, TypedBuilder)]
+#[builder(doc)]
 pub struct ClientOptions {
+    /// User-Agent header to use for requests
+    #[builder(default, setter(strip_option))]
     user_agent: Option<HeaderValue>,
+    /// Default headers for every request
+    #[builder(default, setter(strip_option))]
     default_headers: Option<HeaderMap>,
+    /// HTTP proxy URL
+    #[builder(default, setter(strip_option, into))]
     proxy_url: Option<String>,
-    allow_http: bool,
+    /// Allow HTTP connections (default: false)
+    #[builder(default)]
+    pub(crate) allow_http: bool,
+    /// Allow invalid SSL certificates (default: false)
+    #[builder(default)]
     allow_insecure: bool,
+    /// Request timeout
+    #[builder(default, setter(strip_option))]
     timeout: Option<Duration>,
+    /// Connect timeout
+    #[builder(default, setter(strip_option))]
     connect_timeout: Option<Duration>,
+    /// Pool idle timeout
+    #[builder(default, setter(strip_option))]
     pool_idle_timeout: Option<Duration>,
+    /// Maximum number of idle connections per host
+    #[builder(default, setter(strip_option))]
     pool_max_idle_per_host: Option<usize>,
+    /// HTTP2 keep alive interval
+    #[builder(default, setter(strip_option))]
     http2_keep_alive_interval: Option<Duration>,
+    /// HTTP2 keep alive timeout
+    #[builder(default, setter(strip_option))]
     http2_keep_alive_timeout: Option<Duration>,
+    /// Enable HTTP2 keep alive while idle
+    #[builder(default)]
     http2_keep_alive_while_idle: bool,
+    /// Only use HTTP1
+    #[builder(default)]
     http1_only: bool,
+    /// Only use HTTP2
+    #[builder(default)]
     http2_only: bool,
+    /// Retry configuration
+    #[builder(default, setter(strip_option))]
     retry_config: Option<RetryConfig>,
 }
 
 impl ClientOptions {
-    /// Create a new [`ClientOptions`] with default values
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// Sets the User-Agent header to be used by this client
-    ///
-    /// Default is based on the version of this crate
-    pub fn with_user_agent(mut self, agent: HeaderValue) -> Self {
-        self.user_agent = Some(agent);
-        self
-    }
-
-    /// Sets the default headers for every request
-    pub fn with_default_headers(mut self, headers: HeaderMap) -> Self {
-        self.default_headers = Some(headers);
-        self
-    }
-
-    /// Sets what protocol is allowed. If `allow_http` is :
-    /// * false (default):  Only HTTPS are allowed
-    /// * true:  HTTP and HTTPS are allowed
-    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
-        self.allow_http = allow_http;
-        self
-    }
-    /// Allows connections to invalid SSL certificates
-    /// * false (default):  Only valid HTTPS certificates are allowed
-    /// * true:  All HTTPS certificates are allowed
-    ///
-    /// # Warning
-    ///
-    /// You should think very carefully before using this method. If
-    /// invalid certificates are trusted, *any* certificate for *any* site
-    /// will be trusted for use. This includes expired certificates. This
-    /// introduces significant vulnerabilities, and should only be used
-    /// as a last resort or for testing
-    pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
-        self.allow_insecure = allow_insecure;
-        self
-    }
-
-    /// Only use http1 connections
-    pub fn with_http1_only(mut self) -> Self {
-        self.http1_only = true;
-        self
-    }
-
-    /// Only use http2 connections
-    pub fn with_http2_only(mut self) -> Self {
-        self.http2_only = true;
-        self
-    }
-
-    /// Set an HTTP proxy to use for requests
-    pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
-        self.proxy_url = Some(proxy_url.into());
-        self
-    }
-
-    /// Set a request timeout
-    ///
-    /// The timeout is applied from when the request starts connecting until the
-    /// response body has finished
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
-    /// Set a timeout for only the connect phase of a Client
-    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
-        self.connect_timeout = Some(timeout);
-        self
-    }
-
-    /// Set the pool max idle timeout
-    ///
-    /// This is the length of time an idle connection will be kept alive
-    ///
-    /// Default is 90 seconds
-    pub fn with_pool_idle_timeout(mut self, timeout: Duration) -> Self {
-        self.pool_idle_timeout = Some(timeout);
-        self
-    }
-
-    /// Set the maximum number of idle connections per host
-    ///
-    /// Default is no limit
-    pub fn with_pool_max_idle_per_host(mut self, max: usize) -> Self {
-        self.pool_max_idle_per_host = Some(max);
-        self
-    }
-
-    /// Sets an interval for HTTP2 Ping frames should be sent to keep a connection alive.
-    ///
-    /// Default is disabled
-    pub fn with_http2_keep_alive_interval(mut self, interval: Duration) -> Self {
-        self.http2_keep_alive_interval = Some(interval);
-        self
-    }
-
-    /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
-    ///
-    /// If the ping is not acknowledged within the timeout, the connection will be closed.
-    /// Does nothing if http2_keep_alive_interval is disabled.
-    ///
-    /// Default is disabled
-    pub fn with_http2_keep_alive_timeout(mut self, interval: Duration) -> Self {
-        self.http2_keep_alive_timeout = Some(interval);
-        self
-    }
-
-    /// Enable HTTP2 keep alive pings for idle connections
-    ///
-    /// If disabled, keep-alive pings are only sent while there are open request/response
-    /// streams. If enabled, pings are also sent when no streams are active
-    ///
-    /// Default is disabled
-    pub fn with_http2_keep_alive_while_idle(mut self) -> Self {
-        self.http2_keep_alive_while_idle = true;
-        self
-    }
-
-    pub fn with_retry_config(mut self, cfg: RetryConfig) -> Self {
-        self.retry_config = Some(cfg);
-        self
-    }
-
     pub(crate) fn client(&self) -> DataCatalogResult<ClientWithMiddleware> {
         let mut builder = ClientBuilder::new();
 

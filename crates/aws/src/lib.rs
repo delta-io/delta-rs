@@ -44,6 +44,7 @@ use storage::S3StorageOptionsConversion;
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
 use tracing::debug;
 use tracing::warn;
+use typed_builder::TypedBuilder;
 use url::Url;
 
 #[derive(Clone, Debug, Default)]
@@ -118,36 +119,29 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
 /// - temp_path: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
 /// - expire_time: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, TypedBuilder)]
+#[builder(doc)]
 pub struct CommitEntry {
-    /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`
+    /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`)
     pub version: i64,
-    /// Path to temp file for this commit, relative to the `_delta_log
+    /// Path to temp file for this commit, relative to the `_delta_log` directory
+    #[builder(setter(into))]
     pub temp_path: Path,
     /// true if delta json file is successfully copied to its destination location, else false
+    #[builder(default = false)]
     pub complete: bool,
     /// If complete = true, epoch seconds at which this external commit entry is safe to be deleted
+    #[builder(default, setter(strip_option))]
     pub expire_time: Option<SystemTime>,
 }
 
-impl CommitEntry {
-    /// Create a new log entry for the given version.
-    /// Initial log entry state is incomplete.
-    pub fn new(version: i64, temp_path: Path) -> CommitEntry {
-        Self {
-            version,
-            temp_path,
-            complete: false,
-            expire_time: None,
-        }
-    }
-}
-
 /// Lock client backed by DynamoDb.
+#[derive(TypedBuilder)]
+#[builder(doc)]
 pub struct DynamoDbLockClient {
     /// DynamoDb client
     dynamodb_client: Client,
-    /// configuration of the
+    /// Configuration of the lock client
     config: DynamoDbConfig,
 }
 
@@ -204,16 +198,16 @@ impl DynamoDbLockClient {
             )
             .map_err(|err| DynamoDbConfigError::ParseMaxElapsedRequestTime { source: err })?;
 
-        let config = DynamoDbConfig {
-            billing_mode,
-            lock_table_name,
-            max_elapsed_request_time,
-            sdk_config: sdk_config.clone(),
-        };
-        Ok(Self {
-            dynamodb_client,
-            config,
-        })
+        let config = DynamoDbConfig::builder()
+            .billing_mode(billing_mode)
+            .lock_table_name(lock_table_name)
+            .max_elapsed_request_time(max_elapsed_request_time)
+            .sdk_config(sdk_config.clone())
+            .build();
+        Ok(Self::builder()
+            .dynamodb_client(dynamodb_client)
+            .config(config)
+            .build())
     }
     fn create_dynamodb_sdk_config(
         sdk_config: &SdkConfig,
@@ -612,10 +606,12 @@ impl TryFrom<&HashMap<String, AttributeValue>> for CommitEntry {
                 })
                 .transpose()?
                 .map(epoch_to_system_time);
+        let complete = extract_required_string_field(item, constants::ATTR_COMPLETE)? == "true";
+
         Ok(Self {
             version,
             temp_path,
-            complete: extract_required_string_field(item, constants::ATTR_COMPLETE)? == "true",
+            complete,
             expire_time,
         })
     }
@@ -663,11 +659,18 @@ fn create_value_map(
     value_map
 }
 
-#[derive(Debug)]
+/// Configuration for DynamoDb lock client
+#[derive(Debug, TypedBuilder)]
+#[builder(doc)]
 pub struct DynamoDbConfig {
+    /// Billing mode for the DynamoDb table
     pub billing_mode: BillingMode,
+    /// Name of the lock table
+    #[builder(setter(into))]
     pub lock_table_name: String,
+    /// Maximum time to wait for DynamoDB requests
     pub max_elapsed_request_time: Duration,
+    /// AWS SDK configuration
     pub sdk_config: SdkConfig,
 }
 
@@ -773,18 +776,20 @@ mod tests {
                     .unwrap()
                     .as_secs(),
             );
-        commit_entry_roundtrip(&CommitEntry {
-            version: 0,
-            temp_path: Path::from("_delta_log/tmp/0_abc.json"),
-            complete: true,
-            expire_time: Some(system_time),
-        })?;
-        commit_entry_roundtrip(&CommitEntry {
-            version: 139,
-            temp_path: Path::from("_delta_log/tmp/0_abc.json"),
-            complete: false,
-            expire_time: None,
-        })?;
+        commit_entry_roundtrip(
+            &CommitEntry::builder()
+                .version(0)
+                .temp_path(Path::from("_delta_log/tmp/0_abc.json"))
+                .complete(true)
+                .expire_time(system_time)
+                .build(),
+        )?;
+        commit_entry_roundtrip(
+            &CommitEntry::builder()
+                .version(139)
+                .temp_path(Path::from("_delta_log/tmp/0_abc.json"))
+                .build(),
+        )?;
         Ok(())
     }
 
