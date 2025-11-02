@@ -206,7 +206,7 @@ impl LakeFSLogStore {
                     // Merge successful
                 }
                 // TODO: propagate better LakeFS errors.
-                Err(TransactionError::VersionAlreadyExists(_)) => {
+                Err(LogStoreError::VersionAlreadyExists(_)) => {
                     return Err(DeltaTableError::Transaction {
                         source: TransactionError::LogStoreError {
                             msg: "Merge Failed".to_string(),
@@ -214,7 +214,7 @@ impl LakeFSLogStore {
                         },
                     });
                 }
-                Err(err) => return Err(DeltaTableError::Transaction { source: err }),
+                Err(err) => return Err(err.into()),
             };
         } else {
             debug!("No changes detected, skipping merge");
@@ -302,9 +302,7 @@ impl LogStore for LakeFSLogStore {
                     self.client.decompose_url(self.config.location.to_string());
                 let transaction_id = self
                     .client
-                    .get_transaction(operation_id)
-                    .map_err(LogStoreError::from)?;
-                match self
+                    .get_transaction(operation_id)?;                match self
                     .client
                     .merge(
                         repo,
@@ -317,14 +315,14 @@ impl LogStore for LakeFSLogStore {
                     .await
                 {
                     Ok(_) => Ok(()),
-                    Err(TransactionError::VersionAlreadyExists(version)) => {
+                    Err(LogStoreError::VersionAlreadyExists(version)) => {
                         store
                             .delete(&commit_uri_from_version(version))
                             .await
                             .map_err(|e| LogStoreError::ObjectStore { source: e })?;
                         return Err(LogStoreError::VersionAlreadyExists(version));
                     }
-                    Err(err) => Err(LogStoreError::from(err)),
+                    Err(err) => Err(err),
                 }?;
             }
             _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
@@ -337,18 +335,16 @@ impl LogStore for LakeFSLogStore {
         _version: i64,
         commit_or_bytes: CommitOrBytes,
         operation_id: Uuid,
-    ) -> Result<(), LogStoreError> {
+    ) -> LogStoreResult<()> {
         match &commit_or_bytes {
             CommitOrBytes::LogBytes(_) => {
                 let (repo, _, _) = self.client.decompose_url(self.config.location.to_string());
                 let transaction_id = self
                     .client
-                    .get_transaction(operation_id)
-                    .map_err(LogStoreError::from)?;
+                    .get_transaction(operation_id)?;
                 self.client
                     .delete_branch(repo, transaction_id)
-                    .await
-                    .map_err(|e| LogStoreError::from(DeltaTableError::from(e)))?;
+                    .await?;
                 self.client.clear_transaction(operation_id);
                 Ok(())
             }

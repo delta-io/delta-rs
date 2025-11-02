@@ -71,6 +71,14 @@ impl From<LakeFSOperationError> for DeltaTableError {
     }
 }
 
+impl From<LakeFSOperationError> for LogStoreError {
+    fn from(err: LakeFSOperationError) -> Self {
+        LogStoreError::Generic {
+            source: Box::new(err),
+        }
+    }
+}
+
 impl From<LakeFSConfigError> for DeltaTableError {
     fn from(err: LakeFSConfigError) -> Self {
         DeltaTableError::GenericError {
