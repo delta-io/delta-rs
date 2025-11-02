@@ -300,9 +300,8 @@ impl LogStore for LakeFSLogStore {
                 // Try LakeFS Branch merge of transaction branch in source branch
                 let (repo, target_branch, table) =
                     self.client.decompose_url(self.config.location.to_string());
-                let transaction_id = self
-                    .client
-                    .get_transaction(operation_id)?;                match self
+                let transaction_id = self.client.get_transaction(operation_id)?;
+                match self
                     .client
                     .merge(
                         repo,
@@ -339,12 +338,8 @@ impl LogStore for LakeFSLogStore {
         match &commit_or_bytes {
             CommitOrBytes::LogBytes(_) => {
                 let (repo, _, _) = self.client.decompose_url(self.config.location.to_string());
-                let transaction_id = self
-                    .client
-                    .get_transaction(operation_id)?;
-                self.client
-                    .delete_branch(repo, transaction_id)
-                    .await?;
+                let transaction_id = self.client.get_transaction(operation_id)?;
+                self.client.delete_branch(repo, transaction_id).await?;
                 self.client.clear_transaction(operation_id);
                 Ok(())
             }

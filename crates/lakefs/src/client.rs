@@ -96,11 +96,7 @@ impl LakeFSClient {
         }
     }
 
-    pub async fn delete_branch(
-        &self,
-        repo: String,
-        branch: String,
-    ) -> LogStoreResult<()> {
+    pub async fn delete_branch(&self, repo: String, branch: String) -> LogStoreResult<()> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/branches/{branch}",
             self.config.host,
