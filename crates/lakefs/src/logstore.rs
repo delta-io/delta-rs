@@ -258,7 +258,7 @@ impl LogStore for LakeFSLogStore {
     ) -> LogStoreResult<()> {
         let (transaction_url, store, _root_store) = self
             .get_transaction_objectstore(operation_id)
-            .map_err(|e| LogStoreError::LogStoreError {
+            .map_err(|e| LogStoreError::TransactionError {
                 msg: e.to_string(),
                 source: e.into(),
             })?;
@@ -292,7 +292,7 @@ impl LogStore for LakeFSLogStore {
                         false,
                     )
                     .await
-                    .map_err(|e| LogStoreError::LogStoreError {
+                    .map_err(|e| LogStoreError::TransactionError {
                         msg: e.to_string(),
                         source: Box::new(e),
                     })?;

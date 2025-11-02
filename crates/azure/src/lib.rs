@@ -13,6 +13,7 @@ use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
+pub mod error;
 
 trait AzureOptions {
     fn as_azure_options(&self) -> HashMap<AzureConfigKey, String>;
@@ -58,8 +59,9 @@ impl ObjectStoreFactory for AzureFactory {
         let (_, path) = ObjectStoreScheme::parse(url).map_err(|e| LogStoreError::Generic {
             source: Box::new(e),
         })?;
-        let prefix =
-            Path::parse(path).map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
+        let prefix = Path::parse(path).map_err(|e| LogStoreError::Generic {
+            source: Box::new(e),
+        })?;
 
         Ok((Arc::new(store), prefix))
     }

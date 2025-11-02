@@ -21,8 +21,8 @@ pub enum LogStoreError {
     },
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
-    #[error("Transaction failed: {msg}")]
-    LogStoreError {
+    #[error("Transaction failed: {msg}, error: {source}")]
+    TransactionError {
         /// Detailed message for the commit failure.
         msg: String,
         /// underlying error in the log store transactional layer.

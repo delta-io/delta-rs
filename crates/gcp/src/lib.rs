@@ -13,6 +13,7 @@ use object_store::client::SpawnedReqwestConnector;
 use url::Url;
 
 mod config;
+pub mod error;
 mod storage;
 
 trait GcpOptions {

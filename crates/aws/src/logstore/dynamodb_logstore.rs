@@ -137,7 +137,7 @@ impl S3DynamoDbLogStore {
                 .lock_client
                 .update_commit_entry(entry.version, &self.table_path)
                 .await
-                .map_err(|err| LogStoreError::LogStoreError {
+                .map_err(|err| LogStoreError::TransactionError {
                     msg: format!(
                         "unable to complete entry for '{}': failure to write to DynamoDb",
                         entry.version
@@ -232,7 +232,6 @@ impl LogStore for S3DynamoDbLogStore {
             .await
             .map_err(|err| match err {
                 LockClientError::VersionAlreadyExists { version, .. } => {
-                    warn!("LockClientError::VersionAlreadyExists({version})");
                     LogStoreError::VersionAlreadyExists(version)
                 }
                 LockClientError::ProvisionedThroughputExceeded => todo!(
@@ -240,19 +239,15 @@ impl LogStore for S3DynamoDbLogStore {
                 ),
                 LockClientError::LockTableNotFound => {
                     let table_name = self.lock_client.get_lock_table_name();
-                    error!("Lock table '{table_name}' not found");
-                    LogStoreError::LogStoreError {
+                    LogStoreError::TransactionError {
                         msg: format!("lock table '{table_name}' not found"),
                         source: Box::new(err),
                     }
                 }
-                err => {
-                    error!("dynamodb client failed to write log entry: {err:?}");
-                    LogStoreError::LogStoreError {
-                        msg: "dynamodb client failed to write log entry".to_owned(),
-                        source: Box::new(err),
-                    }
-                }
+                err => LogStoreError::TransactionError {
+                    msg: "dynamodb client failed to write log entry".to_owned(),
+                    source: Box::new(err),
+                },
             })?;
         // `repair_entry` performs the exact steps required to finalize the commit, but contains
         // retry logic and more robust error handling under the assumption that any other client
@@ -283,12 +278,12 @@ impl LogStore for S3DynamoDbLogStore {
                 ),
                 LockClientError::VersionAlreadyCompleted { version, .. } => {
                     error!("Trying to abort a completed commit");
-                    LogStoreError::LogStoreError {
+                    LogStoreError::TransactionError {
                         msg: format!("trying to abort a completed log entry: {version}"),
                         source: Box::new(err),
                     }
                 }
-                err => LogStoreError::LogStoreError {
+                err => LogStoreError::TransactionError {
                     msg: "dynamodb client failed to delete log entry".to_owned(),
                     source: Box::new(err),
                 },
