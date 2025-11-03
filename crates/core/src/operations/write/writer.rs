@@ -254,7 +254,7 @@ impl DeltaWriter {
                     self.config.num_indexed_cols,
                     self.config.stats_columns.clone(),
                 )
-                .await?;
+                ?;
                 writer.write(&record_batch).await?;
                 let _ = self.partition_writers.insert(partition_key, writer);
             }
@@ -418,7 +418,7 @@ pub struct PartitionWriter {
 
 impl PartitionWriter {
     /// Create a new instance of [`PartitionWriter`] from [`PartitionWriterConfig`]
-    pub async fn try_with_config(
+    pub fn try_with_config(
         object_store: ObjectStoreRef,
         config: PartitionWriterConfig,
         num_indexed_cols: DataSkippingNumIndexedCols,
@@ -609,7 +609,6 @@ mod tests {
             DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
             None,
         )
-        .await
         .unwrap()
     }
 

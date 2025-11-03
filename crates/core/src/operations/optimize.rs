@@ -577,7 +577,7 @@ impl MergePlan {
             task_parameters.num_indexed_cols,
             task_parameters.stats_columns.clone(),
         )
-        .await?;
+        ?;
 
         let mut read_stream = read_stream.await?;
 
