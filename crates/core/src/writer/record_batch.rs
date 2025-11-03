@@ -37,10 +37,7 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::table::file_format_options::{
-    build_writer_properties_factory_or_default_ffo, build_writer_properties_factory_wp,
-    WriterPropertiesFactoryRef,
-};
+use crate::table::file_format_options::{build_writer_properties_factory_or_default_ffo, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
@@ -236,7 +233,7 @@ impl RecordBatchWriter {
 
     /// Sets the writer properties for the underlying arrow writer.
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
         self.writer_properties_factory = writer_properties_factory;
         self
     }

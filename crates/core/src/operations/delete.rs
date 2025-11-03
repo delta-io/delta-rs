@@ -59,9 +59,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::{
-    build_writer_properties_factory_wp, state_with_file_format_options, WriterPropertiesFactoryRef,
-};
+use crate::table::file_format_options::{state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
 
@@ -169,7 +167,7 @@ impl DeleteBuilder {
 
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }

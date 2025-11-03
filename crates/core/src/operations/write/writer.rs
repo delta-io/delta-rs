@@ -23,9 +23,7 @@ use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::table::file_format_options::{
-    build_writer_properties_factory_wp, WriterPropertiesFactoryRef,
-};
+use crate::table::file_format_options::{IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -161,7 +159,7 @@ impl WriterConfig {
             let wp = WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
                 .build();
-            build_writer_properties_factory_wp(wp)
+            wp.into_factory_ref()
         });
         let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
@@ -205,7 +203,7 @@ impl DeltaWriter {
 
     /// Apply custom writer_properties to the underlying parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
         self.config.writer_properties_factory = writer_properties_factory;
         self
     }
@@ -334,7 +332,7 @@ impl PartitionWriterConfig {
             let wp = WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
                 .build();
-            build_writer_properties_factory_wp(wp)
+            wp.into_factory_ref()
         });
         let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
@@ -572,7 +570,7 @@ mod tests {
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> DeltaWriter {
-        let writer_properties_factory = writer_properties.map(build_writer_properties_factory_wp);
+        let writer_properties_factory = writer_properties.map(|wp| wp.into_factory_ref());
 
         let config = WriterConfig::new(
             batch.schema(),
@@ -593,7 +591,7 @@ mod tests {
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> PartitionWriter {
-        let writer_properties_factory = writer_properties.map(build_writer_properties_factory_wp);
+        let writer_properties_factory = writer_properties.map(|wp| wp.into_factory_ref());
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),

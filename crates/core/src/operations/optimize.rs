@@ -63,9 +63,7 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::{
-    build_writer_properties_factory_wp, FileFormatRef, WriterPropertiesFactoryRef,
-};
+use crate::table::file_format_options::{FileFormatRef, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
@@ -253,7 +251,7 @@ impl<'a> OptimizeBuilder<'a> {
                     .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
                     .set_created_by(format!("delta-rs version {}", crate_version()))
                     .build();
-                let wpf = build_writer_properties_factory_wp(wp);
+                let wpf = wp.into_factory_ref();
                 Some(wpf)
             }
             Some(file_format_options) => file_format_options
@@ -298,7 +296,7 @@ impl<'a> OptimizeBuilder<'a> {
 
     /// Writer properties passed to parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }

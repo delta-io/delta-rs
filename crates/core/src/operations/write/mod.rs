@@ -68,9 +68,7 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::file_format_options::{
-    build_writer_properties_factory_wp, WriterPropertiesFactoryRef,
-};
+use crate::table::file_format_options::{IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 use crate::DeltaTable;
 
 pub mod configs;
@@ -286,7 +284,7 @@ impl WriteBuilder {
 
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        let writer_properties_factory = build_writer_properties_factory_wp(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
         self.writer_properties_factory = Some(writer_properties_factory);
         self
     }

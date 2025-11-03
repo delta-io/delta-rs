@@ -109,10 +109,14 @@ fn build_writer_properties_factory_tpo(
     props.map(|wp| Arc::new(SimpleWriterPropertiesFactory::new(wp)) as WriterPropertiesFactoryRef)
 }
 
-pub fn build_writer_properties_factory_wp(
-    writer_properties: WriterProperties,
-) -> WriterPropertiesFactoryRef {
-    Arc::new(SimpleWriterPropertiesFactory::new(writer_properties))
+pub trait IntoWriterPropertiesFactoryRef {
+    fn into_factory_ref(self) -> WriterPropertiesFactoryRef;
+}
+
+impl IntoWriterPropertiesFactoryRef for WriterProperties {
+    fn into_factory_ref(self) -> WriterPropertiesFactoryRef {
+        Arc::new(SimpleWriterPropertiesFactory::new(self))
+    }
 }
 
 pub fn build_writer_properties_factory_default() -> WriterPropertiesFactoryRef {
