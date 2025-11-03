@@ -158,7 +158,7 @@ impl Write for ShareableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::file_format_options::{IntoWriterPropertiesFactoryRef};
+    use crate::table::file_format_options::IntoWriterPropertiesFactoryRef;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::properties::WriterProperties;
 

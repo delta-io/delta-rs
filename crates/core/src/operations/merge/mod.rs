@@ -91,7 +91,9 @@ use crate::operations::write::generated_columns::{
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::{state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{
+    state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 

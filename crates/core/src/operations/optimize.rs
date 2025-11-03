@@ -63,7 +63,9 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::{FileFormatRef, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{
+    FileFormatRef, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
@@ -574,8 +576,7 @@ impl MergePlan {
             writer_config,
             task_parameters.num_indexed_cols,
             task_parameters.stats_columns.clone(),
-        )
-        ?;
+        )?;
 
         let mut read_stream = read_stream.await?;
 

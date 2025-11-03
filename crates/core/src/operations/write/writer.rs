@@ -23,7 +23,9 @@ use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::table::file_format_options::{IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -251,8 +253,7 @@ impl DeltaWriter {
                     config,
                     self.config.num_indexed_cols,
                     self.config.stats_columns.clone(),
-                )
-                ?;
+                )?;
                 writer.write(&record_batch).await?;
                 let _ = self.partition_writers.insert(partition_key, writer);
             }

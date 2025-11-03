@@ -37,7 +37,9 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::table::file_format_options::{FileFormatToWriterPropertiesFactory, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{
+    FileFormatToWriterPropertiesFactory, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.

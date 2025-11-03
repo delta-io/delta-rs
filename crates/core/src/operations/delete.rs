@@ -59,7 +59,9 @@ use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::{state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{
+    state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
 
