@@ -37,7 +37,7 @@ use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::table::file_format_options::{build_writer_properties_factory_or_default_ffo, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{FileFormatToWriterPropertiesFactory, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
@@ -73,13 +73,12 @@ impl RecordBatchWriter {
         let delta_table = DeltaTableBuilder::from_uri(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
-        let writer_properties_factory = build_writer_properties_factory_or_default_ffo(
-            delta_table
-                .snapshot()?
-                .load_config()
-                .file_format_options
-                .clone(),
-        );
+        let writer_properties_factory = delta_table
+            .snapshot()?
+            .load_config()
+            .file_format_options
+            .clone()
+            .into_writer_properties_factory_ref_or_default();
 
         // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
         let configuration = delta_table.snapshot().map_or_else(
@@ -130,9 +129,12 @@ impl RecordBatchWriter {
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns().clone();
 
-        let writer_properties_factory = build_writer_properties_factory_or_default_ffo(
-            table.snapshot()?.load_config().file_format_options.clone(),
-        );
+        let writer_properties_factory = table
+            .snapshot()?
+            .load_config()
+            .file_format_options
+            .clone()
+            .into_writer_properties_factory_ref_or_default();
 
         let configuration = table.snapshot()?.metadata().configuration().clone();
 

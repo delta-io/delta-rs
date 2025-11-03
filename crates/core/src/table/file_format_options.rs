@@ -65,12 +65,15 @@ impl FileFormatOptions for SimpleFileFormatOptions {
     }
 }
 
-pub fn build_writer_properties_factory_or_default_ffo(
-    file_format_options: Option<FileFormatRef>,
-) -> WriterPropertiesFactoryRef {
-    file_format_options
-        .map(|ffo| ffo.writer_properties_factory())
-        .unwrap_or_else(|| build_writer_properties_factory_default())
+pub trait FileFormatToWriterPropertiesFactory {
+    fn into_writer_properties_factory_ref_or_default(self) -> WriterPropertiesFactoryRef;
+}
+
+impl FileFormatToWriterPropertiesFactory for Option<FileFormatRef> {
+    fn into_writer_properties_factory_ref_or_default(self) -> WriterPropertiesFactoryRef {
+        self.map(|ffo| ffo.writer_properties_factory())
+            .unwrap_or_else(|| build_writer_properties_factory_default())
+    }
 }
 
 #[cfg(feature = "datafusion")]
