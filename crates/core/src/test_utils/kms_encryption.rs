@@ -1,3 +1,15 @@
+//! This module contains classes and functions to support encryption with a KMS.
+//! These are not part of the core API but are used in the encryption tests and examples.
+//!
+//! The first main class is `TableEncryption`, which encapsulates the encryption configuration
+//! and the encryption factory.
+//!
+//! The second main class is `KmsFileFormatOptions` which configures the file format options for
+//! KMS encryption. It is used to create a `FileFormatOptions` instance that can be
+//! passed to the `DeltaTable::create` method. This class can also be directly used in
+//! `DeltaOps` via the `with_file_format_options` method.
+//! See `crates/deltalake/examples/basic_operations_encryption.rs` for a working example.
+
 use crate::table::file_format_options::{
     FileFormatOptions, TableOptions, WriterPropertiesFactory, WriterPropertiesFactoryRef,
 };
