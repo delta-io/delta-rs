@@ -12,10 +12,9 @@ use datafusion::{
 };
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::operations::collect_sendable_stream;
-use deltalake_core::operations::encryption::TableEncryption;
 use deltalake_core::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake_core::table::file_format_options::{FileFormatRef, SimpleFileFormatOptions};
-use deltalake_core::test_utils::kms_encryption::KmsFileFormatOptions;
+use deltalake_core::test_utils::kms_encryption::{KmsFileFormatOptions, TableEncryption};
 use deltalake_core::{arrow, parquet, DeltaOps};
 use deltalake_core::{operations::optimize::OptimizeType, DeltaTable, DeltaTableError};
 use parquet_key_management::datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions};
