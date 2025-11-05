@@ -25,7 +25,7 @@ features = [
 ]
 
 [dependencies]
-deltalake-core = { version = "0.29.0", path = "../core", default-features = false }
+deltalake-core = { version = "0.29.0", path = "../core", default-features = false}
 deltalake-aws = { version = "0.12.0", path = "../aws", default-features = false, optional = true }
 deltalake-azure = { version = "0.12.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.13.0", path = "../gcp", optional = true }
@@ -45,6 +45,7 @@ datafusion-ext = ["datafusion"]
 gcs = ["deltalake-gcp"]
 glue = ["deltalake-catalog-glue"]
 hdfs = ["deltalake-hdfs"]
+integration-test = ["deltalake-core/integration_test"]
 json = ["deltalake-core/json"]
 python = ["deltalake-core/python"]
 s3-native-tls = ["deltalake-aws/native-tls", "native-tls"]
@@ -68,7 +69,7 @@ required-features = ["datafusion"]
 
 [[example]]
 name = "basic_operations_encryption"
-required-features = ["datafusion"]
+required-features = ["datafusion", "integration-test"]
 
 [[example]]
 name = "load_table"
