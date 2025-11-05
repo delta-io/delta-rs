@@ -1,4 +1,5 @@
 mod factories;
+#[cfg(feature = "datafusion")]
 pub mod kms_encryption;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};

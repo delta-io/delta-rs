@@ -1,3 +1,4 @@
+use crate::operations::encryption::TableEncryption;
 use crate::table::file_format_options::{
     FileFormatOptions, TableOptions, WriterPropertiesFactory, WriterPropertiesFactoryRef,
 };
@@ -13,18 +14,13 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[cfg(feature = "datafusion")]
-use crate::operations::encryption::TableEncryption;
-
 // More advanced factory with KMS support
-#[cfg(feature = "datafusion")]
 #[derive(Clone, Debug)]
 pub struct KMSWriterPropertiesFactory {
     writer_properties: WriterProperties,
     encryption: Option<crate::operations::encryption::TableEncryption>,
 }
 
-#[cfg(feature = "datafusion")]
 impl KMSWriterPropertiesFactory {
     pub fn with_encryption(table_encryption: TableEncryption) -> Self {
         let writer_properties = WriterProperties::builder()
@@ -38,7 +34,6 @@ impl KMSWriterPropertiesFactory {
     }
 }
 
-#[cfg(feature = "datafusion")]
 #[async_trait]
 impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
     fn compression(&self, column_path: &ColumnPath) -> Compression {
@@ -63,14 +58,12 @@ impl WriterPropertiesFactory for KMSWriterPropertiesFactory {
 // -------------------------------------------------------------------------------------------------
 // FileFormatOptions for KMS encryption based on settings in TableEncryption
 // -------------------------------------------------------------------------------------------------
-#[cfg(feature = "datafusion")]
 pub struct KmsFileFormatOptions {
     table_encryption: TableEncryption,
     writer_properties_factory: WriterPropertiesFactoryRef,
     encryption_factory_id: String,
 }
 
-#[cfg(feature = "datafusion")]
 impl KmsFileFormatOptions {
     pub fn new(table_encryption: TableEncryption) -> Self {
         let encryption_factory_id = format!("delta-{}", Uuid::new_v4());
@@ -85,7 +78,6 @@ impl KmsFileFormatOptions {
     }
 }
 
-#[cfg(feature = "datafusion")]
 impl Debug for KmsFileFormatOptions {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KmsFileFormatOptions")
@@ -93,7 +85,6 @@ impl Debug for KmsFileFormatOptions {
     }
 }
 
-#[cfg(feature = "datafusion")]
 impl FileFormatOptions for KmsFileFormatOptions {
     fn table_options(&self) -> TableOptions {
         let mut table_options = TableOptions::default();
