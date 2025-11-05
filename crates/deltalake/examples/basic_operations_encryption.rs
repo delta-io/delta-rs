@@ -22,11 +22,11 @@ use deltalake_core::{
     datafusion::common::test_util::format_batches, operations::optimize::OptimizeType, DeltaTable,
     DeltaTableError,
 };
-use parquet_key_management::datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions};
 use parquet_key_management::{
     crypto_factory::{CryptoFactory, DecryptionConfiguration, EncryptionConfiguration},
+    datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions},
     kms::KmsConnectionConfig,
-    test_kms::TestKmsClientFactory,
+    test_kms::TestAsyncKmsClientFactory,
 };
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
@@ -291,8 +291,10 @@ fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let file_format_options = Arc::new(SimpleFileFormatOptions::new(tbl_options)) as FileFormatRef;
     Ok(file_format_options)
 }
+
 fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
-    let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
+    let crypto_factory =
+        CryptoFactory::new_async_with_tokio(TestAsyncKmsClientFactory::with_default_keys());
 
     let kms_connection_config = Arc::new(KmsConnectionConfig::default());
     let encryption_factory = Arc::new(KmsEncryptionFactory::new(
@@ -332,7 +334,7 @@ async fn round_trip_test(
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() -> Result<(), DeltaTableError> {
     println!("====================");
     println!("Begin Plain encryption test");

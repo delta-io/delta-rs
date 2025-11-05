@@ -19,11 +19,11 @@ use deltalake_core::table::file_format_options::{
 };
 use deltalake_core::{arrow, parquet, DeltaOps};
 use deltalake_core::{operations::optimize::OptimizeType, DeltaTable, DeltaTableError};
-use parquet_key_management::datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions};
 use parquet_key_management::{
     crypto_factory::{CryptoFactory, DecryptionConfiguration, EncryptionConfiguration},
+    datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions},
     kms::KmsConnectionConfig,
-    test_kms::TestKmsClientFactory,
+    test_kms::TestAsyncKmsClientFactory,
 };
 use paste::paste;
 use std::{fs, sync::Arc};
@@ -294,7 +294,8 @@ fn plain_crypto_format_bad_decryptor() -> Result<FileFormatRef, DeltaTableError>
     create_plain_crypto_format(encryption_key.clone(), decryption_key.clone())
 }
 fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
-    let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
+    let crypto_factory =
+        CryptoFactory::new_async_with_tokio(TestAsyncKmsClientFactory::with_default_keys());
 
     let kms_connection_config = Arc::new(KmsConnectionConfig::default());
     let encryption_factory = Arc::new(KmsEncryptionFactory::new(
@@ -404,13 +405,13 @@ macro_rules! encryption_tests {
                 $runner(file_format_options, false).await;
             }
 
-            #[tokio::test]
+            #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
             async fn [<$runner _kms>]() {
                 let file_format_options = kms_crypto_format().unwrap();
                 $runner(file_format_options, true).await;
             }
 
-            #[tokio::test]
+            #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
             #[should_panic(expected = "Failed to read encrypted table")]
             async fn [<$runner _kms_no_decryptor>]() {
                 let file_format_options = kms_crypto_format().unwrap();

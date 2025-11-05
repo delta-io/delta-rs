@@ -59,7 +59,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 tracing = { workspace = true }
 tempfile = "3.21.0"
-parquet-key-management = { version = "0.4.1", features = ["_test_utils", "datafusion"] }
+parquet-key-management = { version = "0.5.0", features = ["_test_utils", "datafusion", "tokio"] }
 url = { workspace = true }
 
 [[example]]
