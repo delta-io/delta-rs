@@ -244,7 +244,8 @@ enum StatsScalar {
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
-    Decimal(f64),
+    // Scale is stored to handle scale=0 serialization correctly
+    Decimal { value: f64, scale: i32 },
     String(String),
     Bytes(Vec<u8>),
     Uuid(uuid::Uuid),
@@ -277,7 +278,10 @@ impl StatsScalar {
             (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    value: val,
+                    scale: *scale,
+                })
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
@@ -304,7 +308,10 @@ impl StatsScalar {
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    value: val,
+                    scale: *scale,
+                })
             }
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
             (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
@@ -362,7 +369,10 @@ impl StatsScalar {
                     val = f64::from_bits(val.to_bits() - 1);
                 }
 
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    value: val,
+                    scale: *scale,
+                })
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
                 let val = if use_min {
@@ -418,7 +428,15 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
             }
-            StatsScalar::Decimal(v) => serde_json::Value::from(v),
+            StatsScalar::Decimal { value, scale } => {
+                // For scale=0, serialize as integer since serde_json would otherwise
+                // serialize f64 as "1234.0" instead of "1234"
+                if scale == 0 {
+                    serde_json::Value::from(value.round() as i64)
+                } else {
+                    serde_json::Value::from(value)
+                }
+            }
             StatsScalar::String(v) => serde_json::Value::from(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
@@ -679,6 +697,14 @@ mod tests {
                 Value::from(12340.0),
             ),
             (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal {
+                    scale: 0,
+                    precision: 4,
+                }),
+                Value::from(1234),
+            ),
+            (
                 simple_parquet_stat!(Statistics::Int32, 10561),
                 Some(LogicalType::Date),
                 Value::from("1998-12-01"),
@@ -725,6 +751,14 @@ mod tests {
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal {
+                    scale: 0,
+                    precision: 4,
+                }),
+                Value::from(1234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
                 None,
                 Value::from(1234),
             ),
@@ -759,6 +793,17 @@ mod tests {
                     precision: 5,
                 }),
                 Value::from(10.0),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(1234i128.to_be_bytes().to_vec())
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 0,
+                    precision: 4,
+                }),
+                Value::from(1234),
             ),
             (
                 simple_parquet_stat!(

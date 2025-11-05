@@ -69,12 +69,12 @@ fn client_configs_via_env_variables() -> TestResult<()> {
     let config = client.get_dynamodb_config();
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     assert_eq!(
-        DynamoDbConfig {
-            billing_mode: BillingMode::PayPerRequest,
-            lock_table_name: "some_table".to_owned(),
-            max_elapsed_request_time: Duration::from_secs(64),
-            sdk_config: options.sdk_config.unwrap(),
-        },
+        DynamoDbConfig::builder()
+            .billing_mode(BillingMode::PayPerRequest)
+            .lock_table_name("some_table".to_owned())
+            .max_elapsed_request_time(Duration::from_secs(64))
+            .sdk_config(options.sdk_config.unwrap())
+            .build(),
         *config,
     );
     std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
@@ -423,7 +423,10 @@ async fn create_incomplete_commit_entry(
         _ => unreachable!(),
     };
 
-    let commit_entry = CommitEntry::new(version, tmp_commit.to_owned());
+    let commit_entry = CommitEntry::builder()
+        .version(version)
+        .temp_path(tmp_commit.to_owned())
+        .build();
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;

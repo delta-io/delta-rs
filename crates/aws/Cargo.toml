@@ -25,6 +25,7 @@ object_store = { workspace = true, features = ["aws"] }
 regex = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
 

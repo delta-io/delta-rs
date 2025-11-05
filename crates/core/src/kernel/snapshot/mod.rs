@@ -39,8 +39,6 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde_json::Deserializer;
-use tokio::task::spawn_blocking;
-use tracing::Instrument;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};

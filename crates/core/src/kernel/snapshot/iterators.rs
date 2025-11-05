@@ -117,10 +117,6 @@ impl LogicalFileView {
     ///
     /// this tries to parse the file string and if that fails, it will return the string as is.
     // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
-    #[deprecated(
-        since = "0.27.1",
-        note = "Will no longer be meaningful once we have full url support"
-    )]
     pub(crate) fn object_store_path(&self) -> Path {
         let path = self.path();
         // Try to preserve percent encoding if possible

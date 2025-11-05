@@ -83,8 +83,8 @@ impl TestContext {
             .with_log_store(log_store)
             .with_table_name("delta-rs_test_table")
             .with_comment("Table created by delta-rs tests")
-            .with_columns(schema.fields().cloned())
             .with_partition_columns(p)
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap()
     }
