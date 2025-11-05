@@ -543,11 +543,8 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 #[cfg(test)]
 mod tests {
     use arrow::json::ReaderBuilder;
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_schema::Schema as ArrowSchema;
     use delta_kernel::schema::StructType;
-    #[cfg(feature = "datafusion")]
-    use futures::TryStreamExt;
     use std::path::Path;
 
     use crate::operations::create::CreateBuilder;
@@ -802,7 +799,6 @@ mod tests {
     /// Validates <https://github.com/delta-io/delta-rs/issues/1806>
     #[tokio::test]
     async fn test_write_tilde() {
-        use crate::operations::create::CreateBuilder;
         let table_schema = crate::writer::test_utils::get_delta_schema();
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
         let table_dir = tempfile::Builder::new()
@@ -832,9 +828,12 @@ mod tests {
     // <https://github.com/delta-io/delta-rs/issues/1386>
     #[cfg(feature = "datafusion")]
     mod schema_evolution {
-        use itertools::Itertools;
-
         use super::*;
+
+        use arrow_array::{Int32Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field};
+        use futures::TryStreamExt;
+        use itertools::Itertools;
 
         #[tokio::test]
         async fn test_write_mismatched_schema() {
@@ -1143,114 +1142,119 @@ mod tests {
     }
 
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn test_write_data_skipping_stats_columns() {
-        let batch = get_record_batch(None, false);
-        let partition_cols: &[String] = &[];
-        let table_schema: StructType = get_delta_schema();
-        let table_dir = tempfile::tempdir().unwrap();
-        let table_path = table_dir.path();
-        let config: HashMap<String, Option<String>> = vec![(
-            "delta.dataSkippingStatsColumns".to_string(),
-            Some("id,value".to_string()),
-        )]
-        .into_iter()
-        .collect();
+    mod datafusion_tests {
+        use super::*;
 
-        let mut table = CreateBuilder::new()
-            .with_location(table_path.to_str().unwrap())
-            .with_table_name("test-table")
-            .with_comment("A table for running tests")
-            .with_columns(table_schema.fields().cloned())
-            .with_configuration(config)
-            .with_partition_columns(partition_cols)
-            .await
-            .unwrap();
+        use futures::TryStreamExt;
 
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        #[tokio::test]
+        async fn test_write_data_skipping_stats_columns() {
+            let batch = get_record_batch(None, false);
+            let partition_cols: &[String] = &[];
+            let table_schema: StructType = get_delta_schema();
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path();
+            let config: HashMap<String, Option<String>> = vec![(
+                "delta.dataSkippingStatsColumns".to_string(),
+                Some("id,value".to_string()),
+            )]
+            .into_iter()
+            .collect();
 
-        assert_eq!(partitions.len(), 1);
-        assert_eq!(partitions[0].record_batch, batch);
-        writer.write(batch).await.unwrap();
-        writer.flush_and_commit(&mut table).await.unwrap();
-        assert_eq!(table.version(), Some(1));
-        let add_actions: Vec<_> = table
-            .snapshot()
-            .unwrap()
-            .snapshot()
-            .file_views(&table.log_store, None)
-            .try_collect()
-            .await
-            .unwrap();
-        assert_eq!(add_actions.len(), 1);
-        let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
-        assert_eq!(
-            expected_stats.parse::<serde_json::Value>().unwrap(),
-            add_actions
-                .into_iter()
-                .next()
+            let mut table = CreateBuilder::new()
+                .with_location(table_path.to_str().unwrap())
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(table_schema.fields().cloned())
+                .with_configuration(config)
+                .with_partition_columns(partition_cols)
+                .await
+                .unwrap();
+
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+            let partitions = writer.divide_by_partition_values(&batch).unwrap();
+
+            assert_eq!(partitions.len(), 1);
+            assert_eq!(partitions[0].record_batch, batch);
+            writer.write(batch).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(table.version(), Some(1));
+            let add_actions: Vec<_> = table
+                .snapshot()
                 .unwrap()
-                .stats()
-                .unwrap()
-                .parse::<serde_json::Value>()
-                .unwrap()
-        );
-    }
+                .snapshot()
+                .file_views(&table.log_store, None)
+                .try_collect()
+                .await
+                .unwrap();
+            assert_eq!(add_actions.len(), 1);
+            let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
+            assert_eq!(
+                expected_stats.parse::<serde_json::Value>().unwrap(),
+                add_actions
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .stats()
+                    .unwrap()
+                    .parse::<serde_json::Value>()
+                    .unwrap()
+            );
+        }
 
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn test_write_data_skipping_num_indexed_colsn() {
-        let batch = get_record_batch(None, false);
-        let partition_cols: &[String] = &[];
-        let table_schema: StructType = get_delta_schema();
-        let table_dir = tempfile::tempdir().unwrap();
-        let table_path = table_dir.path();
-        let config: HashMap<String, Option<String>> = vec![(
-            "delta.dataSkippingNumIndexedCols".to_string(),
-            Some("1".to_string()),
-        )]
-        .into_iter()
-        .collect();
+        #[tokio::test]
+        async fn test_write_data_skipping_num_indexed_colsn() {
+            let batch = get_record_batch(None, false);
+            let partition_cols: &[String] = &[];
+            let table_schema: StructType = get_delta_schema();
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path();
+            let config: HashMap<String, Option<String>> = vec![(
+                "delta.dataSkippingNumIndexedCols".to_string(),
+                Some("1".to_string()),
+            )]
+            .into_iter()
+            .collect();
 
-        let mut table = CreateBuilder::new()
-            .with_location(table_path.to_str().unwrap())
-            .with_table_name("test-table")
-            .with_comment("A table for running tests")
-            .with_columns(table_schema.fields().cloned())
-            .with_configuration(config)
-            .with_partition_columns(partition_cols)
-            .await
-            .unwrap();
+            let mut table = CreateBuilder::new()
+                .with_location(table_path.to_str().unwrap())
+                .with_table_name("test-table")
+                .with_comment("A table for running tests")
+                .with_columns(table_schema.fields().cloned())
+                .with_configuration(config)
+                .with_partition_columns(partition_cols)
+                .await
+                .unwrap();
 
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+            let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
-        assert_eq!(partitions.len(), 1);
-        assert_eq!(partitions[0].record_batch, batch);
-        writer.write(batch).await.unwrap();
-        writer.flush_and_commit(&mut table).await.unwrap();
-        assert_eq!(table.version(), Some(1));
-        let add_actions: Vec<_> = table
-            .snapshot()
-            .unwrap()
-            .snapshot()
-            .file_views(&table.log_store, None)
-            .try_collect()
-            .await
-            .unwrap();
-        assert_eq!(add_actions.len(), 1);
-        let expected_stats = "{\"numRecords\":11,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"B\"},\"nullCount\":{\"id\":0}}";
-        assert_eq!(
-            expected_stats.parse::<serde_json::Value>().unwrap(),
-            add_actions
-                .into_iter()
-                .next()
+            assert_eq!(partitions.len(), 1);
+            assert_eq!(partitions[0].record_batch, batch);
+            writer.write(batch).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(table.version(), Some(1));
+            let add_actions: Vec<_> = table
+                .snapshot()
                 .unwrap()
-                .stats()
-                .unwrap()
-                .parse::<serde_json::Value>()
-                .unwrap()
-        );
+                .snapshot()
+                .file_views(&table.log_store, None)
+                .try_collect()
+                .await
+                .unwrap();
+            assert_eq!(add_actions.len(), 1);
+            let expected_stats = "{\"numRecords\":11,\"minValues\":{\"id\":\"A\"},\"maxValues\":{\"id\":\"B\"},\"nullCount\":{\"id\":0}}";
+            assert_eq!(
+                expected_stats.parse::<serde_json::Value>().unwrap(),
+                add_actions
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .stats()
+                    .unwrap()
+                    .parse::<serde_json::Value>()
+                    .unwrap()
+            );
+        }
     }
 }

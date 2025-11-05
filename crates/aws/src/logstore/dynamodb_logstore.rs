@@ -10,6 +10,7 @@ use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 use bytes::Bytes;
 use deltalake_core::{ObjectStoreError, Path};
 use tracing::{debug, error, warn};
+use typed_builder::TypedBuilder;
 use url::Url;
 
 use deltalake_core::logstore::*;
@@ -22,11 +23,19 @@ const STORE_NAME: &str = "DeltaS3ObjectStore";
 const MAX_REPAIR_RETRIES: i64 = 3;
 
 /// [`LogStore`] implementation backed by DynamoDb
+#[derive(TypedBuilder)]
+#[builder(doc)]
 pub struct S3DynamoDbLogStore {
+    /// Object store for delta log operations
     prefixed_store: ObjectStoreRef,
+    /// Root object store
     root_store: ObjectStoreRef,
+    /// DynamoDB lock client for transaction coordination
     lock_client: DynamoDbLockClient,
+    /// Log store configuration
     config: LogStoreConfig,
+    /// Table path URI
+    #[builder(setter(into))]
     table_path: String,
 }
 
@@ -72,16 +81,16 @@ impl S3DynamoDbLogStore {
             },
         })?;
         let table_path = to_uri(&location, &Path::from(""));
-        Ok(Self {
-            prefixed_store,
-            root_store,
-            lock_client,
-            config: LogStoreConfig {
+        Ok(Self::builder()
+            .prefixed_store(prefixed_store)
+            .root_store(root_store)
+            .lock_client(lock_client)
+            .config(LogStoreConfig {
                 location,
                 options: options.clone(),
-            },
-            table_path,
-        })
+            })
+            .table_path(table_path)
+            .build())
     }
 
     /// Attempt to repair an incomplete log entry by moving the temporary commit file
@@ -218,7 +227,10 @@ impl LogStore for S3DynamoDbLogStore {
             CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
             _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
         };
-        let entry = CommitEntry::new(version, tmp_commit.clone());
+        let entry = CommitEntry::builder()
+            .version(version)
+            .temp_path(tmp_commit.clone())
+            .build();
         debug!("Writing commit entry for {self:?}: {entry:?}");
         // create log entry in dynamo db: complete = false, no expireTime
         self.lock_client

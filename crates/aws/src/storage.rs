@@ -22,9 +22,13 @@ use futures::Future;
 use object_store::aws::AmazonS3;
 use object_store::client::SpawnedReqwestConnector;
 use tracing::log::*;
+use typed_builder::TypedBuilder;
 use url::Url;
 
-use crate::constants;
+use crate::constants::{
+    self, DEFAULT_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, DEFAULT_S3_POOL_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS,
+};
 use crate::credentials::AWSForObjectStore;
 use crate::errors::DynamoDbConfigError;
 
@@ -122,21 +126,47 @@ fn is_aws(options: &HashMap<String, String>) -> bool {
 /// Options used to configure the [S3StorageBackend].
 ///
 /// Available options are described in [constants].
-#[derive(Clone, Debug)]
-#[allow(missing_docs)]
+#[derive(Clone, Debug, TypedBuilder)]
+#[builder(doc)]
 pub struct S3StorageOptions {
+    /// Whether to use virtual hosted-style requests
+    #[builder(default = false)]
     pub virtual_hosted_style_request: bool,
+    /// Locking provider to use (e.g., "dynamodb")
+    #[builder(default, setter(strip_option, into))]
     pub locking_provider: Option<String>,
+    /// Override endpoint for DynamoDB
+    #[builder(default, setter(strip_option, into))]
     pub dynamodb_endpoint: Option<String>,
+    /// Override region for DynamoDB
+    #[builder(default, setter(strip_option, into))]
     pub dynamodb_region: Option<String>,
+    /// Override access key ID for DynamoDB
+    #[builder(default, setter(strip_option, into))]
     pub dynamodb_access_key_id: Option<String>,
+    /// Override secret access key for DynamoDB
+    #[builder(default, setter(strip_option, into))]
     pub dynamodb_secret_access_key: Option<String>,
+    /// Override session token for DynamoDB
+    #[builder(default, setter(strip_option, into))]
     pub dynamodb_session_token: Option<String>,
+    /// Idle timeout for S3 connection pool
+    #[builder(default = Duration::from_secs(DEFAULT_S3_POOL_IDLE_TIMEOUT_SECONDS))]
     pub s3_pool_idle_timeout: Duration,
+    /// Idle timeout for STS connection pool
+    #[builder(default = Duration::from_secs(DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS))]
     pub sts_pool_idle_timeout: Duration,
+    /// Number of retries for S3 internal server errors
+    #[builder(default = DEFAULT_S3_GET_INTERNAL_SERVER_ERROR_RETRIES)]
     pub s3_get_internal_server_error_retries: usize,
+    /// Allow unsafe rename operations
+    #[builder(default = false)]
     pub allow_unsafe_rename: bool,
+    /// Extra storage options not handled by other fields
+    #[builder(default)]
     pub extra_opts: HashMap<String, String>,
+    /// AWS SDK configuration
+    #[builder(default, setter(strip_option))]
     pub sdk_config: Option<SdkConfig>,
 }
 
@@ -177,15 +207,21 @@ impl S3StorageOptions {
         Self::ensure_env_var(options, constants::AWS_WEB_IDENTITY_TOKEN_FILE);
         Self::ensure_env_var(options, constants::AWS_ROLE_ARN);
         Self::ensure_env_var(options, constants::AWS_ROLE_SESSION_NAME);
-        let s3_pool_idle_timeout =
-            Self::u64_or_default(options, constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, 15);
-        let sts_pool_idle_timeout =
-            Self::u64_or_default(options, constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, 10);
+        let s3_pool_idle_timeout = Self::u64_or_default(
+            options,
+            constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
+            DEFAULT_S3_POOL_IDLE_TIMEOUT_SECONDS,
+        );
+        let sts_pool_idle_timeout = Self::u64_or_default(
+            options,
+            constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
+            DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS,
+        );
 
         let s3_get_internal_server_error_retries = Self::u64_or_default(
             options,
             constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
-            10,
+            DEFAULT_S3_GET_INTERNAL_SERVER_ERROR_RETRIES as u64,
         ) as usize;
 
         let virtual_hosted_style_request: bool =
@@ -568,26 +604,15 @@ mod tests {
 
             let options = S3StorageOptions::try_default().unwrap();
             assert_eq!(
-                S3StorageOptions {
-                    sdk_config: Some(
+                S3StorageOptions::builder()
+                    .sdk_config(
                         SdkConfig::builder()
                             .endpoint_url("http://localhost".to_string())
                             .region(Region::from_static("us-west-1"))
                             .build()
-                    ),
-                    virtual_hosted_style_request: false,
-                    locking_provider: Some("dynamodb".to_string()),
-                    dynamodb_endpoint: None,
-                    dynamodb_region: None,
-                    dynamodb_access_key_id: None,
-                    dynamodb_secret_access_key: None,
-                    dynamodb_session_token: None,
-                    s3_pool_idle_timeout: Duration::from_secs(15),
-                    sts_pool_idle_timeout: Duration::from_secs(10),
-                    s3_get_internal_server_error_retries: 10,
-                    extra_opts: HashMap::new(),
-                    allow_unsafe_rename: false,
-                },
+                    )
+                    .locking_provider("dynamodb")
+                    .build(),
                 options
             );
         });
@@ -803,26 +828,19 @@ mod tests {
             .unwrap();
 
             assert_eq!(
-                S3StorageOptions {
-                    sdk_config: Some(
+                S3StorageOptions::builder()
+                    .sdk_config(
                         SdkConfig::builder()
                             .endpoint_url("http://localhost".to_string())
                             .region(Region::from_static("us-west-2"))
                             .build()
-                    ),
-                    virtual_hosted_style_request: false,
-                    locking_provider: Some("dynamodb".to_string()),
-                    dynamodb_endpoint: Some("http://localhost:dynamodb".to_string()),
-                    dynamodb_region: None,
-                    dynamodb_access_key_id: None,
-                    dynamodb_secret_access_key: None,
-                    dynamodb_session_token: None,
-                    s3_pool_idle_timeout: Duration::from_secs(1),
-                    sts_pool_idle_timeout: Duration::from_secs(2),
-                    s3_get_internal_server_error_retries: 3,
-                    extra_opts: HashMap::new(),
-                    allow_unsafe_rename: false,
-                },
+                    )
+                    .locking_provider("dynamodb")
+                    .dynamodb_endpoint("http://localhost:dynamodb")
+                    .s3_pool_idle_timeout(Duration::from_secs(1))
+                    .sts_pool_idle_timeout(Duration::from_secs(2))
+                    .s3_get_internal_server_error_retries(3)
+                    .build(),
                 options
             );
         });

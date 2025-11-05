@@ -442,8 +442,6 @@ impl std::future::IntoFuture for WriteBuilder {
                 let mut metrics = WriteMetrics::default();
                 let exec_start = Instant::now();
 
-                let write_planner = DeltaPlanner::new();
-
                 // Create table actions to initialize table in case it does not yet exist
                 // and should be created
                 let mut actions = this.check_preconditions().await?;
