@@ -301,7 +301,13 @@ mod tests {
                     ProtocolInner {
                         min_reader_version: 1,
                         min_writer_version: writer,
-                        writer_features: Some(feat.into_iter().collect()),
+                        writer_features: if writer == 7 {
+                            Some(feat.into_iter().collect())
+                        } else if feat.is_empty() {
+                            None
+                        } else {
+                            Some(feat.into_iter().collect())
+                        },
                         ..Default::default()
                     }
                     .as_kernel(),

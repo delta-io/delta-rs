@@ -708,7 +708,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::NANOS(parquet::format::NanoSeconds {}),
+                    unit: parquet::basic::TimeUnit::NANOS,
                 }),
                 Value::from("2022-01-01T12:34:56.789123456Z"),
             ),
@@ -716,7 +716,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
+                    unit: parquet::basic::TimeUnit::MICROS,
                 }),
                 Value::from("2022-01-01T12:34:56.789123Z"),
             ),
@@ -724,7 +724,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::MILLIS(parquet::format::MilliSeconds {}),
+                    unit: parquet::basic::TimeUnit::MILLIS,
                 }),
                 Value::from("2022-01-01T12:34:56.789Z"),
             ),

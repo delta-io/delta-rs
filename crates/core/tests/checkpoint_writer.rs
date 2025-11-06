@@ -128,7 +128,7 @@ mod simple_checkpoint {
                     row_group.column(j);
 
                 for encoding in column_chunk.encodings() {
-                    if *encoding == Encoding::RLE_DICTIONARY {
+                    if encoding == Encoding::RLE_DICTIONARY {
                         found_rle = true;
                     }
                 }
