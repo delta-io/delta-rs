@@ -1141,9 +1141,9 @@ mod tests {
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
                 .expect("to proto");
 
-        let runtime = ctx.runtime_env();
+        let task_ctx = ctx.task_ctx();
         let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-            .try_into_physical_plan(&ctx, runtime.deref(), &codec)
+            .try_into_physical_plan(&task_ctx, &codec)
             .expect("from proto");
         assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     }

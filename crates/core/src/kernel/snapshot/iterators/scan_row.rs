@@ -379,8 +379,11 @@ mod tests {
 
         let partition_values = MapType::new(DataType::STRING, DataType::STRING, true);
         let file_constant_values: SchemaRef = Arc::new(
-            StructType::try_new([StructField::nullable("partitionValues", partition_values)])
-                .unwrap(),
+            StructType::try_new([
+                StructField::nullable("partitionValues", partition_values),
+                StructField::nullable("baseRowId", DataType::LONG),
+            ])
+            .unwrap(),
         );
         // Inspecting the schema of file_constant_values:
         let _: ArrowSchema = file_constant_values.as_ref().try_into_arrow()?;
@@ -417,14 +420,20 @@ mod tests {
             false,
         ));
 
-        let parts = StructArray::from(vec![(
-            Arc::new(ArrowField::new(
-                "partitionValues",
-                ArrowDataType::Map(map_field, false),
-                true,
-            )),
-            Arc::new(partitions) as ArrayRef,
-        )]);
+        let parts = StructArray::from(vec![
+            (
+                Arc::new(ArrowField::new(
+                    "partitionValues",
+                    ArrowDataType::Map(map_field, false),
+                    true,
+                )),
+                Arc::new(partitions) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("baseRowId", ArrowDataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![Option::<i64>::None])) as ArrayRef,
+            ),
+        ]);
 
         let batch = RecordBatch::try_new(
             Arc::new(schema.as_ref().try_into_arrow()?),
