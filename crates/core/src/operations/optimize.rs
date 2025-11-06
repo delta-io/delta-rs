@@ -1164,10 +1164,13 @@ pub(super) mod zorder {
             }
 
             fn signature(&self) -> &Signature {
-                &Signature {
-                    type_signature: TypeSignature::VariadicAny,
-                    volatility: Volatility::Immutable,
-                }
+                static SIGNATURE: std::sync::LazyLock<Signature> =
+                    std::sync::LazyLock::new(|| Signature {
+                        type_signature: TypeSignature::VariadicAny,
+                        volatility: Volatility::Immutable,
+                        parameter_names: Some(vec![]),
+                    });
+                &SIGNATURE
             }
 
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
