@@ -14,6 +14,7 @@ use object_store::path::Path;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
@@ -75,10 +76,10 @@ fn get_max_concurrency_tasks() -> usize {
 async fn upload_parquet_file(
     mut arrow_writer: AsyncArrowWriter<ParquetObjectWriter>,
     path: Path,
-) -> DeltaResult<(Path, usize, FileMetaData)> {
+) -> DeltaResult<(Path, usize, ParquetMetaData)> {
     let metadata = arrow_writer.finish().await?;
     let file_size = arrow_writer.bytes_written();
-    Span::current().record("rows", metadata.num_rows);
+    Span::current().record("rows", metadata.file_metadata().num_rows());
     Span::current().record("size", file_size);
     debug!("multipart upload completed successfully");
 
@@ -399,7 +400,7 @@ pub struct PartitionWriter {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
-    in_flight_writers: JoinSet<DeltaResult<(Path, usize, FileMetaData)>>,
+    in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
 }
 
 impl PartitionWriter {

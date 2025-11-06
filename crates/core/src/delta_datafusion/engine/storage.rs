@@ -93,6 +93,12 @@ impl StorageHandler for DataFusionStorageHandler {
                 .flatten(),
         ))
     }
+
+    fn copy_atomic(&self, src: &Url, dest: &Url) -> DeltaResult<()> {
+        Err(DeltaError::Unsupported(
+            "Copy Atomic is not supported".to_string(),
+        ))
+    }
 }
 
 pub(crate) trait AsObjectStoreUrl {

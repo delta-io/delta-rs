@@ -87,7 +87,7 @@ use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
 
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
@@ -183,19 +183,19 @@ pub enum TransactionError {
 
     /// Error returned when unsupported reader features are required
     #[error("Unsupported reader features required: {0:?}")]
-    UnsupportedReaderFeatures(Vec<ReaderFeature>),
+    UnsupportedReaderFeatures(Vec<TableFeature>),
 
     /// Error returned when unsupported writer features are required
     #[error("Unsupported writer features required: {0:?}")]
-    UnsupportedWriterFeatures(Vec<WriterFeature>),
+    UnsupportedWriterFeatures(Vec<TableFeature>),
 
     /// Error returned when writer features are required but not specified
     #[error("Writer features must be specified for writerversion >= 7, please specify: {0:?}")]
-    WriterFeaturesRequired(WriterFeature),
+    WriterFeaturesRequired(TableFeature),
 
     /// Error returned when reader features are required but not specified
     #[error("Reader features must be specified for reader version >= 3, please specify: {0:?}")]
-    ReaderFeaturesRequired(ReaderFeature),
+    ReaderFeaturesRequired(TableFeature),
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
     /// Currently used by DynamoDb-backed S3 log store when database operations fail.

@@ -172,11 +172,13 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .transpose()?
             .flatten();
 
+        let latest_commit_file = None;
         let listed_log_files = ListedLogFiles::try_new(
             ascending_commit_files,
             ascending_compaction_files,
             checkpoint_parts,
             latest_crc_file,
+            latest_commit_file,
         )
         .map_err(de::Error::custom)?;
 

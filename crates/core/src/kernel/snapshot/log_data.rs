@@ -390,11 +390,13 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER.new_expression_evaluator(
-                crate::kernel::models::fields::log_schema_ref().clone(),
-                expression.into(),
-                field.data_type().clone(),
-            );
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(
+                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    expression.into(),
+                    field.data_type().clone(),
+                )
+                .ok()?; // ok to ignore error here?
 
             let results: Vec<_> = self
                 .data
@@ -468,11 +470,13 @@ mod datafusion {
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER.new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column(["add", "stats_parsed", "numRecords"]).into(),
-                    DataType::Primitive(PrimitiveType::Long),
-                )
+                ARROW_HANDLER
+                    .new_expression_evaluator(
+                        crate::kernel::models::fields::log_schema_ref().clone(),
+                        Expression::column(["add", "stats_parsed", "numRecords"]).into(),
+                        DataType::Primitive(PrimitiveType::Long),
+                    )
+                    .expect("failed to create row counts evaluator")
             });
 
             let results: Vec<_> = self

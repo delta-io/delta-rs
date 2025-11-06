@@ -1,5 +1,7 @@
+use delta_kernel::{DeltaResult, FilteredEngineData};
 use std::sync::Arc;
 
+use super::storage::{group_by_store, AsObjectStoreUrl};
 use dashmap::{mapref::one::Ref, DashMap};
 use datafusion::execution::{
     object_store::{ObjectStoreRegistry, ObjectStoreUrl},
@@ -18,8 +20,7 @@ use delta_kernel::{
 };
 use itertools::Itertools;
 use tokio::runtime::{Handle, RuntimeFlavor};
-
-use super::storage::{group_by_store, AsObjectStoreUrl};
+use url::Url;
 
 #[derive(Clone)]
 pub struct DataFusionFileFormatHandler {
@@ -167,7 +168,7 @@ impl JsonHandler for DataFusionFileFormatHandler {
     fn write_json_file(
         &self,
         path: &url::Url,
-        data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send + '_>,
+        data: Box<dyn Iterator<Item = Result<FilteredEngineData, delta_kernel::Error>> + Send + '_>,
         overwrite: bool,
     ) -> KernelResult<()> {
         self.get_or_create_json(path.as_object_store_url())?

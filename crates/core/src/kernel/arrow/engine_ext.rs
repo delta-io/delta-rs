@@ -65,7 +65,7 @@ pub(crate) trait SnapshotExt {
 
 impl SnapshotExt for Snapshot {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let partition_columns = self.metadata().partition_columns();
+        let partition_columns = self.table_configuration().metadata().partition_columns();
         let column_mapping_mode = self.table_configuration().column_mapping_mode();
         let physical_schema = StructType::try_new(
             self.schema()
@@ -80,10 +80,8 @@ impl SnapshotExt for Snapshot {
     }
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
-        Ok(
-            partitions_schema(self.schema().as_ref(), self.metadata().partition_columns())?
-                .map(Arc::new),
-        )
+        let partition_columns = self.table_configuration().metadata().partition_columns();
+        Ok(partitions_schema(self.schema().as_ref(), partition_columns)?.map(Arc::new))
     }
 
     /// Arrow schema for a parsed (including stats_parsed and partitionValues_parsed)
@@ -386,17 +384,16 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
 }
 
 pub(crate) fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
+    let (data, selection_vector) = metadata.scan_files.into_parts();
     let scan_file_transforms = metadata
         .scan_file_transforms
         .into_iter()
         .enumerate()
-        .filter_map(|(i, v)| metadata.scan_files.selection_vector[i].then_some(v))
+        .filter_map(|(i, v)| selection_vector[i].then_some(v))
         .collect();
-    let batch = ArrowEngineData::try_from_engine_data(metadata.scan_files.data)?.into();
-    let scan_files = filter_record_batch(
-        &batch,
-        &BooleanArray::from(metadata.scan_files.selection_vector),
-    )?;
+    let predicate = BooleanArray::from_iter(&selection_vector);
+    let batch = ArrowEngineData::try_from_engine_data(data)?.into();
+    let scan_files = filter_record_batch(&batch, &predicate)?;
     Ok(ScanMetadataArrow {
         scan_files,
         scan_file_transforms,
@@ -475,11 +472,13 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(values)]).unwrap();
 
         let expression = column_expr!("a");
-        let expr = handler.new_expression_evaluator(
-            Arc::new((&schema).try_into_kernel().unwrap()),
-            expression.into(),
-            DataType::INTEGER,
-        );
+        let expr = handler
+            .new_expression_evaluator(
+                Arc::new((&schema).try_into_kernel().unwrap()),
+                expression.into(),
+                DataType::INTEGER,
+            )
+            .unwrap();
 
         let result = expr.evaluate_arrow(batch);
         assert!(result.is_ok());

@@ -23,26 +23,26 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 delta_kernel = { version = "0.16.0", features = [
-    "arrow-56",
+    "arrow-57",
     "default-engine-rustls",
     "internal-api",
 ] }
 
 
 # arrow
-arrow = { version = "56.2" }
-arrow-arith = { version = "56.2" }
-arrow-array = { version = "56.2", features = ["chrono-tz"] }
-arrow-buffer = { version = "56.2" }
-arrow-cast = { version = "56.2" }
-arrow-ipc = { version = "56.2" }
-arrow-json = { version = "56.2" }
-arrow-ord = { version = "56.2" }
-arrow-row = { version = "56.2" }
-arrow-schema = { version = "56.2" }
-arrow-select = { version = "56.2" }
+arrow = { version = "57" }
+arrow-arith = { version = "57" }
+arrow-array = { version = "57", features = ["chrono-tz"] }
+arrow-buffer = { version = "57" }
+arrow-cast = { version = "57" }
+arrow-ipc = { version = "57" }
+arrow-json = { version = "57" }
+arrow-ord = { version = "57" }
+arrow-row = { version = "57" }
+arrow-schema = { version = "57" }
+arrow-select = { version = "57" }
 object_store = { version = "0.12.1" }
-parquet = { version = "56.2" }
+parquet = { version = "57" }
 
 # datafusion
 datafusion = "50.2"
@@ -117,3 +117,35 @@ inherits = "release"
 opt-level = 3
 codegen-units = 1
 lto = "fat"
+
+
+
+[patch.crates-io]
+# pin to pre-release DataFusion 51
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+datafusion-functions-aggregate = {git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "a5eb9121ccf802dda547897155403b08a4fbf774"  }
+
+# get the latest delta-kernel (to get arrow-57 support)
+# https://github.com/delta-io/delta-kernel-rs/pull/1424
+delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs.git", rev = "1a58987df6e55785350ad20ba876ef5467b6e20b"  }
+
+
+# datafusion
+# datafusion = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/core" }
+# datafusion-expr = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/expr"  }
+# datafusion-common = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/common"  }
+# datafusion-ffi = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/ffi"  }
+# datafusion-functions = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/functions"  }
+# datafusion-functions-aggregate = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/functions-aggregate"  }
+# datafusion-physical-expr = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/physical-expr"  }
+# datafusion-physical-plan = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/physical-plan"  }
+# datafusion-proto = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/proto"  }
+# datafusion-sql = { path = "/Users/andrewlamb/Software/datafusion2/datafusion/sql"  }

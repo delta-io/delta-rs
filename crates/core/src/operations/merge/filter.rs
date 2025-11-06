@@ -69,10 +69,8 @@ fn construct_placeholder(
 ) -> Option<Expr> {
     if is_partition_column {
         let placeholder_name = format!("{column_name}_{}", placeholders.len());
-        let placeholder = Expr::Placeholder(Placeholder {
-            id: placeholder_name.clone(),
-            data_type: None,
-        });
+        let placeholder =
+            Expr::Placeholder(Placeholder::new_with_field(placeholder_name.clone(), None));
 
         let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
             (placeholder.into(), binary.clone().right, *binary.left)
@@ -97,15 +95,11 @@ fn construct_placeholder(
         match binary.op {
             Operator::Eq => {
                 let name_min = format!("{column_name}_{}_min", placeholders.len());
-                let placeholder_min = Expr::Placeholder(Placeholder {
-                    id: name_min.clone(),
-                    data_type: None,
-                });
+                let placeholder_min =
+                    Expr::Placeholder(Placeholder::new_with_field(name_min.clone(), None));
                 let name_max = format!("{column_name}_{}_max", placeholders.len());
-                let placeholder_max = Expr::Placeholder(Placeholder {
-                    id: name_max.clone(),
-                    data_type: None,
-                });
+                let placeholder_max =
+                    Expr::Placeholder(Placeholder::new_with_field(name_max.clone(), None));
                 let (source_expr, target_expr) = if source_left {
                     (*binary.left, *binary.right)
                 } else {
@@ -301,10 +295,8 @@ pub(crate) fn generalize_filter(
                 if !streaming_source {
                     let placeholder_name = format!("{col}_{}", placeholders.len());
 
-                    let placeholder = Expr::Placeholder(Placeholder {
-                        id: placeholder_name.clone(),
-                        data_type: None,
-                    });
+                    let placeholder =
+                        Expr::Placeholder(Placeholder::new(placeholder_name.clone(), None));
 
                     placeholders.push(PredicatePlaceholder {
                         expr: other,

@@ -415,10 +415,11 @@ mod local {
 
         // Build a new context from scratch and deserialize the plan
         let ctx = create_session().into_inner();
+        let task_ctx = ctx.task_ctx();
         let state = ctx.state();
         let source_scan = Arc::new(logical_plan_from_bytes_with_extension_codec(
             &source_scan_bytes,
-            &ctx,
+            &task_ctx,
             &DeltaLogicalCodec {},
         )?);
         let schema: StructType = source_scan.schema().as_arrow().try_into_kernel().unwrap();

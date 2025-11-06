@@ -3,7 +3,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use delta_kernel::schema::{DataType, StructField};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
 use crate::kernel::{error::Error, DeltaResult};
@@ -164,10 +164,10 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
 /// Allows us to extend the Protocol struct with additional methods
 /// to update the protocol actions.
 pub(crate) trait ProtocolExt {
-    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>>;
-    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>>;
-    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol;
-    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol;
+    fn reader_features_set(&self) -> Option<HashSet<TableFeature>>;
+    fn writer_features_set(&self) -> Option<HashSet<TableFeature>>;
+    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol;
+    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol;
     fn move_table_properties_into_features(
         self,
         configuration: &HashMap<String, String>,
@@ -181,23 +181,23 @@ pub(crate) trait ProtocolExt {
 }
 
 impl ProtocolExt for Protocol {
-    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>> {
+    fn reader_features_set(&self) -> Option<HashSet<TableFeature>> {
         self.reader_features()
             .map(|features| features.iter().cloned().collect())
     }
 
-    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>> {
+    fn writer_features_set(&self) -> Option<HashSet<TableFeature>> {
         self.writer_features()
             .map(|features| features.iter().cloned().collect())
     }
 
-    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol {
+    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol {
         let mut inner = ProtocolInner::from_kernel(&self);
         inner = inner.append_reader_features(reader_features.iter().cloned());
         inner.as_kernel()
     }
 
-    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol {
+    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol {
         let mut inner = ProtocolInner::from_kernel(&self);
         inner = inner.append_writer_features(writer_features.iter().cloned());
         inner.as_kernel()
@@ -248,11 +248,11 @@ pub(crate) struct ProtocolInner {
     /// A collection of features that a client must implement in order to correctly
     /// read this table (exist only when minReaderVersion is set to 3)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reader_features: Option<HashSet<ReaderFeature>>,
+    pub reader_features: Option<HashSet<TableFeature>>,
     /// A collection of features that a client must implement in order to correctly
     /// write this table (exist only when minWriterVersion is set to 7)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub writer_features: Option<HashSet<WriterFeature>>,
+    pub writer_features: Option<HashSet<TableFeature>>,
 }
 
 impl Default for ProtocolInner {
@@ -290,7 +290,7 @@ impl ProtocolInner {
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
     pub fn append_reader_features(
         mut self,
-        reader_features: impl IntoIterator<Item = impl Into<ReaderFeature>>,
+        reader_features: impl IntoIterator<Item = impl Into<TableFeature>>,
     ) -> Self {
         let all_reader_features = reader_features
             .into_iter()
@@ -312,7 +312,7 @@ impl ProtocolInner {
     /// Append the writer features in the protocol action, automatically bumps min_writer_version
     pub fn append_writer_features(
         mut self,
-        writer_features: impl IntoIterator<Item = impl Into<WriterFeature>>,
+        writer_features: impl IntoIterator<Item = impl Into<TableFeature>>,
     ) -> Self {
         let all_writer_features = writer_features
             .into_iter()
@@ -349,25 +349,25 @@ impl ProtocolInner {
                 .filter(|(_, value)| value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableChangeDataFeed" if parse_bool(value) => {
-                        Some(WriterFeature::ChangeDataFeed)
+                        Some(TableFeature::ChangeDataFeed)
                     }
-                    "delta.appendOnly" if parse_bool(value) => Some(WriterFeature::AppendOnly),
+                    "delta.appendOnly" if parse_bool(value) => Some(TableFeature::AppendOnly),
                     "delta.enableDeletionVectors" if parse_bool(value) => {
-                        Some(WriterFeature::DeletionVectors)
+                        Some(TableFeature::DeletionVectors)
                     }
                     "delta.enableRowTracking" if parse_bool(value) => {
-                        Some(WriterFeature::RowTracking)
+                        Some(TableFeature::RowTracking)
                     }
-                    "delta.checkpointPolicy" if value == "v2" => Some(WriterFeature::V2Checkpoint),
+                    "delta.checkpointPolicy" if value == "v2" => Some(TableFeature::V2Checkpoint),
                     _ => None,
                 })
-                .collect::<HashSet<WriterFeature>>();
+                .collect::<HashSet<TableFeature>>();
 
             if configuration
                 .keys()
                 .any(|v| v.starts_with("delta.constraints."))
             {
-                converted_writer_features.insert(WriterFeature::CheckConstraints);
+                converted_writer_features.insert(TableFeature::CheckConstraints);
             }
 
             match self.writer_features {
@@ -383,12 +383,12 @@ impl ProtocolInner {
                 .iter()
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableDeletionVectors" if parse_bool(value) => {
-                        Some(ReaderFeature::DeletionVectors)
+                        Some(TableFeature::DeletionVectors)
                     }
-                    "delta.checkpointPolicy" if value == "v2" => Some(ReaderFeature::V2Checkpoint),
+                    "delta.checkpointPolicy" if value == "v2" => Some(TableFeature::V2Checkpoint),
                     _ => None,
                 })
-                .collect::<HashSet<ReaderFeature>>();
+                .collect::<HashSet<TableFeature>>();
             match self.reader_features {
                 Some(mut features) => {
                     features.extend(converted_reader_features);
@@ -481,7 +481,7 @@ impl ProtocolInner {
             }
         }
 
-        // Check enableChangeDataFeed and bump protocol or add writerFeature if writer versions is >=7
+        // Check enableChangeDataFeed and bump protocol or add TableFeature if writer versions is >=7
         if let Some(enable_cdf) = parsed_properties.get(&TableProperty::EnableChangeDataFeed) {
             let if_enable_cdf = enable_cdf.to_ascii_lowercase().parse::<bool>();
             match if_enable_cdf {
@@ -489,12 +489,12 @@ impl ProtocolInner {
                     if self.min_writer_version >= 7 {
                         match self.writer_features {
                             Some(mut features) => {
-                                features.insert(WriterFeature::ChangeDataFeed);
+                                features.insert(TableFeature::ChangeDataFeed);
                                 self.writer_features = Some(features);
                             }
                             None => {
                                 self.writer_features =
-                                    Some(HashSet::from([WriterFeature::ChangeDataFeed]))
+                                    Some(HashSet::from([TableFeature::ChangeDataFeed]))
                             }
                         }
                     } else if self.min_writer_version <= 3 {
@@ -514,17 +514,17 @@ impl ProtocolInner {
                 Ok(true) => {
                     let writer_features = match self.writer_features {
                         Some(mut features) => {
-                            features.insert(WriterFeature::DeletionVectors);
+                            features.insert(TableFeature::DeletionVectors);
                             features
                         }
-                        None => HashSet::from([WriterFeature::DeletionVectors]),
+                        None => HashSet::from([TableFeature::DeletionVectors]),
                     };
                     let reader_features = match self.reader_features {
                         Some(mut features) => {
-                            features.insert(ReaderFeature::DeletionVectors);
+                            features.insert(TableFeature::DeletionVectors);
                             features
                         }
-                        None => HashSet::from([ReaderFeature::DeletionVectors]),
+                        None => HashSet::from([TableFeature::DeletionVectors]),
                     };
                     self.min_reader_version = 3;
                     self.min_writer_version = 7;
@@ -547,8 +547,8 @@ impl ProtocolInner {
 
     /// Enable timestamp_ntz in the protocol
     fn enable_timestamp_ntz(mut self) -> Self {
-        self = self.append_reader_features([ReaderFeature::TimestampWithoutTimezone]);
-        self = self.append_writer_features([WriterFeature::TimestampWithoutTimezone]);
+        self = self.append_reader_features([TableFeature::TimestampWithoutTimezone]);
+        self = self.append_writer_features([TableFeature::TimestampWithoutTimezone]);
         self
     }
 
@@ -558,7 +558,7 @@ impl ProtocolInner {
             self.min_writer_version = 4;
         }
         if self.min_writer_version >= 7 {
-            self = self.append_writer_features([WriterFeature::GeneratedColumns]);
+            self = self.append_writer_features([TableFeature::GeneratedColumns]);
         }
         self
     }
@@ -566,7 +566,7 @@ impl ProtocolInner {
     /// Enabled generated columns
     fn enable_invariants(mut self) -> Self {
         if self.min_writer_version >= 7 {
-            self = self.append_writer_features([WriterFeature::Invariants]);
+            self = self.append_writer_features([TableFeature::Invariants]);
         }
         self
     }
@@ -654,35 +654,27 @@ impl fmt::Display for TableFeatures {
     }
 }
 
-impl TryFrom<&TableFeatures> for ReaderFeature {
+impl TryFrom<&TableFeatures> for TableFeature {
     type Error = strum::ParseError;
 
     fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        ReaderFeature::try_from(value.as_ref())
-    }
-}
-
-impl TryFrom<&TableFeatures> for WriterFeature {
-    type Error = strum::ParseError;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        WriterFeature::try_from(value.as_ref())
+        TableFeature::try_from(value.as_ref())
     }
 }
 
 impl TableFeatures {
     /// Convert table feature to respective reader or/and write feature
-    pub fn to_reader_writer_features(&self) -> (Option<ReaderFeature>, Option<WriterFeature>) {
-        let reader_feature = ReaderFeature::try_from(self)
+    pub fn to_reader_writer_features(&self) -> (Option<TableFeature>, Option<TableFeature>) {
+        let reader_feature = TableFeature::try_from(self)
             .ok()
             .and_then(|feature| match feature {
-                ReaderFeature::Unknown(_) => None,
+                TableFeature::Unknown(_) => None,
                 _ => Some(feature),
             });
-        let writer_feature = WriterFeature::try_from(self)
+        let writer_feature = TableFeature::try_from(self)
             .ok()
             .and_then(|feature| match feature {
-                WriterFeature::Unknown(_) => None,
+                TableFeature::Unknown(_) => None,
                 _ => Some(feature),
             });
         (reader_feature, writer_feature)
@@ -1178,15 +1170,15 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(
             protocol.reader_features(),
-            Some(vec![ReaderFeature::Unknown("catalogOwned".to_owned())].as_slice())
+            Some(vec![TableFeature::Unknown("catalogOwned".to_owned())].as_slice())
         );
         assert_eq!(
             protocol.writer_features(),
             Some(
                 vec![
-                    WriterFeature::Unknown("catalogOwned".to_owned()),
-                    WriterFeature::Invariants,
-                    WriterFeature::AppendOnly
+                    TableFeature::Unknown("catalogOwned".to_owned()),
+                    TableFeature::Invariants,
+                    TableFeature::AppendOnly
                 ]
                 .as_slice()
             )

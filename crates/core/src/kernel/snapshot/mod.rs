@@ -199,12 +199,12 @@ impl Snapshot {
 
     /// Get the table metadata of the snapshot
     pub fn metadata(&self) -> &Metadata {
-        self.inner.metadata()
+        self.inner.table_configuration().metadata()
     }
 
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
-        self.inner.protocol()
+        self.inner.table_configuration().protocol()
     }
 
     /// Get the table config which is loaded with of the snapshot
@@ -369,11 +369,13 @@ impl Snapshot {
                     .map(|field| Expression::column(["remove", field.name()])),
             )
             .into();
-            ARROW_HANDLER.new_expression_evaluator(
-                TOMBSTONE_SCHEMA.clone(),
-                expression,
-                Remove::to_data_type(),
-            )
+            ARROW_HANDLER
+                .new_expression_evaluator(
+                    TOMBSTONE_SCHEMA.clone(),
+                    expression,
+                    Remove::to_data_type(),
+                )
+                .expect("Failed to create Remove evaluator")
         });
 
         // TODO: which capacity to choose
@@ -385,7 +387,6 @@ impl Snapshot {
 
         let remove_data = match self.inner.log_segment().read_actions(
             engine.as_ref(),
-            TOMBSTONE_SCHEMA.clone(),
             TOMBSTONE_SCHEMA.clone(),
             None,
         ) {
