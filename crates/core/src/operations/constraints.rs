@@ -6,7 +6,7 @@ use datafusion::catalog::Session;
 use datafusion::common::ToDFSchema;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
-use delta_kernel::table_features::WriterFeature;
+use delta_kernel::table_features::TableFeature;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 
@@ -235,7 +235,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 } else {
                     let current_features = old_protocol.writer_features_set();
                     if let Some(mut features) = current_features {
-                        features.insert(WriterFeature::CheckConstraints);
+                        features.insert(TableFeature::CheckConstraints);
                         Some(features)
                     } else {
                         current_features

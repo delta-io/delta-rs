@@ -43,7 +43,7 @@ use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::FunctionRegistry;
+use datafusion::execution::TaskContext;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -688,7 +688,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _registry: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
@@ -732,7 +732,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension, DataFusionError> {
         todo!("DeltaLogicalCodec")
     }
@@ -746,7 +746,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
         let provider: DeltaTable = serde_json::from_slice(buf)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))?;

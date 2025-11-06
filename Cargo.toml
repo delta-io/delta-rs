@@ -22,32 +22,32 @@ repository = "https://github.com/delta-io/delta.rs"
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.16.0", features = [
-    "arrow-56",
+delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs", rev = "eff31d26e14c1c1e29589991e045079d6620e255", features = [
+    "arrow-57",
     "default-engine-rustls",
     "internal-api",
 ] }
 
 
 # arrow
-arrow = { version = "56.2" }
-arrow-arith = { version = "56.2" }
-arrow-array = { version = "56.2", features = ["chrono-tz"] }
-arrow-buffer = { version = "56.2" }
-arrow-cast = { version = "56.2" }
-arrow-ipc = { version = "56.2" }
-arrow-json = { version = "56.2" }
-arrow-ord = { version = "56.2" }
-arrow-row = { version = "56.2" }
-arrow-schema = { version = "56.2" }
-arrow-select = { version = "56.2" }
+arrow = { version = "57" }
+arrow-arith = { version = "57" }
+arrow-array = { version = "57", features = ["chrono-tz"] }
+arrow-buffer = { version = "57" }
+arrow-cast = { version = "57" }
+arrow-ipc = { version = "57" }
+arrow-json = { version = "57" }
+arrow-ord = { version = "57" }
+arrow-row = { version = "57" }
+arrow-schema = { version = "57" }
+arrow-select = { version = "57" }
 object_store = { version = "0.12.1" }
-parquet = { version = "56.2" }
+parquet = { version = "57" }
 
 # datafusion
-datafusion = "50.2"
-datafusion-ffi = "50.2"
-datafusion-proto = "50.2"
+datafusion = { git = "https://github.com/apache/datafusion", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
+datafusion-ffi = { git = "https://github.com/apache/datafusion", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
+datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
