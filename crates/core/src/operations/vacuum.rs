@@ -264,7 +264,9 @@ impl VacuumBuilder {
                 for version in sorted_versions {
                     state.update(&self.log_store, Some(version)).await?;
                     let files: Vec<String> = state
-                        .file_paths_iter()
+                        .log_data()
+                        .into_iter()
+                        .map(|add| add.object_store_path())
                         .map(|path| path.to_string())
                         .collect();
                     debug!("keep version:{version}\n, {files:#?}");
@@ -545,7 +547,7 @@ mod tests {
     use object_store::{local::LocalFileSystem, memory::InMemory, PutPayload};
 
     use super::*;
-    use crate::{checkpoints::create_checkpoint, ensure_table_uri, open_table};
+    use crate::{ensure_table_uri, open_table};
     use std::path::Path;
     use std::{io::Read, time::SystemTime};
     use url::Url;
@@ -734,7 +736,9 @@ mod tests {
         assert_ne!(32, result.files_deleted.len());
 
         // Can we checkpoint it?
-        create_checkpoint(&table, None).await.unwrap();
+        crate::checkpoints::create_checkpoint(&table, None)
+            .await
+            .unwrap();
         table.load().await.unwrap();
         assert_eq!(Some(6), table.version());
 
@@ -838,7 +842,7 @@ mod tests {
     /// This tests the fix for the race condition where concurrent writer's files could be deleted
     #[tokio::test]
     async fn test_vacuum_full_protects_recent_uncommitted_files() -> DeltaResult<()> {
-        use chrono::{DateTime, Utc};
+        use chrono::DateTime;
         use object_store::GetResultPayload;
 
         let store = InMemory::new();
