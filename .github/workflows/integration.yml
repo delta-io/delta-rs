@@ -11,11 +11,6 @@ env:
   # https://github.com/rust-lang/cargo/issues/10280
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
-  # Disable full debug symbol generation to speed up CI build and keep memory down
-  RUSTFLAGS: -C debuginfo=line-tables-only
-  # Disable incremental builds by cargo for CI which should save disk space
-  # and hopefully avoid final link "No space left on device"
-  CARGO_INCREMENTAL: 0
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
