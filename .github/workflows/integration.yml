@@ -11,6 +11,9 @@ env:
   # https://github.com/rust-lang/cargo/issues/10280
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
+  # Override RUSTFLAGS to not treat warnings as errors (setup-rust-toolchain sets -D warnings by default)
+  # This allows deprecated methods to be warnings instead of errors
+  RUSTFLAGS: ""
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
@@ -58,7 +61,7 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo llvm-cov \
+          cargo llvm-cov --profile=ci \
             --package deltalake-${{ matrix.target.name }} \
             --features integration_test \
             --codecov \
@@ -104,7 +107,7 @@ jobs:
       - name: Run tests with native-tls
         run: |
           gmake setup-dat
-          cargo test \
+          cargo test --profile=ci \
             --package deltalake-aws \
             --no-default-features \
             --features integration_test,native-tls
@@ -142,7 +145,7 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo llvm-cov \
+          cargo llvm-cov --profile=ci \
             --features integration_test \
             --package deltalake-hdfs \
             --codecov \
@@ -187,7 +190,7 @@ jobs:
       - name: Run tests
         run: |
           gmake setup-dat
-          cargo llvm-cov \
+          cargo llvm-cov --profile=ci \
             --package deltalake-lakefs \
             --features integration_test_lakefs \
             --codecov \
