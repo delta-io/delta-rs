@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The automatic registration happens via constructor hooks in the meta-crate (see [CHANGELOG.md](../../CHANGELOG.md) for details).
+The automatic registration happens via constructor hooks in the meta-crate (see the [CHANGELOG](https://github.com/delta-io/delta-rs/blob/main/CHANGELOG.md) for details).
 
 **Note**: If you're using `deltalake-core` and individual storage crates directly (instead of the `deltalake` meta-crate), you'll still need to call `deltalake_gcp::register_handlers(None)` manually.
 
