@@ -4,6 +4,39 @@
 
 You don’t need to install any extra dependencies to read/write Delta tables to GCS with engines that use `delta-rs`. You do need to configure your GCS access credentials correctly.
 
+## Using Rust with GCS
+
+When using the Rust `deltalake` crate with the `gcs` feature enabled, GCS support is **automatically registered** at program startup. You don't need to manually call any registration functions.
+
+### Before (manual registration - deprecated)
+
+```rust
+// Legacy approach where applications had to register the handler
+deltalake::gcp::register_handlers(None);
+
+let ops = DeltaOps::try_from_uri("gs://bucket/table".parse()?).await?;
+```
+
+### After (automatic registration)
+
+```rust
+// Enable the gcs feature in Cargo.toml:
+// deltalake = { version = "0.29", features = ["gcs"] }
+
+use deltalake::DeltaOps;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The gs:// scheme is recognized automatically
+    let ops = DeltaOps::try_from_uri("gs://bucket/table".parse()?).await?;
+    Ok(())
+}
+```
+
+The automatic registration happens via constructor hooks in the meta-crate (see the [CHANGELOG](https://github.com/delta-io/delta-rs/blob/main/CHANGELOG.md) for details).
+
+**Note**: If you're using `deltalake-core` and individual storage crates directly (instead of the `deltalake` meta-crate), you'll still need to call `deltalake_gcp::register_handlers(None)` manually.
+
 ## Using Application Default Credentials
 
 Application Default Credentials (ADC) is a strategy used by GCS to automatically find credentials based on the application environment.
