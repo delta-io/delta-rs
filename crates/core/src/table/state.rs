@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
-use arrow::record_batch::RecordBatch;
 use arrow::datatypes::Schema as ArrowSchema;
+use arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
@@ -345,7 +345,7 @@ impl EagerSnapshot {
 
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
-        
+
         let files = self.files()?;
         if files.is_empty() {
             // When there are no add actions, create an empty RecordBatch with the correct schema
@@ -356,29 +356,29 @@ impl EagerSnapshot {
             };
             let arrow_schema: ArrowSchema = struct_type.as_ref().try_into_arrow()?;
             let empty_batch = RecordBatch::new_empty(Arc::new(arrow_schema));
-            
+
             return if flatten {
                 Ok(empty_batch.normalize(".", None)?)
             } else {
                 Ok(empty_batch)
             };
         }
-        
+
         let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let evaluator = ARROW_HANDLER.new_expression_evaluator(
             input_schema,
             expression.into(),
             table_schema,
-        )?;
+)?;
         
         let results = files
             .iter()
             .map(|file| evaluator.evaluate_arrow(file.clone()))
             .collect::<Result<Vec<_>, _>>()?;
-        
+
         let result = concat_batches(results[0].schema_ref(), &results)?;
-        
+
         if flatten {
             Ok(result.normalize(".", None)?)
         } else {
