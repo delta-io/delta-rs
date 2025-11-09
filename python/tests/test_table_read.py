@@ -539,8 +539,9 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
     dt = DeltaTable(tmp_path)
 
     # Sanity check to ensure table starts with files.
-    initial_adds = dt.get_add_actions()
-    assert initial_adds.num_rows == 3
+    initial_adds = dt.get_add_actions(flatten=True)
+    assert initial_adds.num_rows == 1
+    assert len(initial_adds["path"]) == 1
 
     dt.delete()
     dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
