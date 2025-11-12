@@ -8,15 +8,15 @@ use std::time::Duration;
 
 use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
-use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
-use deltalake_core::logstore::object_store::{
+use deltalake_logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+use deltalake_logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
-use deltalake_core::logstore::{
+use deltalake_logstore::{
     config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
-use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
+use deltalake_logstore::{LogStore, LogStoreError, LogStoreResult, ObjectStoreError, Path};
 use futures::stream::BoxStream;
 use futures::Future;
 use object_store::aws::AmazonS3;
@@ -44,7 +44,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let options = self.with_env_s3(&config.raw);
 
         // All S3-likes should start their builder the same way
@@ -69,11 +69,10 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 builder.with_credentials(Arc::new(AWSForObjectStore::new(sdk_config.clone())));
         }
 
-        let (_, path) =
-            ObjectStoreScheme::parse(url).map_err(|e| DeltaTableError::GenericError {
-                source: Box::new(e),
-            })?;
-        let prefix = Path::parse(path)?;
+        let (_, path) = ObjectStoreScheme::parse(url)
+            .map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
+        let prefix =
+            Path::parse(path).map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
 
         let store = aws_storage_handler(builder.build()?, &s3_options)?;
         debug!("Initialized the object store: {store:?}");
@@ -85,7 +84,7 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
 fn aws_storage_handler(
     store: AmazonS3,
     s3_options: &S3StorageOptions,
-) -> DeltaResult<ObjectStoreRef> {
+) -> LogStoreResult<ObjectStoreRef> {
     // Nearly all S3 Object stores support conditional put, so we change the default to always returning an S3 Object store
     // unless explicitly passing a locking provider key or allow_unsafe_rename. Then we will pass it to the old S3StorageBackend.
     if s3_options.locking_provider.as_deref() == Some("dynamodb") || s3_options.allow_unsafe_rename
@@ -191,7 +190,7 @@ impl PartialEq for S3StorageOptions {
 
 impl S3StorageOptions {
     /// Creates an instance of [`S3StorageOptions`] from the given HashMap.
-    pub fn from_map(options: &HashMap<String, String>) -> DeltaResult<S3StorageOptions> {
+    pub fn from_map(options: &HashMap<String, String>) -> LogStoreResult<S3StorageOptions> {
         let extra_opts: HashMap<String, String> = options
             .iter()
             .filter(|(k, _)| !constants::S3_OPTS.contains(&k.as_str()))
@@ -287,12 +286,12 @@ impl S3StorageOptions {
         }
     }
 
-    pub fn try_default() -> DeltaResult<Self> {
+    pub fn try_default() -> LogStoreResult<Self> {
         Self::from_map(&HashMap::new())
     }
 }
 
-fn execute_sdk_future<F, T>(future: F) -> DeltaResult<T>
+fn execute_sdk_future<F, T>(future: F) -> LogStoreResult<T>
 where
     T: Send,
     F: Future<Output = T> + Send,
@@ -309,7 +308,7 @@ where
                         cfg = Some(handle.block_on(future));
                     });
                 });
-                cfg.ok_or(DeltaTableError::ObjectStore {
+                cfg.ok_or(LogStoreError::ObjectStore {
                     source: ObjectStoreError::Generic {
                         store: STORE_NAME,
                         source: Box::new(DynamoDbConfigError::InitializationError),

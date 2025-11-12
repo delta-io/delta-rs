@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use deltalake_core::logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
-use deltalake_core::logstore::object_store::ObjectStoreScheme;
-use deltalake_core::logstore::{default_logstore, logstore_factories, LogStore, LogStoreFactory};
-use deltalake_core::logstore::{
+use deltalake_logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use deltalake_logstore::object_store::ObjectStoreScheme;
+use deltalake_logstore::{default_logstore, logstore_factories, LogStore, LogStoreFactory};
+use deltalake_logstore::{
     object_store_factories, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
-use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use deltalake_logstore::{LogStoreError, LogStoreResult, Path};
 use object_store::client::SpawnedReqwestConnector;
 use url::Url;
 
@@ -41,7 +41,7 @@ impl ObjectStoreFactory for GcpFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let mut builder = GoogleCloudStorageBuilder::new().with_url(url.to_string());
         builder = builder.with_retry(config.retry.clone());
 
@@ -51,11 +51,10 @@ impl ObjectStoreFactory for GcpFactory {
         }
         let config = config::GcpConfigHelper::try_new(config.raw.as_gcp_options())?.build()?;
 
-        let (_, path) =
-            ObjectStoreScheme::parse(url).map_err(|e| DeltaTableError::GenericError {
-                source: Box::new(e),
-            })?;
-        let prefix = Path::parse(path)?;
+        let (_, path) = ObjectStoreScheme::parse(url)
+            .map_err(|e| LogStoreError::Generic { source: e.into() })?;
+        let prefix =
+            Path::parse(path).map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());
@@ -74,7 +73,7 @@ impl LogStoreFactory for GcpFactory {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
+    ) -> LogStoreResult<Arc<dyn LogStore>> {
         Ok(default_logstore(
             prefixed_store,
             root_store,

@@ -1,5 +1,6 @@
 //! Exceptions for the deltalake crate
 use chrono::{DateTime, Utc};
+use deltalake_logstore::LogStoreError;
 use object_store::Error as ObjectStoreError;
 
 use crate::kernel::transaction::{CommitBuilderError, TransactionError};
@@ -13,6 +14,11 @@ pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
 pub enum DeltaTableError {
     #[error("Kernel error: {0}")]
     KernelError(#[from] delta_kernel::error::Error),
+
+    #[error("LogStore error: {source}")]
+    LogStore {
+        source: crate::logstore::error::LogStoreError,
+    },
 
     /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]
@@ -231,6 +237,19 @@ pub enum DeltaTableError {
 
     #[error("No starting version or timestamp provided for CDC")]
     NoStartingVersionOrTimestamp,
+}
+
+impl From<LogStoreError> for DeltaTableError {
+    fn from(err: LogStoreError) -> Self {
+        match err {
+            LogStoreError::VersionAlreadyExists(version) => {
+                DeltaTableError::VersionAlreadyExists(version)
+            }
+            LogStoreError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            LogStoreError::InvalidVersion(version) => DeltaTableError::InvalidVersion(version),
+            _ => DeltaTableError::LogStore { source: err },
+        }
+    }
 }
 
 impl From<object_store::path::Error> for DeltaTableError {

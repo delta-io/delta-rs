@@ -11,6 +11,7 @@ use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistic
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
+use crate::protocol::AddStatsExt;
 use crate::table::state::DeltaTableState;
 
 pub struct AddContainer<'a> {

@@ -248,11 +248,13 @@ impl DeltaTableBuilder {
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), location, storage_config)
+            let result = crate::logstore::logstore_with(store.clone(), location, storage_config)?;
+            Ok(result)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
             debug!("Loading a logstore based off the location: {location:?}");
-            crate::logstore::logstore_for(location, storage_config)
+            let result = crate::logstore::logstore_for(location, storage_config)?;
+            Ok(result)
         }
     }
 
@@ -444,7 +446,7 @@ fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logstore::factories::DefaultObjectStoreFactory;
+    use deltalake_logstore::factories::DefaultObjectStoreFactory;
 
     #[test]
     fn test_ensure_table_uri() {

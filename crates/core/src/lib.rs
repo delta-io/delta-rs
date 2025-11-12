@@ -81,11 +81,11 @@
 pub mod data_catalog;
 pub mod errors;
 pub mod kernel;
-pub mod logstore;
 pub mod operations;
 pub mod protocol;
 pub use kernel::schema;
 pub mod table;
+pub use deltalake_logstore as logstore;
 
 #[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
@@ -111,6 +111,7 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use operations::DeltaOps;
 
 pub use protocol::checkpoints;
+pub use protocol::AddStatsExt;
 
 // convenience exports for consumers to avoid aligning crate versions
 pub use arrow;

@@ -1,4 +1,4 @@
-use deltalake_core::errors::DeltaTableError;
+use deltalake_logstore::LogStoreError;
 
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -12,11 +12,11 @@ pub(crate) enum Error {
     ObjectStore(#[from] object_store::Error),
 }
 
-impl From<Error> for DeltaTableError {
+impl From<Error> for LogStoreError {
     fn from(e: Error) -> Self {
         match e {
-            Error::Parse(msg) => DeltaTableError::Generic(msg),
-            Error::ObjectStore(e) => DeltaTableError::ObjectStore { source: e },
+            Error::Parse(msg) => LogStoreError::Generic { source: msg.into() },
+            Error::ObjectStore(e) => LogStoreError::ObjectStore { source: e },
         }
     }
 }

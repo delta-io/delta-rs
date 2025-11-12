@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use deltalake_core::logstore::{
+use deltalake_logstore::{
     default_logstore, logstore_factories, object_store_factories, LogStore, LogStoreFactory,
     ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
-use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use deltalake_logstore::{LogStoreError, LogStoreResult, Path};
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use object_store::client::SpawnedReqwestConnector;
 use object_store::ObjectStoreScheme;
@@ -40,7 +40,7 @@ impl ObjectStoreFactory for AzureFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         let mut builder = MicrosoftAzureBuilder::new()
             .with_url(url.to_string())
             .with_retry(config.retry.clone());
@@ -56,11 +56,12 @@ impl ObjectStoreFactory for AzureFactory {
         }
         let store = builder.build()?;
 
-        let (_, path) =
-            ObjectStoreScheme::parse(url).map_err(|e| DeltaTableError::GenericError {
-                source: Box::new(e),
-            })?;
-        let prefix = Path::parse(path)?;
+        let (_, path) = ObjectStoreScheme::parse(url).map_err(|e| LogStoreError::Generic {
+            source: Box::new(e),
+        })?;
+        let prefix = Path::parse(path).map_err(|e| LogStoreError::Generic {
+            source: Box::new(e),
+        })?;
 
         Ok((Arc::new(store), prefix))
     }
@@ -73,7 +74,7 @@ impl LogStoreFactory for AzureFactory {
         root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
-    ) -> DeltaResult<Arc<dyn LogStore>> {
+    ) -> LogStoreResult<Arc<dyn LogStore>> {
         Ok(default_logstore(
             prefixed_store,
             root_store,

@@ -1,15 +1,13 @@
+//! Delta Lake action types
+//!
+//! This crate contains the fundamental action types used in Delta Lake.
 //! Actions are the fundamental unit of work in Delta Lake. Each action performs a single atomic
 //! operation on the state of a Delta table. Actions are stored in the `_delta_log` directory of a
 //! Delta table in JSON format. The log is a time series of actions that represent all the changes
 //! made to a table.
 
-pub(crate) mod actions;
-pub(crate) mod fields;
+mod actions;
+mod serde_path;
 
 pub use actions::*;
-// Re-export Action and action types from deltalake-types
 pub use delta_kernel::actions::{Metadata, Protocol};
-pub use deltalake_types::{
-    Action, Add, AddCDCFile, CheckpointMetadata, CommitInfo, DeletionVectorDescriptor,
-    DomainMetadata, IsolationLevel, Remove, Sidecar, StorageType, TableFeatures, Transaction,
-};

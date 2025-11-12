@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use object_store::gcp::GoogleConfigKey;
-use object_store::Error as ObjectStoreError;
 
 use crate::error::Result;
 
@@ -70,7 +69,7 @@ impl GcpConfigHelper {
             config: config
                 .into_iter()
                 .map(|(key, value)| Ok((GoogleConfigKey::from_str(key.as_ref())?, value.into())))
-                .collect::<Result<_, ObjectStoreError>>()?,
+                .collect::<Result<_>>()?,
             env_config,
             priority: Vec::from_iter([
                 GcpCredential::ServiceAccountKey,

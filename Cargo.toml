@@ -53,6 +53,7 @@ bytes = { version = "1" }
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
+rstest = { version = "0.26.1" }
 thiserror = { version = "2" }
 url = { version = "2" }
 percent-encoding-rfc3986 = { version = "0.1.3" }

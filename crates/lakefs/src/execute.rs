@@ -35,7 +35,7 @@ impl CustomExecuteHandler for LakeFSCustomExecuteHandler {
                 .client
                 .delete_branch(repo, lakefs_store.client.get_transaction(operation_id)?)
                 .await
-                .map_err(|e| DeltaTableError::Transaction { source: e });
+                .map_err(Into::into);
             lakefs_store.client.clear_transaction(operation_id);
             result
         } else {

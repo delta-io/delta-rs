@@ -1,13 +1,12 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use deltalake_derive::DeltaConfig;
-use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
 use url::Url;
 
-use crate::{DeltaResult, DeltaTableError};
+use crate::error::{LogStoreError, LogStoreResult};
 
 pub use retry_ext::ObjectStoreRetryExt;
 pub use runtime::{DeltaIOStorageBackend, IORuntime};
@@ -15,8 +14,6 @@ pub use runtime::{DeltaIOStorageBackend, IORuntime};
 pub(super) mod retry_ext;
 pub(super) mod runtime;
 pub(super) mod utils;
-
-static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Sharable reference to [`ObjectStore`]
 pub type ObjectStoreRef = Arc<DynObjectStore>;
@@ -33,7 +30,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If no [`ObjectStore`] found for the `url`, ad-hoc discovery may be executed depending on
     /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
     /// created and registered.
-    fn get_store(&self, url: &Url) -> DeltaResult<Arc<dyn ObjectStore>>;
+    fn get_store(&self, url: &Url) -> LogStoreResult<Arc<dyn ObjectStore>>;
 }
 
 /// The default [`ObjectStoreRegistry`]
@@ -80,12 +77,12 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         self.object_stores.insert(url.to_string(), store)
     }
 
-    fn get_store(&self, url: &Url) -> DeltaResult<Arc<dyn ObjectStore>> {
+    fn get_store(&self, url: &Url) -> LogStoreResult<Arc<dyn ObjectStore>> {
         self.object_stores
             .get(&url.to_string())
             .map(|o| Arc::clone(o.value()))
-            .ok_or_else(|| {
-                DeltaTableError::generic(format!("No suitable object store found for '{url}'."))
+            .ok_or_else(|| LogStoreError::ObjectStoreNotFound {
+                url: url.to_string(),
             })
     }
 }
@@ -105,8 +102,9 @@ mod tests {
     use rstest::*;
 
     use super::*;
-    use crate::logstore::config::TryUpdateKey;
-    use crate::test_utils::with_env;
+    use crate::config::TryUpdateKey;
+    // Note: test_utils::with_env removed - this requires core
+    // For testing, use environment variables directly or mock them
 
     #[test]
     fn test_limit_config() {
@@ -122,13 +120,16 @@ mod tests {
 
     #[rstest]
     fn test_limit_config_env() {
-        let _env = with_env(vec![("OBJECT_STORE_CONCURRENCY_LIMIT", "100")]);
+        // Note: Using environment variables directly instead of test_utils::with_env
+        std::env::set_var("OBJECT_STORE_CONCURRENCY_LIMIT", "100");
 
         let mut config = LimitConfig::default();
         assert!(config.max_concurrency.is_none());
 
         config.load_from_environment().unwrap();
         assert_eq!(config.max_concurrency, Some(100));
+
+        std::env::remove_var("OBJECT_STORE_CONCURRENCY_LIMIT");
     }
 
     #[rstest]
@@ -138,8 +139,11 @@ mod tests {
         // try get non-existent key
         let url = Url::parse("not-registered://host").unwrap();
         let err = registry.get_store(&url).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("No suitable object store found for 'not-registered://host'."));
+        match err {
+            LogStoreError::ObjectStoreNotFound { url } => {
+                assert_eq!(url, "not-registered://host");
+            }
+            _ => panic!("Expected LogStoreError::ObjectStoreNotFound"),
+        }
     }
 }

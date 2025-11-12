@@ -14,11 +14,11 @@ use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::{future, ProvideCredentials};
 use aws_credential_types::Credentials;
 
-use deltalake_core::logstore::object_store::aws::{AmazonS3ConfigKey, AwsCredential};
-use deltalake_core::logstore::object_store::{
+use deltalake_logstore::object_store::aws::{AmazonS3ConfigKey, AwsCredential};
+use deltalake_logstore::object_store::{
     CredentialProvider, Error as ObjectStoreError, Result as ObjectStoreResult,
 };
-use deltalake_core::DeltaResult;
+use deltalake_logstore::LogStoreResult;
 use tokio::sync::Mutex;
 use tracing::log::*;
 
@@ -255,7 +255,7 @@ fn assume_session_name(options: &HashMap<String, String>) -> String {
 
 /// Take a set of [StorageOptions] and produce an appropriate AWS SDK [SdkConfig]
 /// for use with various AWS SDK APIs, such as in our [S3DynamoDbLogStore](crate::logstore::S3DynamoDbLogStore)
-pub async fn resolve_credentials(options: &HashMap<String, String>) -> DeltaResult<SdkConfig> {
+pub async fn resolve_credentials(options: &HashMap<String, String>) -> LogStoreResult<SdkConfig> {
     let default_provider = DefaultCredentialsChain::builder().build().await;
 
     let credentials_provider = match assume_role_arn(options) {
@@ -373,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_object_store_credential_provider() -> DeltaResult<()> {
+    async fn test_object_store_credential_provider() -> LogStoreResult<()> {
         let options = HashMap::from([
             (
                 constants::AWS_ACCESS_KEY_ID.to_string(),
@@ -403,7 +403,7 @@ mod tests {
     /// operations.
     #[tokio::test]
     #[serial]
-    async fn test_object_store_credential_provider_consistency() -> DeltaResult<()> {
+    async fn test_object_store_credential_provider_consistency() -> LogStoreResult<()> {
         let options = HashMap::from([
             (
                 constants::AWS_ACCESS_KEY_ID.to_string(),

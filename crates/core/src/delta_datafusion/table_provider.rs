@@ -52,13 +52,14 @@ use serde::{Deserialize, Serialize};
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, register_store, to_correct_scalar_value, DataFusionMixins as _,
-    LogDataHandler,
+    DatafusionLogStore, LogDataHandler,
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
 use crate::kernel::{Action, Add, EagerSnapshot, Remove};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
+use crate::protocol::AddStatsExt;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::{ensure_table_uri, DeltaTable};
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
@@ -1145,7 +1146,7 @@ fn partitioned_file_from_action(
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
-            ..action.try_into().unwrap()
+            ..action.try_into_object_meta().unwrap()
         },
         partition_values,
         range: None,

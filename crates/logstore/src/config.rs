@@ -10,10 +10,11 @@
 use ::object_store::RetryConfig;
 use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::storage::LimitConfig;
 use super::{storage::runtime::RuntimeConfig, IORuntime};
-use crate::{DeltaResult, DeltaTableError};
+use crate::error::{LogStoreError, LogStoreResult};
 
 pub trait TryUpdateKey: Default {
     /// Update an internal field in the configuration.
@@ -23,15 +24,17 @@ pub trait TryUpdateKey: Default {
     /// - `Ok(None)` if the key was not found and no internal field was updated.
     /// - `Err(_)` if the update failed. Failed updates may include finding a known key,
     ///   but failing to parse the value into the expected type.
-    fn try_update_key(&mut self, key: &str, value: &str) -> DeltaResult<Option<()>>;
+    fn try_update_key(&mut self, key: &str, value: &str) -> LogStoreResult<Option<()>>;
 
     /// Load configuration values from environment variables
     ///
     /// For Option<T> fields, this will only set values that are None
     /// For non-optional fields, environment variables will update the
     /// value if the current value corresponds to the default value.
-    fn load_from_environment(&mut self) -> DeltaResult<()>;
+    fn load_from_environment(&mut self) -> LogStoreResult<()>;
 }
+
+type ParseErrors = Vec<(String, Arc<LogStoreError>)>;
 
 #[derive(Debug)]
 /// Generic container for parsing configuration
@@ -41,18 +44,17 @@ pub struct ParseResult<T: std::fmt::Debug> {
     /// Unrecognized key value pairs.
     pub unparsed: HashMap<String, String>,
     /// Errors encountered during parsing
-    pub errors: Vec<(String, String)>,
+    pub errors: ParseErrors,
     /// Whether the configuration is defaults only - i.e. no custom values were provided
     pub is_default: bool,
 }
 
 impl<T: std::fmt::Debug> ParseResult<T> {
-    pub fn raise_errors(&self) -> DeltaResult<()> {
+    pub fn raise_errors(&self) -> LogStoreResult<()> {
         if !self.errors.is_empty() {
-            return Err(DeltaTableError::Generic(format!(
-                "Failed to parse config: {:?}",
-                self.errors
-            )));
+            return Err(LogStoreError::ParseErrors {
+                errors: self.errors.clone(),
+            });
         }
         Ok(())
     }
@@ -75,7 +77,7 @@ where
                     unparsed.insert(k.into(), v.into());
                 }
                 Ok(Some(_)) => is_default = false,
-                Err(e) => errors.push((k.into(), e.to_string())),
+                Err(e) => errors.push((k.into(), Arc::new(e))),
             }
         }
         ParseResult {
@@ -125,7 +127,7 @@ impl StorageConfig {
         &self,
         store: T,
         table_root: &url::Url,
-    ) -> DeltaResult<Box<dyn ObjectStore>> {
+    ) -> LogStoreResult<Box<dyn ObjectStore>> {
         let inner = Self::decorate_prefix(store, table_root)?;
         Ok(inner)
     }
@@ -133,8 +135,8 @@ impl StorageConfig {
     pub(crate) fn decorate_prefix<T: ObjectStore>(
         store: T,
         table_root: &url::Url,
-    ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let prefix = super::object_store_path(table_root)?;
+    ) -> LogStoreResult<Box<dyn ObjectStore>> {
+        let prefix = crate::object_store_path(table_root)?;
         Ok(if prefix != Path::from("/") {
             Box::new(PrefixStore::new(store, prefix)) as Box<dyn ObjectStore>
         } else {
@@ -193,7 +195,7 @@ impl StorageConfig {
     /// # Raises
     ///
     /// Raises a `DeltaError` if any of the options are invalid - i.e. cannot be parsed into target type.
-    pub fn parse_options<K, V, I>(options: I) -> DeltaResult<Self>
+    pub fn parse_options<K, V, I>(options: I) -> LogStoreResult<Self>
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str> + Into<String>,
@@ -236,43 +238,50 @@ impl StorageConfig {
     }
 }
 
-pub(super) fn try_parse_impl<T: std::fmt::Debug, K, V, I>(
-    options: I,
-) -> DeltaResult<(T, HashMap<String, String>)>
+pub(super) fn try_parse_impl<T, K, V, I>(options: I) -> LogStoreResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
-    T: TryUpdateKey,
+    T: TryUpdateKey + std::fmt::Debug,
 {
     let result = ParseResult::from_iter(options);
     result.raise_errors()?;
     Ok((result.config, result.unparsed))
 }
 
-pub fn parse_usize(value: &str) -> DeltaResult<usize> {
+pub fn parse_usize(value: &str) -> LogStoreResult<usize> {
     value
         .parse::<usize>()
-        .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as usize")))
+        .map_err(|e| LogStoreError::ParseError {
+            value: value.to_string(),
+            type_name: "usize".to_string(),
+            source: Box::new(e),
+        })
 }
 
-pub fn parse_f64(value: &str) -> DeltaResult<f64> {
-    value
-        .parse::<f64>()
-        .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as f64")))
+pub fn parse_f64(value: &str) -> LogStoreResult<f64> {
+    value.parse::<f64>().map_err(|e| LogStoreError::ParseError {
+        value: value.to_string(),
+        type_name: "f64".to_string(),
+        source: Box::new(e),
+    })
 }
 
 #[cfg(feature = "cloud")]
-pub fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
-    humantime::parse_duration(value)
-        .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
+pub fn parse_duration(value: &str) -> LogStoreResult<std::time::Duration> {
+    humantime::parse_duration(value).map_err(|e| LogStoreError::ParseError {
+        value: value.to_string(),
+        type_name: "Duration".to_string(),
+        source: Box::new(e),
+    })
 }
 
-pub fn parse_bool(value: &str) -> DeltaResult<bool> {
+pub fn parse_bool(value: &str) -> LogStoreResult<bool> {
     Ok(str_is_truthy(value))
 }
 
-pub fn parse_string(value: &str) -> DeltaResult<String> {
+pub fn parse_string(value: &str) -> LogStoreResult<String> {
     Ok(value.to_string())
 }
 
@@ -281,7 +290,7 @@ pub fn parse_string(value: &str) -> DeltaResult<String> {
 /// aka YAML booleans
 ///
 /// ```rust
-/// # use deltalake_core::logstore::config::*;
+/// # use deltalake_logstore::config::*;
 /// for value in ["1", "true", "on", "YES", "Y"] {
 ///     assert!(str_is_truthy(value));
 /// }

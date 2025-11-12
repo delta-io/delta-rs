@@ -5,6 +5,7 @@ use std::fmt;
 use std::fmt::Formatter;
 
 use chrono::{DateTime, Utc};
+use deltalake_logstore::LogStoreError;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
@@ -141,7 +142,10 @@ impl DeltaTable {
 
     /// Check if the [`DeltaTable`] exists
     pub async fn verify_deltatable_existence(&self) -> DeltaResult<bool> {
-        self.log_store.is_delta_table_location().await
+        self.log_store
+            .is_delta_table_location()
+            .await
+            .map_err(Into::into)
     }
 
     /// The URI of the underlying data
@@ -159,6 +163,7 @@ impl DeltaTable {
         self.log_store
             .get_latest_version(self.version().unwrap_or(0))
             .await
+            .map_err(Into::into)
     }
 
     /// Currently loaded version of the table - if any.
@@ -370,12 +375,12 @@ impl DeltaTable {
             .await
         {
             Ok(version) => version,
-            Err(DeltaTableError::InvalidVersion(_)) => {
+            Err(LogStoreError::InvalidVersion(_)) => {
                 return Err(DeltaTableError::NotATable(
                     log_store.table_root_url().to_string(),
                 ))
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
         let mut version = min_version;
         let lowest_table_version = min_version;
@@ -423,7 +428,9 @@ impl std::fmt::Debug for DeltaTable {
 
 #[cfg(test)]
 mod tests {
+    use object_store::memory::InMemory;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     use super::*;
@@ -463,5 +470,29 @@ mod tests {
             .await
             .unwrap();
         (dt, tmp_dir)
+    }
+
+    /// <https://github.com/delta-io/delta-rs/issues/3297>:w
+    #[tokio::test]
+    async fn test_peek_with_invalid_json() -> DeltaResult<()> {
+        let memory_store = Arc::new(InMemory::new());
+        let log_path = Path::from("delta-table/_delta_log/00000000000000000001.json");
+
+        let log_content = r#"{invalid_json"#;
+
+        memory_store
+            .put(&log_path, log_content.into())
+            .await
+            .expect("Failed to write log file");
+
+        let table_uri = url::Url::parse("memory:///delta-table").unwrap();
+        let table = crate::DeltaTableBuilder::from_uri(table_uri.clone())
+            .unwrap()
+            .with_storage_backend(memory_store, table_uri)
+            .build()?;
+
+        let result = table.log_store().peek_next_commit(0).await;
+        assert!(result.is_err());
+        Ok(())
     }
 }

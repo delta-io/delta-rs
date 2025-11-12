@@ -42,6 +42,7 @@ use datafusion::common::{
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::SessionContext;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -112,6 +113,32 @@ impl From<DataFusionError> for DeltaTableError {
             _ => DeltaTableError::Generic(err.to_string()),
         }
     }
+}
+
+pub trait DatafusionLogStore {
+    /// Generate a unique enough url to identify the store in datafusion.
+    /// The DF object store registry only cares about the scheme and the host of the url for
+    /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
+    /// host we convert the location from this `LogStore` to a valid name, combining the
+    /// original scheme, host and path with invalid characters replaced.
+    fn object_store_url(&self) -> ObjectStoreUrl;
+}
+
+impl<T: LogStore + ?Sized> DatafusionLogStore for T {
+    fn object_store_url(&self) -> ObjectStoreUrl {
+        object_store_url_internal(&self.config().location)
+    }
+}
+
+pub(crate) fn object_store_url_internal(location: &Url) -> ObjectStoreUrl {
+    use object_store::path::DELIMITER;
+    ObjectStoreUrl::parse(format!(
+        "delta-rs://{}-{}{}",
+        location.scheme(),
+        location.host_str().unwrap_or("-"),
+        location.path().replace(DELIMITER, "-").replace(':', "-")
+    ))
+    .expect("Invalid object store url.")
 }
 
 /// Convenience trait for calling common methods on snapshot hierarchies

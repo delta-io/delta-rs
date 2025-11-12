@@ -1,6 +1,6 @@
 use dashmap::DashMap;
-use deltalake_core::kernel::transaction::TransactionError;
-use deltalake_core::DeltaResult;
+use deltalake_logstore::LogStoreError;
+use deltalake_logstore::LogStoreResult;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -52,7 +52,7 @@ impl LakeFSClient {
         &self,
         source_url: &Url,
         operation_id: Uuid,
-    ) -> DeltaResult<(Url, String)> {
+    ) -> LogStoreResult<(Url, String)> {
         let (repo, source_branch, table) = self.decompose_url(source_url.to_string());
 
         let request_url = format!("{}/api/v1/repositories/{repo}/branches", self.config.host);
@@ -96,11 +96,7 @@ impl LakeFSClient {
         }
     }
 
-    pub async fn delete_branch(
-        &self,
-        repo: String,
-        branch: String,
-    ) -> Result<(), TransactionError> {
+    pub async fn delete_branch(&self, repo: String, branch: String) -> LogStoreResult<()> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/branches/{branch}",
             self.config.host,
@@ -137,7 +133,7 @@ impl LakeFSClient {
         branch: String,
         commit_message: String,
         allow_empty: bool,
-    ) -> DeltaResult<()> {
+    ) -> LogStoreResult<()> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/branches/{branch}/commits",
             self.config.host,
@@ -183,7 +179,7 @@ impl LakeFSClient {
         commit_version: i64,
         commit_message: String,
         allow_empty: bool,
-    ) -> Result<(), TransactionError> {
+    ) -> LogStoreResult<()> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/refs/{transaction_branch}/merge/{target_branch}",
             self.config.host,
@@ -208,7 +204,7 @@ impl LakeFSClient {
         // Handle the response;
         match response.status() {
             StatusCode::OK => Ok(()),
-            StatusCode::CONFLICT => Err(TransactionError::VersionAlreadyExists(commit_version)),
+            StatusCode::CONFLICT => Err(LogStoreError::VersionAlreadyExists(commit_version)),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             _ => {
                 let error: LakeFSErrorResponse =
@@ -228,7 +224,7 @@ impl LakeFSClient {
         repo: &str,
         base_branch: &str,
         compare_branch: &str,
-    ) -> Result<bool, TransactionError> {
+    ) -> LogStoreResult<bool> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/refs/{base_branch}/diff/{compare_branch}",
             self.config.host
@@ -278,7 +274,7 @@ impl LakeFSClient {
         debug!("{}", format!("LakeFS Transaction `{id}` has been set."));
     }
 
-    pub fn get_transaction(&self, id: Uuid) -> Result<String, TransactionError> {
+    pub fn get_transaction(&self, id: Uuid) -> LogStoreResult<String> {
         let transaction_branch = self
             .transactions
             .get(&id)

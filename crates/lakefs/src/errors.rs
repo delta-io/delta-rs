@@ -2,6 +2,7 @@
 
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::DeltaTableError;
+use deltalake_logstore::LogStoreError;
 use reqwest::Error;
 
 #[derive(thiserror::Error, Debug)]
@@ -70,9 +71,25 @@ impl From<LakeFSOperationError> for DeltaTableError {
     }
 }
 
+impl From<LakeFSOperationError> for LogStoreError {
+    fn from(err: LakeFSOperationError) -> Self {
+        LogStoreError::Generic {
+            source: Box::new(err),
+        }
+    }
+}
+
 impl From<LakeFSConfigError> for DeltaTableError {
     fn from(err: LakeFSConfigError) -> Self {
         DeltaTableError::GenericError {
+            source: Box::new(err),
+        }
+    }
+}
+
+impl From<LakeFSConfigError> for LogStoreError {
+    fn from(err: LakeFSConfigError) -> Self {
+        LogStoreError::Generic {
             source: Box::new(err),
         }
     }

@@ -4,8 +4,7 @@ use ::object_store::path::Path;
 use ::object_store::{Error, ObjectStore, PutPayload, PutResult, Result};
 use tracing::*;
 
-#[cfg(feature = "cloud")]
-use crate::logstore::config;
+use crate::config;
 
 impl<T: ObjectStore + ?Sized> ObjectStoreRetryExt for T {}
 
@@ -92,7 +91,7 @@ pub trait ObjectStoreRetryExt: ObjectStore {
 
 #[cfg(feature = "cloud")]
 impl config::TryUpdateKey for object_store::RetryConfig {
-    fn try_update_key(&mut self, key: &str, v: &str) -> crate::DeltaResult<Option<()>> {
+    fn try_update_key(&mut self, key: &str, v: &str) -> crate::LogStoreResult<Option<()>> {
         match key {
             "max_retries" => self.max_retries = config::parse_usize(v)?,
             "retry_timeout" => self.retry_timeout = config::parse_duration(v)?,
@@ -110,7 +109,7 @@ impl config::TryUpdateKey for object_store::RetryConfig {
         Ok(Some(()))
     }
 
-    fn load_from_environment(&mut self) -> crate::DeltaResult<()> {
+    fn load_from_environment(&mut self) -> crate::LogStoreResult<()> {
         Ok(())
     }
 }

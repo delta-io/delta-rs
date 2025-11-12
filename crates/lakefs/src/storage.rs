@@ -1,8 +1,10 @@
 //! LakeFS storage backend (internally S3).
 
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
-use deltalake_core::logstore::{ObjectStoreFactory, ObjectStoreRef, StorageConfig};
-use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use deltalake_core::logstore::{
+    LogStoreError, LogStoreResult, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+};
+use deltalake_core::Path;
 use object_store::aws::AmazonS3Builder;
 use object_store::client::SpawnedReqwestConnector;
 use object_store::ObjectStoreScheme;
@@ -62,11 +64,11 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
         &self,
         url: &Url,
         config: &StorageConfig,
-    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+    ) -> LogStoreResult<(ObjectStoreRef, Path)> {
         // Convert LakeFS URI to equivalent S3 URI.
         let s3_url = url.to_string().replace("lakefs://", "s3://");
         let s3_url = Url::parse(&s3_url)
-            .map_err(|_| DeltaTableError::InvalidTableLocation(url.clone().into()))?;
+            .map_err(|_| LogStoreError::InvalidTableLocation(url.to_string()))?;
         let mut builder = AmazonS3Builder::new().with_url(s3_url.to_string());
 
         // All S3-likes should start their builder the same way
@@ -89,11 +91,9 @@ impl ObjectStoreFactory for LakeFSObjectStoreFactory {
             })
             .collect::<HashMap<AmazonS3ConfigKey, String>>();
 
-        let (_, path) =
-            ObjectStoreScheme::parse(&s3_url).map_err(|e| DeltaTableError::GenericError {
-                source: Box::new(e),
-            })?;
-        let prefix = Path::parse(path)?;
+        let (_, path) = ObjectStoreScheme::parse(&s3_url)
+            .map_err(|e| LogStoreError::ObjectStore { source: e.into() })?;
+        let prefix = Path::parse(path).map_err(|e| LogStoreError::Generic { source: e.into() })?;
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());
