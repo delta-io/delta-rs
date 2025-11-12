@@ -20,6 +20,7 @@
 
 **Fixed bugs:**
 
+- Automatically register the AWS, Azure, GCS, HDFS, LakeFS, and Unity storage handlers when the corresponding feature is enabled so `DeltaOps::try_from_uri` no longer errors with unknown schemes such as `gs://`.
 - Significant performance regression when opening S3 table on next branch [\#3667](https://github.com/delta-io/delta-rs/issues/3667)
 - Concurrent overwrite doesn't fail conflict checking [\#3622](https://github.com/delta-io/delta-rs/issues/3622)
 - source distributions missing in v1.1.1 [\#3621](https://github.com/delta-io/delta-rs/issues/3621)
