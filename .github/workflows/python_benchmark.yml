@@ -13,9 +13,6 @@ jobs:
   benchmark:
     name: Python Benchmark
     runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-C debuginfo=line-tables-only"
-      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +22,7 @@ jobs:
 
       - name: Build deltalake in release mode
         run: |
-          MATURIN_EXTRA_ARGS=--release make develop
+          PROFILE=ci make develop
 
       # Download previous benchmark result from cache (if exists)
       - name: Download previous benchmark data

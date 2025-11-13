@@ -8,12 +8,6 @@
 DAT_VERSION := 0.0.3
 DEFAULT_FEATURES := "azure,datafusion,s3,gcs,glue,hdfs"
 
-# Disable full debug symbol generation to speed up CI build and keep memory down
-export RUSTFLAGS:= -C debuginfo=line-tables-only
-# Disable incremental builds by cargo for CI which should save disk space
-# and hopefully avoid final link "No space left on device"
-export CARGO_INCREMENTAL:=0
-
 ## begin dat related
 ####################
 .PHONY: setup-dat

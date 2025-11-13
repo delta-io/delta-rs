@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     from minio import Minio
 
 # NOTE: make sure to run these in release mode with
-# MATURIN_EXTRA_ARGS=--release make develop
+# PROFILE=python-release make develop
 # When profiling, use:
-# MATURIN_EXTRA_ARGS="--profile release-with-debug" make develop
+# PROFILE=profiling make develop
 
 
 @pytest.fixture()

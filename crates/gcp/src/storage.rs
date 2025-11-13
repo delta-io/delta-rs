@@ -132,3 +132,11 @@ impl ObjectStore for GcsStorageBackend {
         self.inner.put_multipart_opts(location, options).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_it() {}
+}

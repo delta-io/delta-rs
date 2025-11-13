@@ -92,3 +92,24 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
     object_store_factories().insert(url.clone(), factory.clone());
     logstore_factories().insert(url.clone(), factory.clone());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::path::Path;
+
+    #[test]
+    fn test_gcp_factory() {
+        let store: ObjectStoreRef = Arc::new(object_store::memory::InMemory::new());
+        let prefixed: ObjectStoreRef = Arc::new(object_store::prefix::PrefixStore::new(
+            store.clone(),
+            Path::from("/foo"),
+        ));
+        let factory = GcpFactory {};
+        let location = Url::parse("https://example./com").unwrap();
+        let logstore = factory
+            .with_options(prefixed, store, &location, &StorageConfig::default())
+            .unwrap();
+        assert_eq!(logstore.name(), "DefaultLogStore");
+    }
+}

@@ -28,7 +28,7 @@ documentation = "https://delta-io.github.io/delta-rs/"
 repository = "https://github.com/delta-io/delta-rs/tree/main/python/"
 
 [tool.maturin]
-profile = "release-python"
+profile = "dev"
 module-name = "deltalake._internal"
 
 [tool.mypy]
