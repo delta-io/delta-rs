@@ -15,12 +15,6 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
-# Reducing the debuginfo for the test profile in order to trim the disk and RAM
-# usage during development
-# <https://github.com/delta-io/delta-rs/issues/1550?
-[profile.test]
-debug = "line-tables-only"
-
 [workspace.dependencies]
 delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs", rev = "eff31d26e14c1c1e29589991e045079d6620e255", features = [
     "arrow-57",
@@ -100,20 +94,54 @@ AKS = "AKS"
 # to avoid using 'type' as a field name.
 tpe = "tpe"
 
-[profile.release-with-debug]
-inherits = "release"
-debug = true
+# ============================================================================
+# Profile Configuration
+# ============================================================================
+# Profiles for different use cases:
+# - dev: Fast local development with good debug experience (Cargo defaults)
+# - test: test builds with minimal debug info to save disk/RAM (custom)
+# - release: Production Rust crates - maximum performance (Cargo defaults)
+# - bench: For benchmarking with flamegraphs (cargo bench)
+# - profiling: For performance profiling with release opts + debug info
+# - ci: CI/CD optimized - fast builds, release-like performance
+# - python-release: Python wheel builds - portable, reproducible (PyPI releases)
+# ============================================================================
 
-# for better flamegraphs when benchmarking
+# Test profile - reduced debug info to save disk/RAM
+# Usage: cargo test (automatic)
+# <https://github.com/delta-io/delta-rs/issues/1550>
+[profile.test]
+debug = "line-tables-only"
+
+# Benchmark profile with debug symbols for flamegraphs
+# Usage: cargo bench (automatic)
 [profile.bench]
 debug = true
 
+# Profiling profile with release optimizations + debug info
+# Usage: cargo build --profile=profiling
 [profile.profiling]
 inherits = "release"
 debug = true
 
-[profile.release-python]
+# CI profile - optimized for Continuous Integration
+# Usage: cargo build --profile=ci
+[profile.ci]
+inherits = "dev"           
+debug = false              
+incremental = false        
+
+[profile.ci.package."*"]
+opt-level = 3              
+debug = false             
+debug-assertions = false   
+strip = "debuginfo"       
+incremental = false
+
+# Python wheel release profile - for PyPI distribution
+# Usage: maturin build --profile python-release (via .github/workflows/python_release.yml)
+[profile.python-release]
 inherits = "release"
 opt-level = 3
 codegen-units = 1
-lto = "fat"
+lto = "fat"         
