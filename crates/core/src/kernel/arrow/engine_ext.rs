@@ -474,11 +474,13 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(values)]).unwrap();
 
         let expression = column_expr!("a");
-        let expr = handler.new_expression_evaluator(
-            Arc::new((&schema).try_into_kernel().unwrap()),
-            expression.into(),
-            DataType::INTEGER,
-        );
+        let expr = handler
+            .new_expression_evaluator(
+                Arc::new((&schema).try_into_kernel().unwrap()),
+                expression.into(),
+                DataType::INTEGER,
+            )
+            .unwrap();
 
         let result = expr.evaluate_arrow(batch);
         assert!(result.is_ok());
