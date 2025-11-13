@@ -346,8 +346,11 @@ impl EagerSnapshot {
 
         let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-        let evaluator =
-            ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
+        let evaluator = ARROW_HANDLER.new_expression_evaluator(
+            input_schema,
+            expression.into(),
+            table_schema,
+        )?;
 
         let results = self
             .files()?
