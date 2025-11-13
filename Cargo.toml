@@ -16,7 +16,7 @@ documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
-delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs", rev = "eff31d26e14c1c1e29589991e045079d6620e255", features = [
+delta_kernel = { version = "0.17.0", features = [
     "arrow-57",
     "default-engine-rustls",
     "internal-api",
@@ -39,9 +39,9 @@ object_store = { version = "0.12.1" }
 parquet = { version = "57" }
 
 # datafusion
-datafusion = { git = "https://github.com/apache/datafusion", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-ffi = { git = "https://github.com/apache/datafusion", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
+datafusion = { git = "https://github.com/apache/datafusion", rev = "187c6b2" }
+datafusion-ffi = { git = "https://github.com/apache/datafusion", rev = "187c6b2" }
+datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "187c6b2" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
