@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.29.3"
+version = "0.29.4"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -34,7 +34,7 @@ deltalake-lakefs = { version = "0.12.0", path = "../lakefs", optional = true }
 deltalake-catalog-glue = { version = "0.13.0", path = "../catalog-glue", optional = true }
 deltalake-catalog-unity = { version = "0.13.0", path = "../catalog-unity", optional = true }
 delta_kernel = { workspace = true }
-
+ctor = "0.6"
 
 [features]
 # All of these features are just reflected into the core crate until that

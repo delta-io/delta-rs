@@ -87,14 +87,13 @@ impl PartialEq for DeltaTableConfig {
 #[derive(Debug)]
 pub struct DeltaTableBuilder {
     /// table root uri
-    table_uri: String,
+    table_url: Url,
     /// backend to access storage system
     storage_backend: Option<(Arc<DynObjectStore>, Url)>,
     /// specify the version we are going to load: a time stamp, a version, or just the newest
     /// available version
     version: DeltaVersion,
     storage_options: Option<HashMap<String, String>>,
-    #[allow(unused_variables)]
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
 }
@@ -108,18 +107,26 @@ impl DeltaTableBuilder {
     /// let url = Url::parse("memory:///test").unwrap();
     /// let builder = DeltaTableBuilder::from_uri(url);
     /// ```
-    pub fn from_uri(table_uri: Url) -> DeltaResult<Self> {
-        if table_uri.scheme() == "file" {
-            let path = table_uri.to_file_path().map_err(|_| {
-                DeltaTableError::InvalidTableLocation(table_uri.as_str().to_string())
+    pub fn from_uri(table_url: Url) -> DeltaResult<Self> {
+        // We cannot trust that a [Url] has had it's .. segments canonicalized out of the path
+        // See <https://github.com/servo/rust-url/issues/1086>
+        let table_url = Url::parse(table_url.as_str()).map_err(|_| {
+            DeltaTableError::NotATable(
+                "Received path segments that could not be canonicalized".into(),
+            )
+        })?;
+
+        if table_url.scheme() == "file" {
+            let path = table_url.to_file_path().map_err(|_| {
+                DeltaTableError::InvalidTableLocation(table_url.as_str().to_string())
             })?;
             ensure_file_location_exists(path)?;
         }
 
-        debug!("creating table builder with {table_uri}");
+        debug!("creating table builder with {table_url}");
 
         Ok(Self {
-            table_uri: table_uri.into(),
+            table_url,
             storage_backend: None,
             version: DeltaVersion::default(),
             storage_options: None,
@@ -255,10 +262,7 @@ impl DeltaTableBuilder {
 
     /// Build a delta storage backend for the given config
     pub fn build_storage(&self) -> DeltaResult<LogStoreRef> {
-        debug!("build_storage() with {}", self.table_uri);
-        let location = Url::parse(&self.table_uri).map_err(|_| {
-            DeltaTableError::NotATable(format!("Could not turn {} into a URL", self.table_uri))
-        })?;
+        debug!("build_storage() with {}", self.table_url);
 
         let mut storage_config = StorageConfig::parse_options(self.storage_options())?;
         if let Some(io_runtime) = self.table_config.io_runtime.clone() {
@@ -267,11 +271,14 @@ impl DeltaTableBuilder {
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), location, storage_config)
+            crate::logstore::logstore_with(store.clone(), self.table_url.clone(), storage_config)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
-            debug!("Loading a logstore based off the location: {location:?}");
-            crate::logstore::logstore_for(location, storage_config)
+            debug!(
+                "Loading a logstore based off the location: {:?}",
+                self.table_url
+            );
+            crate::logstore::logstore_for(self.table_url.clone(), storage_config)
         }
     }
 
