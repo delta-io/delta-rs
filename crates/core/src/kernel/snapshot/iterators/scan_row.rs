@@ -86,7 +86,7 @@ pub(crate) fn scan_row_in_eval(
     let input_schema = snapshot.scan_row_parsed_schema_arrow()?;
     let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
 
-    Ok(ARROW_HANDLER.new_expression_evaluator(input_schema, EXPRESSION.clone(), OUT_TYPE.clone()))
+    ARROW_HANDLER.new_expression_evaluator(input_schema, EXPRESSION.clone(), OUT_TYPE.clone())
 }
 
 fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<RecordBatch> {

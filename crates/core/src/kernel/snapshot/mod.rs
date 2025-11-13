@@ -369,11 +369,13 @@ impl Snapshot {
                     .map(|field| Expression::column(["remove", field.name()])),
             )
             .into();
-            ARROW_HANDLER.new_expression_evaluator(
-                TOMBSTONE_SCHEMA.clone(),
-                expression,
-                Remove::to_data_type(),
-            )
+            ARROW_HANDLER
+                .new_expression_evaluator(
+                    TOMBSTONE_SCHEMA.clone(),
+                    expression,
+                    Remove::to_data_type(),
+                )
+                .expect("Failed to create tombstone evaluator")
         });
 
         // TODO: which capacity to choose
