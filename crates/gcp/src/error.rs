@@ -20,3 +20,11 @@ impl From<Error> for DeltaTableError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_it() {}
+}
