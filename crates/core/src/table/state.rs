@@ -383,3 +383,25 @@ impl EagerSnapshot {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DeltaOps, DeltaResult};
+
+    /// <https://github.com/delta-io/delta-rs/issues/3918>
+    #[tokio::test]
+    async fn test_add_actions_empty() -> DeltaResult<()> {
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(delta_kernel::schema::PrimitiveType::Long),
+                true,
+                None,
+            )
+            .await?;
+        let _actions = table.snapshot()?.add_actions_table(false)?;
+        Ok(())
+    }
+}
