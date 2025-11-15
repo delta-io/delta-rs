@@ -676,7 +676,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     },
                 )
                 .with_statistics(stats)
-                .with_projection(self.projection.cloned())
+                .with_projection_indices(self.projection.cloned())
                 .with_limit(self.limit)
                 .with_table_partition_cols(table_partition_cols)
                 .build();

@@ -71,7 +71,7 @@ fn construct_placeholder(
         let placeholder_name = format!("{column_name}_{}", placeholders.len());
         let placeholder = Expr::Placeholder(Placeholder {
             id: placeholder_name.clone(),
-            data_type: None,
+            field: None,
         });
 
         let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
@@ -99,12 +99,12 @@ fn construct_placeholder(
                 let name_min = format!("{column_name}_{}_min", placeholders.len());
                 let placeholder_min = Expr::Placeholder(Placeholder {
                     id: name_min.clone(),
-                    data_type: None,
+                    field: None,
                 });
                 let name_max = format!("{column_name}_{}_max", placeholders.len());
                 let placeholder_max = Expr::Placeholder(Placeholder {
                     id: name_max.clone(),
-                    data_type: None,
+                    field: None,
                 });
                 let (source_expr, target_expr) = if source_left {
                     (*binary.left, *binary.right)
@@ -303,7 +303,7 @@ pub(crate) fn generalize_filter(
 
                     let placeholder = Expr::Placeholder(Placeholder {
                         id: placeholder_name.clone(),
-                        data_type: None,
+                        field: None,
                     });
 
                     placeholders.push(PredicatePlaceholder {

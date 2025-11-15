@@ -124,8 +124,9 @@ pub(crate) async fn create_checkpoint_for(
 }
 
 fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
-    let engine_data = ArrowEngineData::try_from_engine_data(data.data)?;
-    let predicate = BooleanArray::from(data.selection_vector);
+    let (underlying_data, selection_vector) = data.into_parts();
+    let engine_data = ArrowEngineData::try_from_engine_data(underlying_data)?;
+    let predicate = BooleanArray::from(selection_vector);
     let batch = filter_record_batch(engine_data.record_batch(), &predicate)?;
     Ok(batch)
 }

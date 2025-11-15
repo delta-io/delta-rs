@@ -86,7 +86,11 @@ pub(crate) fn scan_row_in_eval(
     let input_schema = snapshot.scan_row_parsed_schema_arrow()?;
     let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
 
-    Ok(ARROW_HANDLER.new_expression_evaluator(input_schema, EXPRESSION.clone(), OUT_TYPE.clone()))
+    Ok(ARROW_HANDLER.new_expression_evaluator(
+        input_schema,
+        EXPRESSION.clone(),
+        OUT_TYPE.clone(),
+    )?)
 }
 
 fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<RecordBatch> {
@@ -379,8 +383,11 @@ mod tests {
 
         let partition_values = MapType::new(DataType::STRING, DataType::STRING, true);
         let file_constant_values: SchemaRef = Arc::new(
-            StructType::try_new([StructField::nullable("partitionValues", partition_values)])
-                .unwrap(),
+            StructType::try_new([
+                StructField::nullable("partitionValues", partition_values),
+                StructField::nullable("baseRowId", DataType::LONG),
+            ])
+            .unwrap(),
         );
         // Inspecting the schema of file_constant_values:
         let _: ArrowSchema = file_constant_values.as_ref().try_into_arrow()?;
@@ -417,14 +424,20 @@ mod tests {
             false,
         ));
 
-        let parts = StructArray::from(vec![(
-            Arc::new(ArrowField::new(
-                "partitionValues",
-                ArrowDataType::Map(map_field, false),
-                true,
-            )),
-            Arc::new(partitions) as ArrayRef,
-        )]);
+        let parts = StructArray::from(vec![
+            (
+                Arc::new(ArrowField::new(
+                    "partitionValues",
+                    ArrowDataType::Map(map_field, false),
+                    true,
+                )),
+                Arc::new(partitions) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("baseRowId", ArrowDataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![Option::<i64>::None])) as ArrayRef,
+            ),
+        ]);
 
         let batch = RecordBatch::try_new(
             Arc::new(schema.as_ref().try_into_arrow()?),
