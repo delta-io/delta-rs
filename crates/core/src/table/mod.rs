@@ -1,9 +1,5 @@
 //! Delta Table read and write implementation
 
-use std::cmp::{min, Ordering};
-use std::fmt;
-use std::fmt::Formatter;
-
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -11,6 +7,9 @@ use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::cmp::{min, Ordering};
+use std::fmt;
+use std::fmt::Formatter;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
@@ -30,6 +29,7 @@ pub mod config;
 pub mod state;
 
 mod columns;
+pub mod file_format_options;
 
 // Re-exposing for backwards compatibility
 pub use columns::*;
