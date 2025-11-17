@@ -287,27 +287,17 @@ class DeltaTable:
             DeltaTable: a new `DeltaTable` instance pointing at the cloned table located
             at `target_uri`.
         """
-        # Normalize target_uri to a string without requiring a runtime import of os
-        target_str = target_uri
-        if not isinstance(target_str, str):
-            target_str = str(target_uri)
+        # Normalize target_uri to a string
+        target_str = str(target_uri) if not isinstance(target_uri, str) else target_uri
 
         # Execute the shallow clone via the Rust bindings; a new RawDeltaTable is returned
         cloned_raw = self._table.shallow_clone(target_str)
 
-        # Build a high-level DeltaTable for the target. We reuse storage options if possible.
-        # Note: constructing a new DeltaTable will load table state; alternatively we could
-        # set the internal _table, but construction keeps behavior consistent with other APIs.
-        new_dt = DeltaTable(
-            table_uri=target_str,
-            storage_options=self._storage_options,
-        )
-        # Replace with already cloned raw table to avoid an extra reload when possible
-        try:
-            new_dt._table = cloned_raw
-        except Exception:
-            # Fallback: leave as loaded by the constructor
-            pass
+        # Construct DeltaTable directly with the cloned raw table
+        new_dt = DeltaTable.__new__(DeltaTable)
+        new_dt._table = cloned_raw
+        new_dt._storage_options = self._storage_options
+
         return new_dt
 
     def version(self) -> int:
