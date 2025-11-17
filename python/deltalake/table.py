@@ -267,6 +267,49 @@ class DeltaTable:
 
         return cls(table_uri=table_uri, storage_options=storage_options)
 
+    def shallow_clone(self, target_uri: str | Path | os.PathLike[str]) -> "DeltaTable":
+        """
+        Create a shallow clone of this Delta table at the given target location and
+        return a new `DeltaTable` instance for the cloned table.
+
+        The shallow clone references the same data files as the source table and does
+        not copy data. Only metadata is created at the target table to reference the
+        existing data files.
+
+        Limitations:
+        - Currently, both source and target locations must be `file://` URLs.
+
+        Args:
+            target_uri: Destination URI for the cloned table. Can be a string path,
+                a `pathlib.Path`, or any `os.PathLike`.
+
+        Returns:
+            DeltaTable: a new `DeltaTable` instance pointing at the cloned table located
+            at `target_uri`.
+        """
+        # Normalize target_uri to a string without requiring a runtime import of os
+        target_str = target_uri
+        if not isinstance(target_str, str):
+            target_str = str(target_uri)
+
+        # Execute the shallow clone via the Rust bindings; a new RawDeltaTable is returned
+        cloned_raw = self._table.shallow_clone(target_str)
+
+        # Build a high-level DeltaTable for the target. We reuse storage options if possible.
+        # Note: constructing a new DeltaTable will load table state; alternatively we could
+        # set the internal _table, but construction keeps behavior consistent with other APIs.
+        new_dt = DeltaTable(
+            table_uri=target_str,
+            storage_options=self._storage_options,
+        )
+        # Replace with already cloned raw table to avoid an extra reload when possible
+        try:
+            new_dt._table = cloned_raw
+        except Exception:
+            # Fallback: leave as loaded by the constructor
+            pass
+        return new_dt
+
     def version(self) -> int:
         """
         Get the version of the DeltaTable.
