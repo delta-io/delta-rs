@@ -552,9 +552,6 @@ mod tests {
 
     use super::*;
     use crate::{ensure_table_uri, open_table};
-    use std::path::Path;
-    use std::{io::Read, time::SystemTime};
-    use url::Url;
 
     #[tokio::test]
     async fn test_vacuum_full() -> DeltaResult<()> {
