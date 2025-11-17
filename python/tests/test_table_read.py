@@ -530,6 +530,28 @@ def test_add_actions_table(flatten: bool):
     assert partition_day == pa.array(["1", "3", "5", "20", "4", "5"])
 
 
+@pytest.mark.pyarrow
+def test_get_add_actions_on_empty_table(tmp_path: Path):
+    import pyarrow as pa
+
+    data = pa.table({"value": pa.array([1, 2, 3], type=pa.int64())})
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    # Sanity check to ensure table starts with files.
+    initial_adds = dt.get_add_actions(flatten=True)
+    assert initial_adds.num_rows == 1
+    assert len(initial_adds["path"]) == 1
+
+    dt.delete()
+    dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
+
+    dt = DeltaTable(tmp_path)
+    add_actions = dt.get_add_actions()
+    assert add_actions.num_rows == 0
+    assert dt.get_add_actions(flatten=True).num_rows == 0
+
+
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
     assert dt.files(partition_filters) == expected_paths
     absolute_paths = [os.path.join(dt.table_uri, path) for path in expected_paths]
