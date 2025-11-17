@@ -1,11 +1,13 @@
+use url::Url;
+
 #[allow(dead_code)]
 mod fs_common;
 
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
     use deltalake_core::kernel::Add;
-    use maplit::hashmap;
     use serde_json::json;
+    use std::collections::HashMap;
 
     let mut table = fs_common::create_table_from_json(
         "../test/tests/data/read_null_partitions_from_checkpoint",
@@ -24,9 +26,7 @@ async fn read_null_partitions_from_checkpoint() {
     let delta_log = std::path::Path::new(&table.table_uri()).join("_delta_log");
 
     let add = |partition: Option<String>| Add {
-        partition_values: hashmap! {
-            "color".to_string() => partition
-        },
+        partition_values: HashMap::from([("color".to_string(), partition)]),
         ..fs_common::add(0)
     };
 
@@ -45,10 +45,12 @@ async fn read_null_partitions_from_checkpoint() {
     assert!(cp.exists());
 
     // verify that table loads from checkpoint and handles null partitions
-    let table = deltalake_core::open_table(&table.table_uri())
-        .await
-        .unwrap();
-    assert_eq!(table.version(), 2);
+    let table = deltalake_core::open_table(
+        Url::from_directory_path(std::path::Path::new(&table.table_uri())).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(table.version(), Some(2));
 }
 
 #[cfg(feature = "datafusion")]
@@ -58,9 +60,12 @@ async fn load_from_delta_8_0_table_with_special_partition() {
     use deltalake_core::{DeltaOps, DeltaTable};
     use futures::{future, StreamExt};
 
-    let table = deltalake_core::open_table("../test/tests/data/delta-0.8.0-special-partition")
-        .await
-        .unwrap();
+    let path = "../test/tests/data/delta-0.8.0-special-partition";
+    let table = deltalake_core::open_table(
+        Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let (_, stream): (DeltaTable, SendableRecordBatchStream) = DeltaOps(table)
         .load()

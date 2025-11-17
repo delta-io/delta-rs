@@ -15,43 +15,37 @@ from typing import (
     Union,
 )
 
-import pyarrow
-import pyarrow.dataset as ds
-import pyarrow.fs as pa_fs
-from pyarrow.dataset import (
-    Expression,
-    FileSystemDataset,
-    ParquetFileFormat,
-    ParquetFragmentScanOptions,
-    ParquetReadOptions,
+from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core.types import (
+    ArrowArrayExportable,
+    ArrowSchemaExportable,
+    ArrowStreamExportable,
 )
+from deprecated import deprecated
 
 from deltalake._internal import (
     DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
-    Transaction,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
-from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
-from deltalake.writer._conversion import (
-    ArrowSchemaConversionMode,
-    ArrowStreamExportable,
-    _convert_data_and_schema,
-)
-
-try:
-    from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
-except ImportError:
-    from pyarrow.parquet import _filters_to_expression as filters_to_expression
+from deltalake.writer._conversion import _convert_arro3_schema_to_delta
 
 if TYPE_CHECKING:
     import os
+
+    import pandas as pd
+    import pyarrow
+    import pyarrow.fs as pa_fs
+    from pyarrow.dataset import (
+        Expression,
+        ParquetReadOptions,
+    )
 
     from deltalake.transaction import (
         AddAction,
@@ -60,13 +54,6 @@ if TYPE_CHECKING:
     )
     from deltalake.writer.properties import WriterProperties
 
-
-try:
-    import pandas as pd
-except ModuleNotFoundError:
-    _has_pandas = False
-else:
-    _has_pandas = True
 
 MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
 NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
@@ -132,6 +119,11 @@ class Metadata:
         )
 
 
+class DeltaTableConfig(NamedTuple):
+    without_files: bool
+    log_buffer_size: int
+
+
 class ProtocolVersions(NamedTuple):
     min_reader_version: int
     min_writer_version: int
@@ -179,6 +171,10 @@ class DeltaTable:
             log_buffer_size=log_buffer_size,
         )
 
+    @property
+    def table_config(self) -> DeltaTableConfig:
+        return DeltaTableConfig(*self._table.table_config())
+
     @staticmethod
     def is_deltatable(
         table_uri: str, storage_options: dict[str, str] | None = None
@@ -198,7 +194,7 @@ class DeltaTable:
     def create(
         cls,
         table_uri: str | Path,
-        schema: pyarrow.Schema | DeltaSchema,
+        schema: DeltaSchema | ArrowSchemaExportable,
         mode: Literal["error", "append", "overwrite", "ignore"] = "error",
         partition_by: list[str] | str | None = None,
         name: str | None = None,
@@ -246,13 +242,14 @@ class DeltaTable:
             )
             ```
         """
-        if isinstance(schema, DeltaSchema):
-            schema = schema.to_pyarrow()
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
         if isinstance(table_uri, Path):
             table_uri = str(table_uri)
+
+        if not isinstance(schema, DeltaSchema):
+            schema = DeltaSchema.from_arrow(schema)
 
         _create_deltalake(
             table_uri,
@@ -297,6 +294,10 @@ class DeltaTable:
             partitions.append({k: v for (k, v) in partition})
         return partitions
 
+    @deprecated(
+        version="1.0.0",
+        reason="Not compatible with modern delta features (e.g. shallow clones). Use `file_uris` instead.",
+    )
     def files(
         self, partition_filters: list[tuple[str, str, Any]] | None = None
     ) -> list[str]:
@@ -330,6 +331,11 @@ class DeltaTable:
             ("z", "not in", ["a","b"])
             ```
         """
+        warnings.warn(
+            "Method `files` is deprecated, Use DeltaTable.file_uris(predicate) instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
         return self._table.files(self._stringify_partition_values(partition_filters))
 
     def file_uris(
@@ -424,7 +430,25 @@ class DeltaTable:
         columns: list[str] | None = None,
         predicate: str | None = None,
         allow_out_of_range: bool = False,
-    ) -> pyarrow.RecordBatchReader:
+    ) -> RecordBatchReader:
+        """
+        Load the Change Data Feed (CDF) from the Delta table as a stream of record batches.
+
+        Parameters:
+            starting_version (int): The version of the Delta table to start reading CDF from.
+            ending_version (int | None): The version to stop reading CDF at. If None, reads up to the latest version.
+            starting_timestamp (str | None): An ISO 8601 timestamp to start reading CDF from. Ignored if starting_version is provided.
+            ending_timestamp (str | None): An ISO 8601 timestamp to stop reading CDF at. Ignored if ending_version is provided.
+            columns (list[str] | None): A list of column names to include in the output. If None, all columns are included.
+            predicate (str | None): An optional SQL predicate to filter the output rows.
+            allow_out_of_range (bool): If True, does not raise an error when specified versions or timestamps are outside the table's history.
+
+        Returns:
+            RecordBatchReader: An Arrow RecordBatchReader that streams the resulting change data.
+
+        Raises:
+            ValueError: If input parameters are invalid or if the specified range is not found (unless allow_out_of_range is True).
+        """
         return self._table.load_cdf(
             columns=columns,
             predicate=predicate,
@@ -448,13 +472,17 @@ class DeltaTable:
         """
         return self._table.schema
 
+    @deprecated(
+        version="1.2.1",
+        reason="Not compatible with modern Delta features (e.g. shallow clones). Use `file_uris` instead.",
+    )
     def files_by_partitions(self, partition_filters: PartitionFilterType) -> list[str]:
         """
         Get the files for each partition
 
         """
         warnings.warn(
-            "files_by_partitions is deprecated, please use DeltaTable.files() instead.",
+            "Method `files_by_partitions` is deprecated, please use DeltaTable.file_uris() instead.",
             category=DeprecationWarning,
             stacklevel=2,
         )
@@ -478,6 +506,37 @@ class DeltaTable:
             the current ProtocolVersions registered in the transaction log
         """
         return ProtocolVersions(*self._table.protocol_versions())
+
+    def generate(self) -> None:
+        """
+        Generate symlink manifest for engines that cannot read native Delta Lake tables.
+
+        The generate supports the fairly simple "GENERATE" operation which produces a
+        [symlink_format_manifest](https://docs.delta.io/delta-utility/#generate-a-manifest-file) file
+        when needed for an external engine such as Presto or BigQuery.
+
+        The "symlink_format_manifest" is not something that has been well documented, but for
+        enon-partitioned tables this will generate a `_symlink_format_manifest/manifest` file next to
+        the `_delta_log`, for example:
+
+        ```
+        COVID-19_NYT
+        ├── _delta_log
+        │   ├── 00000000000000000000.crc
+        │   └── 00000000000000000000.json
+        ├── part-00000-a496f40c-e091-413a-85f9-b1b69d4b3b4e-c000.snappy.parquet
+        ├── part-00001-9d9d980b-c500-4f0b-bb96-771a515fbccc-c000.snappy.parquet
+        ├── part-00002-8826af84-73bd-49a6-a4b9-e39ffed9c15a-c000.snappy.parquet
+        ├── part-00003-539aff30-2349-4b0d-9726-c18630c6ad90-c000.snappy.parquet
+        ├── part-00004-1bb9c3e3-c5b0-4d60-8420-23261f58a5eb-c000.snappy.parquet
+        ├── part-00005-4d47f8ff-94db-4d32-806c-781a1cf123d2-c000.snappy.parquet
+        ├── part-00006-d0ec7722-b30c-4e1c-92cd-b4fe8d3bb954-c000.snappy.parquet
+        ├── part-00007-4582392f-9fc2-41b0-ba97-a74b3afc8239-c000.snappy.parquet
+        └── _symlink_format_manifest
+            └── manifest
+        ```
+        """
+        return self._table.generate()
 
     def history(self, limit: int | None = None) -> list[dict[str, Any]]:
         """
@@ -509,6 +568,29 @@ class DeltaTable:
             history.append(commit)
         return history
 
+    def count(self) -> int:
+        """
+        Get the approximate row count based on file statistics added to the Delta table.
+
+        This requires that add actions have been added to the Delta table with
+        per-file statistics enabled. Because this is an optional field this
+        "count" will be less than or equal to the true row count of the table.
+        In order to get an exact number of rows a full table scan must happen
+
+        Returns:
+            The approximate number of rows for this specific table
+        """
+        total_rows = 0
+
+        for value in self.get_add_actions().column("num_records").to_pylist():
+            # Add action file statistics are optional and so while most modern
+            # tables are _likely_ to have this information it is not
+            # guaranteed.
+            if value is not None:
+                total_rows += value
+
+        return total_rows
+
     def vacuum(
         self,
         retention_hours: int | None = None,
@@ -517,6 +599,7 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
         full: bool = False,
+        keep_versions: list[int] | None = None,
     ) -> list[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -528,6 +611,7 @@ class DeltaTable:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
             full: when set to True, will perform a "full" vacuum and remove all files not referenced in the transaction log
+            keep_versions: An optional list of versions to keep. If provided, files from these versions will not be deleted.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
@@ -542,6 +626,7 @@ class DeltaTable:
             commit_properties,
             post_commithook_properties,
             full,
+            keep_versions,
         )
 
     def update(
@@ -672,12 +757,7 @@ class DeltaTable:
 
     def merge(
         self,
-        source: pyarrow.Table
-        | pyarrow.RecordBatch
-        | pyarrow.RecordBatchReader
-        | ds.Dataset
-        | ArrowStreamExportable
-        | pd.DataFrame,
+        source: ArrowStreamExportable | ArrowArrayExportable,
         predicate: str,
         source_alias: str | None = None,
         target_alias: str | None = None,
@@ -708,15 +788,13 @@ class DeltaTable:
         Returns:
             TableMerger: TableMerger Object
         """
-        data, schema = _convert_data_and_schema(
-            data=source,
-            schema=None,
-            conversion_mode=ArrowSchemaConversionMode.PASSTHROUGH,
-        )
-        data = pyarrow.RecordBatchReader.from_batches(schema, (batch for batch in data))
+
+        source = RecordBatchReader.from_arrow(source)
+        compatible_delta_schema = _convert_arro3_schema_to_delta(source.schema)
 
         py_merge_builder = self._table.create_merge_builder(
             source=source,
+            batch_schema=compatible_delta_schema,
             predicate=predicate,
             source_alias=source_alias,
             target_alias=target_alias,
@@ -772,7 +850,7 @@ class DeltaTable:
         parquet_read_options: ParquetReadOptions | None = None,
         schema: pyarrow.Schema | None = None,
         as_large_types: bool = False,
-    ) -> pyarrow.dataset.Dataset:
+    ) -> "pyarrow.dataset.Dataset":
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
@@ -808,6 +886,16 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
+        try:
+            from pyarrow.dataset import (
+                FileSystemDataset,
+                ParquetFileFormat,
+                ParquetFragmentScanOptions,
+            )
+        except ImportError:
+            raise ImportError(
+                "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
+            )
         if not self._table.has_files():
             raise DeltaError("Table is instantiated without files.")
 
@@ -833,6 +921,30 @@ class DeltaTable:
                     f"The table has set these reader features: {missing_features} "
                     "but these are not yet supported by the deltalake reader."
                 )
+
+        if (
+            table_protocol.reader_features
+            and "columnMapping" in table_protocol.reader_features
+        ):
+            raise DeltaProtocolError(
+                "The table requires reader feature 'columnMapping' "
+                "but this is not supported using pyarrow Datasets."
+            )
+
+        if (
+            table_protocol.reader_features
+            and "deletionVectors" in table_protocol.reader_features
+        ):
+            raise DeltaProtocolError(
+                "The table requires reader feature 'deletionVectors' "
+                "but this is not supported using pyarrow Datasets."
+            )
+
+        import pyarrow
+        import pyarrow.fs as pa_fs
+
+        from deltalake.fs import DeltaStorageHandler
+
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler.from_table(
@@ -841,12 +953,18 @@ class DeltaTable:
                     self._table.get_add_file_sizes(),
                 )
             )
+
         format = ParquetFileFormat(
             read_options=parquet_read_options,
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
-        schema = schema or self.schema().to_pyarrow(as_large_types=as_large_types)
+        if schema is None:
+            schema = pyarrow.schema(
+                self.schema().to_arrow(as_large_types=as_large_types)
+            )
+
+        partitions = self._stringify_partition_values(partitions)
 
         fragments = [
             format.make_fragment(
@@ -876,7 +994,7 @@ class DeltaTable:
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
-    ) -> pyarrow.Table:
+    ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
 
@@ -886,6 +1004,13 @@ class DeltaTable:
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
         """
+        try:
+            from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
+        except ImportError:
+            raise ImportError(
+                "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
+            )
+
         if filters is not None:
             filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
@@ -899,7 +1024,7 @@ class DeltaTable:
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
-    ) -> pd.DataFrame:
+    ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
@@ -924,6 +1049,9 @@ class DeltaTable:
         self._table.update_incremental()
 
     def create_checkpoint(self) -> None:
+        """
+        Create a checkpoint at the current table version.
+        """
         self._table.create_checkpoint()
 
     def cleanup_metadata(self) -> None:
@@ -948,7 +1076,7 @@ class DeltaTable:
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions(self, flatten: bool = False) -> pyarrow.RecordBatch:
+    def get_add_actions(self, flatten: bool = False) -> RecordBatch:
         """
         Return a dataframe with all current add actions.
 
@@ -1063,14 +1191,23 @@ class DeltaTable:
         )
         return deserialized_metrics
 
-    def transaction_versions(self) -> dict[str, Transaction]:
-        return self._table.transaction_versions()
+    def transaction_version(self, app_id: str) -> int | None:
+        """
+        Retrieve the latest transaction versions for the given application ID.
+
+        Args:
+            app_id (str): The application ID for which to retrieve the latest transaction version.
+
+        Returns:
+            int | None: The latest transaction version for the given application ID if it exists, otherwise None.
+        """
+        return self._table.transaction_version(app_id)
 
     def create_write_transaction(
         self,
         actions: list[AddAction],
         mode: str,
-        schema: pyarrow.Schema,
+        schema: DeltaSchema | ArrowSchemaExportable,
         partition_by: list[str] | str | None = None,
         partition_filters: FilterType | None = None,
         commit_properties: CommitProperties | None = None,
@@ -1078,6 +1215,9 @@ class DeltaTable:
     ) -> None:
         if isinstance(partition_by, str):
             partition_by = [partition_by]
+
+        if not isinstance(schema, DeltaSchema):
+            schema = DeltaSchema.from_arrow(schema)
 
         self._table.create_write_transaction(
             actions,
@@ -1274,7 +1414,7 @@ class TableMerger:
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema
+            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
             if col.name not in except_columns
         }
 
@@ -1491,7 +1631,7 @@ class TableMerger:
 
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema
+            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
             if col.name not in except_columns
         }
 
@@ -1685,12 +1825,6 @@ class TableAlterer:
             {'delta.constraints.value_gt_5': 'value > 5'}
             ```
         """
-        if len(constraints.keys()) > 1:
-            raise ValueError(
-                """add_constraints is limited to a single constraint addition at once for now.
-                Please execute add_constraints multiple times with each time a different constraint."""
-            )
-
         self.table._table.add_constraints(
             constraints,
             commit_properties,
@@ -1773,6 +1907,50 @@ class TableAlterer:
             raise_if_not_exists,
             commit_properties,
         )
+
+    def set_table_name(
+        self,
+        name: str,
+        commit_properties: CommitProperties | None = None,
+    ) -> None:
+        """
+        Set the name of the table.
+
+        Args:
+            name: the name of the table
+            commit_properties: properties of the transaction commit. If None, default values are used.
+                              Note: This parameter is not yet implemented and will be ignored.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_name("new_table_name")
+            ```
+        """
+        self.table._table.set_table_name(name, commit_properties)
+
+    def set_table_description(
+        self,
+        description: str,
+        commit_properties: CommitProperties | None = None,
+    ) -> None:
+        """
+        Set the description of the table.
+
+        Args:
+            description: the description of the table
+            commit_properties: properties of the transaction commit. If None, default values are used.
+                              Note: This parameter is not yet implemented and will be ignored.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.set_table_description("new_table_description")
+            ```
+        """
+        self.table._table.set_table_description(description, commit_properties)
 
     def set_column_metadata(
         self,

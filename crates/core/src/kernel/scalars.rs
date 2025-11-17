@@ -5,13 +5,49 @@ use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
 use delta_kernel::{
+    engine::arrow_conversion::TryIntoKernel as _,
     expressions::{Scalar, StructData},
     schema::StructField,
 };
-use object_store::path::Path;
-#[cfg(test)]
+use percent_encoding_rfc3986::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_json::Value;
-use urlencoding::encode;
+
+// ASCII set that needs to be encoded, derived from
+// PROTOCOL DOCS: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#how-to-url-encode-keys-and-string-values
+const RFC3986_PART: &AsciiSet = &CONTROLS
+    .add(b' ') // space
+    .add(b'!')
+    .add(b'"')
+    .add(b'#')
+    .add(b'$')
+    .add(b'%')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
+
+fn encode_partition_value(value: &str) -> String {
+    utf8_percent_encode(value, RFC3986_PART).to_string()
+}
 
 use crate::NULL_PARTITION_VALUE_DATA_PATH;
 
@@ -24,8 +60,7 @@ pub trait ScalarExt: Sized {
     /// Create a [`Scalar`] from an arrow array row
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
     /// Serialize as serde_json::Value
-    #[cfg(test)]
-    fn to_json(&self) -> serde_json::Value;
+    fn to_json(&self) -> Value;
 }
 
 impl ScalarExt for Scalar {
@@ -76,6 +111,7 @@ impl ScalarExt for Scalar {
             Self::Null(_) => "null".to_string(),
             Self::Struct(_) => self.to_string(),
             Self::Array(_) => self.to_string(),
+            Self::Map(_) => self.to_string(),
         }
     }
 
@@ -84,7 +120,7 @@ impl ScalarExt for Scalar {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        encode(Path::from(self.serialize()).as_ref()).to_string()
+        encode_partition_value(self.serialize().as_str())
     }
 
     /// Create a [`Scalar`] from a row in an arrow array.
@@ -96,7 +132,7 @@ impl ScalarExt for Scalar {
             return None;
         }
         if arr.is_null(index) {
-            return Some(Self::Null(arr.data_type().try_into().ok()?));
+            return Some(Self::Null(arr.data_type().try_into_kernel().ok()?));
         }
 
         match arr.data_type() {
@@ -194,7 +230,7 @@ impl ScalarExt for Scalar {
             Struct(fields) => {
                 let struct_fields = fields
                     .iter()
-                    .flat_map(|f| TryFrom::try_from(f.as_ref()))
+                    .flat_map(|f| f.as_ref().try_into_kernel())
                     .collect::<Vec<_>>();
                 let values = arr
                     .as_any()
@@ -214,6 +250,8 @@ impl ScalarExt for Scalar {
                 ))
             }
             Float16
+            | Decimal32(_, _)
+            | Decimal64(_, _)
             | Decimal256(_, _)
             | List(_)
             | LargeList(_)
@@ -235,7 +273,6 @@ impl ScalarExt for Scalar {
     }
 
     /// Serializes this scalar as a serde_json::Value.
-    #[cfg(test)]
     fn to_json(&self) -> serde_json::Value {
         match self {
             Self::String(s) => Value::String(s.to_owned()),
@@ -280,8 +317,29 @@ impl ScalarExt for Scalar {
             },
             Self::Binary(val) => Value::String(create_escaped_binary_string(val.as_slice())),
             Self::Null(_) => Value::Null,
-            Self::Struct(_) => unimplemented!(),
-            Self::Array(_) => unimplemented!(),
+            Self::Struct(struct_data) => {
+                let mut result = serde_json::Map::new();
+                for (field, value) in struct_data.fields().iter().zip(struct_data.values().iter()) {
+                    result.insert(field.name.clone(), value.to_json());
+                }
+                Value::Object(result)
+            }
+            Self::Array(array_data) => {
+                let mut result = Vec::new();
+                #[allow(deprecated)] // array elements are deprecated b/c kernel wants to replace it
+                // with a more efficient implementation. However currently no alternatiove API is available.
+                for value in array_data.array_elements() {
+                    result.push(value.to_json());
+                }
+                Value::Array(result)
+            }
+            Self::Map(map_data) => {
+                let mut result = serde_json::Map::new();
+                for (key, value) in map_data.pairs() {
+                    result.insert(key.to_string(), value.to_json());
+                }
+                Value::Object(result)
+            }
         }
     }
 }

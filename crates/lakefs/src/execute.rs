@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use deltalake_core::{
-    logstore::LogStoreRef, operations::CustomExecuteHandler, DeltaResult, DeltaTableError,
+    logstore::{LogStore as _, LogStoreRef},
+    operations::CustomExecuteHandler,
+    DeltaResult, DeltaTableError,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -28,7 +30,7 @@ impl CustomExecuteHandler for LakeFSCustomExecuteHandler {
         if let Some(lakefs_store) = log_store.clone().as_any().downcast_ref::<LakeFSLogStore>() {
             let (repo, _, _) = lakefs_store
                 .client
-                .decompose_url(lakefs_store.config.location.to_string());
+                .decompose_url(lakefs_store.config().location.to_string());
             let result = lakefs_store
                 .client
                 .delete_branch(repo, lakefs_store.client.get_transaction(operation_id)?)
@@ -91,10 +93,10 @@ mod tests {
     use crate::register_handlers;
 
     use super::*;
-    use deltalake_core::{logstore::logstore_for, logstore::ObjectStoreRegistry};
+    use deltalake_core::logstore::{logstore_for, ObjectStoreRegistry, StorageConfig};
     use http::StatusCode;
     use maplit::hashmap;
-    use std::{collections::HashMap, sync::OnceLock};
+    use std::sync::OnceLock;
     use tokio::runtime::Runtime;
     use url::Url;
     use uuid::Uuid;
@@ -108,7 +110,9 @@ mod tests {
             "SECRET_ACCESS_KEY".to_string() => "options_key".to_string(),
             "REGION".to_string() => "options_key".to_string()
         };
-        logstore_for(location, raw_options, None).unwrap()
+
+        let storage_config = StorageConfig::parse_options(raw_options).unwrap();
+        logstore_for(location, storage_config).unwrap()
     }
 
     #[inline]
@@ -142,7 +146,7 @@ mod tests {
             .downcast_ref::<LakeFSLogStore>()
         {
             assert!(lakefs_store
-                .storage
+                .prefixed_registry
                 .get_store(
                     &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
                         .unwrap()
@@ -183,7 +187,7 @@ mod tests {
             .downcast_ref::<LakeFSLogStore>()
         {
             assert!(lakefs_store
-                .storage
+                .prefixed_registry
                 .get_store(
                     &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
                         .unwrap()
@@ -259,6 +263,16 @@ mod tests {
             .with_status(StatusCode::CREATED.as_u16().into())
             .create();
 
+        let diff_mock = server
+            .mock(
+                "GET",
+                format!("/api/v1/repositories/repo/refs/branch/diff/delta-tx-{operation_id}")
+                    .as_str(),
+            )
+            .with_status(StatusCode::OK.as_u16().into())
+            .with_body(r#"{"results": [{"some": "change"}]}"#)
+            .create();
+
         let merge_branch_mock = server
             .mock(
                 "POST",
@@ -293,6 +307,7 @@ mod tests {
         });
 
         create_commit_mock.assert();
+        diff_mock.assert();
         merge_branch_mock.assert();
         delete_branch_mock.assert();
         assert!(result.is_ok());
@@ -311,8 +326,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_error_with_invalid_log_store() {
         let location = Url::parse("memory:///table").unwrap();
-        let invalid_default_store =
-            logstore_for(location, HashMap::<String, String>::default(), None).unwrap();
+        let invalid_default_store = logstore_for(location, StorageConfig::default()).unwrap();
 
         let handler = LakeFSCustomExecuteHandler {};
         let operation_id = Uuid::new_v4();
@@ -367,8 +381,7 @@ mod tests {
         // When file operations is false, the commit hook executor is a noop, since we don't need
         // to create any branches, or commit and merge them back.
         let location = Url::parse("memory:///table").unwrap();
-        let invalid_default_store =
-            logstore_for(location, HashMap::<String, String>::default(), None).unwrap();
+        let invalid_default_store = logstore_for(location, StorageConfig::default()).unwrap();
 
         let handler = LakeFSCustomExecuteHandler {};
         let operation_id = Uuid::new_v4();

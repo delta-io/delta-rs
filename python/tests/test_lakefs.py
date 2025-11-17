@@ -3,17 +3,30 @@ import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-import pyarrow as pa
 import pytest
+from arro3.core import Array, DataType, Table
+from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, TableFeatures
-from deltalake._internal import Field, PrimitiveType
+from deltalake._internal import Field, PrimitiveType, Schema
 from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.query import QueryBuilder
 from deltalake.writer import write_deltalake
 from tests.test_alter import _sort_fields
 
 if TYPE_CHECKING:
     import lakefs
+
+
+@pytest.fixture
+def delta_schema() -> Schema:
+    return Schema(
+        fields=[
+            Field("date", PrimitiveType("date")),
+            Field("foo", PrimitiveType("string")),
+            Field("bar", PrimitiveType("string")),
+        ]
+    )
 
 
 @pytest.fixture
@@ -42,10 +55,10 @@ def lakefs_storage_options():
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_create(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options):
+def test_create(lakefs_path: str, delta_schema: Schema, lakefs_storage_options):
     dt = DeltaTable.create(
         lakefs_path,
-        sample_data.schema,
+        delta_schema,
         mode="error",
         storage_options=lakefs_storage_options,
     )
@@ -54,7 +67,7 @@ def test_create(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options)
     with pytest.raises(DeltaError):
         dt = DeltaTable.create(
             lakefs_path,
-            sample_data.schema,
+            delta_schema,
             mode="error",
             storage_options=lakefs_storage_options,
         )
@@ -63,14 +76,14 @@ def test_create(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options)
     with pytest.raises(DeltaError):
         dt = DeltaTable.create(
             lakefs_path,
-            sample_data.schema,
+            delta_schema,
             mode="append",
             storage_options=lakefs_storage_options,
         )
 
     dt = DeltaTable.create(
         lakefs_path,
-        sample_data.schema,
+        delta_schema,
         mode="ignore",
         storage_options=lakefs_storage_options,
     )
@@ -78,7 +91,7 @@ def test_create(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options)
 
     dt = DeltaTable.create(
         lakefs_path,
-        sample_data.schema,
+        delta_schema,
         mode="overwrite",
         storage_options=lakefs_storage_options,
     )
@@ -91,11 +104,11 @@ def test_create(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options)
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_delete(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options):
+def test_delete(lakefs_path: str, sample_table: Table, lakefs_storage_options):
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by=["bool"],
+        sample_table,
+        partition_by=["id"],
         storage_options=lakefs_storage_options,
     )
 
@@ -109,35 +122,35 @@ def test_delete(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options)
     assert dt.version() == old_version + 1
     assert last_action["userName"] == "John Doe"
 
-    dataset = dt.to_pyarrow_dataset()
-    assert dataset.count_rows() == 0
+    dataset = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    assert dataset.num_rows == 0
     assert len(dt.files()) == 0
 
 
 @pytest.mark.lakefs
 @pytest.mark.integration
 def test_optimize_min_commit_interval(
-    lakefs_path: str, sample_data: pa.Table, lakefs_storage_options
+    lakefs_path: str, sample_table: Table, lakefs_storage_options
 ):
     print(lakefs_path)
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by="utf8",
+        sample_table,
+        partition_by="id",
         mode="append",
         storage_options=lakefs_storage_options,
     )
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by="utf8",
+        sample_table,
+        partition_by="id",
         mode="append",
         storage_options=lakefs_storage_options,
     )
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by="utf8",
+        sample_table,
+        partition_by="id",
         mode="append",
         storage_options=lakefs_storage_options,
     )
@@ -145,7 +158,7 @@ def test_optimize_min_commit_interval(
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
     old_version = dt.version()
 
-    dt.optimize.z_order(["date32", "timestamp"], min_commit_interval=timedelta(0))
+    dt.optimize.z_order(["sold", "price"], min_commit_interval=timedelta(0))
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
@@ -157,25 +170,25 @@ def test_optimize_min_commit_interval(
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_optimize(lakefs_path: str, sample_data: pa.Table, lakefs_storage_options):
+def test_optimize(lakefs_path: str, sample_table: Table, lakefs_storage_options):
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by="utf8",
+        sample_table,
+        partition_by="id",
         mode="append",
         storage_options=lakefs_storage_options,
     )
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by="utf8",
+        sample_table,
+        partition_by="id",
         mode="append",
         storage_options=lakefs_storage_options,
     )
     write_deltalake(
         lakefs_path,
-        sample_data,
-        partition_by="utf8",
+        sample_table,
+        partition_by="id",
         mode="append",
         storage_options=lakefs_storage_options,
     )
@@ -183,7 +196,7 @@ def test_optimize(lakefs_path: str, sample_data: pa.Table, lakefs_storage_option
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
     old_version = dt.version()
 
-    dt.optimize.z_order(["date32", "timestamp"])
+    dt.optimize.z_order(["sold", "price"])
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
@@ -196,15 +209,24 @@ def test_optimize(lakefs_path: str, sample_data: pa.Table, lakefs_storage_option
 @pytest.mark.lakefs
 @pytest.mark.integration
 def test_repair_wo_dry_run(
-    lakefs_path, sample_data, lakefs_storage_options, lakefs_client: "lakefs.Client"
+    lakefs_path,
+    sample_table,
+    lakefs_storage_options,
+    lakefs_client: "lakefs.Client",
 ):
     import lakefs
 
     write_deltalake(
-        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
     )
     write_deltalake(
-        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
     )
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
 
@@ -226,7 +248,7 @@ def test_repair_wo_dry_run(
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_add_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
+def test_add_constraint(lakefs_path, sample_table: Table, lakefs_storage_options):
     write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
 
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
@@ -244,12 +266,22 @@ def test_add_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_opti
         dt.alter.add_constraint({"check_price": "price < 0"})
 
     with pytest.raises(DeltaProtocolError):
-        data = pa.table(
+        data = Table(
             {
-                "id": pa.array(["1"]),
-                "price": pa.array([-1], pa.int64()),
-                "sold": pa.array(list(range(1)), pa.int32()),
-                "deleted": pa.array([False] * 1),
+                "id": Array(
+                    ["1"], type=ArrowField("id", type=DataType.string(), nullable=True)
+                ),
+                "price": Array(
+                    [-1], type=ArrowField("price", type=DataType.int64(), nullable=True)
+                ),
+                "sold": Array(
+                    list(range(1)),
+                    type=ArrowField("sold", type=DataType.int32(), nullable=True),
+                ),
+                "deleted": Array(
+                    [False],
+                    type=ArrowField("deleted", type=DataType.bool(), nullable=True),
+                ),
             }
         )
         write_deltalake(
@@ -262,7 +294,7 @@ def test_add_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_opti
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_drop_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
+def test_drop_constraint(lakefs_path, sample_table: Table, lakefs_storage_options):
     write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
 
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
@@ -276,9 +308,7 @@ def test_drop_constraint(lakefs_path, sample_table: pa.Table, lakefs_storage_opt
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_set_table_properties(
-    lakefs_path, sample_table: pa.Table, lakefs_storage_options
-):
+def test_set_table_properties(lakefs_path, sample_table: Table, lakefs_storage_options):
     write_deltalake(
         lakefs_path,
         sample_table,
@@ -296,7 +326,7 @@ def test_set_table_properties(
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_add_feautres(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
+def test_add_features(lakefs_path, sample_table: Table, lakefs_storage_options):
     write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
     dt.alter.add_feature(
@@ -323,17 +353,19 @@ def test_add_feautres(lakefs_path, sample_table: pa.Table, lakefs_storage_option
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_merge(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
+def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
     write_deltalake(
         lakefs_path, sample_table, mode="append", storage_options=lakefs_storage_options
     )
 
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
 
-    source_table = pa.table(
+    source_table = Table(
         {
-            "id": pa.array(["5"]),
-            "weight": pa.array([105], pa.int32()),
+            "id": Array(["5"], type=ArrowField("id", DataType.string(), nullable=True)),
+            "weight": Array(
+                [105], type=ArrowField("weight", DataType.int32(), nullable=True)
+            ),
         }
     )
 
@@ -347,15 +379,29 @@ def test_merge(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
     ).when_matched_delete().execute()
 
     nrows = 4
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
+            "id": Array(
+                ["1", "2", "3", "4"],
+                type=ArrowField("id", DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3],
+                type=ArrowField("price", DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3],
+                type=ArrowField("sold", DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * nrows,
+                type=ArrowField("deleted", DataType.bool(), nullable=True),
+            ),
         }
     )
-    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "MERGE"
@@ -367,17 +413,26 @@ def test_merge(lakefs_path, sample_table: pa.Table, lakefs_storage_options):
 @pytest.mark.integration
 def test_restore(
     lakefs_path,
-    sample_data: pa.Table,
+    sample_table: Table,
     lakefs_storage_options,
 ):
     write_deltalake(
-        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
     )
     write_deltalake(
-        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
     )
     write_deltalake(
-        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
     )
 
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
@@ -392,9 +447,12 @@ def test_restore(
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_add_column(lakefs_path, sample_data: pa.Table, lakefs_storage_options):
+def test_add_column(lakefs_path, sample_table: Table, lakefs_storage_options):
     write_deltalake(
-        lakefs_path, sample_data, mode="append", storage_options=lakefs_storage_options
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
     )
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
     current_fields = dt.schema().fields
@@ -415,21 +473,35 @@ def test_add_column(lakefs_path, sample_data: pa.Table, lakefs_storage_options):
 @pytest.fixture()
 def sample_table_update():
     nrows = 5
-    return pa.table(
+    return Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int64()),
-            "price_float": pa.array(list(range(nrows)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
-            "deleted": pa.array([False] * nrows),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                type=ArrowField("id", DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)),
+                type=ArrowField("price", DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(nrows)),
+                type=ArrowField("sold", DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                list(range(nrows)),
+                type=ArrowField("price_float", DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * nrows,
+                type=ArrowField("deleted", DataType.bool(), nullable=True),
+            ),
         }
     )
 
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_update(lakefs_path, sample_table_update: pa.Table, lakefs_storage_options):
+def test_update(lakefs_path, sample_table_update: Table, lakefs_storage_options):
     write_deltalake(
         lakefs_path,
         sample_table_update,
@@ -439,14 +511,29 @@ def test_update(lakefs_path, sample_table_update: pa.Table, lakefs_storage_optio
 
     dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
     nrows = 5
-    expected = pa.table(
+
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int64()),
-            "price_float": pa.array(list(range(nrows)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
-            "deleted": pa.array([False, False, False, False, True]),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                type=ArrowField("id", DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)),
+                type=ArrowField("price", DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(nrows)),
+                type=ArrowField("sold", DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                list(range(nrows)),
+                type=ArrowField("price_float", DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, True],
+                type=ArrowField("deleted", DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -457,7 +544,7 @@ def test_update(lakefs_path, sample_table_update: pa.Table, lakefs_storage_optio
         commit_properties=commit_properties,
     )
 
-    result = dt.to_pyarrow_table()
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "UPDATE"
@@ -467,7 +554,7 @@ def test_update(lakefs_path, sample_table_update: pa.Table, lakefs_storage_optio
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_checkpoint(sample_data: pa.Table, lakefs_storage_options, lakefs_client):
+def test_checkpoint(sample_table: Table, lakefs_storage_options, lakefs_client):
     import lakefs
 
     table = str(uuid.uuid4())
@@ -481,10 +568,8 @@ def test_checkpoint(sample_data: pa.Table, lakefs_storage_options, lakefs_client
         repository_id="bronze", branch_id="main", client=lakefs_client
     )
 
-    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
-    sample_data = sample_data.drop(["binary"])
     write_deltalake(
-        str(tmp_table_path), sample_data, storage_options=lakefs_storage_options
+        str(tmp_table_path), sample_table, storage_options=lakefs_storage_options
     )
 
     assert not branch.object(checkpoint_path).exists()
@@ -500,13 +585,44 @@ def test_checkpoint(sample_data: pa.Table, lakefs_storage_options, lakefs_client
 
 @pytest.mark.lakefs
 @pytest.mark.integration
-def test_storage_options(sample_data: pa.Table):
+def test_no_empty_commits(
+    lakefs_path, sample_table: Table, lakefs_storage_options, lakefs_client
+):
+    import lakefs
+
+    write_deltalake(
+        lakefs_path,
+        sample_table,
+        mode="append",
+        storage_options=lakefs_storage_options,
+    )
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+
+    # Get current branch head commit before operation
+    branch = lakefs.Branch(
+        repository_id="bronze", branch_id="main", client=lakefs_client
+    )
+    commits_before = list(branch.log())
+    before_commit_id = commits_before[0].id if commits_before else None
+
+    # Since there should be no files to vacuum in a fresh table this should be a no-op operation
+    dt.vacuum(dry_run=False)
+
+    commits_after = list(branch.log())
+    after_commit_id = commits_after[0].id if commits_after else None
+
+    assert before_commit_id == after_commit_id, "Empty commit should be skipped"
+
+
+@pytest.mark.lakefs
+@pytest.mark.integration
+def test_storage_options(sample_table: Table):
     with pytest.raises(
         DeltaError, match="LakeFS endpoint is missing in storage options."
     ):
         write_deltalake(
             "lakefs://bronze/main/oops",
-            data=sample_data,
+            data=sample_table,
             storage_options={
                 "allow_http": "true",
                 "access_key_id": "LAKEFSID",
@@ -519,7 +635,7 @@ def test_storage_options(sample_data: pa.Table):
     ):
         write_deltalake(
             "lakefs://bronze/main/oops",
-            data=sample_data,
+            data=sample_table,
             storage_options={
                 "endpoint": "http://127.0.0.1:8000",
                 "allow_http": "true",

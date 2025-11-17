@@ -1,14 +1,19 @@
 import pathlib
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
 import pytest
+from arro3.core import Array, DataType, Field, Schema, Table
 
 from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
 from deltalake.exceptions import DeltaError, DeltaProtocolError
-from deltalake.schema import Field, PrimitiveType, StructType
+from deltalake.schema import Field as DeltaField
+from deltalake.schema import PrimitiveType, StructType
+
+if TYPE_CHECKING:
+    pass
 
 
-def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
     dt = DeltaTable(tmp_path)
@@ -28,31 +33,27 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
         dt.alter.add_constraint({"check_price": "price < 0"})
 
     with pytest.raises(DeltaProtocolError):
-        data = pa.table(
+        data = Table(
             {
-                "id": pa.array(["1"]),
-                "price": pa.array([-1], pa.int64()),
-                "sold": pa.array(list(range(1)), pa.int32()),
-                "deleted": pa.array([False] * 1),
-            }
+                "id": Array(["1"], DataType.string()),
+                "price": Array([-1], DataType.int64()),
+                "sold": Array(list(range(1)), DataType.int32()),
+                "deleted": Array([False] * 1, DataType.bool()),
+            },
+            schema=Schema(
+                fields=[
+                    Field("id", type=DataType.string(), nullable=True),
+                    Field("price", type=DataType.int64(), nullable=True),
+                    Field("sold", type=DataType.int32(), nullable=True),
+                    Field("deleted", type=DataType.bool(), nullable=True),
+                ]
+            ),
         )
+
         write_deltalake(tmp_path, data, mode="append")
 
 
-def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: pa.Table):
-    write_deltalake(tmp_path, sample_table)
-
-    dt = DeltaTable(tmp_path)
-
-    with pytest.raises(ValueError):
-        dt.alter.add_constraint(
-            {"check_price": "price >= 0", "check_price2": "price >= 0"}
-        )
-
-
-def test_add_constraint_roundtrip_metadata(
-    tmp_path: pathlib.Path, sample_table: pa.Table
-):
+def test_add_constraint_roundtrip_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
@@ -65,7 +66,7 @@ def test_add_constraint_roundtrip_metadata(
     assert dt.history(1)[0]["userName"] == "John Doe"
 
 
-def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_drop_constraint(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
     dt = DeltaTable(tmp_path)
@@ -80,7 +81,7 @@ def test_drop_constraint(tmp_path: pathlib.Path, sample_table: pa.Table):
     assert dt.protocol().min_writer_version == 3
 
 
-def test_drop_constraint_invalid(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_drop_constraint_invalid(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
     dt = DeltaTable(tmp_path)
@@ -95,7 +96,7 @@ def test_drop_constraint_invalid(tmp_path: pathlib.Path, sample_table: pa.Table)
     assert dt.protocol().min_writer_version == 3
 
 
-def test_drop_constraint_invalid_ignore(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_drop_constraint_invalid_ignore(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
     dt = DeltaTable(tmp_path)
@@ -105,7 +106,7 @@ def test_drop_constraint_invalid_ignore(tmp_path: pathlib.Path, sample_table: pa
 
 
 def test_drop_constraint_roundtrip_metadata(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -125,7 +126,7 @@ def test_drop_constraint_roundtrip_metadata(
 @pytest.mark.parametrize("min_writer_version", ["2", "3", "4", "5", "6", "7"])
 def test_set_table_properties_min_writer_version(
     tmp_path: pathlib.Path,
-    sample_table: pa.Table,
+    sample_table: Table,
     min_writer_version: str,
 ):
     write_deltalake(
@@ -146,7 +147,7 @@ def test_set_table_properties_min_writer_version(
 
 
 def test_set_table_properties_invalid_min_writer_version(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -166,7 +167,7 @@ def test_set_table_properties_invalid_min_writer_version(
 @pytest.mark.parametrize("min_reader_version", ["1", "2", "3"])
 def test_set_table_properties_min_reader_version(
     tmp_path: pathlib.Path,
-    sample_table: pa.Table,
+    sample_table: Table,
     min_reader_version: str,
 ):
     write_deltalake(
@@ -185,7 +186,7 @@ def test_set_table_properties_min_reader_version(
 
 
 def test_set_table_properties_invalid_min_reader_version(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -202,9 +203,7 @@ def test_set_table_properties_invalid_min_reader_version(
     assert protocol.min_writer_version == 2
 
 
-def test_set_table_properties_enable_cdf(
-    tmp_path: pathlib.Path, sample_table: pa.Table
-):
+def test_set_table_properties_enable_cdf(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(
         tmp_path,
         sample_table,
@@ -220,7 +219,7 @@ def test_set_table_properties_enable_cdf(
 
 
 def test_set_table_properties_enable_cdf_invalid(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -238,7 +237,7 @@ def test_set_table_properties_enable_cdf_invalid(
 
 
 def test_set_table_properties_enable_cdf_value_false(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -255,7 +254,7 @@ def test_set_table_properties_enable_cdf_value_false(
 
 
 def test_set_table_properties_enable_cdf_with_writer_version_bumped(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -278,7 +277,7 @@ def test_set_table_properties_enable_cdf_with_writer_version_bumped(
 
 
 def test_set_table_properties_enable_cdf_and_deletion_vectors(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(
         tmp_path,
@@ -305,7 +304,7 @@ def test_set_table_properties_enable_cdf_and_deletion_vectors(
 
 
 def test_convert_checkConstraints_to_feature_after_version_upgrade(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table)
 
@@ -337,7 +336,7 @@ def test_convert_checkConstraints_to_feature_after_version_upgrade(
     assert protocol.reader_features == ["deletionVectors"]
 
 
-def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(
         tmp_path,
         sample_table,
@@ -354,43 +353,44 @@ def test_set_table_properties_enable_dv(tmp_path: pathlib.Path, sample_table: pa
     assert protocol.reader_features == ["deletionVectors"]
 
 
-def _sort_fields(fields: list[Field]) -> list[Field]:
+def _sort_fields(fields: list[Field]) -> list[DeltaField]:
     return list(sorted(iter(fields), key=lambda x: (x.name, str(x.type))))
 
 
-def test_add_column_primitive(existing_table: DeltaTable):
-    current_fields = existing_table.schema().fields
+def test_add_column_primitive(existing_sample_table: DeltaTable):
+    current_fields = existing_sample_table.schema().fields
 
     new_fields_to_add = [
-        Field("foo", PrimitiveType("integer")),
-        Field("bar", PrimitiveType("float")),
+        DeltaField("foo", PrimitiveType("integer")),
+        DeltaField("bar", PrimitiveType("float")),
     ]
 
-    existing_table.alter.add_columns(new_fields_to_add)
-    new_fields = existing_table.schema().fields
+    existing_sample_table.alter.add_columns(new_fields_to_add)
+    new_fields = existing_sample_table.schema().fields
 
     assert _sort_fields(new_fields) == _sort_fields(
         [*current_fields, *new_fields_to_add]
     )
 
 
+@pytest.mark.pyarrow
 def test_add_field_in_struct_column(existing_table: DeltaTable):
     current_fields = existing_table.schema().fields
 
     new_fields_to_add = [
-        Field("struct", StructType([Field("z", PrimitiveType("float"))])),
+        DeltaField("struct", StructType([DeltaField("z", PrimitiveType("float"))])),
     ]
 
     existing_table.alter.add_columns(new_fields_to_add)
     new_fields = existing_table.schema().fields
 
-    new_field = Field(
+    new_field = DeltaField(
         "struct",
         StructType(
             [
-                Field("x", PrimitiveType("long")),
-                Field("y", PrimitiveType("string")),
-                Field("z", PrimitiveType("float")),
+                DeltaField("x", PrimitiveType("long")),
+                DeltaField("y", PrimitiveType("string")),
+                DeltaField("z", PrimitiveType("float")),
             ]
         ),
     )
@@ -399,7 +399,7 @@ def test_add_field_in_struct_column(existing_table: DeltaTable):
     )
 
 
-def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(
         tmp_path,
         sample_table,
@@ -408,7 +408,7 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: pa.Table
     dt = DeltaTable(tmp_path)
     current_fields = dt.schema().fields
 
-    new_fields_to_add = Field("timestamp_ntz_col", PrimitiveType("timestamp_ntz"))
+    new_fields_to_add = DeltaField("timestamp_ntz_col", PrimitiveType("timestamp_ntz"))
 
     dt.alter.add_columns(new_fields_to_add)
     new_fields = dt.schema().fields
@@ -445,6 +445,7 @@ all_features.extend(features)
 all_features.append(features)
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("feature", all_features)
 def test_add_feature_variations(existing_table: DeltaTable, feature):
     """Existing table already has timestampNtz so it's already at v3,7"""
@@ -476,7 +477,7 @@ def test_add_features_disallowed_protocol_increase(existing_sample_table: DeltaT
         )
 
 
-def test_add_feautres(existing_sample_table: DeltaTable):
+def test_add_features(existing_sample_table: DeltaTable):
     existing_sample_table.alter.add_feature(
         feature=features,
         allow_protocol_versions_increase=True,
@@ -505,7 +506,7 @@ def test_add_feautres(existing_sample_table: DeltaTable):
     )  # type: ignore
 
 
-def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
     dt = DeltaTable(tmp_path)
@@ -518,3 +519,113 @@ def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: pa.Table):
     with pytest.raises(DeltaError):
         # Can't set metadata for non existing column.
         dt.alter.set_column_metadata("non_existing_column", {"comment": "my comment"})
+
+
+def test_set_table_name(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    initial_metadata = dt.metadata()
+    assert initial_metadata.name is None
+
+    dt.alter.set_table_name("my_awesome_table")
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.name == "my_awesome_table"
+
+    assert dt.version() == 1
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_description(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    initial_metadata = dt.metadata()
+    assert initial_metadata.description is None
+
+    dt.alter.set_table_description("A wonderful sample table for testing")
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.description == "A wonderful sample table for testing"
+
+    assert dt.version() == 1
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_name_overwrite(tmp_path: pathlib.Path, sample_table: Table):
+    """Test overwriting an existing table name."""
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.set_table_name("initial_name")
+    dt.alter.set_table_name("new_name")
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.name == "new_name"
+
+
+def test_set_table_description_overwrite(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.set_table_description("initial description")
+    dt.alter.set_table_description("updated description")
+
+    updated_metadata = dt.metadata()
+
+    assert updated_metadata.description == "updated description"
+
+    assert dt.version() == 2
+
+
+def test_set_table_name_character_limit(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    name_255_chars = "x" * 255
+    dt.alter.set_table_name(name_255_chars)
+    assert dt.metadata().name == name_255_chars
+
+    name_256_chars = "y" * 256
+    with pytest.raises(
+        DeltaError,
+        match="Table metadata is invalid: name: Table name cannot be empty and cannot exceed 255 characters",
+    ):
+        dt.alter.set_table_name(name_256_chars)
+
+
+def test_set_table_description_character_limit(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    desc_4000_chars = "x" * 4000
+    dt.alter.set_table_description(desc_4000_chars)
+    assert dt.metadata().description == desc_4000_chars
+
+    desc_4001_chars = "y" * 4001
+    with pytest.raises(
+        DeltaError,
+        match="Table metadata is invalid: description: Table description cannot exceed 4000 characters",
+    ):
+        dt.alter.set_table_description(desc_4001_chars)
+
+
+def test_set_table_metadata_name_none_should_raise_error(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(
+        DeltaError,
+        match="Table metadata is invalid: name: Table name cannot be empty and cannot exceed 255 characters",
+    ):
+        dt.alter.set_table_name("")

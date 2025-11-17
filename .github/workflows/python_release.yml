@@ -11,9 +11,9 @@ defaults:
 jobs:
   validate-release-tag:
     name: Validate git tag
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: compare git tag with cargo metadata
         run: |
           PUSHED_TAG=${GITHUB_REF##*/}
@@ -32,7 +32,11 @@ jobs:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
@@ -41,14 +45,18 @@ jobs:
         with:
           target: ${{ matrix.target }}
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist
+          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
 
   release-pypi-windows:
     needs: validate-release-tag
     name: PyPI release on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
@@ -57,53 +65,38 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist
+          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
 
   release-pypi-manylinux-x86-64:
     needs: validate-release-tag
     name: PyPI release manylinux-2_17 x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish manylinux to pypi x86_64 (with sdist)
         uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
-          maturin-version: v1.6.0 # https://github.com/PyO3/maturin/issues/2154
           target: x86_64-unknown-linux-gnu
           command: publish
-          args: --skip-existing -m python/Cargo.toml
-          # for openssl build
-          before-script-linux: yum install -y perl-IPC-Cmd
-
-  release-pypi-manylinux-217-aarch64:
-    needs: validate-release-tag
-    name: PyPI release manylinux-2_17 aarch64 
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Publish manylinux to pypi aarch64 (without sdist)
-        uses: messense/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        with:
-          target: aarch64-unknown-linux-gnu
-          command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist
-          before-script-linux: |
-            # We can remove this once we upgrade to 2_28.
-            # https://github.com/briansmith/ring/issues/1728
-            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
+          args: --skip-existing -m python/Cargo.toml --profile python-release
 
   release-pypi-manylinux-228-aarch64:
     needs: validate-release-tag
     name: PyPI release manylinux-2_28 aarch64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Publish manylinux to pypi aarch64 manylinux-2_28 (without sdist)
         uses: messense/maturin-action@v1
@@ -112,16 +105,36 @@ jobs:
         with:
           target: aarch64-unknown-linux-gnu
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist
+          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
           manylinux: "2_28"
+
+  release-pypi-musl-x86-64:
+    needs: validate-release-tag
+    name: PyPI release musl-2_17 x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      - name: Publish manylinux to pypi x86_64 (with sdist)
+        uses: messense/maturin-action@v1
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          target: x86_64-unknown-linux-musl
+          command: publish
+          args: --skip-existing -m python/Cargo.toml --zig --profile python-release
 
   release-docs:
     needs:
       [
         validate-release-tag,
         release-pypi-manylinux-x86-64,
-        release-pypi-manylinux-217-aarch64,
         release-pypi-manylinux-228-aarch64,
+        release-pypi-musl-x86-64,
         release-pypi-mac,
         release-pypi-windows,
       ]

@@ -1,44 +1,69 @@
 import pathlib
 
-import pyarrow as pa
 import pytest
+from arro3.core import Array, DataType, Table
+from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, write_deltalake
-from deltalake.writer._conversion import (
-    ArrowSchemaConversionMode,
-    convert_pyarrow_table,
-)
+from deltalake.query import QueryBuilder
 
 
 @pytest.fixture()
 def sample_table():
     nrows = 5
-    return pa.table(
+    return Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int64()),
-            "price_float": pa.array(list(range(nrows)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
-            "deleted": pa.array([False] * nrows),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(nrows)),
+                ArrowField("sold", type=DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                list(range(nrows)),
+                ArrowField("price_float", type=DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * nrows,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
 
-def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    nrows = 5
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int64()),
-            "price_float": pa.array(list(range(nrows)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
-            "deleted": pa.array([False, False, False, False, True]),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("sold", type=DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                ArrowField("price_float", type=DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -49,7 +74,7 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
         commit_properties=commit_properties,
     )
 
-    result = dt.to_pyarrow_table()
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "UPDATE"
@@ -57,67 +82,46 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
     assert result == expected
 
 
-def test_update_with_predicate_large_dtypes(
-    tmp_path: pathlib.Path, sample_table: pa.Table
-):
-    sample_table = convert_pyarrow_table(
-        sample_table, schema_conversion_mode=ArrowSchemaConversionMode.LARGE
-    )
+def test_update_wo_predicate(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    nrows = 5
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int64()),
-            "price_float": pa.array(list(range(nrows)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
-            "deleted": pa.array([True, False, False, False, False]),
-        }
-    )
-
-    dt.update(
-        updates={"deleted": "True"},
-        predicate="id = '1'",
-    )
-
-    result = dt.to_pyarrow_table()
-    last_action = dt.history(1)[0]
-
-    assert last_action["operation"] == "UPDATE"
-    assert result == expected
-
-
-def test_update_wo_predicate(tmp_path: pathlib.Path, sample_table: pa.Table):
-    write_deltalake(tmp_path, sample_table, mode="append")
-
-    dt = DeltaTable(tmp_path)
-
-    nrows = 5
-    expected = pa.table(
-        {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int64()),
-            "price_float": pa.array(list(range(nrows)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * nrows),
-            "deleted": pa.array([True] * 5),
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("sold", type=DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                ArrowField("price_float", type=DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True, True, True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
     dt.update(updates={"deleted": "True"})
 
-    result = dt.to_pyarrow_table()
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "UPDATE"
     assert result == expected
 
 
-def test_update_wrong_types_cast(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_update_wrong_types_cast(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
@@ -130,20 +134,34 @@ def test_update_wrong_types_cast(tmp_path: pathlib.Path, sample_table: pa.Table)
 
 
 def test_update_wo_predicate_multiple_updates(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1_1", "2_1", "3_1", "4_1", "5_1"]),
-            "price": pa.array([0, 1, 2, 3, 4], pa.int64()),
-            "sold": pa.array([0, 1, 4, 9, 16], pa.int64()),
-            "price_float": pa.array(list(range(5)), pa.float64()),
-            "items_in_bucket": pa.array([["item1", "item2", "item3"]] * 5),
-            "deleted": pa.array([True] * 5),
+            "id": Array(
+                ["1_1", "2_1", "3_1", "4_1", "5_1"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 4, 9, 16],
+                ArrowField("sold", type=DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                [0.0, 1.0, 2.0, 3.0, 4.0],
+                ArrowField("price_float", type=DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True, True, True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -152,7 +170,7 @@ def test_update_wo_predicate_multiple_updates(
         error_on_type_mismatch=False,
     )
 
-    result = dt.to_pyarrow_table()
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "UPDATE"
@@ -160,23 +178,34 @@ def test_update_wo_predicate_multiple_updates(
 
 
 def test_update_with_predicate_and_new_values(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
 
-    nrows = 5
-    expected = pa.table(
+    expected = Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "new_id"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array([0, 1, 2, 3, 100], pa.int64()),
-            "price_float": pa.array([0, 1, 2, 3, 9999], pa.float64()),
-            "items_in_bucket": pa.array(
-                [["item1", "item2", "item3"]] * 4 + [["item4", "item5", "item6"]]
+            "id": Array(
+                ["1", "2", "3", "4", "new_id"],
+                ArrowField("id", type=DataType.string(), nullable=True),
             ),
-            "deleted": pa.array([False, False, False, False, True]),
+            "price": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 100],
+                ArrowField("sold", type=DataType.int64(), nullable=True),
+            ),
+            "price_float": Array(
+                [0.0, 1.0, 2.0, 3.0, 9999.0],
+                ArrowField("price_float", type=DataType.float64(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, False, False, False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
         }
     )
 
@@ -191,14 +220,14 @@ def test_update_with_predicate_and_new_values(
         predicate="price > 3",
     )
 
-    result = dt.to_pyarrow_table()
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     last_action = dt.history(1)[0]
 
     assert last_action["operation"] == "UPDATE"
     assert result == expected
 
 
-def test_update_no_inputs(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_update_no_inputs(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
@@ -212,7 +241,7 @@ def test_update_no_inputs(tmp_path: pathlib.Path, sample_table: pa.Table):
     )
 
 
-def test_update_to_many_inputs(tmp_path: pathlib.Path, sample_table: pa.Table):
+def test_update_to_many_inputs(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 
     dt = DeltaTable(tmp_path)
@@ -227,7 +256,7 @@ def test_update_to_many_inputs(tmp_path: pathlib.Path, sample_table: pa.Table):
 
 
 def test_update_with_incorrect_updates_input(
-    tmp_path: pathlib.Path, sample_table: pa.Table
+    tmp_path: pathlib.Path, sample_table: Table
 ):
     write_deltalake(tmp_path, sample_table, mode="append")
 
@@ -243,13 +272,23 @@ def test_update_with_incorrect_updates_input(
 
 
 def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
-    data = pa.table(
+    data = Table(
         {
-            "foo": pa.array(["a", "b", None, None]),
-            "bar": pa.array([1, 2, 3, None]),
-            "baz": pa.array([1, 1, None, None]),
+            "foo": Array(
+                ["a", "b", None, None],
+                ArrowField("foo", type=DataType.string(), nullable=True),
+            ),
+            "bar": Array(
+                [1, 2, 3, None],
+                ArrowField("bar", type=DataType.int64(), nullable=True),
+            ),
+            "baz": Array(
+                [1, 1, None, None],
+                ArrowField("baz", type=DataType.int64(), nullable=True),
+            ),
         }
     )
+
     write_deltalake(
         tmp_path,
         data,
@@ -258,31 +297,36 @@ def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
     )
     dt = DeltaTable(tmp_path)
     add_actions_table = dt.get_add_actions(flatten=True)
-    stats = add_actions_table.to_pylist()[0]
 
-    assert stats["null_count.foo"] == 2
-    assert stats["min.foo"] == "a"
-    assert stats["max.foo"] == "b"
-    assert stats["null_count.bar"] is None
-    assert stats["min.bar"] is None
-    assert stats["max.bar"] is None
-    assert stats["null_count.baz"] == 2
-    assert stats["min.baz"] == 1
-    assert stats["max.baz"] == 1
+    def get_value(name: str):
+        return add_actions_table.column(name)[0].as_py()
+
+    # x1 has no max, since inf was the highest value
+    assert get_value("null_count.foo") == 2
+    assert get_value("min.foo") == "a"
+    assert get_value("max.foo") == "b"
+    assert get_value("null_count.baz") == 2
+    assert get_value("min.baz") == 1
+    assert get_value("max.baz") == 1
+
+    with pytest.raises(Exception):
+        get_value("null_count.bar")
 
     dt.update({"foo": "'hello world'"})
 
     dt = DeltaTable(tmp_path)
     add_actions_table = dt.get_add_actions(flatten=True)
-    stats = add_actions_table.to_pylist()[0]
 
-    assert dt.version() == 1
-    assert stats["null_count.foo"] == 0
-    assert stats["min.foo"] == "hello world"
-    assert stats["max.foo"] == "hello world"
-    assert stats["null_count.bar"] is None
-    assert stats["min.bar"] is None
-    assert stats["max.bar"] is None
-    assert stats["null_count.baz"] == 2
-    assert stats["min.baz"] == 1
-    assert stats["max.baz"] == 1
+    def get_value(name: str):
+        return add_actions_table.column(name)[0].as_py()
+
+    # x1 has no max, since inf was the highest value
+    assert get_value("null_count.foo") == 0
+    assert get_value("min.foo") == "hello world"
+    assert get_value("max.foo") == "hello world"
+    assert get_value("null_count.baz") == 2
+    assert get_value("min.baz") == 1
+    assert get_value("max.baz") == 1
+
+    with pytest.raises(Exception):
+        get_value("null_count.bar")

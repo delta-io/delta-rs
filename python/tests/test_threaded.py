@@ -6,15 +6,19 @@
 import pathlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import CommitFailedError
 
+if TYPE_CHECKING:
+    import pyarrow as pa
 
-def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
+
+@pytest.mark.pyarrow
+def test_concurrency(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table"):
     exception = None
 
     def comp():
@@ -25,9 +29,9 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
             data = DeltaTable(dt.table_uri).to_pyarrow_table()
             # If two overwrites delete the same file and then add their own
             # concurrently, then this will fail.
-            assert data.num_rows == sample_data.num_rows
+            assert data.num_rows == sample_data_pyarrow.num_rows
             try:
-                write_deltalake(dt.table_uri, sample_data, mode="overwrite")
+                write_deltalake(dt.table_uri, sample_data_pyarrow, mode="overwrite")
             except Exception as e:
                 exception = e
 
@@ -40,34 +44,40 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
         t.join()
 
     assert isinstance(exception, CommitFailedError)
-    assert (
-        "a concurrent transaction deleted the same data your transaction deletes"
-        in str(exception)
-    )
+    assert "a concurrent transaction deleted data this operation read" in str(exception)
 
 
 @pytest.mark.polars
-def test_multithreaded_write_using_table(sample_data: pa.Table, tmp_path: pathlib.Path):
+def test_multithreaded_write_using_table(tmp_path: pathlib.Path):
     import polars as pl
 
-    table = pl.DataFrame({"a": [1, 2, 3]}).to_arrow()
+    table = pl.DataFrame({"a": [1, 2, 3]})
     write_deltalake(tmp_path, table, mode="overwrite")
 
     dt = DeltaTable(tmp_path)
 
-    with pytest.raises(RuntimeError, match="borrowed"):
-        with ThreadPoolExecutor() as exe:
-            list(exe.map(lambda _: write_deltalake(dt, table, mode="append"), range(5)))
+    with ThreadPoolExecutor() as exe:
+        list(
+            exe.map(
+                lambda i: write_deltalake(dt, pl.DataFrame({"a": [i]}), mode="append"),
+                range(5),
+            )
+        )
 
 
 @pytest.mark.polars
-def test_multithreaded_write_using_path(sample_data: pa.Table, tmp_path: pathlib.Path):
+def test_multithreaded_write_using_path(tmp_path: pathlib.Path):
     import polars as pl
 
-    table = pl.DataFrame({"a": [1, 2, 3]}).to_arrow()
+    table = pl.DataFrame({"a": [1, 2, 3]})
     write_deltalake(tmp_path, table, mode="overwrite")
 
     with ThreadPoolExecutor() as exe:
         list(
-            exe.map(lambda _: write_deltalake(tmp_path, table, mode="append"), range(5))
+            exe.map(
+                lambda _: write_deltalake(
+                    tmp_path, pl.DataFrame({"a": [1, 2, 3]}), mode="append"
+                ),
+                range(5),
+            )
         )

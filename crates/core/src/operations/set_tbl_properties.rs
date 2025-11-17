@@ -7,17 +7,16 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::Action;
+use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
 use crate::DeltaTable;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: Option<EagerSnapshot>,
     /// Name of the property
     properties: HashMap<String, String>,
     /// Raise if property doesn't exist
@@ -29,7 +28,7 @@ pub struct SetTablePropertiesBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for SetTablePropertiesBuilder {
+impl super::Operation for SetTablePropertiesBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -40,7 +39,7 @@ impl super::Operation<()> for SetTablePropertiesBuilder {
 
 impl SetTablePropertiesBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             properties: HashMap::new(),
             raise_if_not_exists: true,
@@ -85,28 +84,26 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
         let this = self;
 
         Box::pin(async move {
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let mut metadata = this.snapshot.metadata().clone();
+            let mut metadata = snapshot.metadata().clone();
 
-            let current_protocol = this.snapshot.protocol();
+            let current_protocol = snapshot.protocol();
             let properties = this.properties;
 
             let new_protocol = current_protocol
                 .clone()
                 .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
 
-            metadata.configuration.extend(
-                properties
-                    .clone()
-                    .into_iter()
-                    .map(|(k, v)| (k, Some(v)))
-                    .collect::<HashMap<String, Option<String>>>(),
-            );
+            for (key, value) in &properties {
+                metadata = metadata.add_config_key(key.clone(), value.to_string())?;
+            }
 
             let final_protocol =
-                new_protocol.move_table_properties_into_features(&metadata.configuration);
+                new_protocol.move_table_properties_into_features(metadata.configuration());
 
             let operation = DeltaOperation::SetTableProperties { properties };
 
@@ -120,11 +117,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                 .with_actions(actions.clone())
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                .build(
-                    Some(&this.snapshot),
-                    this.log_store.clone(),
-                    operation.clone(),
-                )
+                .build(Some(&snapshot), this.log_store.clone(), operation.clone())
                 .await?;
 
             if let Some(handler) = this.custom_execute_handler {

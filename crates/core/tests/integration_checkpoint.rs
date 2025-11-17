@@ -2,13 +2,18 @@ use chrono::Utc;
 use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake_core::kernel::{DataType, PrimitiveType};
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
-use deltalake_core::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore};
+use deltalake_core::{
+    ensure_table_uri, errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore,
+};
 use deltalake_test::utils::*;
 use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;
 use std::time::Duration;
 use tokio::time::sleep;
+use url::Url;
+
+mod fs_common;
 
 #[tokio::test]
 #[serial]
@@ -25,7 +30,8 @@ async fn cleanup_metadata_fs_test() -> TestResult {
 // test to run longer but reliable
 async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     let table_uri = context.root_uri();
-    let log_store = DeltaTableBuilder::from_uri(table_uri)
+    let table_url = deltalake_core::table::builder::parse_table_uri(table_uri).unwrap();
+    let log_store = DeltaTableBuilder::from_uri(table_url)?
         .with_allow_http(true)
         .build_storage()?;
     let object_store = log_store.object_store(None);
@@ -80,7 +86,12 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
 async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     let _ = std::fs::remove_dir_all("./tests/data/issue_1420");
 
-    let mut table = DeltaOps::try_from_uri("./tests/data/issue_1420")
+    // Create the directory and get absolute path
+    std::fs::create_dir_all("./tests/data/issue_1420").unwrap();
+    let path = std::path::Path::new("./tests/data/issue_1420")
+        .canonicalize()
+        .unwrap();
+    let mut table = DeltaOps::try_from_uri(url::Url::from_directory_path(path).unwrap())
         .await?
         .create()
         .with_column(
@@ -95,18 +106,18 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     writer.write(vec![json!({"id": 1})]).await?;
     writer.flush_and_commit(&mut table).await?; // v1
 
-    let ts = Utc::now(); // use this ts for log retention expiry
-    sleep(Duration::from_secs(1)).await;
-
     writer.write(vec![json!({"id": 2})]).await?;
     writer.flush_and_commit(&mut table).await?; // v2
-    assert_eq!(table.version(), 2);
+    assert_eq!(table.version(), Some(2));
 
     create_checkpoint(&table, None).await.unwrap(); // v2.checkpoint.parquet
 
+    sleep(Duration::from_secs(1)).await;
+    let ts = Utc::now(); // use this ts for log retention expiry
+
     // Should delete v1 but not v2 or v2.checkpoint.parquet
     cleanup_expired_logs_for(
-        table.version(),
+        table.version().unwrap(),
         table.log_store().as_ref(),
         ts.timestamp_millis(),
         None,
@@ -115,7 +126,8 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .head(&Path::from(format!("_delta_log/{:020}.json", 1)))
             .await
             .is_err(),
@@ -124,7 +136,8 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await
             .is_ok(),
@@ -133,7 +146,8 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .head(&Path::from(format!(
                 "_delta_log/{:020}.checkpoint.parquet",
                 2
@@ -149,7 +163,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     sleep(Duration::from_secs(1)).await;
 
     cleanup_expired_logs_for(
-        table.version(),
+        table.version().unwrap(),
         table.log_store().as_ref(),
         ts.timestamp_millis(),
         None,
@@ -158,7 +172,8 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await
             .is_ok(),
@@ -167,7 +182,8 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 
     assert!(
         table
-            .object_store()
+            .log_store()
+            .object_store(None)
             .head(&Path::from(format!(
                 "_delta_log/{:020}.checkpoint.parquet",
                 2
@@ -177,5 +193,53 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         "checkpoint should exist"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+/// This test validates a checkpoint can be updated on a pre deltalake (python) 1.x table
+/// see also: <https://github.com/delta-io/delta-rs/issues/3527>
+async fn test_older_checkpoint_reads() -> DeltaResult<()> {
+    let temp_table = fs_common::clone_table("python-0.25.5-checkpoint");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table_url = ensure_table_uri(&table_path).unwrap();
+    let table = deltalake_core::open_table(table_url).await?;
+    assert_eq!(table.version(), Some(1));
+    create_checkpoint(&table, None).await?;
+    Ok(())
+}
+
+#[tokio::test]
+/// This test validates that we can read a table with v2 checkpoints
+async fn test_v2_checkpoint_json() -> DeltaResult<()> {
+    let temp_table = fs_common::clone_table("checkpoint-v2-table");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table_url = ensure_table_uri(&table_path).unwrap();
+    let table = deltalake_core::open_table(table_url).await?;
+    assert_eq!(table.version(), Some(9));
+    create_checkpoint(&table, None).await?;
+    Ok(())
+}
+
+#[tokio::test]
+/// This test that we can read a table with domain metadata. Since we cannot
+/// write domain metadata atm, we can at least test, that accessing restricted
+/// domain metadata in the table fails with a proper error.
+async fn test_checkpoint_with_domain_meta() -> DeltaResult<()> {
+    let temp_table = fs_common::clone_table("table-with-domain-metadata");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table =
+        deltalake_core::open_table(Url::parse(&format!("file://{table_path}")).unwrap()).await?;
+    assert_eq!(table.version(), Some(108));
+    let metadata = table
+        .snapshot()
+        .unwrap()
+        .snapshot()
+        .domain_metadata(&table.log_store(), "delta.clustering")
+        .await;
+    assert!(metadata
+        .unwrap_err()
+        .to_string()
+        .contains("User DomainMetadata are not allowed to use system-controlled 'delta.*' domain"));
     Ok(())
 }

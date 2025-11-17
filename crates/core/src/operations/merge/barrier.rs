@@ -10,18 +10,19 @@
 //! they can be removed from the delta log.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::{Context, Poll},
 };
 
-use arrow_array::{builder::UInt64Builder, ArrayRef, RecordBatch};
-use arrow_schema::SchemaRef;
-use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use datafusion_physical_expr::{Distribution, PhysicalExpr};
-use datafusion_physical_plan::{
+use arrow::array::{builder::UInt64Builder, Array, ArrayRef, RecordBatch};
+use arrow::datatypes::SchemaRef;
+use dashmap::DashSet;
+use datafusion::common::{DataFusionError, Result as DataFusionResult};
+use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion::physical_expr::{Distribution, PhysicalExpr};
+use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
@@ -32,7 +33,7 @@ use crate::{
     DeltaTableError,
 };
 
-pub(crate) type BarrierSurvivorSet = Arc<Mutex<HashSet<String>>>;
+pub(crate) type BarrierSurvivorSet = Arc<DashSet<String>>;
 
 #[derive(Debug)]
 /// Physical Node for the MergeBarrier
@@ -55,7 +56,7 @@ impl MergeBarrierExec {
         MergeBarrierExec {
             input,
             file_column,
-            survivors: Arc::new(Mutex::new(HashSet::new())),
+            survivors: Arc::new(DashSet::new()),
             expr,
         }
     }
@@ -94,7 +95,7 @@ impl ExecutionPlan for MergeBarrierExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Plan(
                 "MergeBarrierExec wrong number of children".to_string(),
@@ -111,7 +112,7 @@ impl ExecutionPlan for MergeBarrierExec {
         &self,
         partition: usize,
         context: Arc<datafusion::execution::TaskContext>,
-    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
+    ) -> datafusion::common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         Ok(Box::pin(MergeBarrierStream::new(
             input,
@@ -252,7 +253,7 @@ impl Stream for MergeBarrierStream {
                             // However this approach exposes the cost of hashing so we want to minimize that as much as possible.
                             // A map from an arrow dictionary key to the correct index of `file_partition` is created for each batch that's processed.
                             // This ensures we only need to hash each file path at most once per batch.
-                            let mut key_map = Vec::new();
+                            let mut key_map = Vec::with_capacity(file_dictionary.len());
 
                             for file_name in file_dictionary.values().into_iter() {
                                 let key = match file_name {
@@ -272,9 +273,11 @@ impl Stream for MergeBarrierStream {
                                 key_map.push(key)
                             }
 
-                            let mut indices: Vec<_> = (0..(self.file_partitions.len()))
-                                .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
-                                .collect();
+                            let mut indices: Vec<_> =
+                                Vec::with_capacity(self.file_partitions.len());
+                            for _ in 0..self.file_partitions.len() {
+                                indices.push(UInt64Builder::with_capacity(batch.num_rows()));
+                            }
 
                             for (idx, key) in file_dictionary.keys().iter().enumerate() {
                                 match key {
@@ -299,10 +302,11 @@ impl Stream for MergeBarrierStream {
                                             .columns()
                                             .iter()
                                             .map(|c| {
-                                                arrow::compute::take(c.as_ref(), &indices, None)
-                                                    .map_err(|err| {
-                                                        DataFusionError::ArrowError(err, None)
-                                                    })
+                                                Ok(arrow::compute::take(
+                                                    c.as_ref(),
+                                                    &indices,
+                                                    None,
+                                                )?)
                                             })
                                             .collect::<DataFusionResult<Vec<ArrayRef>>>()?;
 
@@ -358,17 +362,12 @@ impl Stream for MergeBarrierStream {
                     }
 
                     {
-                        let mut lock = self.survivors.lock().map_err(|_| {
-                            DataFusionError::External(Box::new(DeltaTableError::Generic(
-                                "MergeBarrier mutex is poisoned".to_string(),
-                            )))
-                        })?;
                         for part in &self.file_partitions {
                             match part.state {
                                 PartitionBarrierState::Closed => {}
                                 PartitionBarrierState::Open => {
                                     if let Some(file_name) = &part.file_name {
-                                        lock.insert(file_name.to_owned());
+                                        self.survivors.insert(file_name.to_owned());
                                     }
                                 }
                             }
@@ -407,15 +406,15 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
         "MergeBarrier"
     }
 
-    fn inputs(&self) -> Vec<&datafusion_expr::LogicalPlan> {
+    fn inputs(&self) -> Vec<&datafusion::logical_expr::LogicalPlan> {
         vec![&self.input]
     }
 
-    fn schema(&self) -> &datafusion_common::DFSchemaRef {
+    fn schema(&self) -> &datafusion::common::DFSchemaRef {
         self.input.schema()
     }
 
-    fn expressions(&self) -> Vec<datafusion_expr::Expr> {
+    fn expressions(&self) -> Vec<datafusion::logical_expr::Expr> {
         vec![self.expr.clone()]
     }
 
@@ -425,8 +424,8 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
 
     fn with_exprs_and_inputs(
         &self,
-        exprs: Vec<datafusion_expr::Expr>,
-        inputs: Vec<datafusion_expr::LogicalPlan>,
+        exprs: Vec<datafusion::logical_expr::Expr>,
+        inputs: Vec<datafusion::logical_expr::LogicalPlan>,
     ) -> DataFusionResult<Self> {
         Ok(MergeBarrier {
             input: inputs[0].clone(),
@@ -470,9 +469,9 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::execution::TaskContext;
+    use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::ExecutionPlan;
-    use datafusion_physical_expr::expressions::Column;
     use futures::StreamExt;
     use std::sync::Arc;
 
@@ -531,11 +530,10 @@ mod tests {
         ];
         assert_batches_sorted_eq!(&expected, &actual);
 
-        let s = survivors.lock().unwrap();
-        assert!(!s.contains(&"file0".to_string()));
-        assert!(s.contains(&"file1".to_string()));
-        assert!(s.contains(&"file2".to_string()));
-        assert_eq!(s.len(), 2);
+        assert!(!survivors.contains(&"file0".to_string()));
+        assert!(survivors.contains(&"file1".to_string()));
+        assert!(survivors.contains(&"file2".to_string()));
+        assert_eq!(survivors.len(), 2);
     }
 
     #[tokio::test]
@@ -661,8 +659,8 @@ mod tests {
             MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
 
         let survivors = merge.survivors();
-        let coalsece = CoalesceBatchesExec::new(Arc::new(merge), 100);
-        let mut stream = coalsece.execute(0, task_ctx).unwrap();
+        let coalescence = CoalesceBatchesExec::new(Arc::new(merge), 100);
+        let mut stream = coalescence.execute(0, task_ctx).unwrap();
         (vec![stream.next().await.unwrap().unwrap()], survivors)
     }
 

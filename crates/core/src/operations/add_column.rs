@@ -7,18 +7,19 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{StructField, StructTypeExt};
+use crate::kernel::{
+    resolve_snapshot, EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt,
+};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::merge_schema::merge_delta_struct;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Add new columns and/or nested fields to a table
 pub struct AddColumnBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: Option<EagerSnapshot>,
     /// Fields to add/merge into schema
     fields: Option<Vec<StructField>>,
     /// Delta object store for handling data files
@@ -28,7 +29,7 @@ pub struct AddColumnBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl Operation<()> for AddColumnBuilder {
+impl Operation for AddColumnBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -39,7 +40,7 @@ impl Operation<()> for AddColumnBuilder {
 
 impl AddColumnBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -76,7 +77,9 @@ impl std::future::IntoFuture for AddColumnBuilder {
         let this = self;
 
         Box::pin(async move {
-            let mut metadata = this.snapshot.metadata().clone();
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+
+            let mut metadata = snapshot.metadata().clone();
             let fields = match this.fields.clone() {
                 Some(v) => v,
                 None => return Err(DeltaTableError::Generic("No fields provided".to_string())),
@@ -84,7 +87,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let fields_right = &StructType::new(fields.clone());
+            let fields_right = &StructType::try_new(fields.clone())?;
 
             if !fields_right
                 .get_generated_columns()
@@ -96,21 +99,21 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 ));
             }
 
-            let table_schema = this.snapshot.schema();
-            let new_table_schema = merge_delta_struct(table_schema, fields_right)?;
+            let table_schema = snapshot.schema();
+            let new_table_schema = merge_delta_struct(table_schema.as_ref(), fields_right)?;
 
-            let current_protocol = this.snapshot.protocol();
+            let current_protocol = snapshot.protocol();
 
             let new_protocol = current_protocol
                 .clone()
                 .apply_column_metadata_to_protocol(&new_table_schema)?
-                .move_table_properties_into_features(&metadata.configuration);
+                .move_table_properties_into_features(metadata.configuration());
 
             let operation = DeltaOperation::AddColumn {
                 fields: fields.into_iter().collect_vec(),
             };
 
-            metadata.schema_string = serde_json::to_string(&new_table_schema)?;
+            metadata = metadata.with_schema(&new_table_schema)?;
 
             let mut actions = vec![metadata.into()];
 
@@ -122,7 +125,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 .with_actions(actions)
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.get_custom_execute_handler())
-                .build(Some(&this.snapshot), this.log_store.clone(), operation)
+                .build(Some(&snapshot), this.log_store.clone(), operation)
                 .await?;
 
             this.post_execute(operation_id).await?;

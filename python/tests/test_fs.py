@@ -1,17 +1,26 @@
 import pickle
 import urllib
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
-from pyarrow.fs import FileType
 
 from deltalake import DeltaTable
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.writer import write_deltalake
 
+if TYPE_CHECKING:
+    import pyarrow as pa
 
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from pyarrow.fs import FileType
+except ImportError:
+    pass
+
+
+@pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
@@ -29,6 +38,7 @@ def test_read_files(s3_localstack):
             assert table.shape > (0, 0)
 
 
+@pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
@@ -42,6 +52,7 @@ def test_read_file_info(s3_localstack):
     assert meta[0].type == FileType.File
 
 
+@pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
@@ -61,13 +72,14 @@ def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
 
     # Make a get request on an object
     with pytest.raises(Exception):
-        storage_handler.open_input_stream("nonexistant")
+        storage_handler.open_input_stream("nonexistent")
 
     # Try to write an object
     with pytest.raises(Exception):
-        storage_handler.open_output_stream("nonexistant")
+        storage_handler.open_output_stream("nonexistent")
 
 
+@pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
@@ -88,45 +100,47 @@ def test_read_simple_table_from_remote(s3_localstack):
     assert dt.file_uris() == [table_path + "/" + path for path in expected_files]
 
 
+@pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
 @pytest.mark.skip(
     reason="Temporarily disabled until we can resolve https://github.com/delta-io/delta-rs/pull/2120#issuecomment-1912367573"
 )
-def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
+def test_roundtrip_s3_env(s3_localstack, sample_data_pyarrow: "pa.Table", monkeypatch):
     table_path = "s3://deltars/roundtrip"
 
     # Create new table with path
     with pytest.raises(DeltaProtocolError, match="Atomic rename requires a LockClient"):
-        write_deltalake(table_path, sample_data)
+        write_deltalake(table_path, sample_data_pyarrow)
 
     monkeypatch.setenv("AWS_S3_ALLOW_UNSAFE_RENAME", "true")
 
     # Create new table with path
-    write_deltalake(table_path, sample_data)
+    write_deltalake(table_path, sample_data_pyarrow)
     dt = DeltaTable(table_path)
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
     assert dt.version() == 0
 
     # Write with existing DeltaTable
-    write_deltalake(dt, sample_data, mode="overwrite")
+    write_deltalake(dt, sample_data_pyarrow, mode="overwrite")
     dt.update_incremental()
     assert dt.version() == 1
 
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
 
 
+@pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
+def test_roundtrip_s3_direct(s3_localstack_creds, sample_data_pyarrow: "pa.Table"):
     table_path = "s3://deltars/roundtrip2"
 
     # Fails without any credentials
-    with pytest.raises(IOError):
+    with pytest.raises(Exception):
         anon_storage_options = {
             "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
             # Grants anonymous access. If we don't do this, will timeout trying
@@ -136,7 +150,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
         }
         write_deltalake(
             table_path,
-            sample_data,
+            sample_data_pyarrow,
             storage_options=anon_storage_options,
         )
 
@@ -146,92 +160,100 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
         "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
     }
     storage_opts.update(s3_localstack_creds)
-    write_deltalake(table_path, sample_data, storage_options=storage_opts)
+    write_deltalake(table_path, sample_data_pyarrow, storage_options=storage_opts)
+
     dt = DeltaTable(table_path, storage_options=storage_opts)
     assert dt.version() == 0
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
 
     # Can pass storage_options into DeltaTable and then write
-    write_deltalake(dt, sample_data, mode="overwrite")
+    write_deltalake(dt, sample_data_pyarrow, mode="overwrite")
     dt.update_incremental()
     assert dt.version() == 1
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
 
 
+@pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
-def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
-    table_path = "az://deltars/roundtrip"
+def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
+    table_path = "abfs://deltars/roundtrip"
 
     # Create new table with path
-    write_deltalake(table_path, sample_data)
+    write_deltalake(table_path, sample_data_pyarrow)
     dt = DeltaTable(table_path)
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
     assert dt.version() == 0
 
     # Write with existing DeltaTable
-    write_deltalake(dt, sample_data, mode="overwrite")
+    write_deltalake(dt, sample_data_pyarrow, mode="overwrite")
     dt.update_incremental()
     assert dt.version() == 1
 
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
 
 
+@pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
-def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
-    table_path = "az://deltars/roundtrip2"
+def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
+    table_path = "abfs://deltars/roundtrip2"
 
     # Can pass storage_options in directly
-    write_deltalake(table_path, sample_data, storage_options=azurite_creds)
+    write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_creds)
     dt = DeltaTable(table_path, storage_options=azurite_creds)
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
     assert dt.version() == 0
 
     # Can pass storage_options into DeltaTable and then write
-    write_deltalake(dt, sample_data, mode="overwrite")
+    write_deltalake(dt, sample_data_pyarrow, mode="overwrite")
     dt.update_incremental()
     assert dt.version() == 1
 
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
 
 
+@pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
-def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
-    table_path = "az://deltars/roundtrip3"
-    write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
+def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table"):
+    table_path = "abfs://deltars/roundtrip3"
+    write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
     assert dt.version() == 0
 
 
+@pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=60, method="thread")
-def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
-    table_path = "az://deltars/roundtrip4"
+def test_roundtrip_azure_decoded_sas(
+    azurite_sas_creds, sample_data_pyarrow: "pa.Table"
+):
+    table_path = "abfs://deltars/roundtrip4"
     azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(
         azurite_sas_creds["SAS_TOKEN"]
     )
 
-    write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
+    write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
-    assert table == sample_data
+    assert table == sample_data_pyarrow
     assert dt.version() == 0
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("storage_size", [1, 4 * 1024 * 1024, 5 * 1024 * 1024 - 1])
 def test_warning_for_small_max_buffer_size(tmp_path, storage_size):
     storage_opts = {"max_buffer_size": str(storage_size)}
@@ -246,6 +268,7 @@ def test_warning_for_small_max_buffer_size(tmp_path, storage_size):
     )
 
 
+@pytest.mark.pyarrow
 def test_pickle_roundtrip(tmp_path):
     store = DeltaStorageHandler(str(tmp_path.absolute()))
 

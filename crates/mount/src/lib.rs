@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use deltalake_core::logstore::DeltaIOStorageBackend;
 use deltalake_core::logstore::{
     config::str_is_truthy, default_logstore, logstore_factories, object_store_factories, LogStore,
     LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::local::LocalFileSystem;
-use object_store::RetryConfig;
+use object_store::DynObjectStore;
 use url::Url;
 
 mod config;
@@ -39,18 +40,18 @@ impl ObjectStoreFactory for MountFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let config = config::MountConfigHelper::try_new(options.as_mount_options())?.build()?;
+        let mount_config =
+            config::MountConfigHelper::try_new(config.raw.as_mount_options())?.build()?;
 
         let allow_unsafe_rename = str_is_truthy(
-            config
-                .get(&config::MountConfigKey::AllowUnsafeRename)
+            mount_config
+                .get(&crate::config::MountConfigKey::AllowUnsafeRename)
                 .unwrap_or(&String::new()),
         );
 
-        match url.scheme() {
+        let (mut store, prefix) = match url.scheme() {
             "dbfs" => {
                 if !allow_unsafe_rename {
                     // Just let the user know that they need to set the allow_unsafe_rename option
@@ -74,18 +75,30 @@ impl ObjectStoreFactory for MountFactory {
                 }
             }
             _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
+        }?;
+
+        if let Some(runtime) = &config.runtime {
+            store =
+                Arc::new(DeltaIOStorageBackend::new(store, runtime.clone())) as Arc<DynObjectStore>;
         }
+        Ok((store, prefix))
     }
 }
 
 impl LogStoreFactory for MountFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(
+            prefixed_store,
+            root_store,
+            location,
+            options,
+        ))
     }
 }
 

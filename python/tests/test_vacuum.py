@@ -1,8 +1,8 @@
 import os
 import pathlib
 
-import pyarrow as pa
 import pytest
+from arro3.core import Table
 
 from deltalake import CommitProperties, DeltaTable, write_deltalake
 
@@ -37,7 +37,10 @@ def test_vacuum_dry_run_simple_table():
 
 @pytest.mark.parametrize("use_relative", [True, False])
 def test_vacuum_zero_duration(
-    tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch, use_relative: bool
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    monkeypatch,
+    use_relative: bool,
 ):
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
@@ -46,10 +49,10 @@ def test_vacuum_zero_duration(
     else:
         table_path = str(tmp_path)
 
-    write_deltalake(table_path, sample_data, mode="overwrite")
+    write_deltalake(table_path, sample_table, mode="overwrite")
     dt = DeltaTable(table_path)
     original_files = set(dt.files())
-    write_deltalake(table_path, sample_data, mode="overwrite")
+    write_deltalake(table_path, sample_table, mode="overwrite")
     dt.update_incremental()
     new_files = set(dt.files())
     assert new_files.isdisjoint(original_files)
@@ -66,9 +69,9 @@ def test_vacuum_zero_duration(
     assert parquet_files == new_files
 
 
-def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
+def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
     for i in range(5):
-        write_deltalake(tmp_path, sample_data, mode="overwrite")
+        write_deltalake(tmp_path, sample_table, mode="overwrite")
 
     dt = DeltaTable(tmp_path)
 
@@ -102,3 +105,65 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert history[0]["operationMetrics"]["numDeletedFiles"] == 4
     assert history[1]["operationMetrics"]["numFilesToDelete"] == 4
     assert history[1]["operationMetrics"]["sizeOfDataToDelete"] > 0
+
+
+def test_vacuum_keep_versions():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    keep_versions = [2, 3]
+    tombstones_no_kept_versions = dt.vacuum(
+        retention_hours=0,
+        dry_run=True,
+        enforce_retention_duration=False,
+        full=True,
+        keep_versions=None,
+    )
+
+    # Our simple_table has 32 data files in it which could be vacuumed.
+    assert len(tombstones_no_kept_versions) == 32
+
+    tombstones_kept_versions = dt.vacuum(
+        retention_hours=0,
+        dry_run=True,
+        enforce_retention_duration=False,
+        full=True,
+        keep_versions=keep_versions,
+    )
+
+    # with_keep_versions should have fewer files deleted than a full vacuum
+    assert len(tombstones_kept_versions) < len(tombstones_no_kept_versions)
+
+    no_kept_versions = set(tombstones_no_kept_versions)
+    kept_versions = set(tombstones_kept_versions)
+
+    tombstone_difference = no_kept_versions.difference(kept_versions)
+
+    assert tombstone_difference == {
+        # Adds from v3
+        "part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet",
+        "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
+        # Removes from v3, these were add in v2
+        "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet",
+        "part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet",
+    }
+
+
+# https://github.com/delta-io/delta-rs/issues/3745
+@pytest.mark.pyarrow
+def test_issue_3745(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    data = pa.Table.from_pydict(
+        {
+            "x": pa.array(list(range(100)), type=pa.int32()),
+        }
+    )
+    write_deltalake(table_or_uri=tmp_path, data=data, mode="append")
+
+    table = DeltaTable(tmp_path)
+    table.create_checkpoint()
+
+    write_deltalake(table_or_uri=tmp_path, data=data, mode="append")
+
+    table = DeltaTable(tmp_path)
+    table.vacuum()

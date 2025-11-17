@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 
-use arrow_array::*;
+use arrow::array::AsArray as _;
+use arrow::datatypes::{Int32Type, Int64Type};
 use chrono::Utc;
 use delta_kernel::schema::{DataType, PrimitiveType};
+use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use serde_json::json;
 
 use super::{get_parquet_bytes, DataFactory, FileStats};
-use crate::kernel::arrow::extract::{self as ex};
-use crate::kernel::partitions_schema;
 use crate::kernel::transaction::PROTOCOL;
+use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
 
 pub struct ActionFactory;
 
@@ -34,7 +36,6 @@ impl ActionFactory {
             deletion_vector: None,
             base_row_id: None,
             clustering_provider: None,
-            stats_parsed: None,
         }
     }
 
@@ -52,16 +53,21 @@ impl ActionFactory {
                 .map(|f| {
                     let value = match f.data_type() {
                         DataType::Primitive(PrimitiveType::String) => {
-                            let arr =
-                                ex::extract_and_cast::<StringArray>(&batch, f.name()).unwrap();
+                            let arr = batch.column_by_name(f.name()).unwrap().as_string::<i32>();
                             Some(arr.value(0).to_string())
                         }
                         DataType::Primitive(PrimitiveType::Integer) => {
-                            let arr = ex::extract_and_cast::<Int32Array>(&batch, f.name()).unwrap();
+                            let arr = batch
+                                .column_by_name(f.name())
+                                .unwrap()
+                                .as_primitive::<Int32Type>();
                             Some(arr.value(0).to_string())
                         }
                         DataType::Primitive(PrimitiveType::Long) => {
-                            let arr = ex::extract_and_cast::<Int64Array>(&batch, f.name()).unwrap();
+                            let arr = batch
+                                .column_by_name(f.name())
+                                .unwrap()
+                                .as_primitive::<Int64Type>();
                             Some(arr.value(0).to_string())
                         }
                         _ => unimplemented!(),
@@ -73,12 +79,13 @@ impl ActionFactory {
             HashMap::new()
         };
 
-        let data_schema = StructType::new(
+        let data_schema = StructType::try_new(
             schema
                 .fields()
                 .filter(|f| !partition_columns.contains(f.name()))
                 .cloned(),
-        );
+        )
+        .unwrap();
 
         let batch = DataFactory::record_batch(&data_schema, 10, &bounds).unwrap();
         let stats = DataFactory::file_stats(&batch).unwrap();
@@ -104,12 +111,13 @@ impl ActionFactory {
         reader_features: Option<impl IntoIterator<Item = ReaderFeature>>,
         writer_features: Option<impl IntoIterator<Item = WriterFeature>>,
     ) -> Protocol {
-        Protocol {
+        ProtocolInner {
             min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),
             min_writer_version: max_writer.unwrap_or(PROTOCOL.default_writer_version()),
             writer_features: writer_features.map(|i| i.into_iter().collect()),
             reader_features: reader_features.map(|i| i.into_iter().collect()),
         }
+        .as_kernel()
     }
 
     pub fn metadata(
@@ -117,18 +125,19 @@ impl ActionFactory {
         partition_columns: Option<impl IntoIterator<Item = impl ToString>>,
         configuration: Option<HashMap<String, Option<String>>>,
     ) -> Metadata {
-        Metadata {
-            id: uuid::Uuid::new_v4().hyphenated().to_string(),
-            format: Default::default(),
-            schema_string: serde_json::to_string(schema).unwrap(),
-            partition_columns: partition_columns
-                .map(|i| i.into_iter().map(|c| c.to_string()).collect())
+        let value = json!({
+            "id": uuid::Uuid::new_v4().hyphenated().to_string(),
+            "format": { "provider": "parquet", "options": {} },
+            "schemaString": serde_json::to_string(schema).unwrap(),
+            "partitionColumns": partition_columns
+                .map(|i| i.into_iter().map(|c| c.to_string()).collect_vec())
                 .unwrap_or_default(),
-            configuration: configuration.unwrap_or_default(),
-            name: None,
-            description: None,
-            created_time: Some(Utc::now().timestamp_millis()),
-        }
+            "configuration": configuration.unwrap_or_default(),
+            "name": None::<String>,
+            "description": None::<String>,
+            "createdTime": Some(Utc::now().timestamp_millis()),
+        });
+        serde_json::from_value(value).unwrap()
     }
 }
 

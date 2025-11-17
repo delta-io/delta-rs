@@ -4,11 +4,10 @@ use std::{
 };
 
 use dashmap::DashMap;
-use object_store::path::Path;
-use object_store::RetryConfig;
+use object_store::{path::Path, DynObjectStore};
 use url::Url;
 
-use super::{default_logstore, LogStore, ObjectStoreRef, StorageConfig};
+use super::{default_logstore, DeltaIOStorageBackend, LogStore, ObjectStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTableError};
 
 /// Factory registry to manage [`ObjectStoreFactory`] instances
@@ -27,8 +26,7 @@ pub trait ObjectStoreFactory: Send + Sync {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        retry: &RetryConfig,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)>;
 }
 
@@ -39,10 +37,15 @@ impl ObjectStoreFactory for DefaultObjectStoreFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        default_parse_url_opts(url, options)
+        let (mut store, path) = default_parse_url_opts(url, &config.raw)?;
+
+        if let Some(runtime) = &config.runtime {
+            store =
+                Arc::new(DeltaIOStorageBackend::new(store, runtime.clone())) as Arc<DynObjectStore>;
+        }
+        Ok((store, path))
     }
 }
 
@@ -63,9 +66,9 @@ fn default_parse_url_opts(
 /// Access global registry of object store factories
 pub fn object_store_factories() -> ObjectStoreFactoryRegistry {
     static REGISTRY: OnceLock<ObjectStoreFactoryRegistry> = OnceLock::new();
-    let factory = Arc::new(DefaultObjectStoreFactory::default());
     REGISTRY
         .get_or_init(|| {
+            let factory = Arc::new(DefaultObjectStoreFactory::default());
             let registry = ObjectStoreFactoryRegistry::default();
             registry.insert(Url::parse("memory://").unwrap(), factory.clone());
             registry.insert(Url::parse("file://").unwrap(), factory);
@@ -84,9 +87,8 @@ where
     let scheme = Url::parse(&format!("{}://", url.scheme())).unwrap();
     let storage_config = StorageConfig::parse_options(options)?;
     if let Some(factory) = object_store_factories().get(&scheme) {
-        let (store, _prefix) =
-            factory.parse_url_opts(url, &storage_config.raw, &storage_config.retry)?;
-        let store = storage_config.decorate_store(store, url, None)?;
+        let (store, _prefix) = factory.parse_url_opts(url, &storage_config)?;
+        let store = storage_config.decorate_store(store, url)?;
         Ok(Arc::new(store))
     } else {
         Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
@@ -103,14 +105,15 @@ pub trait LogStoreFactory: Send + Sync {
     /// This method is responsible for creating a new instance of the [LogStore] implementation.
     ///
     /// ## Parameters
-    /// - `store`: A reference to the object store.
+    /// - `prefixed_store`: A reference to the object store.
     /// - `location`: A reference to the URL of the location.
     /// - `options`: A reference to the storage configuration options.
     ///
     /// It returns a [DeltaResult] containing an [Arc] to the newly created [LogStore] implementation.
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>>;
@@ -122,11 +125,17 @@ struct DefaultLogStoreFactory {}
 impl LogStoreFactory for DefaultLogStoreFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(
+            prefixed_store,
+            root_store,
+            location,
+            options,
+        ))
     }
 }
 
@@ -148,3 +157,6 @@ pub fn logstore_factories() -> LogStoreFactoryRegistry {
         })
         .clone()
 }
+
+#[cfg(test)]
+mod tests {}

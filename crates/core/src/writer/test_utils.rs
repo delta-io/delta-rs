@@ -1,17 +1,18 @@
 //! Utilities for writing unit tests
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use arrow_select::take::take;
+use url::Url;
 
-use crate::kernel::{DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType};
+use crate::kernel::{
+    new_metadata, DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType,
+};
 use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
 use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
-
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
 pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
@@ -132,7 +133,7 @@ fn data_without_null() -> (Int32Array, StringArray, StringArray) {
 }
 
 pub fn get_delta_schema() -> StructType {
-    StructType::new(vec![
+    StructType::try_new(vec![
         StructField::new(
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
@@ -149,11 +150,17 @@ pub fn get_delta_schema() -> StructType {
             true,
         ),
     ])
+    .unwrap()
 }
 
 pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
     let table_schema = get_delta_schema();
-    Metadata::try_new(table_schema, partition_cols.to_vec(), HashMap::new()).unwrap()
+    new_metadata(
+        &table_schema,
+        partition_cols.to_vec(),
+        std::iter::empty::<(&str, &str)>(),
+    )
+    .unwrap()
 }
 
 pub fn get_record_batch_with_nested_struct() -> RecordBatch {
@@ -241,7 +248,7 @@ pub fn get_record_batch_with_nested_struct() -> RecordBatch {
 }
 
 pub fn get_delta_schema_with_nested_struct() -> StructType {
-    StructType::new(vec![
+    StructType::try_new(vec![
         StructField::new(
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
@@ -259,14 +266,18 @@ pub fn get_delta_schema_with_nested_struct() -> StructType {
         ),
         StructField::new(
             String::from("nested"),
-            DeltaDataType::Struct(Box::new(StructType::new(vec![StructField::new(
-                String::from("count"),
-                DeltaDataType::Primitive(PrimitiveType::Integer),
-                true,
-            )]))),
+            DeltaDataType::Struct(Box::new(
+                StructType::try_new(vec![StructField::new(
+                    String::from("count"),
+                    DeltaDataType::Primitive(PrimitiveType::Integer),
+                    true,
+                )])
+                .unwrap(),
+            )),
             true,
         ),
     ])
+    .unwrap()
 }
 
 pub async fn setup_table_with_configuration(
@@ -285,7 +296,9 @@ pub async fn setup_table_with_configuration(
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
-    DeltaTableBuilder::from_uri(table_path.to_str().unwrap())
+    let table_uri = Url::from_directory_path(table_path).unwrap();
+    DeltaTableBuilder::from_uri(table_uri)
+        .unwrap()
         .build()
         .unwrap()
 }

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
@@ -6,8 +5,7 @@ use deltalake_core::logstore::{
 };
 use deltalake_core::logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
 use deltalake_core::{DeltaResult, Path};
-use hdfs_native_object_store::HdfsObjectStore;
-use object_store::RetryConfig;
+use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use url::Url;
 
 #[derive(Clone, Default, Debug)]
@@ -17,11 +15,18 @@ impl ObjectStoreFactory for HdfsFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        _retry: &RetryConfig,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let store: ObjectStoreRef =
-            Arc::new(HdfsObjectStore::with_config(url.as_str(), options.clone())?);
+        let mut builder = HdfsObjectStoreBuilder::new()
+            .with_url(url.as_str())
+            .with_config(&config.raw);
+
+        if let Some(runtime) = &config.runtime {
+            builder = builder.with_io_runtime(runtime.get_handle());
+        }
+
+        let store = Arc::new(builder.build()?);
+
         let prefix = Path::parse(url.path())?;
         Ok((store, prefix))
     }
@@ -30,11 +35,17 @@ impl ObjectStoreFactory for HdfsFactory {
 impl LogStoreFactory for HdfsFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(
+            prefixed_store,
+            root_store,
+            location,
+            options,
+        ))
     }
 }
 
@@ -57,8 +68,7 @@ mod tests {
         let factory = HdfsFactory::default();
         let _ = factory.parse_url_opts(
             &Url::parse("hdfs://localhost:9000").expect("Failed to parse hdfs://"),
-            &HashMap::default(),
-            &RetryConfig::default(),
+            &StorageConfig::default(),
         )?;
         Ok(())
     }

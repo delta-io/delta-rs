@@ -12,7 +12,7 @@ use tracing::debug;
 use url::Url;
 
 use crate::logstore::storage::IORuntime;
-use crate::logstore::{object_store_factories, LogStoreRef};
+use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
@@ -80,57 +80,46 @@ impl PartialEq for DeltaTableConfig {
 #[derive(Debug)]
 pub struct DeltaTableBuilder {
     /// table root uri
-    table_uri: String,
+    table_url: Url,
     /// backend to access storage system
     storage_backend: Option<(Arc<DynObjectStore>, Url)>,
     /// specify the version we are going to load: a time stamp, a version, or just the newest
     /// available version
     version: DeltaVersion,
     storage_options: Option<HashMap<String, String>>,
-    #[allow(unused_variables)]
     allow_http: Option<bool>,
     table_config: DeltaTableConfig,
 }
 
 impl DeltaTableBuilder {
-    /// Creates `DeltaTableBuilder` from table uri
-    ///
-    /// Can panic on an invalid URI
+    /// Creates `DeltaTableBuilder` from table URL
     ///
     /// ```rust
     /// # use deltalake_core::table::builder::*;
-    /// let builder = DeltaTableBuilder::from_uri("../test/tests/data/delta-0.8.0");
-    /// assert!(true);
+    /// # use url::Url;
+    /// let url = Url::parse("memory:///test").unwrap();
+    /// let builder = DeltaTableBuilder::from_uri(url);
     /// ```
-    pub fn from_uri(table_uri: impl AsRef<str>) -> Self {
-        let url = ensure_table_uri(&table_uri).expect("The specified table_uri is not valid");
-        DeltaTableBuilder::from_valid_uri(url).expect("Failed to create valid builder")
-    }
+    pub fn from_uri(table_url: Url) -> DeltaResult<Self> {
+        // We cannot trust that a [Url] has had it's .. segments canonicalized out of the path
+        // See <https://github.com/servo/rust-url/issues/1086>
+        let table_url = Url::parse(table_url.as_str()).map_err(|_| {
+            DeltaTableError::NotATable(
+                "Received path segments that could not be canonicalized".into(),
+            )
+        })?;
 
-    /// Creates `DeltaTableBuilder` from verified table uri.
-    ///
-    /// ```rust
-    /// # use deltalake_core::table::builder::*;
-    /// let builder = DeltaTableBuilder::from_valid_uri("memory:///");
-    /// assert!(builder.is_ok(), "Builder failed with {builder:?}");
-    /// ```
-    pub fn from_valid_uri(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
-        if let Ok(url) = Url::parse(table_uri.as_ref()) {
-            if url.scheme() == "file" {
-                let path = url.to_file_path().map_err(|_| {
-                    DeltaTableError::InvalidTableLocation(table_uri.as_ref().to_string())
-                })?;
-                ensure_file_location_exists(path)?;
-            }
-        } else {
-            ensure_file_location_exists(PathBuf::from(table_uri.as_ref()))?;
+        if table_url.scheme() == "file" {
+            let path = table_url.to_file_path().map_err(|_| {
+                DeltaTableError::InvalidTableLocation(table_url.as_str().to_string())
+            })?;
+            ensure_file_location_exists(path)?;
         }
 
-        let url = ensure_table_uri(&table_uri)?;
-        debug!("creating table builder with {url}");
+        debug!("creating table builder with {table_url}");
 
         Ok(Self {
-            table_uri: url.into(),
+            table_url,
             storage_backend: None,
             version: DeltaVersion::default(),
             storage_options: None,
@@ -182,11 +171,15 @@ impl DeltaTableBuilder {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with
-    ///   "/" pointing at delta table root (i.e. where `_delta_log` is located).
-    /// * `location` - A url corresponding to the storagle location of `storage`.
-    pub fn with_storage_backend(mut self, storage: Arc<DynObjectStore>, location: Url) -> Self {
-        self.storage_backend = Some((storage, location));
+    /// * `root_storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with
+    ///   "/" pointing at the root of the object store.
+    /// * `location` - A url corresponding to the storage location of the delta table.
+    pub fn with_storage_backend(
+        mut self,
+        root_storage: Arc<DynObjectStore>,
+        location: Url,
+    ) -> Self {
+        self.storage_backend = Some((root_storage, location));
         self
     }
 
@@ -222,7 +215,7 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// Allows unsecure connections via http.
+    /// Allows insecure connections via http.
     ///
     /// This setting is most useful for testing / development when connecting to emulated services.
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
@@ -250,27 +243,23 @@ impl DeltaTableBuilder {
 
     /// Build a delta storage backend for the given config
     pub fn build_storage(&self) -> DeltaResult<LogStoreRef> {
-        debug!("build_storage() with {}", self.table_uri);
-        let location = Url::parse(&self.table_uri).map_err(|_| {
-            DeltaTableError::NotATable(format!("Could not turn {} into a URL", self.table_uri))
-        })?;
+        debug!("build_storage() with {}", self.table_url);
+
+        let mut storage_config = StorageConfig::parse_options(self.storage_options())?;
+        if let Some(io_runtime) = self.table_config.io_runtime.clone() {
+            storage_config = storage_config.with_io_runtime(io_runtime);
+        }
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(
-                store.clone(),
-                location,
-                self.storage_options(),
-                self.table_config.io_runtime.clone(),
-            )
+            crate::logstore::logstore_with(store.clone(), self.table_url.clone(), storage_config)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
-            debug!("Loading a logstore based off the location: {location:?}");
-            crate::logstore::logstore_for(
-                location,
-                self.storage_options(),
-                self.table_config.io_runtime.clone(),
-            )
+            debug!(
+                "Loading a logstore based off the location: {:?}",
+                self.table_url
+            );
+            crate::logstore::logstore_for(self.table_url.clone(), storage_config)
         }
     }
 
@@ -300,6 +289,26 @@ enum UriType {
     Url(Url),
 }
 
+/// Expand tilde (~) in path to home directory
+fn expand_tilde_path(path: &str) -> DeltaResult<PathBuf> {
+    if path.starts_with("~/") || path == "~" {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            DeltaTableError::InvalidTableLocation(
+                "Could not determine home directory for tilde expansion".to_string(),
+            )
+        })?;
+
+        if path == "~" {
+            Ok(home_dir)
+        } else {
+            let relative_path = &path[2..];
+            Ok(home_dir.join(relative_path))
+        }
+    } else {
+        Ok(PathBuf::from(path))
+    }
+}
+
 /// Utility function to figure out whether string representation of the path
 /// is either local path or some kind or URL.
 ///
@@ -311,28 +320,42 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
         .map(|v| v.key().scheme().to_owned())
         .collect();
 
-    if let Ok(url) = Url::parse(table_uri) {
-        let scheme = url.scheme().to_string();
-        if url.scheme() == "file" {
-            Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
-                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
-                DeltaTableError::InvalidTableLocation(msg)
-            })?))
-        // NOTE this check is required to support absolute windows paths which may properly parse as url
-        } else if known_schemes.contains(&scheme) {
-            Ok(UriType::Url(url))
-        // NOTE this check is required to support absolute windows paths which may properly parse as url
-        // we assume here that a single character scheme is a windows drive letter
-        } else if scheme.len() == 1 {
-            Ok(UriType::LocalPath(PathBuf::from(table_uri)))
-        } else {
-            Err(DeltaTableError::InvalidTableLocation(format!(
-                "Unknown scheme: {scheme}. Known schemes: {}",
-                known_schemes.join(",")
-            )))
+    match Url::parse(table_uri) {
+        Ok(url) => {
+            let scheme = url.scheme().to_string();
+            if url.scheme() == "file" {
+                Ok(UriType::LocalPath(url.to_file_path().map_err(|err| {
+                    let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
+                    DeltaTableError::InvalidTableLocation(msg)
+                })?))
+            // NOTE this check is required to support absolute windows paths which may properly parse as url
+            } else if known_schemes.contains(&scheme) {
+                Ok(UriType::Url(url))
+            // NOTE this check is required to support absolute windows paths which may properly parse as url
+            // we assume here that a single character scheme is a windows drive letter
+            } else if scheme.len() == 1 {
+                Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
+            } else {
+                Err(DeltaTableError::InvalidTableLocation(format!(
+                    "Unknown scheme: {scheme}. Known schemes: {}",
+                    known_schemes.join(",")
+                )))
+            }
         }
-    } else {
-        Ok(UriType::LocalPath(PathBuf::from(table_uri)))
+        Err(url_error) => {
+            match url_error {
+                // The RelativeUrlWithoutBase error _usually_ means this function has been called
+                // with a file path looking thing.
+                url::ParseError::RelativeUrlWithoutBase => {
+                    Ok(UriType::LocalPath(expand_tilde_path(table_uri)?))
+                }
+                // All other parse errors are likely an actually broken URL that should not be
+                // interpreted as anything but
+                _others => Err(DeltaTableError::InvalidTableLocation(format!(
+                    "Could not parse {table_uri} as a URL: {url_error}"
+                ))),
+            }
+        }
     }
 }
 
@@ -346,7 +369,37 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
 ///
 /// Extra slashes will be removed from the end path as well.
 ///
+/// Parse a table URI to a URL without creating directories.
+/// This is useful for opening existing tables where we don't want to create directories.
+pub fn parse_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
+    let table_uri = table_uri.as_ref();
+
+    let uri_type: UriType = resolve_uri_type(table_uri)?;
+
+    let mut url = match uri_type {
+        UriType::LocalPath(path) => {
+            let path = std::fs::canonicalize(path).map_err(|err| {
+                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
+                DeltaTableError::InvalidTableLocation(msg)
+            })?;
+            Url::from_directory_path(path).map_err(|_| {
+                let msg = format!(
+                    "Could not construct a URL from the canonical path: {table_uri}.\n\
+                    Something must be very wrong with the table path.",
+                );
+                DeltaTableError::InvalidTableLocation(msg)
+            })?
+        }
+        UriType::Url(url) => url,
+    };
+
+    let trimmed_path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&trimmed_path);
+    Ok(url)
+}
+
 /// Will return an error if the location is not valid. For example,
+/// Creates directories for local paths if they don't exist.
 pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
 
@@ -516,13 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_uri() {
-        // Urls should round trips as-is
-        DeltaTableBuilder::from_valid_uri("this://is.nonsense")
-            .expect_err("this should be an error");
-    }
-
-    #[test]
     fn test_writer_storage_opts_url_trim() {
         let cases = [
             // Trim Case 1 - Key indicating a url
@@ -561,9 +607,100 @@ mod tests {
             let mut storage_opts = HashMap::<String, String>::new();
             storage_opts.insert(key.to_owned(), val.to_owned());
 
-            let table = DeltaTableBuilder::from_uri(table_uri).with_storage_options(storage_opts);
+            let table = DeltaTableBuilder::from_uri(table_uri)
+                .unwrap()
+                .with_storage_options(storage_opts);
             let found_opts = table.storage_options();
             assert_eq!(expected, found_opts.get(key).unwrap());
         }
+    }
+
+    #[test]
+    fn test_expand_tilde_path() {
+        let home_dir = dirs::home_dir().expect("Should have home directory");
+
+        let result = expand_tilde_path("~").unwrap();
+        assert_eq!(result, home_dir);
+
+        let result = expand_tilde_path("~/test/path").unwrap();
+        assert_eq!(result, home_dir.join("test/path"));
+
+        let result = expand_tilde_path("/absolute/path").unwrap();
+        assert_eq!(result, PathBuf::from("/absolute/path"));
+
+        let result = expand_tilde_path("relative/path").unwrap();
+        assert_eq!(result, PathBuf::from("relative/path"));
+
+        let result = expand_tilde_path("~other").unwrap();
+        assert_eq!(result, PathBuf::from("~other"));
+    }
+
+    #[test]
+    fn test_resolve_uri_type_with_tilde() {
+        let home_dir = dirs::home_dir().expect("Should have home directory");
+
+        match resolve_uri_type("~/test/path").unwrap() {
+            UriType::LocalPath(path) => {
+                assert_eq!(path, home_dir.join("test/path"));
+            }
+            _ => panic!("Expected LocalPath"),
+        }
+
+        match resolve_uri_type("~").unwrap() {
+            UriType::LocalPath(path) => {
+                assert_eq!(path, home_dir);
+            }
+            _ => panic!("Expected LocalPath"),
+        }
+
+        match resolve_uri_type("regular/path").unwrap() {
+            UriType::LocalPath(path) => {
+                assert_eq!(path, PathBuf::from("regular/path"));
+            }
+            _ => panic!("Expected LocalPath"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_url_but_invalid_file_path_too() -> DeltaResult<()> {
+        for wrong in &["s3://arn:aws:s3:::something", "hdfs://"] {
+            let result = ensure_table_uri(wrong);
+            assert!(
+                result.is_err(),
+                "Expected {wrong} parsed into {result:#?} to return an error because I gave it something URLish"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensure_table_uri_with_tilde() {
+        let home_dir = dirs::home_dir().expect("Should have home directory");
+
+        let test_dir = home_dir.join("delta_test_temp");
+        std::fs::create_dir_all(&test_dir).ok();
+
+        let tilde_path = "~/delta_test_temp";
+        let result = ensure_table_uri(tilde_path);
+        assert!(
+            result.is_ok(),
+            "ensure_table_uri should work with tilde paths"
+        );
+
+        let url = result.unwrap();
+        assert!(!url.as_str().contains("~"));
+
+        #[cfg(windows)]
+        {
+            let home_dir_normalized = home_dir.to_string_lossy().replace('\\', "/");
+            assert!(url.as_str().contains(&home_dir_normalized));
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(url.as_str().contains(home_dir.to_string_lossy().as_ref()));
+        }
+
+        std::fs::remove_dir_all(&test_dir).ok();
     }
 }

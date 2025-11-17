@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
+use datafusion::common::Statistics;
 use datafusion::error::Result as DataFusionResult;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::{
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
@@ -42,7 +43,7 @@ impl MetricObserverExec {
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         match inputs {
             [input] => Ok(Arc::new(MetricObserverExec::new(id, input.clone(), f))),
-            _ => Err(datafusion_common::DataFusionError::External(Box::new(
+            _ => Err(datafusion::common::DataFusionError::External(Box::new(
                 DeltaTableError::Generic("MetricObserverExec expects only one child".into()),
             ))),
         }
@@ -97,7 +98,7 @@ impl ExecutionPlan for MetricObserverExec {
         &self,
         partition: usize,
         context: Arc<datafusion::execution::context::TaskContext>,
-    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
+    ) -> datafusion::common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
         let res = self.parent.execute(partition, context)?;
         Ok(Box::pin(MetricObserverStream {
             schema: self.schema(),
@@ -107,14 +108,17 @@ impl ExecutionPlan for MetricObserverExec {
         }))
     }
 
-    fn statistics(&self) -> DataFusionResult<datafusion_common::Statistics> {
-        self.parent.statistics()
+    fn partition_statistics(
+        &self,
+        partition: Option<usize>,
+    ) -> datafusion::common::Result<Statistics> {
+        self.parent.partition_statistics(partition)
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         MetricObserverExec::try_new(self.id.clone(), &children, self.update)
     }
 

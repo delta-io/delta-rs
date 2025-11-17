@@ -1,32 +1,27 @@
 .DEFAULT_GOAL := help
 
-PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
-DAT_VERSION := 0.0.2
+PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' | tr -d '-' )
+PROFILE ?= dev
 
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
 	uv sync --no-install-project --all-extras
 
-.PHONY: setup-dat
-setup-dat: ## Download DAT test files
-	mkdir -p dat-data
-	rm -rf dat-data/v$(DAT_VERSION)
-	curl -L --silent --output dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz \
-		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz
-	tar --no-same-permissions -xzf dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
-	mv out dat-data/v$(DAT_VERSION)
-	rm dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
-
 .PHONY: build
-build: setup ## Build Python binding of delta-rs
-	$(info --- Build Python binding ---)
-	uvx --from 'maturin[zig]' maturin build $(MATURIN_EXTRA_ARGS)
+build: setup ## Build Python binding of delta-rs (default: PROFILE=dev, override with PROFILE=ci|python-release)
+	$(info --- Build Python binding with profile: $(PROFILE) ---)
+	uvx --from 'maturin[zig]' maturin build --profile $(PROFILE) $(MATURIN_EXTRA_ARGS)
+
+.PHONY: build-release
+build-release: setup ## Build Python wheel for release (uses python-release profile - maximum optimization)
+	$(info --- Build Python wheel with python-release profile ---)
+	uvx --from 'maturin[zig]' maturin build --profile python-release $(MATURIN_EXTRA_ARGS)
 
 .PHONY: develop
-develop: setup ## Install Python binding of delta-rs
-	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop $(MATURIN_EXTRA_ARGS)
+develop: setup ## Install Python binding of delta-rs (default: PROFILE=dev, override with PROFILE=ci|python-release)
+	$(info --- Develop with Python binding with profile: $(PROFILE) ---)
+	uvx --from 'maturin[zig]' maturin develop --profile $(PROFILE) $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
@@ -69,7 +64,7 @@ check-python: ## Run check on Python
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	uv run --no-sync pytest --doctest-modules
+	uv run --no-sync pytest -q -n auto --doctest-modules
 
 .PHONY: test-cov
 test-cov: ## Create coverage report
@@ -78,7 +73,7 @@ test-cov: ## Create coverage report
 
 .PHONY: test-pyspark
 test-pyspark:
-	uv run --no-sync pytest -m 'pyspark and integration'
+	uv run --no-sync pytest -m 'pyarrow and pyspark and integration'
 
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx
@@ -94,6 +89,7 @@ build-docs: ## Build documentation with mkdocs
 clean: ## Run clean
 	$(warning --- Clean virtualenv and target directory ---)
 	cargo clean
+	uv cache clean
 	# Remove uv's venv
 	rm -rf .venv
 	find . -type f -name '*.pyc' -delete

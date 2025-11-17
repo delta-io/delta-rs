@@ -1,3 +1,4 @@
+mod datafusion;
 mod error;
 mod features;
 mod filesystem;
@@ -5,9 +6,56 @@ mod merge;
 mod query;
 mod reader;
 mod schema;
+mod tracing_otlp;
 mod utils;
 mod writer;
 
+use arrow::pyarrow::PyArrowType;
+use arrow_schema::SchemaRef;
+use chrono::{DateTime, Duration, FixedOffset, Utc};
+use datafusion_ffi::table_provider::FFI_TableProvider;
+use delta_kernel::expressions::Scalar;
+use delta_kernel::schema::{MetadataValue, StructField};
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
+use deltalake::datafusion::catalog::TableProvider;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
+use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::DeltaCdfTableProvider;
+use deltalake::errors::DeltaTableError;
+use deltalake::kernel::scalars::ScalarExt;
+use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use deltalake::kernel::{
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
+};
+use deltalake::lakefs::LakeFSCustomExecuteHandler;
+use deltalake::logstore::LogStoreRef;
+use deltalake::logstore::{IORuntime, ObjectStoreRef};
+use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
+use deltalake::operations::optimize::OptimizeType;
+use deltalake::operations::update_table_metadata::TableMetadataUpdate;
+use deltalake::operations::vacuum::VacuumMode;
+use deltalake::operations::write::WriteBuilder;
+use deltalake::operations::CustomExecuteHandler;
+use deltalake::parquet::basic::{Compression, Encoding};
+use deltalake::parquet::errors::ParquetError;
+use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
+use deltalake::partitions::PartitionFilter;
+use deltalake::protocol::{DeltaOperation, SaveMode};
+use deltalake::table::config::TablePropertiesExt as _;
+use deltalake::table::state::DeltaTableState;
+use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
+use futures::TryStreamExt;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
+use pyo3::{prelude::*, IntoPyObjectExt};
+use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
+use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
+use schema::PySchema;
+use serde_json::{Map, Value};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -15,63 +63,11 @@ use std::future::IntoFuture;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use arrow::pyarrow::PyArrowType;
-use chrono::{DateTime, Duration, FixedOffset, Utc};
-use datafusion_ffi::table_provider::FFI_TableProvider;
-use delta_kernel::expressions::Scalar;
-use delta_kernel::schema::{MetadataValue, StructField};
-use deltalake::arrow::compute::concat_batches;
-use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use deltalake::arrow::record_batch::RecordBatch;
-use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
-use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
-use deltalake::datafusion::catalog::TableProvider;
-use deltalake::datafusion::datasource::provider_as_source;
-use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
-use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaDataChecker};
-use deltalake::errors::DeltaTableError;
-use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
-use deltalake::kernel::{
-    scalars::ScalarExt, Action, Add, Invariant, LogicalFile, Remove, StructType, Transaction,
-};
-use deltalake::lakefs::LakeFSCustomExecuteHandler;
-use deltalake::logstore::LogStoreRef;
-use deltalake::logstore::{IORuntime, ObjectStoreRef};
-use deltalake::operations::add_column::AddColumnBuilder;
-use deltalake::operations::add_feature::AddTableFeatureBuilder;
-use deltalake::operations::constraints::ConstraintBuilder;
-use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
-use deltalake::operations::delete::DeleteBuilder;
-use deltalake::operations::drop_constraints::DropConstraintBuilder;
-use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
-use deltalake::operations::load_cdf::CdfLoadBuilder;
-use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
-use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
-use deltalake::operations::update::UpdateBuilder;
-use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
-use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
-use deltalake::operations::write::WriteBuilder;
-use deltalake::operations::CustomExecuteHandler;
-use deltalake::parquet::basic::Compression;
-use deltalake::parquet::errors::ParquetError;
-use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
-use deltalake::partitions::PartitionFilter;
-use deltalake::protocol::{DeltaOperation, SaveMode};
-use deltalake::table::state::DeltaTableState;
-use deltalake::{init_client_version, DeltaOps, DeltaResult, DeltaTableBuilder};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
-use pyo3::{prelude::*, IntoPyObjectExt};
-use serde_json::{Map, Value};
-use tracing::log::*;
 use uuid::Uuid;
 
-use crate::error::{DeltaError, DeltaProtocolError, PythonError};
+use writer::maybe_lazy_cast_reader;
+
+use crate::error::{to_rt_err, DeltaError, DeltaProtocolError, PythonError};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
@@ -95,7 +91,7 @@ enum PartitionFilterValue {
     Multiple(Vec<PyBackedStr>),
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", frozen)]
 struct RawDeltaTable {
     /// The internal reference to the table is guarded by a Mutex to allow for re-using the same
     /// [DeltaTable] instance across multiple Python threads
@@ -104,20 +100,14 @@ struct RawDeltaTable {
     _config: FsConfig,
 }
 
-#[pyclass]
+#[pyclass(frozen, get_all)]
 struct RawDeltaTableMetaData {
-    #[pyo3(get)]
     id: String,
-    #[pyo3(get)]
     name: Option<String>,
-    #[pyo3(get)]
     description: Option<String>,
-    #[pyo3(get)]
     partition_columns: Vec<String>,
-    #[pyo3(get)]
     created_time: Option<i64>,
-    #[pyo3(get)]
-    configuration: HashMap<String, Option<String>>,
+    configuration: HashMap<String, String>,
 }
 
 type StringVec = Vec<String>;
@@ -142,12 +132,13 @@ impl RawDeltaTable {
     }
 
     fn object_store(&self) -> PyResult<ObjectStoreRef> {
-        self.with_table(|t| Ok(t.object_store().clone()))
+        self.with_table(|t| Ok(t.log_store().object_store(None).clone()))
     }
 
-    fn cloned_state(&self) -> PyResult<DeltaTableState> {
+    fn cloned_state(&self) -> PyResult<EagerSnapshot> {
         self.with_table(|t| {
             t.snapshot()
+                .map(|snapshot| snapshot.snapshot())
                 .cloned()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)
@@ -181,7 +172,10 @@ impl RawDeltaTable {
         log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         py.allow_threads(|| {
-            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri)
+            let table_url = deltalake::table::builder::parse_table_uri(table_uri)
+                .map_err(error::PythonError::from)?;
+            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_url)
+                .map_err(error::PythonError::from)?
                 .with_io_runtime(IORuntime::default());
             let options = storage_options.clone().unwrap_or_default();
             if let Some(storage_options) = storage_options {
@@ -216,7 +210,10 @@ impl RawDeltaTable {
         table_uri: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<bool> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        let table_url = deltalake::table::builder::ensure_table_uri(table_uri)
+            .map_err(|_| PyErr::new::<PyValueError, _>("Invalid table URI"))?;
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_url)
+            .map_err(|_| PyErr::new::<PyValueError, _>("Failed to create table builder"))?;
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }
@@ -234,81 +231,70 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.table_uri()))
     }
 
-    pub fn version(&self) -> PyResult<i64> {
+    pub fn version(&self) -> PyResult<Option<i64>> {
         self.with_table(|t| Ok(t.version()))
     }
 
-    pub fn has_files(&self) -> PyResult<bool> {
+    pub(crate) fn has_files(&self) -> PyResult<bool> {
         self.with_table(|t| Ok(t.config.require_files))
+    }
+
+    pub fn table_config(&self) -> PyResult<(bool, usize)> {
+        self.with_table(|t| {
+            let config = t.config.clone();
+            // Require_files inverted to reflect without_files
+            Ok((!config.require_files, config.log_buffer_size))
+        })
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
         let metadata = self.with_table(|t| {
-            t.metadata()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.metadata().clone())
         })?;
         Ok(RawDeltaTableMetaData {
-            id: metadata.id.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            partition_columns: metadata.partition_columns.clone(),
-            created_time: metadata.created_time,
-            configuration: metadata.configuration.clone(),
+            id: metadata.id().to_string(),
+            name: metadata.name().map(String::from),
+            description: metadata.description().map(String::from),
+            partition_columns: metadata.partition_columns().clone(),
+            created_time: metadata.created_time(),
+            configuration: metadata.configuration().clone(),
         })
     }
 
     pub fn protocol_versions(&self) -> PyResult<(i32, i32, Option<StringVec>, Option<StringVec>)> {
         let table_protocol = self.with_table(|t| {
-            t.protocol()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.protocol().clone())
         })?;
         Ok((
-            table_protocol.min_reader_version,
-            table_protocol.min_writer_version,
-            table_protocol
-                .writer_features
-                .as_ref()
-                .and_then(|features| {
-                    let empty_set = !features.is_empty();
-                    empty_set.then(|| {
-                        features
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    })
-                }),
-            table_protocol
-                .reader_features
-                .as_ref()
-                .and_then(|features| {
-                    let empty_set = !features.is_empty();
-                    empty_set.then(|| {
-                        features
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    })
-                }),
+            table_protocol.min_reader_version(),
+            table_protocol.min_writer_version(),
+            table_protocol.writer_features().and_then(|features| {
+                let empty_set = !features.is_empty();
+                empty_set.then(|| {
+                    features
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
+            }),
+            table_protocol.reader_features().and_then(|features| {
+                let empty_set = !features.is_empty();
+                empty_set.then(|| {
+                    features
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
+            }),
         ))
-    }
-
-    pub fn check_can_write_timestamp_ntz(&self, schema: PyArrowType<ArrowSchema>) -> PyResult<()> {
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
-        // Need to unlock to access the shared reference to &DeltaTableState
-        match self._table.lock() {
-            Ok(table) => Ok(PROTOCOL
-                .check_can_write_timestamp_ntz(
-                    table.snapshot().map_err(PythonError::from)?,
-                    &schema,
-                )
-                .map_err(|e| DeltaTableError::Generic(e.to_string()))
-                .map_err(PythonError::from)?),
-            Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-        }
     }
 
     /// Load the internal [RawDeltaTable] with the table state from the specified `version`
@@ -348,37 +334,27 @@ impl RawDeltaTable {
         })
     }
 
-    pub fn get_earliest_version(&self, py: Python) -> PyResult<i64> {
-        py.allow_threads(|| {
-            #[allow(clippy::await_holding_lock)]
-            rt().block_on(async {
-                match self._table.lock() {
-                    Ok(table) => table
-                        .get_earliest_version()
-                        .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from),
-                    Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-                }
+    fn get_num_index_cols(&self) -> PyResult<i32> {
+        self.with_table(|t| {
+            let n_cols = t
+                .snapshot()
+                .map_err(PythonError::from)?
+                .config()
+                .num_indexed_cols();
+            Ok(match n_cols {
+                DataSkippingNumIndexedCols::NumColumns(n_cols) => n_cols as i32,
+                DataSkippingNumIndexedCols::AllColumns => -1,
             })
         })
     }
 
-    pub fn get_num_index_cols(&self) -> PyResult<i32> {
+    fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
         self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
                 .config()
-                .num_indexed_cols())
-        })
-    }
-
-    pub fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
-        self.with_table(|t| {
-            Ok(t.snapshot()
-                .map_err(PythonError::from)?
-                .config()
-                .stats_columns()
+                .data_skipping_stats_columns
+                .as_ref()
                 .map(|v| v.iter().map(|s| s.to_string()).collect::<Vec<String>>()))
         })
     }
@@ -418,9 +394,12 @@ impl RawDeltaTable {
                 let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
                 Ok(self
                     .with_table(|t| {
-                        t.get_files_by_partitions(&filters)
-                            .map_err(PythonError::from)
-                            .map_err(PyErr::from)
+                        rt().block_on(async {
+                            t.get_files_by_partitions(&filters)
+                                .await
+                                .map_err(PythonError::from)
+                                .map_err(PyErr::from)
+                        })
                     })?
                     .into_iter()
                     .map(|p| p.to_string())
@@ -428,8 +407,9 @@ impl RawDeltaTable {
             } else {
                 match self._table.lock() {
                     Ok(table) => Ok(table
-                        .get_files_iter()
+                        .snapshot()
                         .map_err(PythonError::from)?
+                        .file_paths_iter()
                         .map(|f| f.to_string())
                         .collect()),
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
@@ -450,9 +430,12 @@ impl RawDeltaTable {
         if let Some(filters) = partition_filters {
             let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
             self.with_table(|t| {
-                t.get_file_uris_by_partitions(&filters)
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from)
+                rt().block_on(async {
+                    t.get_file_uris_by_partitions(&filters)
+                        .await
+                        .map_err(PythonError::from)
+                        .map_err(PyErr::from)
+                })
             })
         } else {
             self.with_table(|t| {
@@ -466,18 +449,27 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let schema: StructType = self.with_table(|t| {
-            t.get_schema()
+        let schema = self.with_table(|t| {
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
-                .map(|s| s.to_owned())
+                .map_err(PyErr::from)?;
+            Ok(snapshot.schema().clone())
         })?;
         schema_to_pyobject(schema, py)
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, commit_properties=None, post_commithook_properties=None, full = false))]
+    #[pyo3(signature = (
+        dry_run,
+        retention_hours = None,
+        enforce_retention_duration = true,
+        commit_properties=None,
+        post_commithook_properties=None,
+        full = false,
+        keep_versions = None,
+    ))]
     #[allow(clippy::too_many_arguments)]
     pub fn vacuum(
         &self,
@@ -488,17 +480,12 @@ impl RawDeltaTable {
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         full: bool,
+        keep_versions: Option<Vec<i64>>,
     ) -> PyResult<Vec<String>> {
         let (table, metrics) = py.allow_threads(|| {
-            let snapshot = match self._table.lock() {
-                Ok(table) => table
-                    .snapshot()
-                    .cloned()
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from),
-                Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
-            }?;
-            let mut cmd = VacuumBuilder::new(self.log_store()?, snapshot)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .vacuum()
                 .with_enforce_retention_duration(enforce_retention_duration)
                 .with_dry_run(dry_run);
 
@@ -516,6 +503,10 @@ impl RawDeltaTable {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
+            if let Some(keep_versions_vec) = keep_versions {
+                cmd = cmd.with_keep_versions(keep_versions_vec.as_slice());
+            }
+
             if self.log_store()?.name() == "LakeFSLogStore" {
                 cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
             }
@@ -529,7 +520,14 @@ impl RawDeltaTable {
     }
 
     /// Run the UPDATE command on the Delta Table
-    #[pyo3(signature = (updates, predicate=None, writer_properties=None, safe_cast = false, commit_properties = None, post_commithook_properties=None))]
+    #[pyo3(signature = (
+        updates,
+        predicate=None,
+        writer_properties=None,
+        safe_cast = false,
+        commit_properties = None,
+        post_commithook_properties=None,
+    ))]
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &self,
@@ -542,8 +540,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = UpdateBuilder::new(self.log_store()?, self.cloned_state()?)
-                .with_safe_cast(safe_cast);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).update().with_safe_cast(safe_cast);
 
             if let Some(writer_props) = writer_properties {
                 cmd = cmd.with_writer_properties(
@@ -593,7 +591,7 @@ impl RawDeltaTable {
         &self,
         py: Python,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
-        target_size: Option<i64>,
+        target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
@@ -601,8 +599,11 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
             }
@@ -649,13 +650,14 @@ impl RawDeltaTable {
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
-        post_commithook_properties=None))]
+        post_commithook_properties=None,
+    ))]
     pub fn z_order_optimize(
         &self,
         py: Python,
         z_order_columns: Vec<String>,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
-        target_size: Option<i64>,
+        target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
         min_commit_interval: Option<u64>,
@@ -664,10 +666,13 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = OptimizeBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table.clone())
+                .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
                 .with_max_spill_size(max_spill_size)
                 .with_type(OptimizeType::ZOrder(z_order_columns));
+
             if let Some(size) = target_size {
                 cmd = cmd.with_target_size(size);
             }
@@ -713,7 +718,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = AddColumnBuilder::new(self.log_store()?, self.cloned_state()?);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).add_columns();
 
             let new_fields = fields
                 .iter()
@@ -740,7 +746,9 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (feature, allow_protocol_versions_increase, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (
+        feature, allow_protocol_versions_increase, commit_properties=None, post_commithook_properties=None
+    ))]
     pub fn add_feature(
         &self,
         py: Python,
@@ -750,7 +758,9 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = AddTableFeatureBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .add_feature()
                 .with_features(feature)
                 .with_allow_protocol_versions_increase(allow_protocol_versions_increase);
 
@@ -781,11 +791,10 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = ConstraintBuilder::new(self.log_store()?, self.cloned_state()?);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).add_constraint();
 
-            for (col_name, expression) in constraints {
-                cmd = cmd.with_constraint(col_name.clone(), expression.clone());
-            }
+            cmd = cmd.with_constraints(constraints);
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(commit_properties, post_commithook_properties)
@@ -815,7 +824,9 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = DropConstraintBuilder::new(self.log_store()?, self.cloned_state()?)
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .drop_constraints()
                 .with_constraint(name)
                 .with_raise_if_not_exists(raise_if_not_exists);
 
@@ -837,7 +848,23 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (starting_version = None, ending_version = None, starting_timestamp = None, ending_timestamp = None, columns = None, predicate = None, allow_out_of_range = false))]
+    #[pyo3()]
+    pub fn generate(&self, _py: Python) -> PyResult<()> {
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        rt().block_on(async { DeltaOps(table).generate().await })
+            .map_err(PythonError::from)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (
+        starting_version = None,
+        ending_version = None,
+        starting_timestamp = None,
+        ending_timestamp = None,
+        columns = None,
+        predicate = None,
+        allow_out_of_range = false,
+    ))]
     #[allow(clippy::too_many_arguments)]
     pub fn load_cdf(
         &self,
@@ -849,35 +876,36 @@ impl RawDeltaTable {
         columns: Option<Vec<String>>,
         predicate: Option<String>,
         allow_out_of_range: bool,
-    ) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
+    ) -> PyResult<Arro3RecordBatchReader> {
         let ctx = SessionContext::new();
-        let mut cdf_read = CdfLoadBuilder::new(self.log_store()?, self.cloned_state()?);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).load_cdf();
 
         if let Some(sv) = starting_version {
-            cdf_read = cdf_read.with_starting_version(sv);
+            cmd = cmd.with_starting_version(sv);
         }
         if let Some(ev) = ending_version {
-            cdf_read = cdf_read.with_ending_version(ev);
+            cmd = cmd.with_ending_version(ev);
         }
         if let Some(st) = starting_timestamp {
             let starting_ts: DateTime<Utc> = DateTime::<Utc>::from_str(&st)
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
-            cdf_read = cdf_read.with_starting_timestamp(starting_ts);
+            cmd = cmd.with_starting_timestamp(starting_ts);
         }
         if let Some(et) = ending_timestamp {
             let ending_ts = DateTime::<Utc>::from_str(&et)
                 .map_err(|pe| PyValueError::new_err(pe.to_string()))?
                 .to_utc();
-            cdf_read = cdf_read.with_ending_timestamp(ending_ts);
+            cmd = cmd.with_ending_timestamp(ending_ts);
         }
 
         if allow_out_of_range {
-            cdf_read = cdf_read.with_allow_out_of_range();
+            cmd = cmd.with_allow_out_of_range();
         }
 
         let table_provider: Arc<dyn TableProvider> =
-            Arc::new(DeltaCdfTableProvider::try_new(cdf_read).map_err(PythonError::from)?);
+            Arc::new(DeltaCdfTableProvider::try_new(cmd).map_err(PythonError::from)?);
 
         let table_name: String = "source".to_string();
 
@@ -900,15 +928,15 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
 
         py.allow_threads(|| {
-            let ffi_stream = FFI_ArrowArrayStream::new(convert_stream_to_reader(stream));
-            let reader = ArrowArrayStreamReader::try_new(ffi_stream).unwrap();
-            Ok(PyArrowType(reader))
+            let stream = convert_stream_to_reader(stream);
+            Ok(stream.into())
         })
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         source,
+        batch_schema,
         predicate,
         source_alias = None,
         target_alias = None,
@@ -922,7 +950,8 @@ impl RawDeltaTable {
     pub fn create_merge_builder(
         &self,
         py: Python,
-        source: PyArrowType<ArrowArrayStreamReader>,
+        source: PyRecordBatchReader,
+        batch_schema: PyArrowSchema,
         predicate: String,
         source_alias: Option<String>,
         target_alias: Option<String>,
@@ -944,7 +973,8 @@ impl RawDeltaTable {
             Ok(PyMergeBuilder::new(
                 self.log_store()?,
                 self.cloned_state()?,
-                source.0,
+                source,
+                batch_schema,
                 predicate,
                 source_alias,
                 target_alias,
@@ -976,7 +1006,9 @@ impl RawDeltaTable {
     }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
-    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, commit_properties=None))]
+    #[pyo3(signature = (
+        target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, commit_properties=None
+    ))]
     pub fn restore(
         &self,
         target: Option<&Bound<'_, PyAny>>,
@@ -984,7 +1016,8 @@ impl RawDeltaTable {
         protocol_downgrade_allowed: bool,
         commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<String> {
-        let mut cmd = RestoreBuilder::new(self.log_store()?, self.cloned_state()?);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).restore();
         if let Some(val) = target {
             if let Ok(version) = val.extract::<i64>() {
                 cmd = cmd.with_version_to_restore(version)
@@ -1016,7 +1049,8 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
+    /// Run the History command on the Delta Table: Returns provenance information,
+    /// including the operation, user, and so on, for each write to a table.
     #[pyo3(signature = (limit=None))]
     pub fn history(&self, limit: Option<usize>) -> PyResult<Vec<String>> {
         #[allow(clippy::await_holding_lock)]
@@ -1031,8 +1065,7 @@ impl RawDeltaTable {
             }
         })?;
         Ok(history
-            .iter()
-            .map(|c| serde_json::to_string(c).unwrap())
+            .map(|c| serde_json::to_string(&c).unwrap())
             .collect())
     }
 
@@ -1054,7 +1087,7 @@ impl RawDeltaTable {
     pub fn dataset_partitions<'py>(
         &self,
         py: Python<'py>,
-        schema: PyArrowType<ArrowSchema>,
+        schema: PyArrowSchema,
         partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
     ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
         let path_set = match partition_filters {
@@ -1066,19 +1099,20 @@ impl RawDeltaTable {
         let stats_cols = self.get_stats_columns()?;
         let num_index_cols = self.get_num_index_cols()?;
 
+        let schema = schema.into_inner();
+
         let inclusion_stats_cols = if let Some(stats_cols) = stats_cols {
             stats_cols
         } else if num_index_cols == -1 {
             schema
-                .0
                 .fields()
                 .iter()
                 .map(|v| v.name().clone())
                 .collect::<Vec<_>>()
         } else if num_index_cols >= 0 {
             let mut fields = vec![];
-            for idx in 0..(min(num_index_cols as usize, schema.0.fields.len())) {
-                fields.push(schema.0.field(idx).name().clone())
+            for idx in 0..(min(num_index_cols as usize, schema.fields.len())) {
+                fields.push(schema.field(idx).name().clone())
             }
             fields
         } else {
@@ -1089,7 +1123,7 @@ impl RawDeltaTable {
 
         self.cloned_state()?
             .log_data()
-            .into_iter()
+            .iter()
             .filter_map(|f| {
                 let path = f.path().to_string();
                 match &path_set {
@@ -1112,21 +1146,23 @@ impl RawDeltaTable {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyFrozenSet>> {
         let schema = self.with_table(|t| {
-            t.get_schema()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.schema().clone())
         })?;
         let metadata = self.with_table(|t| {
-            t.metadata()
-                .cloned()
+            let snapshot = t
+                .snapshot()
                 .map_err(PythonError::from)
-                .map_err(PyErr::from)
+                .map_err(PyErr::from)?;
+            Ok(snapshot.metadata().clone())
         })?;
         let column_names: HashSet<&str> =
             schema.fields().map(|field| field.name().as_str()).collect();
         let partition_columns: HashSet<&str> = metadata
-            .partition_columns
+            .partition_columns()
             .iter()
             .map(|col| col.as_str())
             .collect();
@@ -1168,10 +1204,14 @@ impl RawDeltaTable {
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
 
         let state = self.cloned_state()?;
-        let adds = state
-            .get_active_add_actions_by_partitions(&converted_filters)
-            .map_err(PythonError::from)?
-            .collect::<Result<Vec<_>, _>>()
+        let log_store = self.log_store()?;
+        let adds: Vec<_> = rt()
+            .block_on(async {
+                state
+                    .file_views_by_partitions(&log_store, &converted_filters)
+                    .try_collect()
+                    .await
+            })
             .map_err(PythonError::from)?;
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
@@ -1179,14 +1219,15 @@ impl RawDeltaTable {
                 Ok::<_, PythonError>(
                     partition_columns
                         .iter()
-                        .flat_map(|col| {
-                            Ok::<_, PythonError>((
+                        .map(|col| {
+                            (
                                 *col,
                                 add.partition_values()
-                                    .map_err(PythonError::from)?
-                                    .get(*col)
+                                    .and_then(|v| {
+                                        v.index_of(col).and_then(|idx| v.value(idx).cloned())
+                                    })
                                     .map(|v| v.serialize()),
-                            ))
+                            )
                         })
                         .collect(),
                 )
@@ -1201,28 +1242,33 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (add_actions, mode, partition_by, schema, partitions_filters=None, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (
+        add_actions,
+        mode,
+        partition_by,
+        schema,
+        partitions_filters=None,
+        commit_properties=None,
+        post_commithook_properties=None,
+    ))]
     fn create_write_transaction(
         &self,
         py: Python,
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
-        schema: PyArrowType<ArrowSchema>,
+        schema: PyRef<PySchema>,
         partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
+        let schema = schema.as_ref().inner_type.clone();
         py.allow_threads(|| {
             let mode = mode.parse().map_err(PythonError::from)?;
 
-            let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
-
             let existing_schema = self.with_table(|t| {
-                t.get_schema()
-                    .cloned()
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from)
+                let snapshot = t.snapshot().map_err(PythonError::from)?;
+                Ok(snapshot.schema().clone())
             })?;
 
             let mut actions: Vec<Action> = add_actions
@@ -1237,52 +1283,32 @@ impl RawDeltaTable {
                             .map_err(PythonError::from)?;
 
                     let state = self.cloned_state()?;
-                    let add_actions = state
-                        .get_active_add_actions_by_partitions(&converted_filters)
+                    let log_store = self.log_store()?;
+                    let add_actions: Vec<_> = rt()
+                        .block_on(async {
+                            state
+                                .file_views_by_partitions(&log_store, &converted_filters)
+                                .try_collect()
+                                .await
+                        })
                         .map_err(PythonError::from)?;
 
                     for old_add in add_actions {
-                        let old_add = old_add.map_err(PythonError::from)?;
-                        let remove_action = Action::Remove(Remove {
-                            path: old_add.path().to_string(),
-                            deletion_timestamp: Some(current_timestamp()),
-                            data_change: true,
-                            extended_file_metadata: Some(true),
-                            partition_values: Some(
-                                old_add
-                                    .partition_values()
-                                    .map_err(PythonError::from)?
-                                    .iter()
-                                    .map(|(k, v)| {
-                                        (
-                                            k.to_string(),
-                                            if v.is_null() {
-                                                None
-                                            } else {
-                                                Some(v.serialize())
-                                            },
-                                        )
-                                    })
-                                    .collect(),
-                            ),
-                            size: Some(old_add.size()),
-                            deletion_vector: None,
-                            tags: None,
-                            base_row_id: None,
-                            default_row_commit_version: None,
-                        });
+                        let remove_action = Action::Remove(old_add.remove_action(true));
                         actions.push(remove_action);
                     }
 
                     // Update metadata with new schema
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         let mut metadata = self.with_table(|t| {
-                            t.metadata()
-                                .cloned()
+                            let snapshot = t
+                                .snapshot()
                                 .map_err(PythonError::from)
-                                .map_err(PyErr::from)
+                                .map_err(PyErr::from)?;
+                            Ok(snapshot.metadata().clone())
                         })?;
-                        metadata.schema_string = serde_json::to_string(&schema)
+                        metadata = metadata
+                            .with_schema(&schema)
                             .map_err(DeltaTableError::from)
                             .map_err(PythonError::from)?;
                         actions.push(Action::Metadata(metadata));
@@ -1290,7 +1316,7 @@ impl RawDeltaTable {
                 }
                 _ => {
                     // This should be unreachable from Python
-                    if schema != existing_schema {
+                    if &schema != existing_schema.as_ref() {
                         DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
                     }
                 }
@@ -1403,10 +1429,9 @@ impl RawDeltaTable {
                         let new_state = if result > 0 {
                             Some(
                                 DeltaTableState::try_new(
-                                    &table.state.clone().unwrap().snapshot().table_root(),
-                                    table.object_store(),
+                                    &table.log_store(),
                                     table.config.clone(),
-                                    Some(table.version()),
+                                    table.version(),
                                 )
                                 .await
                                 .map_err(PythonError::from)?,
@@ -1440,31 +1465,41 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyArrowType<RecordBatch>> {
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
+        // replace with Arro3RecordBatch once new release is done for arro3.core
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
-        Ok(PyArrowType(self.with_table(|t| {
+        let batch = self.with_table(|t| {
             Ok(t.snapshot()
                 .map_err(PythonError::from)?
                 .add_actions_table(flatten)
                 .map_err(PythonError::from)?)
-        })?))
+        })?;
+        Ok(batch.into())
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
         self.with_table(|t| {
-            Ok(t.snapshot()
-                .map_err(PythonError::from)?
-                .snapshot()
-                .files()
-                .map(|f| (f.path().to_string(), f.size()))
-                .collect::<HashMap<String, i64>>())
+            let log_store = t.log_store();
+            let sizes: HashMap<String, i64> = rt()
+                .block_on(async {
+                    t.snapshot()?
+                        .snapshot()
+                        .file_views(&log_store, None)
+                        .map_ok(|f| (f.path().to_string(), f.size()))
+                        .try_collect()
+                        .await
+                })
+                .map_err(PythonError::from)?;
+            Ok(sizes)
         })
     }
 
     /// Run the delete command on the delta table: delete records following a predicate and return the delete metrics.
-    #[pyo3(signature = (predicate = None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (
+        predicate = None, writer_properties=None, commit_properties=None, post_commithook_properties=None
+    ))]
     pub fn delete(
         &self,
         py: Python,
@@ -1474,7 +1509,8 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let (table, metrics) = py.allow_threads(|| {
-            let mut cmd = DeleteBuilder::new(self.log_store()?, self.cloned_state()?);
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table).delete();
             if let Some(predicate) = predicate {
                 cmd = cmd.with_predicate(predicate);
             }
@@ -1508,7 +1544,9 @@ impl RawDeltaTable {
         raise_if_not_exists: bool,
         commit_properties: Option<PyCommitProperties>,
     ) -> PyResult<()> {
-        let mut cmd = SetTablePropertiesBuilder::new(self.log_store()?, self.cloned_state()?)
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table)
+            .set_tbl_properties()
             .with_properties(properties)
             .with_raise_if_not_exists(raise_if_not_exists);
 
@@ -1527,6 +1565,62 @@ impl RawDeltaTable {
         Ok(())
     }
 
+    #[pyo3(signature = (name, commit_properties=None))]
+    pub fn set_table_name(
+        &self,
+        name: String,
+        commit_properties: Option<PyCommitProperties>,
+    ) -> PyResult<()> {
+        let update = TableMetadataUpdate {
+            name: Some(name),
+            description: None,
+        };
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).update_table_metadata().with_update(update);
+
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        if self.log_store()?.name() == "LakeFSLogStore" {
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}));
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (description, commit_properties=None))]
+    pub fn set_table_description(
+        &self,
+        description: String,
+        commit_properties: Option<PyCommitProperties>,
+    ) -> PyResult<()> {
+        let update = TableMetadataUpdate {
+            name: None,
+            description: Some(description),
+        };
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).update_table_metadata().with_update(update);
+
+        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+            cmd = cmd.with_commit_properties(commit_properties);
+        }
+
+        if self.log_store()?.name() == "LakeFSLogStore" {
+            cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}));
+        }
+
+        let table = rt()
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     /// Execute the File System Check command (FSCK) on the delta table: removes old reference to files that
     /// have been deleted or are malformed
     #[pyo3(signature = (dry_run = true, commit_properties = None, post_commithook_properties=None))]
@@ -1536,8 +1630,8 @@ impl RawDeltaTable {
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
-        let mut cmd = FileSystemCheckBuilder::new(self.log_store()?, self.cloned_state()?)
-            .with_dry_run(dry_run);
+        let table = self._table.lock().map_err(to_rt_err)?.clone();
+        let mut cmd = DeltaOps(table).filesystem_check().with_dry_run(dry_run);
 
         if let Some(commit_properties) =
             maybe_create_commit_properties(commit_properties, post_commithook_properties)
@@ -1556,19 +1650,16 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    pub fn transaction_versions(&self) -> HashMap<String, PyTransaction> {
-        let version = self.with_table(|t| Ok(t.get_app_transaction_version()));
-
-        match version {
-            Ok(version) => version
-                .into_iter()
-                .map(|(app_id, transaction)| (app_id, PyTransaction::from(transaction)))
-                .collect(),
-            Err(e) => {
-                warn!("Cannot fetch transaction version due to {e:?}");
-                HashMap::default()
-            }
-        }
+    /// Get the latest transaction version for the given application ID.
+    ///
+    /// Returns `None` if the application ID is not found.
+    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
+        // NOTE: this will simplify once we have moved logstore onto state.
+        let log_store = self.log_store()?;
+        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+        Ok(rt()
+            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+            .map_err(PythonError::from)?)
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
@@ -1581,14 +1672,16 @@ impl RawDeltaTable {
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = py.allow_threads(|| {
-            let mut cmd = UpdateFieldMetadataBuilder::new(self.log_store()?, self.cloned_state()?);
-
-            cmd = cmd.with_field_name(field_name).with_metadata(
-                metadata
-                    .iter()
-                    .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
-                    .collect(),
-            );
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = DeltaOps(table)
+                .update_field_metadata()
+                .with_field_name(field_name)
+                .with_metadata(
+                    metadata
+                        .iter()
+                        .map(|(k, v)| (k.clone(), MetadataValue::String(v.clone())))
+                        .collect(),
+                );
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(commit_properties, post_commithook_properties)
@@ -1609,11 +1702,26 @@ impl RawDeltaTable {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+    #[pyo3(signature = (
+        data,
+        batch_schema,
+        mode,
+        schema_mode=None,
+        partition_by=None,
+        predicate=None,
+        target_file_size=None,
+        name=None,
+        description=None,
+        configuration=None,
+        writer_properties=None,
+        commit_properties=None,
+        post_commithook_properties=None
+    ))]
     fn write(
-        &mut self,
+        &self,
         py: Python,
-        data: PyArrowType<ArrowArrayStreamReader>,
+        data: PyRecordBatchReader,
+        batch_schema: PyArrowSchema,
         mode: String,
         schema_mode: Option<String>,
         partition_by: Option<Vec<String>>,
@@ -1631,13 +1739,17 @@ impl RawDeltaTable {
 
             let mut builder = WriteBuilder::new(
                 self.log_store()?,
-                self.with_table(|t| Ok(t.state.clone()))?,
+                self.with_table(|t| Ok(t.state.as_ref().map(|s| s.snapshot().clone())))?,
                 // Take the Option<state> since it might be the first write,
                 // triggered through `write_to_deltalake`
             )
             .with_save_mode(save_mode);
 
-            let table_provider = to_lazy_table(data.0).map_err(PythonError::from)?;
+            let table_provider = to_lazy_table(maybe_lazy_cast_reader(
+                data.into_reader()?,
+                batch_schema.into_inner(),
+            ))
+            .map_err(PythonError::from)?;
 
             let plan = LogicalPlanBuilder::scan("source", provider_as_source(table_provider), None)
                 .map_err(PythonError::from)?
@@ -1805,6 +1917,14 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                         enabled_statistics,
                     );
                 }
+                if let Some(encoding) = column_prop.encoding {
+                    properties = properties.set_column_encoding(
+                        column_name.clone().into(),
+                        Encoding::from_str(&encoding).map_err(DeltaTableError::from)?,
+                    );
+                    properties =
+                        properties.set_column_dictionary_enabled(column_name.clone().into(), false);
+                }
                 if let Some(bloom_filter_properties) = column_prop.bloom_filter_properties {
                     if let Some(set_bloom_filter_enabled) =
                         bloom_filter_properties.set_bloom_filter_enabled
@@ -1926,6 +2046,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             py_struct.into_py_any(py)?
         }
         Array(_val) => todo!("how should this be converted!"),
+        Map(map) => {
+            let py_map = PyDict::new(py);
+            for (key, value) in map.pairs() {
+                py_map.set_item(scalar_to_py(key, py_date)?, scalar_to_py(value, py_date)?)?;
+            }
+            py_map.into_py_any(py)?
+        }
     };
 
     Ok(val.into_bound(py))
@@ -1945,9 +2072,9 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
 /// they must be OR'd with is_null.
 fn filestats_to_expression_next<'py>(
     py: Python<'py>,
-    schema: &PyArrowType<ArrowSchema>,
+    schema: &SchemaRef,
     stats_columns: &[String],
-    file_info: LogicalFile<'_>,
+    file_info: LogicalFileView,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let ds = PyModule::import(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
@@ -1968,13 +2095,17 @@ fn filestats_to_expression_next<'py>(
             .call_method1("cast", (column_type,))
     };
 
-    if let Ok(partitions_values) = file_info.partition_values() {
-        for (column, value) in partitions_values.iter() {
-            let column = column.to_string();
+    if let Some(partitions_values) = file_info.partition_values() {
+        for (column, value) in partitions_values
+            .fields()
+            .iter()
+            .zip(partitions_values.values().iter())
+        {
+            let column = column.name().to_string();
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
-                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, &schema.0)?;
+                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, schema)?;
                 expressions.push(
                     py_field
                         .call1((&column,))?
@@ -2014,7 +2145,7 @@ fn filestats_to_expression_next<'py>(
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_minimum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(minimum) = maybe_minimum {
                             let field_expr = py_field.call1((field.name(),))?;
                             let expr = field_expr.call_method1("__ge__", (minimum,));
@@ -2043,7 +2174,7 @@ fn filestats_to_expression_next<'py>(
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_maximum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, &schema.0);
+                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(maximum) = maybe_maximum {
                             let field_expr = py_field.call1((field.name(),))?;
                             let expr = field_expr.call_method1("__le__", (maximum,));
@@ -2078,27 +2209,19 @@ fn rust_core_version() -> &'static str {
     deltalake::crate_version()
 }
 
+/// Initialize OpenTelemetry tracing with OTLP exporter
 #[pyfunction]
-fn batch_distinct(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<RecordBatch>> {
-    let ctx = SessionContext::new();
-    let schema = batch.0.schema();
-    ctx.register_batch("batch", batch.0)
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let batches = rt()
-        .block_on(async { ctx.table("batch").await?.distinct()?.collect().await })
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-
-    Ok(PyArrowType(
-        concat_batches(&schema, &batches).map_err(PythonError::from)?,
-    ))
+#[pyo3(signature = (endpoint=None))]
+fn init_tracing(endpoint: Option<&str>) -> PyResult<()> {
+    tracing_otlp::init_otlp_tracing(endpoint)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize tracing: {}", e)))
 }
 
-fn current_timestamp() -> i64 {
-    let start = SystemTime::now();
-    let since_the_epoch = start
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards");
-    since_the_epoch.as_millis().try_into().unwrap()
+/// Shutdown OpenTelemetry tracing and flush remaining spans
+#[pyfunction]
+fn shutdown_tracing() -> PyResult<()> {
+    tracing_otlp::shutdown_tracing();
+    Ok(())
 }
 
 #[derive(FromPyObject)]
@@ -2120,7 +2243,6 @@ impl From<&PyAddAction> for Add {
             modification_time: action.modification_time,
             data_change: action.data_change,
             stats: action.stats.clone(),
-            stats_parsed: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
@@ -2142,6 +2264,7 @@ pub struct ColumnProperties {
     pub dictionary_enabled: Option<bool>,
     pub statistics_enabled: Option<String>,
     pub bloom_filter_properties: Option<BloomFilterProperties>,
+    pub encoding: Option<String>,
 }
 
 #[derive(FromPyObject)]
@@ -2164,14 +2287,11 @@ pub struct PyPostCommitHookProperties {
 }
 
 #[derive(Clone)]
-#[pyclass(name = "Transaction", module = "deltalake._internal")]
+#[pyclass(name = "Transaction", module = "deltalake._internal", get_all)]
 pub struct PyTransaction {
-    #[pyo3(get)]
-    pub app_id: String,
-    #[pyo3(get)]
-    pub version: i64,
-    #[pyo3(get)]
-    pub last_updated: Option<i64>,
+    app_id: String,
+    version: i64,
+    last_updated: Option<i64>,
 }
 
 #[pymethods]
@@ -2226,11 +2346,28 @@ pub struct PyCommitProperties {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, data, mode, schema_mode=None, partition_by=None, predicate=None, target_file_size=None, name=None, description=None, configuration=None, storage_options=None, writer_properties=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (
+    table_uri,
+    data,
+    batch_schema,
+    mode,
+    schema_mode=None,
+    partition_by=None,
+    predicate=None,
+    target_file_size=None,
+    name=None,
+    description=None,
+    configuration=None,
+    storage_options=None,
+    writer_properties=None,
+    commit_properties=None,
+    post_commithook_properties=None,
+))]
 fn write_to_deltalake(
     py: Python,
     table_uri: String,
-    data: PyArrowType<ArrowArrayStreamReader>,
+    data: PyRecordBatchReader,
+    batch_schema: PyArrowSchema,
     mode: String,
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
@@ -2246,9 +2383,10 @@ fn write_to_deltalake(
 ) -> PyResult<()> {
     let raw_table: DeltaResult<RawDeltaTable> = py.allow_threads(|| {
         let options = storage_options.clone().unwrap_or_default();
+        let table_url = deltalake::table::builder::ensure_table_uri(&table_uri)?;
         let table = rt()
             .block_on(DeltaOps::try_from_uri_with_storage_options(
-                &table_uri,
+                table_url,
                 options.clone(),
             ))?
             .0;
@@ -2266,6 +2404,7 @@ fn write_to_deltalake(
     raw_table.map_err(PythonError::from)?.write(
         py,
         data,
+        batch_schema,
         mode,
         schema_mode,
         partition_by,
@@ -2282,11 +2421,23 @@ fn write_to_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, schema, partition_by, mode, raise_if_key_not_exists, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (
+    table_uri,
+    schema,
+    partition_by,
+    mode,
+    raise_if_key_not_exists,
+    name=None,
+    description=None,
+    configuration=None,
+    storage_options=None,
+    commit_properties=None,
+    post_commithook_properties=None,
+))]
 fn create_deltalake(
     py: Python,
     table_uri: String,
-    schema: PyArrowType<ArrowSchema>,
+    schema: PyRef<PySchema>,
     partition_by: Vec<String>,
     mode: String,
     raise_if_key_not_exists: bool,
@@ -2297,14 +2448,17 @@ fn create_deltalake(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
+    let schema = schema.as_ref().inner_type.clone();
     py.allow_threads(|| {
-        let table = DeltaTableBuilder::from_uri(table_uri.clone())
+        let table_url =
+            deltalake::table::builder::ensure_table_uri(&table_uri).map_err(PythonError::from)?;
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .map_err(PythonError::from)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;
 
         let mode = mode.parse().map_err(PythonError::from)?;
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
@@ -2346,11 +2500,23 @@ fn create_deltalake(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (table_uri, schema, add_actions, mode, partition_by, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (
+    table_uri,
+    schema,
+    add_actions,
+    mode,
+    partition_by,
+    name=None,
+    description=None,
+    configuration=None,
+    storage_options=None,
+    commit_properties=None,
+    post_commithook_properties=None
+))]
 fn create_table_with_add_actions(
     py: Python,
     table_uri: String,
-    schema: PyArrowType<ArrowSchema>,
+    schema: PyRef<PySchema>,
     add_actions: Vec<PyAddAction>,
     mode: &str,
     partition_by: Vec<String>,
@@ -2361,13 +2527,16 @@ fn create_table_with_add_actions(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
+    let schema = schema.as_ref().inner_type.clone();
+
     py.allow_threads(|| {
-        let table = DeltaTableBuilder::from_uri(table_uri.clone())
+        let table_url =
+            deltalake::table::builder::ensure_table_uri(&table_uri).map_err(PythonError::from)?;
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .map_err(PythonError::from)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
             .map_err(PythonError::from)?;
-
-        let schema: StructType = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
@@ -2409,11 +2578,21 @@ fn create_table_with_add_actions(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (uri, partition_schema=None, partition_strategy=None, name=None, description=None, configuration=None, storage_options=None, commit_properties=None, post_commithook_properties=None))]
+#[pyo3(signature = (
+    uri,
+    partition_schema=None,
+    partition_strategy=None,
+    name=None,
+    description=None,
+    configuration=None,
+    storage_options=None,
+    commit_properties=None,
+    post_commithook_properties=None,
+))]
 fn convert_to_deltalake(
     py: Python,
     uri: String,
-    partition_schema: Option<PyArrowType<ArrowSchema>>,
+    partition_schema: Option<PyRef<PySchema>>,
     partition_strategy: Option<String>,
     name: Option<String>,
     description: Option<String>,
@@ -2422,12 +2601,13 @@ fn convert_to_deltalake(
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
+    let partition_schema = partition_schema.map(|s| s.as_ref().inner_type.clone());
+    let table_url = deltalake::table::builder::ensure_table_uri(&uri).map_err(PythonError::from)?;
     py.allow_threads(|| {
-        let mut builder = ConvertToDeltaBuilder::new().with_location(uri.clone());
+        let mut builder = ConvertToDeltaBuilder::new().with_location(table_url);
 
         if let Some(part_schema) = partition_schema {
-            let schema: StructType = (&part_schema.0).try_into().map_err(PythonError::from)?;
-            builder = builder.with_partition_schema(schema.fields().cloned());
+            builder = builder.with_partition_schema(part_schema.fields().cloned());
         }
 
         if let Some(partition_strategy) = &partition_strategy {
@@ -2468,56 +2648,6 @@ fn convert_to_deltalake(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (table=None, configuration=None))]
-fn get_num_idx_cols_and_stats_columns(
-    table: Option<&RawDeltaTable>,
-    configuration: Option<HashMap<String, Option<String>>>,
-) -> PyResult<(i32, Option<Vec<String>>)> {
-    match table.as_ref() {
-        Some(table) => Ok(deltalake::operations::get_num_idx_cols_and_stats_columns(
-            Some(table.cloned_state()?.table_config()),
-            configuration.unwrap_or_default(),
-        )),
-        None => Ok(deltalake::operations::get_num_idx_cols_and_stats_columns(
-            None,
-            configuration.unwrap_or_default(),
-        )),
-    }
-}
-
-#[pyclass(name = "DeltaDataChecker", module = "deltalake._internal")]
-struct PyDeltaDataChecker {
-    inner: DeltaDataChecker,
-    rt: tokio::runtime::Runtime,
-}
-
-#[pymethods]
-impl PyDeltaDataChecker {
-    #[new]
-    #[pyo3(signature = (invariants))]
-    fn new(invariants: Vec<(String, String)>) -> Self {
-        let invariants: Vec<Invariant> = invariants
-            .into_iter()
-            .map(|(field_name, invariant_sql)| Invariant {
-                field_name,
-                invariant_sql,
-            })
-            .collect();
-        Self {
-            inner: DeltaDataChecker::new_with_invariants(invariants),
-            rt: tokio::runtime::Runtime::new().unwrap(),
-        }
-    }
-
-    fn check_batch(&self, batch: PyArrowType<RecordBatch>) -> PyResult<()> {
-        Ok(self
-            .rt
-            .block_on(async { self.inner.check_batch(&batch.0).await })
-            .map_err(PythonError::from)?)
-    }
-}
-
 #[pymodule]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2542,20 +2672,16 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(init_tracing, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(
-        get_num_idx_cols_and_stats_columns,
-        m
-    )?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
-    m.add_class::<PyDeltaDataChecker>()?;
     m.add_class::<PyTransaction>()?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759

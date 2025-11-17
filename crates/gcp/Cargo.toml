@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-gcp"
-version = "0.10.1"
+version = "0.13.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.26.0", path = "../core" }
+deltalake-core = { version = "0.29.0", path = "../core", features = ["cloud"] }
 
 # workspace depenndecies
 async-trait = { workspace = true }
@@ -22,17 +22,17 @@ tracing = { workspace = true }
 object_store = { workspace = true, features = ["gcp"]}
 thiserror = { workspace = true }
 tokio = { workspace = true }
-regex = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
 serial_test = "3"
 deltalake-test = { path = "../test" }
+pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rand = "0.8"
 serde_json = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 
 [features]
 integration_test = []

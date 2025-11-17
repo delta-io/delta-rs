@@ -1,9 +1,27 @@
+use crate::kernel::EagerSnapshot;
+use datafusion::common::ScalarValue;
+use datafusion::logical_expr::{col, when, ExprSchemable};
+use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
-use datafusion_common::ScalarValue;
-use datafusion_expr::{col, when, Expr, ExprSchemable};
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
 
 use crate::{kernel::DataCheck, table::GeneratedColumn, DeltaResult};
+
+/// check if the writer version is able to write generated columns
+pub fn able_to_gc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
+    if let Some(features) = &snapshot.protocol().writer_features() {
+        if snapshot.protocol().min_writer_version() < 4 {
+            return Ok(false);
+        }
+        if snapshot.protocol().min_writer_version() == 7
+            && !features.contains(&delta_kernel::table_features::WriterFeature::GeneratedColumns)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 /// Add generated column expressions to a dataframe
 pub fn add_missing_generated_columns(
@@ -26,9 +44,7 @@ pub fn add_missing_generated_columns(
             // all the merge is projected.
             // Other generated columns that were provided upon the start we only validate during write
             missing_cols.push(col_name.to_string());
-            df = df
-                .clone()
-                .with_column(col_name, Expr::Literal(ScalarValue::Null))?;
+            df = df.clone().with_column(col_name, lit(ScalarValue::Null))?;
         }
     }
     Ok((df, missing_cols))
@@ -59,10 +75,7 @@ pub fn add_generated_columns(
             generated_col.get_name(),
             when(col(col_name).is_null(), generation_expr)
                 .otherwise(col(col_name))?
-                .cast_to(
-                    &arrow_schema::DataType::try_from(&generated_col.data_type)?,
-                    df.schema(),
-                )?,
+                .cast_to(&((&generated_col.data_type).try_into_arrow()?), df.schema())?,
         )?
     }
     Ok(df)

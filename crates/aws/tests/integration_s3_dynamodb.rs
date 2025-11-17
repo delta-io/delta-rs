@@ -10,13 +10,13 @@ use aws_sdk_dynamodb::types::BillingMode;
 use deltalake_aws::logstore::{RepairLogEntryResult, S3DynamoDbLogStore};
 use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
+use deltalake_core::ensure_table_uri;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::{commit_uri_from_version, StorageConfig};
 use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::table::builder::ensure_table_uri;
 use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
 use object_store::path::Path;
@@ -25,7 +25,6 @@ use serial_test::serial;
 use tracing::log::*;
 use uuid::Uuid;
 
-use maplit::hashmap;
 use object_store::{PutOptions, PutPayload};
 use url::Url;
 
@@ -34,11 +33,8 @@ use common::*;
 
 pub type TestResult<T> = Result<T, Box<dyn std::error::Error + 'static>>;
 
-static OPTIONS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    hashmap! {
-        "allow_http".to_owned() => "true".to_owned(),
-    }
-});
+static OPTIONS: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| HashMap::from([("allow_http".to_owned(), "true".to_owned())]));
 static S3_OPTIONS: LazyLock<S3StorageOptions> =
     LazyLock::new(|| S3StorageOptions::from_map(&OPTIONS).unwrap());
 
@@ -73,12 +69,12 @@ fn client_configs_via_env_variables() -> TestResult<()> {
     let config = client.get_dynamodb_config();
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
     assert_eq!(
-        DynamoDbConfig {
-            billing_mode: BillingMode::PayPerRequest,
-            lock_table_name: "some_table".to_owned(),
-            max_elapsed_request_time: Duration::from_secs(64),
-            sdk_config: options.sdk_config.unwrap(),
-        },
+        DynamoDbConfig::builder()
+            .billing_mode(BillingMode::PayPerRequest)
+            .lock_table_name("some_table".to_owned())
+            .max_elapsed_request_time(Duration::from_secs(64))
+            .sdk_config(options.sdk_config.unwrap())
+            .build(),
         *config,
     );
     std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
@@ -96,18 +92,28 @@ async fn test_create_s3_table() -> TestResult<()> {
     let table_name = format!("{}_{}", "create_test", Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
 
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
-    let storage_options: HashMap<String, String> = hashmap! {
-        deltalake_aws::constants::AWS_ALLOW_HTTP.into() => "true".into(),
+    )])?;
+    let storage_options: HashMap<String, String> = HashMap::from([
+        (
+            deltalake_aws::constants::AWS_ALLOW_HTTP.into(),
+            "true".into(),
+        ),
         // Despite not being in AWS, we should force credential resolution
-        deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into() => "true".into(),
-        deltalake_aws::constants::AWS_ENDPOINT_URL.into()  => "http://localhost:4566".into(),
-    };
-    let log_store = logstore_for(Url::parse(&table_uri)?, storage_options, None)?;
+        (
+            deltalake_aws::constants::AWS_FORCE_CREDENTIAL_LOAD.into(),
+            "true".into(),
+        ),
+        (
+            deltalake_aws::constants::AWS_ENDPOINT_URL.into(),
+            "http://localhost:4566".into(),
+        ),
+    ]);
+    let storage_config = StorageConfig::parse_options(storage_options)?;
+    let log_store = logstore_for(Url::parse(&table_uri)?, storage_config)?;
 
     let payload = PutPayload::from_static(b"test-drivin");
     let _put = log_store
@@ -164,7 +170,8 @@ async fn test_repair_commit_entry() -> TestResult<()> {
         ensure_table_uri(table.table_uri())?,
         &options,
         &S3_OPTIONS,
-        std::sync::Arc::new(table.object_store()),
+        table.log_store().object_store(None),
+        table.log_store().root_object_store(None),
     )?;
 
     // create an incomplete log entry, commit file not yet moved from its temporary location
@@ -210,7 +217,7 @@ async fn test_repair_on_update() -> TestResult<()> {
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     table.update().await?;
     // table update should find and update to newest, incomplete commit entry
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
     validate_lock_table_state(&table, 1).await?;
     Ok(())
 }
@@ -223,7 +230,7 @@ async fn test_repair_on_load() -> TestResult<()> {
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     table.load_version(1).await?;
     // table should fix the broken entry while loading a specific version
-    assert_eq!(table.version(), 1);
+    assert_eq!(table.version(), Some(1));
     validate_lock_table_state(&table, 1).await?;
     Ok(())
 }
@@ -239,7 +246,8 @@ async fn test_abort_commit_entry() -> TestResult<()> {
         ensure_table_uri(table.table_uri())?,
         &options,
         &S3_OPTIONS,
-        std::sync::Arc::new(table.object_store()),
+        table.log_store().object_store(None),
+        table.log_store().root_object_store(None),
     )?;
 
     let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
@@ -286,7 +294,8 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
         ensure_table_uri(table.table_uri())?,
         &options,
         &S3_OPTIONS,
-        std::sync::Arc::new(table.object_store()),
+        table.log_store().object_store(None),
+        table.log_store().root_object_store(None),
     )?;
 
     let entry = create_incomplete_commit_entry(&table, 1, "finished_commit").await?;
@@ -357,7 +366,9 @@ pub struct Worker {
 
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
-        let table = DeltaTableBuilder::from_uri(path)
+        let table_uri = Url::parse(path).unwrap();
+        let table = DeltaTableBuilder::from_uri(table_uri)
+            .unwrap()
             .with_allow_http(true)
             .with_storage_options(OPTIONS.clone())
             .load()
@@ -379,10 +390,10 @@ impl Worker {
 
     async fn commit_file(&mut self, seq_no: i64) -> (i64, String) {
         let name = format!("{}-{seq_no}", self.name);
-        let metadata = Some(maplit::hashmap! {
-            "worker".to_owned() => Value::String(self.name.clone()),
-            "current_version".to_owned() => Value::Number( seq_no.into() ),
-        });
+        let metadata = Some(HashMap::from([
+            ("worker".to_owned(), Value::String(self.name.clone())),
+            ("current_version".to_owned(), Value::Number(seq_no.into())),
+        ]));
         let committed_as = append_to_table(&name, &self.table, metadata).await.unwrap();
 
         self.table.update().await.unwrap();
@@ -412,7 +423,10 @@ async fn create_incomplete_commit_entry(
         _ => unreachable!(),
     };
 
-    let commit_entry = CommitEntry::new(version, tmp_commit.to_owned());
+    let commit_entry = CommitEntry::builder()
+        .version(version)
+        .temp_path(tmp_commit.to_owned())
+        .build();
     make_client()?
         .put_commit_entry(&table.table_uri(), &commit_entry)
         .await?;
@@ -431,7 +445,6 @@ fn add_action(name: &str) -> Action {
         modification_time: ts as i64,
         data_change: true,
         stats: None,
-        stats_parsed: None,
         tags: None,
         deletion_vector: None,
         base_row_id: None,
@@ -444,12 +457,14 @@ fn add_action(name: &str) -> Action {
 async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestResult<DeltaTable> {
     let table_name = format!("{table_name}_{}", Uuid::new_v4());
     let table_uri = context.uri_for_table(TestTables::Custom(table_name.to_owned()));
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "Id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
-    let table = DeltaTableBuilder::from_uri(&table_uri)
+    )])?;
+    let table_url = Url::parse(&table_uri).unwrap();
+    let table = DeltaTableBuilder::from_uri(table_url)
+        .unwrap()
         .with_allow_http(true)
         .with_storage_options(OPTIONS.clone())
         .build()?;

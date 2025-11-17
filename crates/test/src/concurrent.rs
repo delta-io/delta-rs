@@ -20,15 +20,21 @@ pub async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult 
 async fn prepare_table(
     context: &IntegrationContext,
 ) -> Result<(DeltaTable, String), Box<dyn std::error::Error + 'static>> {
-    let schema = StructType::new(vec![StructField::new(
+    let schema = StructType::try_new(vec![StructField::new(
         "Id".to_string(),
         DataType::Primitive(PrimitiveType::Integer),
         true,
-    )]);
+    )])?;
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
 
-    let table = DeltaTableBuilder::from_uri(&table_uri)
+    if table_uri.starts_with("file://") {
+        let path = table_uri.strip_prefix("file://").unwrap();
+        std::fs::create_dir_all(path)?;
+    }
+
+    let table_url = url::Url::parse(&table_uri)?;
+    let table = DeltaTableBuilder::from_uri(table_url)?
         .with_allow_http(true)
         .build()?;
 
@@ -36,10 +42,10 @@ async fn prepare_table(
         .create()
         .with_columns(schema.fields().cloned())
         .await?;
-
-    assert_eq!(0, table.version());
-    assert_eq!(1, table.protocol()?.min_reader_version);
-    assert_eq!(2, table.protocol()?.min_writer_version);
+    let snapshot = table.snapshot()?;
+    assert_eq!(snapshot.version(), 0);
+    assert_eq!(snapshot.protocol().min_reader_version(), 1);
+    assert_eq!(snapshot.protocol().min_writer_version(), 2);
     // assert_eq!(0, table.get_files_iter().count());
 
     Ok((table, table_uri))
@@ -97,7 +103,9 @@ pub struct Worker {
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
         std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
-        let table = DeltaTableBuilder::from_uri(path)
+        let table_url = url::Url::parse(path).unwrap();
+        let table = DeltaTableBuilder::from_uri(table_url)
+            .unwrap()
             .with_allow_http(true)
             .load()
             .await
@@ -130,7 +138,6 @@ impl Worker {
             modification_time: 1564524294000,
             data_change: true,
             stats: None,
-            stats_parsed: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,

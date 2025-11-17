@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::basic::Type;
@@ -28,7 +29,7 @@ pub fn create_add(
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
@@ -67,7 +68,6 @@ pub fn create_add(
         deletion_vector: None,
         base_row_id: None,
         default_row_commit_version: None,
-        stats_parsed: None,
         clustering_provider: None,
     })
 }
@@ -81,7 +81,7 @@ pub fn create_add(
 pub(crate) fn stats_from_parquet_metadata(
     partition_values: &IndexMap<String, Scalar>,
     parquet_metadata: &ParquetMetaData,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaWriterError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
@@ -101,7 +101,7 @@ pub(crate) fn stats_from_parquet_metadata(
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
     file_metadata: &FileMetaData,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
@@ -128,7 +128,7 @@ fn stats_from_metadata(
     schema_descriptor: Arc<SchemaDescriptor>,
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
-    num_indexed_cols: i32,
+    num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -167,10 +167,10 @@ fn stats_from_metadata(
                 }
             })
             .collect()
-    } else if num_indexed_cols == -1 {
+    } else if num_indexed_cols == DataSkippingNumIndexedCols::AllColumns {
         (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
-    } else if num_indexed_cols >= 0 {
-        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
+    } else if let DataSkippingNumIndexedCols::NumColumns(n_cols) = num_indexed_cols {
+        (0..min(n_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
     } else {
         return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
             "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
@@ -244,7 +244,8 @@ enum StatsScalar {
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
-    Decimal(f64),
+    // Scale is stored to handle scale=0 serialization correctly
+    Decimal { value: f64, scale: i32 },
     String(String),
     Bytes(Vec<u8>),
     Uuid(uuid::Uuid),
@@ -277,7 +278,10 @@ impl StatsScalar {
             (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    value: val,
+                    scale: *scale,
+                })
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
@@ -304,7 +308,10 @@ impl StatsScalar {
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    value: val,
+                    scale: *scale,
+                })
             }
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
             (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
@@ -362,7 +369,10 @@ impl StatsScalar {
                     val = f64::from_bits(val.to_bits() - 1);
                 }
 
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    value: val,
+                    scale: *scale,
+                })
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
                 let val = if use_min {
@@ -418,7 +428,15 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
             }
-            StatsScalar::Decimal(v) => serde_json::Value::from(v),
+            StatsScalar::Decimal { value, scale } => {
+                // For scale=0, serialize as integer since serde_json would otherwise
+                // serialize f64 as "1234.0" instead of "1234"
+                if scale == 0 {
+                    serde_json::Value::from(value.round() as i64)
+                } else {
+                    serde_json::Value::from(value)
+                }
+            }
             StatsScalar::String(v) => serde_json::Value::from(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
@@ -629,6 +647,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::LazyLock;
+    use url::Url;
 
     macro_rules! simple_parquet_stat {
         ($variant:expr, $value:expr) => {
@@ -678,6 +697,14 @@ mod tests {
                 Value::from(12340.0),
             ),
             (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal {
+                    scale: 0,
+                    precision: 4,
+                }),
+                Value::from(1234),
+            ),
+            (
                 simple_parquet_stat!(Statistics::Int32, 10561),
                 Some(LogicalType::Date),
                 Value::from("1998-12-01"),
@@ -724,6 +751,14 @@ mod tests {
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal {
+                    scale: 0,
+                    precision: 4,
+                }),
+                Value::from(1234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
                 None,
                 Value::from(1234),
             ),
@@ -758,6 +793,17 @@ mod tests {
                     precision: 5,
                 }),
                 Value::from(10.0),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(1234i128.to_be_bytes().to_vec())
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 0,
+                    precision: 4,
+                }),
+                Value::from(1234),
             ),
             (
                 simple_parquet_stat!(
@@ -814,9 +860,8 @@ mod tests {
         let table_path = temp_dir.path();
         create_temp_table(table_path);
 
-        let table = load_table(table_path.to_str().unwrap(), HashMap::new())
-            .await
-            .unwrap();
+        let table_uri = Url::from_directory_path(table_path).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
 
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
         writer = writer.with_writer_properties(
@@ -945,10 +990,12 @@ mod tests {
     }
 
     async fn load_table(
-        table_uri: &str,
+        table_uri: &Url,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
+        let table_uri = table_uri.clone();
         DeltaTableBuilder::from_uri(table_uri)
+            .unwrap()
             .with_storage_options(options)
             .load()
             .await

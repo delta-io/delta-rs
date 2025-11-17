@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::common::Result as DataFusionResult;
+use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+use datafusion::physical_plan::{metrics::MetricBuilder, ExecutionPlan};
 use datafusion::{
     execution::SessionState,
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
 };
-use datafusion_common::Result as DataFusionResult;
-use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_plan::{metrics::MetricBuilder, ExecutionPlan};
 
 use crate::delta_datafusion::{logical::MetricObserver, physical::MetricObserverExec};
 
@@ -16,6 +16,12 @@ pub(crate) const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 
 #[derive(Clone, Debug)]
 pub(crate) struct WriteMetricExtensionPlanner {}
+
+impl WriteMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
 
 #[async_trait]
 impl ExtensionPlanner for WriteMetricExtensionPlanner {

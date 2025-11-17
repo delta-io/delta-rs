@@ -9,16 +9,16 @@ use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{resolve_snapshot, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 /// Update a field's metadata in a schema. If the key does not exists, the entry is inserted.
 pub struct UpdateFieldMetadataBuilder {
     /// A snapshot of the table's state
-    snapshot: DeltaTableState,
+    snapshot: Option<EagerSnapshot>,
     /// The name of the field where the metadata may be updated
     field_name: String,
     /// HashMap of the metadata to upsert
@@ -30,7 +30,7 @@ pub struct UpdateFieldMetadataBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for UpdateFieldMetadataBuilder {
+impl super::Operation for UpdateFieldMetadataBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -41,7 +41,7 @@ impl super::Operation<()> for UpdateFieldMetadataBuilder {
 
 impl UpdateFieldMetadataBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             metadata: HashMap::new(),
             field_name: String::new(),
@@ -86,19 +86,21 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let table_schema = this.snapshot.schema();
+            let table_schema = snapshot.schema();
 
-            let mut fields = table_schema.fields.clone();
             // Check if the field exists in the schema. Otherwise, no need to continue the
             // operation
-            let Some(field) = fields.get_mut(&this.field_name) else {
+            let Some(field) = table_schema.field(&this.field_name) else {
                 return Err(DeltaTableError::Generic(
                     "No field with the provided name in the schema".to_string(),
                 ));
             };
+            let mut field = field.clone();
 
             // DO NOT MODIFY PROTECTED METADATA.
             // Since `delta_kernel::schema::ColumnMetadataKey` does not `impl` any parsing (e.g. `std::core::From``) - at the time of implementation -
@@ -124,21 +126,29 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
                     .or_insert(value);
             });
 
-            let updated_table_schema = StructType::new(fields.into_values());
+            // This feels a little silly but I could not find a better way to modify the StructType
+            // "in place" as of delta-kernel-rs 0.16.0
+            let updated_table_schema = StructType::try_new(table_schema.fields().map(|f| {
+                match f.name == field.name {
+                    // return our modified field instead
+                    true => field.clone(),
+                    false => f.clone(),
+                }
+            }))?;
 
-            let mut metadata = this.snapshot.metadata().clone();
+            let mut metadata = snapshot.metadata().clone();
 
-            let current_protocol = this.snapshot.protocol();
+            let current_protocol = snapshot.protocol();
             let new_protocol = current_protocol
                 .clone()
                 .apply_column_metadata_to_protocol(&updated_table_schema)?
-                .move_table_properties_into_features(&metadata.configuration);
+                .move_table_properties_into_features(metadata.configuration());
 
             let operation = DeltaOperation::UpdateFieldMetadata {
                 fields: updated_table_schema.fields().cloned().collect_vec(),
             };
 
-            metadata.schema_string = serde_json::to_string(&updated_table_schema)?;
+            metadata = metadata.with_schema(&updated_table_schema)?;
 
             let mut actions = vec![metadata.into()];
 
@@ -150,7 +160,7 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
                 .with_actions(actions)
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.get_custom_execute_handler())
-                .build(Some(&this.snapshot), this.log_store.clone(), operation)
+                .build(Some(&snapshot), this.log_store.clone(), operation)
                 .await?;
 
             this.post_execute(operation_id).await?;

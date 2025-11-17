@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_schema::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
+use datafusion::common::scalar::ScalarValue;
+use datafusion::common::{Column, ToDFSchema};
 use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, ToDFSchema};
-use datafusion_expr::Expr;
 
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::errors::DeltaResult;
@@ -224,27 +224,27 @@ impl PruningStatistics for EagerSnapshot {
 
 impl PruningStatistics for DeltaTableState {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().min_values(column)
+        self.snapshot.min_values(column)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().max_values(column)
+        self.snapshot.max_values(column)
     }
 
     fn num_containers(&self) -> usize {
-        self.snapshot.log_data().num_containers()
+        self.snapshot.num_containers()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().null_counts(column)
+        self.snapshot.null_counts(column)
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.log_data().row_counts(column)
+        self.snapshot.row_counts(column)
     }
 
     fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        self.snapshot.log_data().contained(column, values)
+        self.snapshot.contained(column, values)
     }
 }
 
@@ -252,8 +252,8 @@ impl PruningStatistics for DeltaTableState {
 mod tests {
     use std::collections::HashMap;
 
+    use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
-    use datafusion_expr::{col, lit};
 
     use super::*;
     use crate::delta_datafusion::{files_matching_predicate, DataFusionMixins};
@@ -267,25 +267,31 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn test_parse_predicate_expression() {
-        let snapshot = DeltaTableState::from_actions(init_table_actions()).unwrap();
+    #[tokio::test]
+    async fn test_parse_predicate_expression() {
+        let snapshot = DeltaTableState::from_actions(init_table_actions())
+            .await
+            .unwrap();
         let session = SessionContext::new();
         let state = session.state();
 
         // parses simple expression
         let parsed = snapshot
+            .snapshot()
             .parse_predicate_expression("value > 10", &state)
             .unwrap();
         let expected = col("value").gt(lit::<i64>(10));
         assert_eq!(parsed, expected);
 
         // fails for unknown column
-        let parsed = snapshot.parse_predicate_expression("non_existent > 10", &state);
+        let parsed = snapshot
+            .snapshot()
+            .parse_predicate_expression("non_existent > 10", &state);
         assert!(parsed.is_err());
 
         // parses complex expression
         let parsed = snapshot
+            .snapshot()
             .parse_predicate_expression("value > 10 OR value <= 0", &state)
             .unwrap();
         let expected = col("value")
@@ -294,8 +300,8 @@ mod tests {
         assert_eq!(parsed, expected)
     }
 
-    #[test]
-    fn test_files_matching_predicate() {
+    #[tokio::test]
+    async fn test_files_matching_predicate() {
         let mut actions = init_table_actions();
 
         actions.push(Action::Add(ActionFactory::add(
@@ -317,8 +323,8 @@ mod tests {
             true,
         )));
 
-        let state = DeltaTableState::from_actions(actions).unwrap();
-        let files = files_matching_predicate(&state.snapshot, &[])
+        let state = DeltaTableState::from_actions(actions).await.unwrap();
+        let files = files_matching_predicate(state.snapshot().log_data(), &[])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 3);
@@ -327,7 +333,7 @@ mod tests {
             .gt(lit::<i32>(10))
             .or(col("value").lt_eq(lit::<i32>(0)));
 
-        let files = files_matching_predicate(&state.snapshot, &[predictate])
+        let files = files_matching_predicate(state.snapshot().log_data(), &[predictate])
             .unwrap()
             .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);

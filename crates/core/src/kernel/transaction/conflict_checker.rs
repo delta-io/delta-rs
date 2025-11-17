@@ -1,22 +1,22 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
 
+use delta_kernel::table_properties::IsolationLevel;
+
 use super::CommitInfo;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
-use crate::kernel::EagerSnapshot;
-use crate::kernel::Transaction;
-use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
+use crate::kernel::{Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction};
 use crate::logstore::{get_actions, LogStore};
 use crate::protocol::DeltaOperation;
-use crate::table::config::IsolationLevel;
+use crate::table::config::TablePropertiesExt as _;
 use crate::DeltaTableError;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
 #[cfg(feature = "datafusion")]
-use datafusion_expr::Expr;
+use datafusion::logical_expr::Expr;
 #[cfg(feature = "datafusion")]
 use itertools::Either;
 
@@ -99,11 +99,11 @@ pub(crate) struct TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     read_predicates: Option<Expr>,
     /// appIds that have been seen by the transaction
-    pub(crate) read_app_ids: HashSet<String>,
+    read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
     /// read [`DeltaTableState`] used for the transaction
-    pub(crate) read_snapshot: &'a EagerSnapshot,
+    read_snapshot: LogDataHandler<'a>,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
@@ -111,7 +111,7 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     pub fn try_new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: LogDataHandler<'a>,
         read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
@@ -130,22 +130,19 @@ impl<'a> TransactionInfo<'a> {
             }
         }
 
-        Ok(Self {
-            txn_id: "".into(),
-            read_predicates,
-            read_app_ids,
-            actions,
+        Ok(Self::new(
             read_snapshot,
+            read_predicates,
+            actions,
             read_whole_table,
-        })
+        ))
     }
 
     #[cfg(feature = "datafusion")]
-    #[allow(unused)]
     pub fn new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: LogDataHandler<'a>,
         read_predicates: Option<Expr>,
-        actions: &'a Vec<Action>,
+        actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {
         let mut read_app_ids = HashSet::<String>::new();
@@ -166,7 +163,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(not(feature = "datafusion"))]
     pub fn try_new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: LogDataHandler<'a>,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
         read_whole_table: bool,
@@ -201,21 +198,25 @@ impl<'a> TransactionInfo<'a> {
 
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
-                files_matching_predicate(self.read_snapshot, &[predicate.clone()]).map_err(
-                    |err| CommitConflictError::Predicate {
-                        source: Box::new(err),
-                    },
-                )?,
+                files_matching_predicate(
+                    self.read_snapshot.clone(),
+                    std::slice::from_ref(predicate),
+                )
+                .map_err(|err| CommitConflictError::Predicate {
+                    source: Box::new(err),
+                })?,
             ))
         } else {
-            Ok(Either::Right(std::iter::empty()))
+            Ok(Either::Right(
+                self.read_snapshot.iter().map(|f| f.add_action()),
+            ))
         }
     }
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.file_actions().unwrap())
+        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
     }
 
     /// Whether the whole table was read during the transaction
@@ -243,7 +244,7 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, bytes).await?;
+                let actions = get_actions(winning_commit_version, &bytes)?; // ← ADD ? HERE
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))
@@ -362,7 +363,7 @@ impl<'a> ConflictChecker<'a> {
                     op,
                     &transaction_info
                         .read_snapshot
-                        .table_config()
+                        .table_properties()
                         .isolation_level(),
                 ) {
                     Some(IsolationLevel::SnapshotIsolation)
@@ -373,7 +374,7 @@ impl<'a> ConflictChecker<'a> {
             .unwrap_or_else(|| {
                 transaction_info
                     .read_snapshot
-                    .table_config()
+                    .table_properties()
                     .isolation_level()
             });
 
@@ -402,12 +403,12 @@ impl<'a> ConflictChecker<'a> {
     fn check_protocol_compatibility(&self) -> Result<(), CommitConflictError> {
         for p in self.winning_commit_summary.protocol() {
             let (win_read, curr_read) = (
-                p.min_reader_version,
-                self.txn_info.read_snapshot.protocol().min_reader_version,
+                p.min_reader_version(),
+                self.txn_info.read_snapshot.protocol().min_reader_version(),
             );
             let (win_write, curr_write) = (
-                p.min_writer_version,
-                self.txn_info.read_snapshot.protocol().min_writer_version,
+                p.min_writer_version(),
+                self.txn_info.read_snapshot.protocol().min_writer_version(),
             );
             if curr_read < win_read || win_write < curr_write {
                 return Err(CommitConflictError::ProtocolChanged(
@@ -472,16 +473,12 @@ impl<'a> ConflictChecker<'a> {
                     &self.txn_info.read_predicates,
                     self.txn_info.read_whole_table(),
                 ) {
-                    let arrow_schema = self.txn_info.read_snapshot.arrow_schema().map_err(|err| {
-                        CommitConflictError::CorruptedState {
-                            source: Box::new(err),
-                        }
-                    })?;
+                    let arrow_schema = self.txn_info.read_snapshot.read_schema();
                     let partition_columns = &self
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .partition_columns;
+                        .partition_columns();
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {
@@ -648,7 +645,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[cfg(feature = "datafusion")]
-    use datafusion_expr::{col, lit};
+    use datafusion::logical_expr::{col, lit};
     use serde_json::json;
 
     use super::*;
@@ -691,7 +688,7 @@ mod tests {
     // - concurrentWrites
     // - actions
     #[cfg(feature = "datafusion")]
-    fn execute_test(
+    async fn execute_test(
         setup: Option<Vec<Action>>,
         reads: Option<Expr>,
         concurrent: Vec<Action>,
@@ -699,11 +696,13 @@ mod tests {
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
         use crate::table::state::DeltaTableState;
+        use object_store::path::Path;
 
         let setup_actions = setup.unwrap_or_else(init_table_actions);
-        let state = DeltaTableState::from_actions(setup_actions).unwrap();
+        let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
         let snapshot = state.snapshot();
-        let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
+        let transaction_info =
+            TransactionInfo::new(snapshot.log_data(), reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
@@ -721,7 +720,7 @@ mod tests {
         let file1 = simple_add(true, "1", "10").into();
         let file2 = simple_add(true, "1", "10").into();
 
-        let result = execute_test(None, None, vec![file1], vec![file2], false);
+        let result = execute_test(None, None, vec![file1], vec![file2], false).await;
         assert!(result.is_ok());
 
         // disjoint delete - read
@@ -737,7 +736,8 @@ mod tests {
             vec![ActionFactory::remove(&file_not_read, true).into()],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(result.is_ok());
 
         // disjoint add - read
@@ -752,7 +752,8 @@ mod tests {
             vec![file_added],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(result.is_ok());
 
         // TODO enable test once we have isolation level downcast
@@ -786,7 +787,8 @@ mod tests {
             vec![removed_file.clone()],
             vec![removed_file],
             false,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteDelete)
@@ -802,7 +804,8 @@ mod tests {
             vec![file_should_have_read],
             vec![file_added],
             false,
-        );
+        )
+        .await;
         assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
 
         // delete / read
@@ -816,7 +819,8 @@ mod tests {
             vec![ActionFactory::remove(&file_read, true).into()],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteRead)
@@ -830,7 +834,8 @@ mod tests {
             vec![ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into()],
             vec![],
             false,
-        );
+        )
+        .await;
         assert!(matches!(result, Err(CommitConflictError::MetadataChanged)));
 
         // upgrade / upgrade
@@ -841,7 +846,8 @@ mod tests {
             vec![ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into()],
             vec![ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into()],
             false,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ProtocolChanged(_))
@@ -862,7 +868,8 @@ mod tests {
             vec![file_part2],
             vec![file_part3],
             true,
-        );
+        )
+        .await;
         assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
 
         // taint whole table + concurrent remove
@@ -877,7 +884,8 @@ mod tests {
             vec![ActionFactory::remove(&file_part1, true).into()],
             vec![file_part2],
             true,
-        );
+        )
+        .await;
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteRead)

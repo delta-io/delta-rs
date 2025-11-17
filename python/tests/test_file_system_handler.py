@@ -2,17 +2,15 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
-import pyarrow as pa
-import pyarrow.dataset as ds
-import pyarrow.fs as fs
-import pyarrow.parquet as pq
 import pytest
-
-from deltalake.fs import DeltaStorageHandler
 
 
 @pytest.fixture
 def file_systems(tmp_path: Path):
+    import pyarrow.fs as fs
+
+    from deltalake.fs import DeltaStorageHandler
+
     store = fs.PyFileSystem(DeltaStorageHandler(str(tmp_path.absolute())))
     arrow_fs = fs.SubTreeFileSystem(str(tmp_path.absolute()), fs.LocalFileSystem())
     return (store, arrow_fs)
@@ -20,14 +18,19 @@ def file_systems(tmp_path: Path):
 
 @pytest.fixture
 def table_data():
+    import pyarrow as pa
+
     return pa.Table.from_arrays(
         [pa.array([1, 2, 3]), pa.array(["a", "b", "c"])], names=["int", "str"]
     )
 
 
+@pytest.mark.pyarrow
 def test_file_info(file_systems, table_data):
     store, arrow_fs = file_systems
     file_path = "table.parquet"
+
+    import pyarrow.parquet as pq
 
     pq.write_table(table_data, file_path, filesystem=arrow_fs)
 
@@ -42,8 +45,13 @@ def test_file_info(file_systems, table_data):
     assert info.mtime == arrow_info.mtime
 
 
+@pytest.mark.pyarrow
 def test_get_file_info_selector(file_systems):
     store, arrow_fs = file_systems
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    import pyarrow.fs as fs
+
     table = pa.table({"a": range(10), "b": np.random.randn(10), "c": [1, 2] * 5})
     partitioning = ds.partitioning(pa.schema([("c", pa.int64())]), flavor="hive")
     ds.write_dataset(
@@ -61,9 +69,11 @@ def test_get_file_info_selector(file_systems):
     assert Counter([i.type for i in infos]) == Counter([i.type for i in arrow_infos])
 
 
+@pytest.mark.pyarrow
 def test_open_input_file(file_systems, table_data):
     store, arrow_fs = file_systems
     file_path = "table.parquet"
+    import pyarrow.parquet as pq
 
     pq.write_table(table_data, file_path, filesystem=arrow_fs)
 
@@ -99,9 +109,14 @@ def test_open_input_file(file_systems, table_data):
     assert file.read_at(10, 0) == arrow_file.read_at(10, 0)
 
 
+@pytest.mark.pyarrow
 def test_open_input_file_with_size(tmp_path, table_data):
     file_path = "table.parquet"
     input_size = 12345  # incorrect file size for testing purposes
+    import pyarrow.fs as fs
+    import pyarrow.parquet as pq
+
+    from deltalake.fs import DeltaStorageHandler
 
     # test that injected file size gets stored correctly
     store1 = DeltaStorageHandler(
@@ -122,9 +137,12 @@ def test_open_input_file_with_size(tmp_path, table_data):
     assert file.size() != input_size
 
 
+@pytest.mark.pyarrow
 def test_read_table(file_systems, table_data):
     store, arrow_fs = file_systems
     file_path = "table.parquet"
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
     pq.write_table(table_data, file_path, filesystem=arrow_fs)
 
@@ -135,8 +153,13 @@ def test_read_table(file_systems, table_data):
     assert table.equals(arrow_table)
 
 
+@pytest.mark.pyarrow
 def test_read_dataset(file_systems):
     store, arrow_fs = file_systems
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
     table = pa.table({"a": range(10), "b": np.random.randn(10), "c": [1, 2] * 5})
 
     pq.write_table(table.slice(0, 5), "data1.parquet", filesystem=arrow_fs)
@@ -149,8 +172,13 @@ def test_read_dataset(file_systems):
     assert table.equals(ds_table)
 
 
+@pytest.mark.pyarrow
 def test_write_table(file_systems):
     store, _ = file_systems
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
     table = pa.table({"a": range(10), "b": np.random.randn(10), "c": [1, 2] * 5})
 
     pq.write_table(table.slice(0, 5), "data1.parquet", filesystem=store)
@@ -163,8 +191,12 @@ def test_write_table(file_systems):
     assert table.equals(ds_table)
 
 
+@pytest.mark.pyarrow
 def test_write_partitioned_dataset(file_systems):
     store, arrow_fs = file_systems
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+
     table = pa.table({"a": range(10), "b": np.random.randn(10), "c": [1, 2] * 5})
 
     partitioning = ds.partitioning(pa.schema([("c", pa.int64())]), flavor="hive")

@@ -3,20 +3,22 @@ mod fs_common;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use datafusion::common::Column;
 use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::{col, lit, Expr};
 use datafusion::prelude::SessionContext;
-use datafusion_common::Column;
-use datafusion_expr::{col, lit, Expr};
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::merge::MergeMetrics;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{open_table, DeltaOps, DeltaResult, DeltaTable, DeltaTableError};
 use std::sync::Arc;
+use url::Url;
 
 async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTable {
     let table_schema = get_delta_schema();
-    let ops = DeltaOps::try_from_uri(table_uri).await.unwrap();
+    let table_url = url::Url::from_directory_path(table_uri).unwrap();
+    let ops = DeltaOps::try_from_uri(table_url).await.unwrap();
     let table = ops
         .create()
         .with_columns(table_schema.fields().cloned())
@@ -29,7 +31,7 @@ async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTab
 }
 
 fn get_delta_schema() -> StructType {
-    StructType::new(vec![
+    StructType::try_new(vec![
         StructField::new(
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
@@ -46,6 +48,7 @@ fn get_delta_schema() -> StructType {
             true,
         ),
     ])
+    .unwrap()
 }
 
 fn get_arrow_schema() -> Arc<ArrowSchema> {
@@ -143,7 +146,8 @@ async fn test_merge_concurrent_conflict() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
-    let table_ref2 = open_table(table_uri).await.unwrap();
+    let table_url = Url::from_directory_path(table_uri).unwrap();
+    let table_ref2 = open_table(table_url).await.unwrap();
     let (df1, _df2) = create_test_data();
 
     let expr = col("target.id").eq(col("source.id"));
@@ -166,14 +170,14 @@ async fn test_merge_different_range() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
-    let table_ref2 = open_table(table_uri).await.unwrap();
+    let table_url = Url::from_directory_path(table_uri).unwrap();
+    let table_ref2 = open_table(table_url).await.unwrap();
     let (df1, df2) = create_test_data();
 
     let expr = col("target.id").eq(col("source.id"));
     let (_table_ref1, _metrics) = merge(table_ref1, df1, expr.clone()).await.unwrap();
     let result = merge(table_ref2, df2, expr).await;
 
-    println!("{result:#?}");
     assert!(result.is_ok());
 }
 
@@ -184,7 +188,8 @@ async fn test_merge_concurrent_different_partition() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     let table_ref1 = create_table(table_uri, Some(vec!["event_date"])).await;
-    let table_ref2 = open_table(table_uri).await.unwrap();
+    let table_url = url::Url::from_directory_path(table_uri).unwrap();
+    let table_ref2 = open_table(table_url).await.unwrap();
     let (df1, df2) = create_test_data();
 
     let expr = col("target.id")
@@ -203,7 +208,8 @@ async fn test_merge_concurrent_with_overlapping_files() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     let table_ref1 = create_table(table_uri, None).await;
-    let table_ref2 = open_table(table_uri).await.unwrap();
+    let table_url = Url::from_directory_path(table_uri).unwrap();
+    let table_ref2 = open_table(table_url).await.unwrap();
     let (df1, _df2) = create_test_data();
 
     let expr = col("target.id").eq(col("source.id"));

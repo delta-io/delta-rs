@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-mount"
-version = "0.10.0"
+version = "0.13.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,18 +12,16 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.26.0", path = "../core" }
+deltalake-core = { version = "0.29.0", path = "../core" }
 errno = "0.3"
 
 # workspace depenndecies
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-tracing = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-regex = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
@@ -33,7 +31,7 @@ deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
 rand = "0.8"
 serde_json = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 fs_extra = "1.3.0"
 
 [features]

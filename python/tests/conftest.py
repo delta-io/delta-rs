@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import pathlib
 import subprocess
@@ -5,12 +7,17 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from time import sleep
+from typing import TYPE_CHECKING, Generator
 
-import pyarrow as pa
 import pytest
+from arro3.core import Array, DataType, Field, Schema, Table
 from azure.storage import blob
 
 from deltalake import DeltaTable, WriterProperties, write_deltalake
+
+if TYPE_CHECKING:
+    import pyarrow as pa
+    from minio import Minio
 
 
 def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
@@ -180,8 +187,10 @@ def azurite_sas_creds(azurite_creds):
 
 
 @pytest.fixture()
-def sample_data():
+def sample_data_pyarrow() -> "pa.Table":
     nrows = 5
+    import pyarrow as pa
+
     return pa.table(
         {
             "utf8": pa.array([str(x) for x in range(nrows)]),
@@ -201,7 +210,10 @@ def sample_data():
                 [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
             ),
             "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
-            "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
+            "list": pa.array(
+                [list(range(x + 1)) for x in range(nrows)],
+                type=pa.list_(pa.field("inner", pa.int64(), nullable=False)),
+            ),
             # NOTE: https://github.com/apache/arrow-rs/issues/477
             #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
         }
@@ -209,43 +221,101 @@ def sample_data():
 
 
 @pytest.fixture()
-def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
+def existing_table(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
     path = str(tmp_path)
-    write_deltalake(path, sample_data)
+    write_deltalake(path, sample_data_pyarrow)
     return DeltaTable(path)
 
 
 @pytest.fixture()
-def sample_table():
+def sample_table() -> Table:
     nrows = 5
-    return pa.table(
+    return Table(
         {
-            "id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                Field("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                list(range(nrows)), Field("price", type=DataType.int64(), nullable=True)
+            ),
+            "sold": Array(
+                list(range(nrows)), Field("sold", type=DataType.int32(), nullable=True)
+            ),
+            "deleted": Array(
+                [False] * nrows, Field("deleted", type=DataType.bool(), nullable=True)
+            ),
+        },
     )
 
 
 @pytest.fixture()
-def existing_sample_table(tmp_path: pathlib.Path, sample_table: pa.Table):
+def existing_sample_table(tmp_path: pathlib.Path, sample_table: Table):
     path = str(tmp_path)
     write_deltalake(path, sample_table)
     return DeltaTable(path)
 
 
 @pytest.fixture()
-def sample_table_with_spaces_numbers():
+def sample_table_with_spaces_numbers() -> Table:
     nrows = 5
-    return pa.table(
+    return Table.from_pydict(
         {
-            "1id": pa.array(["1", "2", "3", "4", "5"]),
-            "price": pa.array(list(range(nrows)), pa.int64()),
-            "sold items": pa.array(list(range(nrows)), pa.int32()),
-            "deleted": pa.array([False] * nrows),
-        }
+            "1id": Array(["1", "2", "3", "4", "5"], DataType.string()),
+            "price": Array(list(range(nrows)), DataType.int64()),
+            "sold items": Array(list(range(nrows)), DataType.int32()),
+            "deleted": Array(
+                [False] * nrows,
+                DataType.bool(),
+            ),
+        },
+        schema=Schema(
+            fields=[
+                Field("1id", type=DataType.string(), nullable=True),
+                Field("price", type=DataType.int64(), nullable=True),
+                Field("sold items", type=DataType.int32(), nullable=True),
+                Field("deleted", type=DataType.bool(), nullable=True),
+            ]
+        ),
     )
+
+
+@pytest.fixture(scope="session")
+def minio_container() -> Generator[tuple[dict, Minio], None, None]:
+    """Start a MinIO test container for S3-compatible object storage."""
+    from testcontainers.minio import MinioContainer
+
+    container = MinioContainer(
+        image="minio/minio:latest",
+        access_key="minioadmin",
+        secret_key="minioadmin",
+    )
+    container.start()
+
+    client = container.get_client()
+
+    container_config = container.get_config()
+
+    config = {
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": container_config["access_key"],
+        "AWS_SECRET_ACCESS_KEY": container_config["secret_key"],
+        "AWS_ENDPOINT_URL": "http://" + container_config["endpoint"],
+        "AWS_ALLOW_HTTP": "TRUE",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+    }
+
+    yield (config, client)
+
+    container.stop()
+
+
+@pytest.fixture()
+def minio_s3_env(monkeypatch, minio_container):
+    """Set up environment variables for MinIO S3-compatible storage."""
+    for key, value in minio_container.items():
+        monkeypatch.setenv(key, value)
+    return minio_container
 
 
 @pytest.fixture()

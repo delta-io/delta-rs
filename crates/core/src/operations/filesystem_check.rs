@@ -22,13 +22,16 @@ use futures::future::BoxFuture;
 use futures::StreamExt;
 use object_store::ObjectStore;
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use tracing::*;
 use url::{ParseError, Url};
 use uuid::Uuid;
 
 use super::CustomExecuteHandler;
 use super::Operation;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::resolve_snapshot;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::EagerSnapshot;
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -39,7 +42,7 @@ use crate::DeltaTable;
 /// See this module's documentation for more information
 pub struct FileSystemCheckBuilder {
     /// A snapshot of the to-be-checked table's state
-    snapshot: DeltaTableState,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Don't remove actions to the table log. Just determine which files can be removed
@@ -98,7 +101,7 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     }
 }
 
-impl super::Operation<()> for FileSystemCheckBuilder {
+impl super::Operation for FileSystemCheckBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -109,9 +112,9 @@ impl super::Operation<()> for FileSystemCheckBuilder {
 
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
-    pub fn new(log_store: LogStoreRef, state: DeltaTableState) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         FileSystemCheckBuilder {
-            snapshot: state,
+            snapshot,
             log_store,
             dry_run: false,
             commit_properties: CommitProperties::default(),
@@ -137,12 +140,11 @@ impl FileSystemCheckBuilder {
         self
     }
 
-    async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
-        let mut files_relative: HashMap<String, Add> =
-            HashMap::with_capacity(self.snapshot.files_count());
+    async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
+        let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-
-        for active in self.snapshot.file_actions_iter()? {
+        let file_stream = snapshot.log_data().into_iter().map(|f| f.add_action());
+        for active in file_stream {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
@@ -153,15 +155,24 @@ impl FileSystemCheckBuilder {
         }
 
         let object_store = log_store.object_store(None);
-        let mut files = object_store.list(None);
+        let list_span = info_span!("list_files", operation = "filesystem_check");
+        let mut files = list_span.in_scope(|| object_store.list(None));
+
+        let mut file_count = 0;
         while let Some(result) = files.next().await {
             let file = result?;
+            file_count += 1;
             files_relative.remove(file.location.as_ref());
 
             if files_relative.is_empty() {
                 break;
             }
         }
+        info!(
+            files_scanned = file_count,
+            missing_files = files_relative.len(),
+            "filesystem check listing completed"
+        );
 
         let files_to_remove: Vec<Add> = files_relative
             .into_values()
@@ -178,7 +189,7 @@ impl FileSystemCheckBuilder {
 impl FileSystemCheckPlan {
     pub async fn execute(
         self,
-        snapshot: &DeltaTableState,
+        snapshot: &EagerSnapshot,
         mut commit_properties: CommitProperties,
         operation_id: Uuid,
         handle: Option<Arc<dyn CustomExecuteHandler>>,
@@ -239,10 +250,12 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
         let this = self;
 
         Box::pin(async move {
-            let plan = this.create_fsck_plan().await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+
+            let plan = this.create_fsck_plan(&snapshot).await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                     FileSystemCheckMetrics {
                         files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),
                         dry_run: true,
@@ -251,7 +264,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             }
             if plan.files_to_remove.is_empty() {
                 return Ok((
-                    DeltaTable::new_with_state(this.log_store, this.snapshot),
+                    DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                     FileSystemCheckMetrics {
                         dry_run: false,
                         files_removed: Vec::new(),
@@ -263,7 +276,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
 
             let metrics = plan
                 .execute(
-                    &this.snapshot,
+                    &snapshot,
                     this.commit_properties.clone(),
                     operation_id,
                     this.get_custom_execute_handler(),
@@ -272,7 +285,8 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
 
             this.post_execute(operation_id).await?;
 
-            let mut table = DeltaTable::new_with_state(this.log_store, this.snapshot);
+            let mut table =
+                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             table.update().await?;
             Ok((table, metrics))
         })

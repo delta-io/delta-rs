@@ -1,5 +1,6 @@
 use chrono::Duration;
 use clap::{App, AppSettings, Arg};
+use deltalake::table::builder;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -56,31 +57,37 @@ async fn main() -> anyhow::Result<()> {
     match matches.subcommand() {
         Some(("files", files_matches)) => {
             let table_uri = files_matches.value_of("uri").unwrap();
+            let table_url = builder::parse_table_uri(table_uri)?;
 
             let table = match files_matches.value_of_t::<i64>("version") {
-                Ok(v) => deltalake::open_table_with_version(table_uri, v).await?,
+                Ok(v) => deltalake::open_table_with_version(table_url.clone(), v).await?,
                 Err(clap::Error {
                     kind: clap::ErrorKind::ArgumentNotFound,
                     ..
-                }) => deltalake::open_table(table_uri).await?,
+                }) => deltalake::open_table(table_url).await?,
                 Err(e) => e.exit(),
             };
 
             if files_matches.is_present("full_uri") {
                 table.get_file_uris()?.for_each(|f| println!("{f}"));
             } else {
-                table.get_files_iter()?.for_each(|f| println!("{f}"));
+                table
+                    .snapshot()?
+                    .file_paths_iter()
+                    .for_each(|f| println!("{f}"));
             };
         }
         Some(("info", info_matches)) => {
             let table_uri = info_matches.value_of("uri").unwrap();
-            let table = deltalake::open_table(table_uri).await?;
+            let table_url = builder::parse_table_uri(table_uri)?;
+            let table = deltalake::open_table(table_url).await?;
             println!("{table}");
         }
         Some(("vacuum", vacuum_matches)) => {
             let dry_run = !vacuum_matches.is_present("no_dry_run");
             let table_uri = vacuum_matches.value_of("uri").unwrap();
-            let table = deltalake::open_table(table_uri).await?;
+            let table_url = builder::ensure_table_uri(table_uri)?;
+            let table = deltalake::open_table(table_url).await?;
             let retention = vacuum_matches
                 .value_of("retention_hours")
                 .map(|s| s.parse::<i64>().unwrap())

@@ -1,8 +1,9 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use deltalake_core::Path;
 use deltalake_core::{errors::DeltaTableError, DeltaOps};
 use deltalake_test::utils::*;
+use futures::TryStreamExt as _;
 use serial_test::serial;
 
 #[tokio::test]
@@ -23,35 +24,36 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
 
     let table = context.table_builder(TestTables::Simple).load().await?;
     let version = table.snapshot()?.version();
-    let active = table.snapshot()?.files_count();
+    let active = table.snapshot()?.log_data().num_files();
 
-    // Validate a Dry run does not mutate the table log and indentifies orphaned add actions
+    // Validate a Dry run does not mutate the table log and identifies orphaned add actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().with_dry_run(true).await?;
     assert_eq!(version, table.snapshot()?.version());
-    assert_eq!(active, table.snapshot()?.files_count());
+    assert_eq!(active, table.snapshot()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.files_count());
+    assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
         .snapshot()?
-        .all_tombstones(table.object_store().clone())
-        .await?
-        .collect::<HashSet<_>>();
+        .all_tombstones(&table.log_store())
+        .map_ok(|t| (t.path().to_string(), t))
+        .try_collect::<HashMap<_, _>>()
+        .await?;
     let remove = remove.get(file).unwrap();
-    assert!(remove.data_change);
+    assert!(remove.data_change());
 
     // An additional run should return an empty list of orphaned actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.files_count());
+    assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
     assert!(metrics.files_removed.is_empty());
 
     Ok(())
@@ -77,22 +79,23 @@ async fn test_filesystem_check_partitioned() -> TestResult {
         .await?;
 
     let version = table.snapshot()?.version();
-    let active = table.snapshot()?.files_count();
+    let active = table.snapshot()?.log_data().num_files();
 
     // Validate a run updates the table version with proper remove actions
     let op = DeltaOps::from(table);
     let (table, metrics) = op.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.files_count());
+    assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
         .snapshot()?
-        .all_tombstones(table.object_store().clone())
-        .await?
-        .collect::<HashSet<_>>();
+        .all_tombstones(&table.log_store())
+        .map_ok(|t| (t.path().to_string(), t))
+        .try_collect::<HashMap<_, _>>()
+        .await?;
     let remove = remove.get(file).unwrap();
-    assert!(remove.data_change);
+    assert!(remove.data_change());
     Ok(())
 }
 

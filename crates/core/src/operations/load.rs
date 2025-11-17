@@ -1,30 +1,42 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
-use crate::delta_datafusion::DataFusionMixins;
+use crate::delta_datafusion::{create_session, DataFusionMixins as _};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
+use crate::kernel::{resolve_snapshot, EagerSnapshot};
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: DeltaTableState,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
+    /// Datafusion session state relevant for executing the input plan
+    session: Option<Arc<dyn Session>>,
 }
 
-impl super::Operation<()> for LoadBuilder {
+impl std::fmt::Debug for LoadBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadBuilder")
+            .field("snapshot", &self.snapshot)
+            .field("log_store", &self.log_store)
+            .finish()
+    }
+}
+
+impl super::Operation for LoadBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -35,17 +47,24 @@ impl super::Operation<()> for LoadBuilder {
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
             columns: None,
+            session: None,
         }
     }
 
     /// Specify column selection to load
     pub fn with_columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.columns = Some(columns.into_iter().map(|s| s.into()).collect());
+        self
+    }
+
+    /// The Datafusion session state to use
+    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 }
@@ -58,13 +77,10 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_read_from(&this.snapshot.snapshot)?;
-            if !this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("reading".into()));
-            }
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, true).await?;
+            PROTOCOL.can_read_from(&snapshot)?;
 
-            let table = DeltaTable::new_with_state(this.log_store, this.snapshot);
-            let schema = table.snapshot()?.arrow_schema()?;
+            let schema = snapshot.read_schema();
             let projection = this
                 .columns
                 .map(|cols| {
@@ -80,13 +96,17 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            let ctx = SessionContext::new();
+            let session = this
+                .session
+                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
+
+            let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             let scan_plan = table
-                .scan(&ctx.state(), projection.as_ref(), &[], None)
+                .scan(session.as_ref(), projection.as_ref(), &[], None)
                 .await?;
+
             let plan = CoalescePartitionsExec::new(scan_plan);
-            let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-            let stream = plan.execute(0, task_ctx)?;
+            let stream = plan.execute(0, session.task_ctx())?;
 
             Ok((table, stream))
         })
@@ -99,10 +119,15 @@ mod tests {
     use crate::writer::test_utils::{get_record_batch, TestResult};
     use crate::DeltaTableBuilder;
     use datafusion::assert_batches_sorted_eq;
+    use std::path::Path;
+    use url::Url;
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {
-        let table = DeltaTableBuilder::from_uri("../test/tests/data/delta-0.8.0")
+        let table_path = Path::new("../test/tests/data/delta-0.8.0");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTableBuilder::from_uri(table_uri)?
             .load()
             .await
             .unwrap();

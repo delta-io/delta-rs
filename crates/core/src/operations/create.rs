@@ -13,8 +13,11 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
-use crate::kernel::{Action, DataType, Metadata, Protocol, StructField, StructType};
-use crate::logstore::{LogStore, LogStoreRef};
+use crate::kernel::{
+    new_metadata, Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField,
+    StructType,
+};
+use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
@@ -65,7 +68,7 @@ pub struct CreateBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for CreateBuilder {
+impl super::Operation for CreateBuilder {
     fn log_store(&self) -> &LogStoreRef {
         self.log_store
             .as_ref()
@@ -229,8 +232,8 @@ impl CreateBuilder {
         self
     }
 
-    /// Provide a [`LogStore`] instance, that points at table location
-    pub fn with_log_store(mut self, log_store: Arc<dyn LogStore>) -> Self {
+    /// Provide a [`LogStore`] instance
+    pub fn with_log_store(mut self, log_store: LogStoreRef) -> Self {
         self.log_store = Some(log_store);
         self
     }
@@ -266,7 +269,7 @@ impl CreateBuilder {
                 ensure_table_uri(self.location.clone().ok_or(CreateError::MissingLocation)?)?;
             (
                 storage_url.as_str().to_string(),
-                DeltaTableBuilder::from_uri(&storage_url)
+                DeltaTableBuilder::from_uri(storage_url)?
                     .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )
@@ -276,14 +279,19 @@ impl CreateBuilder {
         let operation_id = self.get_operation_id();
         self.pre_execute(operation_id).await?;
 
-        let configuration = self.configuration;
+        let configuration = self
+            .configuration
+            .iter()
+            .filter_map(|(k, v)| Some((k.to_string(), v.as_ref()?.to_string())))
+            .collect();
 
-        let current_protocol = Protocol {
+        let current_protocol = ProtocolInner {
             min_reader_version: PROTOCOL.default_reader_version(),
             min_writer_version: PROTOCOL.default_writer_version(),
             reader_features: None,
             writer_features: None,
-        };
+        }
+        .as_kernel();
 
         let protocol = self
             .actions
@@ -295,30 +303,23 @@ impl CreateBuilder {
             })
             .unwrap_or_else(|| current_protocol);
 
-        let schema = StructType::new(self.columns);
+        let schema = StructType::try_new(self.columns)?;
 
         let protocol = protocol
-            .apply_properties_to_protocol(
-                &configuration
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone().unwrap()))
-                    .collect::<HashMap<String, String>>(),
-                self.raise_if_key_not_exists,
-            )?
+            .apply_properties_to_protocol(&configuration, self.raise_if_key_not_exists)?
             .apply_column_metadata_to_protocol(&schema)?
             .move_table_properties_into_features(&configuration);
 
-        let mut metadata = Metadata::try_new(
-            schema,
+        let mut metadata = new_metadata(
+            &schema,
             self.partition_columns.unwrap_or_default(),
             configuration,
-        )?
-        .with_created_time(chrono::Utc::now().timestamp_millis());
+        )?;
         if let Some(name) = self.name {
-            metadata = metadata.with_name(name);
+            metadata = metadata.with_name(name)?;
         }
         if let Some(comment) = self.comment {
-            metadata = metadata.with_description(comment);
+            metadata = metadata.with_description(comment)?;
         }
 
         let operation = DeltaOperation::Create {
@@ -403,7 +404,7 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::table::config::TableProperty;
-    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use crate::writer::test_utils::get_delta_schema;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -416,8 +417,8 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_schema().unwrap(), &table_schema)
+        assert_eq!(table.version(), Some(0));
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema)
     }
 
     #[tokio::test]
@@ -428,7 +429,11 @@ mod tests {
             "./{}",
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
         );
-        let table = DeltaOps::try_from_uri(relative_path)
+        let table_path = std::path::Path::new(&relative_path).canonicalize().unwrap();
+        let table_url = url::Url::from_directory_path(table_path)
+            .map_err(|_| DeltaTableError::InvalidTableLocation(relative_path.clone()))
+            .unwrap();
+        let table = DeltaOps::try_from_uri(table_url)
             .await
             .unwrap()
             .create()
@@ -436,8 +441,8 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_schema().unwrap(), &table_schema)
+        assert_eq!(table.version(), Some(0));
+        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema)
     }
 
     #[tokio::test]
@@ -453,7 +458,7 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
     }
 
     #[tokio::test]
@@ -464,32 +469,35 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.version(), 0);
         assert_eq!(
-            table.protocol().unwrap().min_reader_version,
+            snapshot.protocol().min_reader_version(),
             PROTOCOL.default_reader_version()
         );
         assert_eq!(
-            table.protocol().unwrap().min_writer_version,
+            snapshot.protocol().min_writer_version(),
             PROTOCOL.default_writer_version()
         );
-        assert_eq!(table.get_schema().unwrap(), &schema);
+        assert_eq!(snapshot.schema().as_ref(), &schema);
 
         // check we can overwrite default settings via adding actions
-        let protocol = Protocol {
-            min_reader_version: 0,
-            min_writer_version: 0,
+        let protocol = ProtocolInner {
+            min_reader_version: 1,
+            min_writer_version: 2,
             writer_features: None,
             reader_features: None,
-        };
+        }
+        .as_kernel();
         let table = CreateBuilder::new()
             .with_location("memory:///")
             .with_columns(schema.fields().cloned())
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        assert_eq!(table.protocol().unwrap().min_reader_version, 0);
-        assert_eq!(table.protocol().unwrap().min_writer_version, 0);
+        let snapshot = table.snapshot().unwrap();
+        assert_eq!(snapshot.protocol().min_reader_version(), 1);
+        assert_eq!(snapshot.protocol().min_writer_version(), 2);
 
         let table = CreateBuilder::new()
             .with_location("memory:///")
@@ -498,144 +506,152 @@ mod tests {
             .await
             .unwrap();
         let append = table
+            .snapshot()
+            .unwrap()
             .metadata()
-            .unwrap()
-            .configuration
+            .configuration()
             .get(TableProperty::AppendOnly.as_ref())
-            .unwrap()
-            .as_ref()
             .unwrap()
             .clone();
         assert_eq!(String::from("true"), append)
     }
 
-    #[tokio::test]
-    async fn test_create_table_save_mode() {
-        let tmp_dir = tempfile::tempdir().unwrap();
+    #[cfg(feature = "datafusion")]
+    mod datafusion_tests {
+        use super::*;
 
-        let schema = get_delta_schema();
-        let table = CreateBuilder::new()
-            .with_location(tmp_dir.path().to_str().unwrap())
-            .with_columns(schema.fields().cloned())
-            .await
-            .unwrap();
-        assert_eq!(table.version(), 0);
-        let first_id = table.metadata().unwrap().id.clone();
+        use crate::writer::test_utils::get_record_batch;
+        #[tokio::test]
+        async fn test_create_table_save_mode() {
+            let tmp_dir = tempfile::tempdir().unwrap();
 
-        let log_store = table.log_store;
+            let schema = get_delta_schema();
+            let table = CreateBuilder::new()
+                .with_location(tmp_dir.path().to_str().unwrap())
+                .with_columns(schema.fields().cloned())
+                .await
+                .unwrap();
+            assert_eq!(table.version(), Some(0));
+            let first_id = table.snapshot().unwrap().metadata().id().to_string();
 
-        // Check an error is raised when a table exists at location
-        let table = CreateBuilder::new()
-            .with_log_store(log_store.clone())
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::ErrorIfExists)
-            .await;
-        assert!(table.is_err());
+            let log_store = table.log_store;
 
-        // Check current table is returned when ignore option is chosen.
-        let table = CreateBuilder::new()
-            .with_log_store(log_store.clone())
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Ignore)
-            .await
-            .unwrap();
-        assert_eq!(table.metadata().unwrap().id, first_id);
+            // Check an error is raised when a table exists at location
+            let table = CreateBuilder::new()
+                .with_log_store(log_store.clone())
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::ErrorIfExists)
+                .await;
+            assert!(table.is_err());
 
-        // Check table is overwritten
-        let table = CreateBuilder::new()
-            .with_log_store(log_store)
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .unwrap();
-        assert_ne!(table.metadata().unwrap().id, first_id)
-    }
+            // Check current table is returned when ignore option is chosen.
+            let table = CreateBuilder::new()
+                .with_log_store(log_store.clone())
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Ignore)
+                .await
+                .unwrap();
+            assert_eq!(table.snapshot().unwrap().metadata().id(), first_id);
 
-    #[tokio::test]
-    async fn test_create_or_replace_existing_table() {
-        let batch = get_record_batch(None, false);
-        let schema = get_delta_schema();
-        let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::ErrorIfExists)
-            .await
-            .unwrap();
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 1);
+            // Check table is overwritten
+            let table = CreateBuilder::new()
+                .with_log_store(log_store)
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .await
+                .unwrap();
+            assert_ne!(table.snapshot().unwrap().metadata().id(), first_id)
+        }
 
-        let mut table = DeltaOps(table)
-            .create()
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .unwrap();
-        table.load().await.unwrap();
-        assert_eq!(table.version(), 1);
-        // Checks if files got removed after overwrite
-        assert_eq!(table.get_files_count(), 0);
-    }
+        #[tokio::test]
+        async fn test_create_or_replace_existing_table() {
+            let batch = get_record_batch(None, false);
+            let schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::ErrorIfExists)
+                .await
+                .unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 0);
+            assert_eq!(state.log_data().num_files(), 1);
 
-    #[tokio::test]
-    async fn test_create_or_replace_existing_table_partitioned() {
-        let batch = get_record_batch(None, false);
-        let schema = get_delta_schema();
-        let table = DeltaOps::new_in_memory()
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::ErrorIfExists)
-            .await
-            .unwrap();
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 1);
+            let mut table = DeltaOps(table)
+                .create()
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .await
+                .unwrap();
+            table.load().await.unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 1);
+            // Checks if files got removed after overwrite
+            assert_eq!(state.log_data().num_files(), 0);
+        }
 
-        let mut table = DeltaOps(table)
-            .create()
-            .with_columns(schema.fields().cloned())
-            .with_save_mode(SaveMode::Overwrite)
-            .with_partition_columns(vec!["id"])
-            .await
-            .unwrap();
-        table.load().await.unwrap();
-        assert_eq!(table.version(), 1);
-        // Checks if files got removed after overwrite
-        assert_eq!(table.get_files_count(), 0);
-    }
+        #[tokio::test]
+        async fn test_create_or_replace_existing_table_partitioned() {
+            let batch = get_record_batch(None, false);
+            let schema = get_delta_schema();
+            let table = DeltaOps::new_in_memory()
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::ErrorIfExists)
+                .await
+                .unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 0);
+            assert_eq!(state.log_data().num_files(), 1);
 
-    #[tokio::test]
-    async fn test_create_table_metadata_raise_if_key_not_exists() {
-        let schema = get_delta_schema();
-        let config: HashMap<String, Option<String>> =
-            vec![("key".to_string(), Some("value".to_string()))]
-                .into_iter()
-                .collect();
+            let mut table = DeltaOps(table)
+                .create()
+                .with_columns(schema.fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .with_partition_columns(vec!["id"])
+                .await
+                .unwrap();
+            table.load().await.unwrap();
+            let state = table.snapshot().unwrap();
+            assert_eq!(state.version(), 1);
+            // Checks if files got removed after overwrite
+            assert_eq!(state.log_data().num_files(), 0);
+        }
 
-        // Fail to create table with unknown Delta key
-        let table = CreateBuilder::new()
-            .with_location("memory:///")
-            .with_columns(schema.fields().cloned())
-            .with_configuration(config.clone())
-            .await;
-        assert!(table.is_err());
+        #[tokio::test]
+        async fn test_create_table_metadata_raise_if_key_not_exists() {
+            let schema = get_delta_schema();
+            let config: HashMap<String, Option<String>> =
+                vec![("key".to_string(), Some("value".to_string()))]
+                    .into_iter()
+                    .collect();
 
-        // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
-        let table = CreateBuilder::new()
-            .with_location("memory:///")
-            .with_columns(schema.fields().cloned())
-            .with_raise_if_key_not_exists(false)
-            .with_configuration(config)
-            .await;
-        assert!(table.is_ok());
+            // Fail to create table with unknown Delta key
+            let table = CreateBuilder::new()
+                .with_location("memory:///")
+                .with_columns(schema.fields().cloned())
+                .with_configuration(config.clone())
+                .await;
+            assert!(table.is_err());
 
-        // Ensure the non-Delta key was set correctly
-        let value = table
-            .unwrap()
-            .metadata()
-            .unwrap()
-            .configuration
-            .get("key")
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .clone();
-        assert_eq!(String::from("value"), value);
+            // Succeed in creating table with unknown Delta key since we set raise_if_key_not_exists to false
+            let table = CreateBuilder::new()
+                .with_location("memory:///")
+                .with_columns(schema.fields().cloned())
+                .with_raise_if_key_not_exists(false)
+                .with_configuration(config)
+                .await;
+            assert!(table.is_ok());
+
+            // Ensure the non-Delta key was set correctly
+            let value = table
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .metadata()
+                .configuration()
+                .get("key")
+                .unwrap()
+                .clone();
+            assert_eq!(String::from("value"), value);
+        }
     }
 }

@@ -10,6 +10,7 @@ use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 use bytes::Bytes;
 use deltalake_core::{ObjectStoreError, Path};
 use tracing::{debug, error, warn};
+use typed_builder::TypedBuilder;
 use url::Url;
 
 use deltalake_core::logstore::*;
@@ -22,10 +23,19 @@ const STORE_NAME: &str = "DeltaS3ObjectStore";
 const MAX_REPAIR_RETRIES: i64 = 3;
 
 /// [`LogStore`] implementation backed by DynamoDb
+#[derive(TypedBuilder)]
+#[builder(doc)]
 pub struct S3DynamoDbLogStore {
-    pub(crate) storage: ObjectStoreRef,
+    /// Object store for delta log operations
+    prefixed_store: ObjectStoreRef,
+    /// Root object store
+    root_store: ObjectStoreRef,
+    /// DynamoDB lock client for transaction coordination
     lock_client: DynamoDbLockClient,
+    /// Log store configuration
     config: LogStoreConfig,
+    /// Table path URI
+    #[builder(setter(into))]
     table_path: String,
 }
 
@@ -41,7 +51,8 @@ impl S3DynamoDbLogStore {
         location: Url,
         options: &StorageConfig,
         s3_options: &S3StorageOptions,
-        object_store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
         let lock_client = DynamoDbLockClient::try_new(
             &s3_options.sdk_config.clone().unwrap(),
@@ -70,15 +81,16 @@ impl S3DynamoDbLogStore {
             },
         })?;
         let table_path = to_uri(&location, &Path::from(""));
-        Ok(Self {
-            storage: object_store,
-            lock_client,
-            config: LogStoreConfig {
+        Ok(Self::builder()
+            .prefixed_store(prefixed_store)
+            .root_store(root_store)
+            .lock_client(lock_client)
+            .config(LogStoreConfig {
                 location,
                 options: options.clone(),
-            },
-            table_path,
-        })
+            })
+            .table_path(table_path)
+            .build())
     }
 
     /// Attempt to repair an incomplete log entry by moving the temporary commit file
@@ -145,7 +157,7 @@ impl S3DynamoDbLogStore {
                 ),
             }
         }
-        unreachable!("for loop yields Ok or Err in body when retyr = MAX_REPAIR_RETRIES")
+        unreachable!("for loop yields Ok or Err in body when retry = MAX_REPAIR_RETRIES")
     }
 
     fn map_retry_result(
@@ -215,7 +227,10 @@ impl LogStore for S3DynamoDbLogStore {
             CommitOrBytes::TmpCommit(tmp_commit) => tmp_commit,
             _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
         };
-        let entry = CommitEntry::new(version, tmp_commit.clone());
+        let entry = CommitEntry::builder()
+            .version(version)
+            .temp_path(tmp_commit.clone())
+            .build();
         debug!("Writing commit entry for {self:?}: {entry:?}");
         // create log entry in dynamo db: complete = false, no expireTime
         self.lock_client
@@ -307,12 +322,12 @@ impl LogStore for S3DynamoDbLogStore {
         }
     }
 
-    async fn get_earliest_version(&self, current_version: i64) -> DeltaResult<i64> {
-        get_earliest_version(self, current_version).await
+    fn object_store(&self, _operation_id: Option<Uuid>) -> ObjectStoreRef {
+        self.prefixed_store.clone()
     }
 
-    fn object_store(&self, _operation_id: Option<Uuid>) -> ObjectStoreRef {
-        self.storage.clone()
+    fn root_object_store(&self, _operation_id: Option<Uuid>) -> ObjectStoreRef {
+        self.root_store.clone()
     }
 
     fn config(&self) -> &LogStoreConfig {

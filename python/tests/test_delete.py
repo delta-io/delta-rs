@@ -1,40 +1,47 @@
 import pathlib
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
-import pyarrow.compute as pc
+import pytest
+from arro3.core import Array, DataType, Field, Table
 
 from deltalake import CommitProperties, write_deltalake
 from deltalake.table import DeltaTable
-from deltalake.writer._conversion import (
-    ArrowSchemaConversionMode,
-    convert_pyarrow_table,
-)
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
-def test_delete_no_predicates(existing_table: DeltaTable):
-    old_version = existing_table.version()
+def test_delete_no_predicates(existing_sample_table: DeltaTable):
+    old_version = existing_sample_table.version()
 
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
-    existing_table.delete(commit_properties=commit_properties)
+    existing_sample_table.delete(commit_properties=commit_properties)
 
-    last_action = existing_table.history(1)[0]
+    last_action = existing_sample_table.history(1)[0]
     assert last_action["operation"] == "DELETE"
-    assert existing_table.version() == old_version + 1
+    assert existing_sample_table.version() == old_version + 1
     assert last_action["userName"] == "John Doe"
 
-    dataset = existing_table.to_pyarrow_dataset()
-    assert dataset.count_rows() == 0
-    assert len(existing_table.files()) == 0
+    from deltalake.query import QueryBuilder
+
+    qb = QueryBuilder()
+    qb = QueryBuilder().register("tbl", existing_sample_table)
+    data = qb.execute("select * from tbl").read_all()
+
+    assert data.num_rows == 0
+    assert len(existing_sample_table.files()) == 0
 
 
-def test_delete_a_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
-    write_deltalake(tmp_path, sample_data, partition_by=["bool"])
+@pytest.mark.pyarrow
+def test_delete_a_partition(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
+    write_deltalake(tmp_path, sample_data_pyarrow, partition_by=["bool"])
+    import pyarrow.compute as pc
 
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
 
-    mask = pc.equal(sample_data["bool"], False)
-    expected_table = sample_data.filter(mask)
+    mask = pc.equal(sample_data_pyarrow["bool"], False)
+    expected_table = sample_data_pyarrow.filter(mask)
 
     dt.delete(predicate="bool = true")
 
@@ -47,7 +54,11 @@ def test_delete_a_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert len(dt.files()) == 1
 
 
+@pytest.mark.pyarrow
 def test_delete_some_rows(existing_table: DeltaTable):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
     old_version = existing_table.version()
 
     existing = existing_table.to_pyarrow_table()
@@ -64,35 +75,19 @@ def test_delete_some_rows(existing_table: DeltaTable):
     assert table.equals(expected_table)
 
 
-def test_delete_large_dtypes(tmp_path: pathlib.Path, sample_table: pa.table):
-    sample_table = convert_pyarrow_table(
-        sample_table, schema_conversion_mode=ArrowSchemaConversionMode.LARGE
-    )
-    write_deltalake(tmp_path, sample_table)  # type: ignore
-
-    dt = DeltaTable(tmp_path)
-    old_version = dt.version()
-
-    existing = dt.to_pyarrow_table()
-    mask = pc.invert(pc.is_in(existing["id"], pa.array(["1"])))
-    expected_table = existing.filter(mask)
-
-    dt.delete(predicate="id = '1'")
-
-    last_action = dt.history(1)[0]
-    assert last_action["operation"] == "DELETE"
-    assert dt.version() == old_version + 1
-
-    table = dt.to_pyarrow_table()
-    assert table.equals(expected_table)
-
-
 def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path):
-    data = pa.table(
+    data = Table(
         {
-            "foo": pa.array(["a", "b", None, None]),
-            "bar": pa.array([1, 2, 3, None]),
-            "baz": pa.array([1, 1, None, None]),
+            "foo": Array(
+                ["a", "b", None, None],
+                type=Field("foo", DataType.string(), nullable=True),
+            ),
+            "bar": Array(
+                [1, 2, 3, None], type=Field("bar", DataType.int64(), nullable=True)
+            ),
+            "baz": Array(
+                [1, 1, None, None], type=Field("baz", DataType.int64(), nullable=True)
+            ),
         }
     )
     write_deltalake(
@@ -103,31 +98,38 @@ def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path):
     )
     dt = DeltaTable(tmp_path)
     add_actions_table = dt.get_add_actions(flatten=True)
-    stats = add_actions_table.to_pylist()[0]
 
-    assert stats["null_count.foo"] == 2
-    assert stats["min.foo"] == "a"
-    assert stats["max.foo"] == "b"
-    assert stats["null_count.bar"] is None
-    assert stats["min.bar"] is None
-    assert stats["max.bar"] is None
-    assert stats["null_count.baz"] == 2
-    assert stats["min.baz"] == 1
-    assert stats["max.baz"] == 1
+    def get_value(name: str):
+        return add_actions_table.column(name)[0].as_py()
+
+    # x1 has no max, since inf was the highest value
+    assert get_value("null_count.foo") == 2
+    assert get_value("min.foo") == "a"
+    assert get_value("max.foo") == "b"
+    assert get_value("null_count.baz") == 2
+    assert get_value("min.baz") == 1
+    assert get_value("max.baz") == 1
+
+    with pytest.raises(Exception):
+        get_value("null_count.bar")
 
     dt.delete("bar == 3")
 
     dt = DeltaTable(tmp_path)
     add_actions_table = dt.get_add_actions(flatten=True)
-    stats = add_actions_table.to_pylist()[0]
 
     assert dt.version() == 1
-    assert stats["null_count.foo"] == 1
-    assert stats["min.foo"] == "a"
-    assert stats["max.foo"] == "b"
-    assert stats["null_count.bar"] is None
-    assert stats["min.bar"] is None
-    assert stats["max.bar"] is None
-    assert stats["null_count.baz"] == 1
-    assert stats["min.baz"] == 1
-    assert stats["max.baz"] == 1
+
+    def get_value(name: str):
+        return add_actions_table.column(name)[0].as_py()
+
+    # x1 has no max, since inf was the highest value
+    assert get_value("null_count.foo") == 1
+    assert get_value("min.foo") == "a"
+    assert get_value("max.foo") == "b"
+    assert get_value("null_count.baz") == 1
+    assert get_value("min.baz") == 1
+    assert get_value("max.baz") == 1
+
+    with pytest.raises(Exception):
+        get_value("null_count.bar")

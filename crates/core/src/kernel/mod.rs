@@ -3,28 +3,42 @@
 //! The Kernel module contains all the logic for reading and processing the Delta Lake transaction log.
 
 use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
-use std::{any::Any, sync::LazyLock};
+use std::sync::{Arc, LazyLock};
+use tokio::task::JoinHandle;
+use tracing::dispatcher;
+use tracing::Span;
 
 pub mod arrow;
 pub mod error;
 pub mod models;
 pub mod scalars;
+pub mod schema;
 mod snapshot;
 pub mod transaction;
 
+pub use arrow::engine_ext::StructDataExt;
+pub use delta_kernel::engine;
 pub use error::*;
 pub use models::*;
+pub use schema::*;
 pub use snapshot::*;
 
-/// A trait for all kernel types that are used as part of data checking
-pub trait DataCheck {
-    /// The name of the specific check
-    fn get_name(&self) -> &str;
-    /// The SQL expression to use for the check
-    fn get_expression(&self) -> &str;
+pub(crate) static ARROW_HANDLER: LazyLock<Arc<ArrowEvaluationHandler>> =
+    LazyLock::new(|| Arc::new(ArrowEvaluationHandler {}));
 
-    fn as_any(&self) -> &dyn Any;
+pub(crate) fn spawn_blocking_with_span<F, R>(f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    // Capture the current dispatcher and span
+    let dispatch = dispatcher::get_default(|d| d.clone());
+    let span = Span::current();
+
+    tokio::task::spawn_blocking(move || {
+        dispatcher::with_default(&dispatch, || {
+            let _enter = span.enter();
+            f()
+        })
+    })
 }
-
-static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
-    LazyLock::new(|| ArrowEvaluationHandler {});

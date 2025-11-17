@@ -9,12 +9,13 @@ use deltalake_core::logstore::object_store::{
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
 use futures::stream::BoxStream;
-use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};
 use serial_test::serial;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use url::Url;
 
 mod common;
 use common::*;
@@ -115,7 +116,9 @@ fn create_s3_backend(
     pause_del: Option<Path>,
 ) -> (Arc<S3StorageBackend>, Arc<Mutex<bool>>) {
     let pause_until_true = Arc::new(Mutex::new(false));
-    let store = DeltaTableBuilder::from_uri(context.root_uri())
+    let table_uri = Url::parse(&context.root_uri()).unwrap();
+    let store = DeltaTableBuilder::from_uri(table_uri)
+        .unwrap()
         .with_allow_http(true)
         .build_storage()
         .unwrap()
@@ -234,7 +237,7 @@ impl ObjectStore for DelayedObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        options: PutMultipartOpts,
+        options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }

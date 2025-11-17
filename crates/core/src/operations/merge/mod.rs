@@ -35,11 +35,21 @@ use std::time::Instant;
 
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
+use datafusion::catalog::Session;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{plan_err, Column, DFSchema, ExprSchema, ScalarValue, TableReference};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::SessionConfig;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::{
+    col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType,
+};
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
+};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -48,21 +58,14 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::{cast, DataFrame, SessionContext},
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
-use datafusion_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
-};
 
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use tracing::log::*;
+use tracing::*;
 use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
@@ -74,20 +77,21 @@ use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObse
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
     register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
-    DeltaSessionConfig, DeltaTableProvider,
+    DeltaSessionContext, DeltaTableProvider,
 };
+use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Metadata, StructTypeExt};
+use crate::kernel::{new_metadata, resolve_snapshot, Action, EagerSnapshot, StructTypeExt};
 use crate::logstore::LogStoreRef;
-use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schema};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
-    add_generated_columns, add_missing_generated_columns,
+    able_to_gc, add_generated_columns, add_missing_generated_columns,
 };
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -130,7 +134,7 @@ pub struct MergeBuilder {
     ///Prefix target columns with a user provided prefix
     target_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
-    snapshot: DeltaTableState,
+    snapshot: Option<EagerSnapshot>,
     /// The source data
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
@@ -140,7 +144,7 @@ pub struct MergeBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
-    state: Option<SessionState>,
+    state: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional information to add to the commit
@@ -151,7 +155,7 @@ pub struct MergeBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for MergeBuilder {
+impl super::Operation for MergeBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -164,7 +168,7 @@ impl MergeBuilder {
     /// Create a new [`MergeBuilder`]
     pub fn new<E: Into<Expression>>(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: Option<EagerSnapshot>,
         predicate: E,
         source: DataFrame,
     ) -> Self {
@@ -380,7 +384,7 @@ impl MergeBuilder {
     }
 
     /// The Datafusion session state to use
-    pub fn with_session_state(mut self, state: SessionState) -> Self {
+    pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
     }
@@ -525,7 +529,7 @@ impl MergeOperation {
     fn try_from(
         config: MergeOperationConfig,
         schema: &DFSchema,
-        state: &SessionState,
+        state: &dyn Session,
         target_alias: &Option<String>,
     ) -> DeltaResult<MergeOperation> {
         let mut ops = HashMap::with_capacity(config.operations.capacity());
@@ -627,7 +631,13 @@ pub struct MergeMetrics {
     pub rewrite_time_ms: u64,
 }
 #[derive(Clone, Debug)]
-struct MergeMetricExtensionPlanner {}
+pub(crate) struct MergeMetricExtensionPlanner {}
+
+impl MergeMetricExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
+    }
+}
 
 #[async_trait]
 impl ExtensionPlanner for MergeMetricExtensionPlanner {
@@ -707,6 +717,9 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         }
 
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
+            if physical_inputs.len() != 1 {
+                return plan_err!("MergeBarrierExec expects exactly one input");
+            }
             let schema = barrier.input.schema();
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
@@ -720,12 +733,13 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_uri()))]
 async fn execute(
     predicate: Expression,
-    source: DataFrame,
+    mut source: DataFrame,
     log_store: LogStoreRef,
-    snapshot: DeltaTableState,
-    _state: SessionState,
+    snapshot: EagerSnapshot,
+    state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
@@ -738,7 +752,13 @@ async fn execute(
     not_match_source_operations: Vec<MergeOperationConfig>,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(DeltaTableState, MergeMetrics)> {
+) -> DeltaResult<(EagerSnapshot, MergeMetrics)> {
+    info!(
+        operation = "merge",
+        version = snapshot.version(),
+        "starting merge execution"
+    );
+
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can
@@ -750,14 +770,13 @@ async fn execute(
         debug!("Executing a merge and I should write CDC!");
     }
 
-    let current_metadata = snapshot.metadata();
-    let merge_planner = DeltaPlanner::<MergeMetricExtensionPlanner> {
-        extension_planner: MergeMetricExtensionPlanner {},
-    };
+    info!(cdc_enabled = should_cdc, "merge execution details");
 
-    let state = SessionStateBuilder::new()
-        .with_default_features()
-        .with_query_planner(Arc::new(merge_planner))
+    let current_metadata = snapshot.metadata();
+    let merge_planner = DeltaPlanner::new();
+
+    let state = SessionStateBuilder::new_from_existing(state)
+        .with_query_planner(merge_planner)
         .build();
 
     // TODO: Given the join predicate, remove any expression that involve the
@@ -779,13 +798,18 @@ async fn execute(
         None => TableReference::bare(UNNAMED_TABLE),
     };
 
-    let generated_col_expressions = snapshot
-        .schema()
-        .get_generated_columns()
-        .unwrap_or_default();
+    let mut generated_col_exp = None;
+    let mut missing_generated_col = None;
 
-    let (source, missing_generated_columns) =
-        add_missing_generated_columns(source, &generated_col_expressions)?;
+    if able_to_gc(&snapshot)? {
+        let generated_col_expressions = snapshot.schema().get_generated_columns()?;
+        let (source_with_gc, missing_generated_columns) =
+            add_missing_generated_columns(source, &generated_col_expressions)?;
+
+        source = source_with_gc;
+        generated_col_exp = Some(generated_col_expressions);
+        missing_generated_col = Some(missing_generated_columns);
+    }
     // This is only done to provide the source columns with a correct table reference. Just renaming the columns does not work
     let source = LogicalPlanBuilder::scan(
         source_name.clone(),
@@ -805,7 +829,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .with_parquet_pushdown(false)
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(snapshot.input_schema())
         .build(&snapshot)?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
@@ -868,7 +892,7 @@ async fn execute(
         }
     };
 
-    debug!("Using target subset filter: {:?}", commit_predicate);
+    debug!("Using target subset filter: {commit_predicate:?}");
 
     let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
     // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
@@ -929,7 +953,7 @@ async fn execute(
     let mut schema_action = None;
     if merge_schema {
         let merge_schema = merge_arrow_schema(
-            snapshot.input_schema()?,
+            snapshot.input_schema(),
             source_schema.inner().clone(),
             false,
         )?;
@@ -958,12 +982,12 @@ async fn execute(
         )?;
         let schema = Arc::new(schema_builder.finish());
         new_schema = Some(schema.clone());
-        let schema_struct: StructType = schema.try_into()?;
-        if &schema_struct != snapshot.schema() {
-            let action = Action::Metadata(Metadata::try_new(
-                schema_struct,
-                current_metadata.partition_columns.clone(),
-                snapshot.metadata().configuration.clone(),
+        let schema_struct: StructType = schema.try_into_kernel()?;
+        if &schema_struct != snapshot.schema().as_ref() {
+            let action = Action::Metadata(new_metadata(
+                &schema_struct,
+                current_metadata.partition_columns(),
+                snapshot.metadata().configuration(),
             )?);
             schema_action = Some(action);
         }
@@ -1082,7 +1106,7 @@ async fn execute(
     let mut write_projection_with_cdf = Vec::new();
 
     let schema = if let Some(schema) = new_schema {
-        &schema.try_into()?
+        Arc::new(schema.try_into_kernel()?)
     } else {
         snapshot.schema()
     };
@@ -1106,7 +1130,7 @@ async fn execute(
             None => TableReference::none(),
         };
         let name = delta_field.name();
-        let mut cast_type: DataType = delta_field.data_type().try_into()?;
+        let mut cast_type: DataType = delta_field.data_type().try_into_arrow()?;
 
         // Receive the correct column reference given that some columns are only in source table
         let column = if let Some(field) = snapshot.schema().field(name) {
@@ -1121,7 +1145,7 @@ async fn execute(
         } else {
             null_target_column = Some(cast(
                 lit(ScalarValue::Null).alias(name),
-                delta_field.data_type().try_into()?,
+                delta_field.data_type().try_into_arrow()?,
             ));
             Column::new(source_qualifier.clone(), name)
         };
@@ -1345,12 +1369,16 @@ async fn execute(
             .select(write_projection)?
     };
 
-    projected = add_generated_columns(
-        projected,
-        &generated_col_expressions,
-        &missing_generated_columns,
-        &state,
-    )?;
+    if let Some(generated_col_expressions) = generated_col_exp {
+        if let Some(missing_generated_columns) = missing_generated_col {
+            projected = add_generated_columns(
+                projected,
+                &generated_col_expressions,
+                &missing_generated_columns,
+                &state,
+            )?;
+        }
+    }
 
     let merge_final = &projected.into_unoptimized_plan();
     let write = state.create_physical_plan(merge_final).await?;
@@ -1361,24 +1389,24 @@ async fn execute(
     let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
     let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns.clone();
+    let table_partition_cols = current_metadata.partition_columns().clone();
 
     let writer_stats_config = WriterStatsConfig::new(
-        snapshot.table_config().num_indexed_cols(),
+        snapshot.table_properties().num_indexed_cols(),
         snapshot
-            .table_config()
-            .stats_columns()
+            .table_properties()
+            .data_skipping_stats_columns
+            .as_ref()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let rewrite_start = Instant::now();
-    let mut actions: Vec<Action> = write_execution_plan_v2(
+    let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
-        state.clone(),
+        &state,
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
-        Some(snapshot.table_config().target_file_size() as usize),
+        Some(snapshot.table_properties().target_file_size().get() as usize),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -1390,7 +1418,8 @@ async fn execute(
         actions.push(schema_metadata);
     }
 
-    metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
+    metrics.rewrite_time_ms = write_plan_metrics.write_time_ms;
+    metrics.scan_time_ms = write_plan_metrics.scan_time_ms;
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
@@ -1400,9 +1429,8 @@ async fn execute(
         .survivors();
 
     {
-        let lock = survivors.lock().unwrap();
         for action in snapshot.log_data() {
-            if lock.contains(action.path().as_ref()) {
+            if survivors.contains(action.path().as_ref()) {
                 metrics.num_target_files_removed += 1;
                 actions.push(action.remove_action(true).into());
             }
@@ -1450,7 +1478,7 @@ async fn execute(
         .with_post_commit_hook_handler(handle.cloned())
         .build(Some(&snapshot), log_store.clone(), operation)
         .await?;
-    Ok((commit.snapshot(), metrics))
+    Ok((commit.snapshot().snapshot, metrics))
 }
 
 fn modify_schema(
@@ -1512,30 +1540,28 @@ impl std::future::IntoFuture for MergeBuilder {
         let this = self;
 
         Box::pin(async move {
-            PROTOCOL.can_write_to(&this.snapshot.snapshot)?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
 
-            if !this.snapshot.load_config().require_files {
-                return Err(DeltaTableError::NotInitializedWithFiles("MERGE".into()));
-            }
+            PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let state = this.state.unwrap_or_else(|| {
-                let config: SessionConfig = DeltaSessionConfig::default().into();
-                let session = SessionContext::new_with_config(config);
+            let state = this
+                .state
+                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
+                .unwrap_or_else(|| {
+                    let session: SessionContext = DeltaSessionContext::default().into();
+                    session.state()
+                });
 
-                // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.log_store.clone(), session.runtime_env());
-
-                session.state()
-            });
+            register_store(this.log_store.clone(), state.runtime_env().as_ref());
 
             let (snapshot, metrics) = execute(
                 this.predicate,
                 this.source,
                 this.log_store.clone(),
-                this.snapshot,
+                snapshot,
                 state,
                 this.writer_properties,
                 this.commit_properties,
@@ -1557,7 +1583,7 @@ impl std::future::IntoFuture for MergeBuilder {
             }
 
             Ok((
-                DeltaTable::new_with_state(this.log_store, snapshot),
+                DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
                 metrics,
             ))
         })
@@ -1566,10 +1592,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::Action;
-    use crate::kernel::DataType;
-    use crate::kernel::PrimitiveType;
-    use crate::kernel::StructField;
+    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
     use crate::operations::DeltaOps;
@@ -1585,15 +1608,17 @@ mod tests {
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::common::Column;
+    use datafusion::common::TableReference;
+    use datafusion::logical_expr::col;
+    use datafusion::logical_expr::expr::Placeholder;
+    use datafusion::logical_expr::lit;
+    use datafusion::logical_expr::Expr;
     use datafusion::prelude::*;
-    use datafusion_common::Column;
-    use datafusion_common::TableReference;
-    use datafusion_expr::col;
-    use datafusion_expr::expr::Placeholder;
-    use datafusion_expr::lit;
-    use datafusion_expr::Expr;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
     use itertools::Itertools;
+    use pretty_assertions::assert_eq;
     use regex::Regex;
     use serde_json::json;
     use std::ops::Neg;
@@ -1610,7 +1635,7 @@ mod tests {
             .with_partition_columns(partitions.unwrap_or_default())
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
         table
     }
 
@@ -1711,15 +1736,15 @@ mod tests {
         let table = setup_table(None).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
         (table, merge_source(schema))
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
-        assert_eq!(table.version(), 2);
-        assert!(table.get_files_count() >= 1);
+        assert_eq!(table.version(), Some(2));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 1);
         assert!(metrics.num_target_files_added >= 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -1728,6 +1753,10 @@ mod tests {
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 5);
         assert_eq!(metrics.num_source_rows, 3);
+        assert_ne!(
+            metrics.scan_time_ms, 0,
+            "Expected the scan time to be non-zero"
+        );
 
         let expected = vec![
             "+----+-------+------------+",
@@ -1774,9 +1803,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -1795,6 +1822,109 @@ mod tests {
 
         assert_merge(table, metrics).await;
     }
+    #[tokio::test]
+    async fn test_merge_preserves_nullability_without_schema_merge() {
+        // Test that nullability constraints are preserved when merge_schema is false (default)
+        let delta_schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                false, // non-nullable
+            ),
+            StructField::new(
+                "value".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false, // non-nullable
+            ),
+            StructField::new(
+                "modified".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true, // nullable
+            ),
+        ];
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(delta_schema)
+            .await
+            .unwrap();
+
+        // Verify initial schema nullability
+        let initial_fields: Vec<_> = table
+            .snapshot()
+            .unwrap()
+            .schema()
+            .fields()
+            .cloned()
+            .collect();
+        assert!(
+            !initial_fields[0].is_nullable(),
+            "id should be non-nullable"
+        );
+        assert!(
+            !initial_fields[1].is_nullable(),
+            "value should be non-nullable"
+        );
+        assert!(
+            initial_fields[2].is_nullable(),
+            "modified should be nullable"
+        );
+
+        // Source data with all nullable fields (typical from external sources)
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true), // nullable in source
+            Field::new("value", ArrowDataType::Int32, true), // nullable in source
+            Field::new("modified", ArrowDataType::Utf8, true), // nullable in source
+        ]));
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            source_schema,
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec![Some("A"), Some("B")])),
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("2021-02-02"),
+                    None,
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (merged_table, _) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            // merge_schema is false by default
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        // Verify schema nullability is preserved after merge
+        let schema = merged_table.snapshot().unwrap().schema();
+        let final_fields: Vec<_> = schema.fields().collect();
+        assert!(
+            !final_fields[0].is_nullable(),
+            "id should remain non-nullable after merge"
+        );
+        assert!(
+            !final_fields[1].is_nullable(),
+            "value should remain non-nullable after merge"
+        );
+        assert!(
+            final_fields[2].is_nullable(),
+            "modified should remain nullable after merge"
+        );
+    }
+
     #[tokio::test]
     async fn test_merge_with_schema_merge_no_change_of_schema() {
         let (table, _) = setup().await;
@@ -1847,8 +1977,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = after_table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = after_table.last_commit().await.unwrap();
 
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
@@ -1866,7 +1995,10 @@ mod tests {
             json!(r#"[{"actionType":"update","predicate":"target.value = 1"}]"#)
         );
 
-        assert_eq!(table.schema(), after_table.schema());
+        assert_eq!(
+            table.snapshot().unwrap().schema(),
+            after_table.snapshot().unwrap().schema()
+        );
 
         let snapshot_bytes = after_table
             .log_store
@@ -1874,9 +2006,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, snapshot_bytes)
-            .await
-            .unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -1950,9 +2080,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, snapshot_bytes)
-            .await
-            .unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -2061,9 +2189,7 @@ mod tests {
             .await
             .unwrap()
             .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, snapshot_bytes)
-            .await
-            .unwrap();
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
 
         let schema_actions = actions
             .iter()
@@ -2130,9 +2256,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         let expected = vec![
@@ -2146,8 +2270,11 @@ mod tests {
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -2194,8 +2321,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2214,8 +2340,11 @@ mod tests {
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -2251,8 +2380,7 @@ mod tests {
             .await
             .unwrap();
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -2392,8 +2520,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2448,8 +2576,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert!(table.get_files_count() >= 3);
+        assert_eq!(table.version(), Some(2));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2459,8 +2587,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 6);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(
@@ -2489,7 +2616,7 @@ mod tests {
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
+        assert_eq!(table.version(), Some(1));
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -2528,9 +2655,8 @@ mod tests {
             .unwrap()
             .await
             .unwrap();
-        assert_eq!(table.version(), 2);
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        assert_eq!(table.version(), Some(2));
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(
             parameters["predicate"],
@@ -2549,8 +2675,8 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 4);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 4);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2588,8 +2714,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert!(table.get_files_count() >= 3);
+        assert_eq!(table.version(), Some(2));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 3);
         assert_eq!(metrics.num_target_files_added, 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -2599,8 +2725,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         let predicate = parameters["predicate"].as_str().unwrap();
         let re = Regex::new(r"^id = '(C|X|B)' OR id = '(C|X|B)' OR id = '(C|X|B)'$").unwrap();
@@ -2628,8 +2753,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2692,8 +2817,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert!(table.get_files_count() >= 3);
+        assert_eq!(table.version(), Some(2));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 3);
         assert!(metrics.num_target_files_added >= 3);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2703,8 +2828,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 6);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(
@@ -2738,8 +2862,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2766,8 +2890,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert!(table.get_files_count() >= 2);
+        assert_eq!(table.version(), Some(2));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2777,8 +2901,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         let extra_info = last_commit.info.clone();
         assert_eq!(
@@ -2808,8 +2931,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2836,8 +2959,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert!(table.get_files_count() >= 2);
+        assert_eq!(table.version(), Some(2));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 2);
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2847,8 +2970,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -2877,8 +2999,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2905,8 +3027,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(2));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -2916,8 +3038,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -2941,8 +3062,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2971,7 +3092,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(metrics.num_target_files_added == 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -2981,8 +3102,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -3011,8 +3131,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3040,8 +3160,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(2));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
         assert_eq!(metrics.num_target_files_added, 2);
         assert_eq!(metrics.num_target_files_removed, 2);
         assert_eq!(metrics.num_target_rows_copied, 2);
@@ -3051,8 +3171,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 2);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
@@ -3076,8 +3195,8 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         let table = write_data(table, &schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 2);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3106,7 +3225,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 2);
+        assert_eq!(table.version(), Some(2));
         assert!(metrics.num_target_files_added == 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 1);
@@ -3116,8 +3235,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 1);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
@@ -3143,8 +3261,8 @@ mod tests {
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
 
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.version(), Some(0));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3187,8 +3305,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 1);
-        assert!(table.get_files_count() >= 2);
+        assert_eq!(table.version(), Some(1));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -3198,8 +3316,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
 
         assert_eq!(
@@ -3230,8 +3347,8 @@ mod tests {
         ]));
         let table = setup_table(Some(vec!["modified"])).await;
 
-        assert_eq!(table.version(), 0);
-        assert_eq!(table.get_files_count(), 0);
+        assert_eq!(table.version(), Some(0));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -3271,8 +3388,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(table.version(), 1);
-        assert!(table.get_files_count() >= 2);
+        assert_eq!(table.version(), Some(1));
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 2);
         assert!(metrics.num_target_files_added >= 2);
         assert_eq!(metrics.num_target_files_removed, 0);
         assert_eq!(metrics.num_target_rows_copied, 0);
@@ -3282,8 +3399,7 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 3);
         assert_eq!(metrics.num_source_rows, 3);
 
-        let commit_info = table.history(None).await.unwrap();
-        let last_commit = &commit_info[0];
+        let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
 
         assert_eq!(
@@ -3301,8 +3417,11 @@ mod tests {
             "+----+-------+-------------+------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = Arc::clone(&schema).try_into().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        let expected_schema_struct: StructType = schema.as_ref().try_into_kernel().unwrap();
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -3315,7 +3434,7 @@ mod tests {
                 true,
             ),
             StructField::new(
-                "vAlue".to_string(),
+                "vAlue".to_string(), // spellchecker:disable-line
                 DataType::Primitive(PrimitiveType::Integer),
                 true,
             ),
@@ -3328,7 +3447,7 @@ mod tests {
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("Id", ArrowDataType::Utf8, true),
-            Field::new("vAlue", ArrowDataType::Int32, true),
+            Field::new("vAlue", ArrowDataType::Int32, true), // spellchecker:disable-line
             Field::new("mOdifieD", ArrowDataType::Utf8, true),
         ]));
 
@@ -3355,8 +3474,8 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let table = write_data(table, &arrow_schema).await;
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
         let (table, _metrics) = DeltaOps(table)
             .merge(source, "target.Id = source.Id")
@@ -3365,7 +3484,7 @@ mod tests {
             .when_not_matched_insert(|insert| {
                 insert
                     .set("Id", "source.Id")
-                    .set("vAlue", "source.vAlue + 1")
+                    .set("vAlue", "source.vAlue + 1") // spellchecker:disable-line
                     .set("mOdifieD", "source.mOdifieD")
             })
             .unwrap()
@@ -3374,7 +3493,7 @@ mod tests {
 
         let expected = vec![
             "+----+-------+------------+",
-            "| Id | vAlue | mOdifieD   |",
+            "| Id | vAlue | mOdifieD   |", // spellchecker:disable-line
             "+----+-------+------------+",
             "| A  | 1     | 2021-02-01 |",
             "| B  | 10    | 2021-02-01 |",
@@ -3651,8 +3770,8 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&arrow_schema.clone()),
@@ -3766,8 +3885,8 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&arrow_schema.clone()),
@@ -3876,8 +3995,8 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
         let batch = RecordBatch::try_new(
             Arc::clone(&arrow_schema.clone()),
@@ -3972,12 +4091,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -3985,13 +4104,13 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = get_arrow_schema(&None);
         let table = write_data(table, &schema).await;
 
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
         let source = merge_source(schema);
 
         let (table, metrics) = DeltaOps(table)
@@ -4065,12 +4184,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_simple_with_schema_merge() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4078,7 +4197,7 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = get_arrow_schema(&None);
 
@@ -4090,8 +4209,8 @@ mod tests {
         ]));
         let table = write_data(table, &schema).await;
 
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
         let source = merge_source(schema);
         let source = source.with_column("inserted_by", lit("new_value")).unwrap();
 
@@ -4135,8 +4254,11 @@ mod tests {
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
-        let expected_schema_struct: StructType = source_schema.try_into().unwrap();
-        assert_eq!(&expected_schema_struct, table.schema().unwrap());
+        let expected_schema_struct: StructType = source_schema.try_into_kernel().unwrap();
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
         assert_batches_sorted_eq!(&expected, &actual);
 
         let ctx = SessionContext::new();
@@ -4182,12 +4304,12 @@ mod tests {
     #[tokio::test]
     async fn test_merge_cdc_enabled_delete() {
         // Manually creating the desired table with the right minimum CDC features
-        use crate::kernel::Protocol;
+        use crate::kernel::ProtocolInner;
         use crate::operations::merge::Action;
 
         let schema = get_delta_schema();
 
-        let actions = vec![Action::Protocol(Protocol::new(1, 4))];
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
         let table: DeltaTable = DeltaOps::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
@@ -4195,13 +4317,13 @@ mod tests {
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
             .await
             .unwrap();
-        assert_eq!(table.version(), 0);
+        assert_eq!(table.version(), Some(0));
 
         let schema = get_arrow_schema(&None);
         let table = write_data(table, &schema).await;
 
-        assert_eq!(table.version(), 1);
-        assert_eq!(table.get_files_count(), 1);
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
         let source = merge_source(schema);
 
         let (table, _metrics) = DeltaOps(table)

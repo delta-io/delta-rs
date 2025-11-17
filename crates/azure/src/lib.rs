@@ -8,7 +8,8 @@ use deltalake_core::logstore::{
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
-use object_store::{ObjectStoreScheme, RetryConfig};
+use object_store::client::SpawnedReqwestConnector;
+use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
@@ -38,14 +39,18 @@ impl ObjectStoreFactory for AzureFactory {
     fn parse_url_opts(
         &self,
         url: &Url,
-        options: &HashMap<String, String>,
-        retry: &RetryConfig,
+        config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let config = config::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
-
         let mut builder = MicrosoftAzureBuilder::new()
             .with_url(url.to_string())
-            .with_retry(retry.clone());
+            .with_retry(config.retry.clone());
+        if let Some(runtime) = &config.runtime {
+            builder =
+                builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
+        }
+
+        let config = config::AzureConfigHelper::try_new(config.raw.as_azure_options())?.build()?;
+
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());
         }
@@ -64,11 +69,17 @@ impl ObjectStoreFactory for AzureFactory {
 impl LogStoreFactory for AzureFactory {
     fn with_options(
         &self,
-        store: ObjectStoreRef,
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        Ok(default_logstore(store, location, options))
+        Ok(default_logstore(
+            prefixed_store,
+            root_store,
+            location,
+            options,
+        ))
     }
 }
 
@@ -79,5 +90,23 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
         let url = Url::parse(&format!("{scheme}://")).unwrap();
         object_store_factories().insert(url.clone(), factory.clone());
         logstore_factories().insert(url.clone(), factory.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_as_azure_options() {
+        use object_store::azure::AzureConfigKey;
+        let mut options = HashMap::default();
+        let key = "AZURE_STORAGE_ACCOUNT_KEY".to_string();
+        let value = "value".to_string();
+        options.insert(key, value.clone());
+
+        let converted = options.as_azure_options();
+        assert_eq!(converted.get(&AzureConfigKey::AccessKey), Some(&value));
     }
 }

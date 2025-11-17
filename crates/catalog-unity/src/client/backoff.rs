@@ -56,7 +56,7 @@ impl Backoff {
 
     /// Creates a new `Backoff` with the optional `rng`
     ///
-    /// Used [`rand::thread_rng()`] if no rng provided
+    /// Used [`rand::random_range()`] if no rng provided
     pub fn new_with_rng(
         config: &BackoffConfig,
         rng: Option<Box<dyn RngCore + Sync + Send>>,
@@ -76,8 +76,8 @@ impl Backoff {
         let range = self.init_backoff..(self.next_backoff_secs * self.base);
 
         let rand_backoff = match self.rng.as_mut() {
-            Some(rng) => rng.gen_range(range),
-            None => thread_rng().gen_range(range),
+            Some(rng) => rng.random_range(range),
+            None => rand::random_range(range),
         };
 
         let next_backoff = self.max_backoff_secs.min(rand_backoff);
@@ -121,7 +121,7 @@ mod tests {
             assert_fuzzy_eq(backoff.tick().as_secs_f64(), value);
         }
 
-        // Create a static rng that takes the mid point of the range
+        // Create a static rng that takes the mid-point of the range
         let rng = Box::new(StepRng::new(u64::MAX / 2, 0));
         let mut backoff = Backoff::new_with_rng(&config, Some(rng));
 

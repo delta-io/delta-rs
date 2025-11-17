@@ -11,9 +11,10 @@ defaults:
 jobs:
   validate-release-tag:
     name: Validate git tag
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+
       - name: compare git tag with cargo metadata
         run: |
           PUSHED_TAG=${GITHUB_REF##*/}
@@ -26,17 +27,20 @@ jobs:
   release-crate:
     needs: validate-release-tag
     name: Release crate
-    strategy:
-      fail-fast: false
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
 
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: cargo publish
         uses: actions-rs/cargo@v1

@@ -1,6 +1,7 @@
 use deltalake_test::read::read_table_paths;
 use deltalake_test::utils::*;
 use deltalake_test::{test_concurrent_writes, test_read_tables};
+use futures::TryStreamExt as _;
 use object_store::path::Path;
 use serial_test::serial;
 
@@ -42,7 +43,11 @@ async fn test_action_reconciliation() {
     let a = fs_common::add(3 * 60 * 1000);
     assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
     assert_eq!(
-        table.get_files_iter().unwrap().collect::<Vec<_>>(),
+        table
+            .snapshot()
+            .unwrap()
+            .file_paths_iter()
+            .collect::<Vec<_>>(),
         vec![Path::from(a.path.clone())]
     );
 
@@ -61,16 +66,16 @@ async fn test_action_reconciliation() {
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.get_files_iter().unwrap().count(), 0);
+    assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
     assert_eq!(
         table
             .snapshot()
             .unwrap()
-            .all_tombstones(table.object_store().clone())
+            .all_tombstones(&table.log_store())
+            .map_ok(|r| r.path().to_string())
+            .try_collect::<Vec<_>>()
             .await
-            .unwrap()
-            .map(|r| r.path.clone())
-            .collect::<Vec<_>>(),
+            .unwrap(),
         vec![a.path.clone()]
     );
 }
