@@ -144,4 +144,4 @@ incremental = false
 inherits = "release"
 opt-level = 3
 codegen-units = 1
-lto = "fat"         
+lto = "fat"

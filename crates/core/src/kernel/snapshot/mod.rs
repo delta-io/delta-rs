@@ -658,6 +658,7 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         filters: &[PartitionFilter],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        panic!("YOU'RE CALLING A DEPRECATED FUNCTION IDIOT");
         if filters.is_empty() {
             return self.file_views(log_store, None);
         }

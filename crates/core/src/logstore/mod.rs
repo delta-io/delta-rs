@@ -343,6 +343,7 @@ pub trait LogStore: Send + Sync + AsAny {
         note = "DO NOT USE: Just a stop gap to support lakefs during kernel migration"
     )]
     fn transaction_url(&self, _operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
+        panic!("WHY IS THIS HERE OMG");
         Ok(base.clone())
     }
 
