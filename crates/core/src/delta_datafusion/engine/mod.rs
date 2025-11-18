@@ -6,9 +6,12 @@ use delta_kernel::{Engine, EvaluationHandler, JsonHandler, ParquetHandler, Stora
 use tokio::runtime::Handle;
 
 use self::file_formats::DataFusionFileFormatHandler;
-use self::storage::DataFusionStorageHandler;
 use crate::kernel::ARROW_HANDLER;
 
+pub(crate) use expressions::*;
+pub(crate) use storage::*;
+
+mod expressions;
 mod file_formats;
 mod storage;
 

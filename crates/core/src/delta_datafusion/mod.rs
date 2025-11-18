@@ -782,14 +782,14 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = if cmd.options.is_empty() {
+        let table = if cmd.options.is_empty() {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table(table_url).await?
         } else {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(Arc::new(provider))
+        Ok(Arc::new(table))
     }
 }
 
@@ -1173,14 +1173,14 @@ mod tests {
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
         let expected = vec! [
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| c3 | c1 | c2 | file_source                                                                   |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
-                "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
-                "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-            ];
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| c3 | c1 | c2 | file_source                                                                   |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
+            "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
+            "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -1598,9 +1598,10 @@ mod tests {
             .unwrap();
 
         let datafusion = SessionContext::new();
-        let table = Arc::new(table);
 
-        datafusion.register_table("snapshot", table).unwrap();
+        datafusion
+            .register_table("snapshot", Arc::new(table))
+            .unwrap();
 
         let df = datafusion
             .sql("select * from snapshot where id > 10000 and id < 20000")

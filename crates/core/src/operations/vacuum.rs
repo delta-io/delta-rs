@@ -544,7 +544,11 @@ async fn get_stale_files(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::{io::Read, time::SystemTime};
+
     use object_store::{local::LocalFileSystem, memory::InMemory, PutPayload};
+    use url::Url;
 
     use super::*;
     use crate::{ensure_table_uri, open_table};
@@ -695,7 +699,7 @@ mod tests {
     async fn test_vacuum_keep_version_validity() {
         use datafusion::prelude::SessionContext;
         use object_store::GetResultPayload;
-        let store = InMemory::new();
+        let store = Arc::new(InMemory::new());
         let source = LocalFileSystem::new_with_prefix("../test/tests/data/simple_table").unwrap();
         let mut stream = source.list(None);
 
@@ -717,7 +721,7 @@ mod tests {
         let table_url = url::Url::parse("memory:///").unwrap();
         let mut table = crate::DeltaTableBuilder::from_uri(table_url.clone())
             .unwrap()
-            .with_storage_backend(Arc::new(store), table_url)
+            .with_storage_backend(store.clone(), table_url)
             .build()
             .unwrap();
         table.load().await.unwrap();
@@ -743,6 +747,8 @@ mod tests {
         assert_eq!(Some(6), table.version());
 
         let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store(&url::Url::parse("memory:///").unwrap(), store);
         ctx.register_table("test", Arc::new(table)).unwrap();
         let _batches = ctx
             .sql("SELECT * FROM test")
