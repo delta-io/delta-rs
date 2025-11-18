@@ -158,6 +158,7 @@ impl DeltaOps {
     /// ```
     #[deprecated(note = "Use try_from_uri with url::Url instead")]
     pub async fn try_from_uri_str(uri: impl AsRef<str>) -> DeltaResult<Self> {
+        panic!("STOP USING THIS JEEZ");
         let url = ensure_table_uri(uri)?;
         Self::try_from_uri(url).await
     }
@@ -184,6 +185,7 @@ impl DeltaOps {
         uri: impl AsRef<str>,
         storage_options: HashMap<String, String>,
     ) -> DeltaResult<Self> {
+        panic!("EW GROSS");
         let url = ensure_table_uri(uri)?;
         Self::try_from_uri_with_storage_options(url, storage_options).await
     }

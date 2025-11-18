@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
@@ -253,6 +253,8 @@ mod tests {
         table_to_update.update().await.unwrap();
         table_to_update.update().await.unwrap();
 
+        panic!("this doesn't work");
+        /*
         assert_eq!(
             table_newest_version
                 .snapshot()
@@ -265,6 +267,7 @@ mod tests {
                 .file_paths_iter()
                 .collect_vec()
         );
+        */
     }
     #[tokio::test]
     async fn read_delta_2_0_table_with_version() {
@@ -280,7 +283,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet"),
                 Path::from("part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet"),
@@ -295,7 +298,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
                 Path::from("part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet"),
@@ -308,7 +311,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
                 Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
@@ -329,7 +332,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"),
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
@@ -382,7 +385,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"),
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
@@ -394,7 +397,7 @@ mod tests {
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(
-            snapshot.file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![
                 Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
                 Path::from("part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"),
@@ -517,7 +520,8 @@ mod tests {
         let table = crate::open_table(table_url).await.unwrap();
 
         assert_eq!(
-            table.snapshot().unwrap().file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
+            //table.snapshot().unwrap().file_paths_iter().collect_vec(),
             vec![
                 Path::parse(
                     "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
@@ -620,6 +624,8 @@ mod tests {
             .unwrap();
         assert!(matches!(peek, PeekCommit::New(..)));
 
+        panic!("ow");
+        /*
         if let PeekCommit::New(version, actions) = peek {
             assert_eq!(table.version(), Some(9));
             assert!(!table.snapshot().unwrap().file_paths_iter().any(|f| f
@@ -638,6 +644,7 @@ mod tests {
                     "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"
                 )));
         };
+        */
 
         let peek = table
             .log_store()
@@ -714,7 +721,7 @@ mod tests {
         let table = crate::open_table(table_url).await.unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(
-            table.snapshot().unwrap().file_paths_iter().collect_vec(),
+            Vec::<Path>::new(),
             vec![Path::from(
                 "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
             ),]
