@@ -3,9 +3,11 @@
 use std::cmp::{min, Ordering};
 use std::fmt;
 use std::fmt::Formatter;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::future::ready;
+use futures::stream::{once, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
 use serde::de::{Error, SeqAccess, Visitor};
@@ -266,9 +268,19 @@ impl DeltaTable {
                 Err(DeltaTableError::NotInitialized)
             }));
         };
+
+        if filters.is_empty() {
+            return state.snapshot().file_views(&self.log_store, None);
+        }
+
+        let predicate =
+            match crate::to_kernel_predicate(filters, state.snapshot().schema().as_ref()) {
+                Ok(predicate) => Arc::new(predicate),
+                Err(err) => return Box::pin(once(ready(Err(err)))),
+            };
         state
             .snapshot()
-            .file_views_by_partitions(&self.log_store, filters)
+            .file_views(&self.log_store, Some(predicate))
     }
 
     /// Returns the file list tracked in current table state filtered by provided
