@@ -94,12 +94,12 @@ impl<'a> LogDataHandler<'a> {
     }
 }
 
-impl IntoIterator for LogDataHandler<'_> {
+impl<'a> IntoIterator for LogDataHandler<'a> {
     type Item = LogicalFileView;
-    type IntoIter = Box<dyn Iterator<Item = Self::Item>>;
+    type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(self.data.to_vec().into_iter().flat_map(|batch| {
+        Box::new(self.data.iter().cloned().flat_map(|batch| {
             (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
         }))
     }
@@ -211,7 +211,7 @@ mod datafusion {
 
                 if let Some(mut accumulator) = accumulator {
                     return accumulator
-                        .update_batch(&[array.clone()])
+                        .update_batch(std::slice::from_ref(&array))
                         .ok()
                         .and_then(|_| accumulator.evaluate().ok())
                         .map(Precision::Exact)
