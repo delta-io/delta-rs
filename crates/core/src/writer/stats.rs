@@ -8,14 +8,13 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use parquet::basic::LogicalType;
 use parquet::basic::Type;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
-use parquet::{basic::LogicalType, errors::ParquetError};
 use parquet::{
+    basic::TimeUnit,
     file::{metadata::RowGroupMetaData, statistics::Statistics},
-    format::TimeUnit,
 };
 use tracing::warn;
 
@@ -28,7 +27,7 @@ pub fn create_add(
     partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Add, DeltaTableError> {
@@ -100,24 +99,20 @@ pub(crate) fn stats_from_parquet_metadata(
 
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
-    let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
-    let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
+    let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata
-        .row_groups
-        .iter()
-        .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
-        .collect::<Result<Vec<RowGroupMetaData>, ParquetError>>()?;
+    let row_group_metadata: Vec<RowGroupMetaData> =
+        file_metadata.row_groups().iter().cloned().collect();
 
     stats_from_metadata(
         partition_values,
-        schema_descriptor,
+        Arc::new(schema_descriptor.clone()),
         row_group_metadata,
-        file_metadata.num_rows,
+        file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
     )
@@ -291,9 +286,9 @@ impl StatsScalar {
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
                 let v = get_stat!(v);
                 let timestamp = match unit {
-                    TimeUnit::MILLIS(_) => chrono::DateTime::from_timestamp_millis(v),
-                    TimeUnit::MICROS(_) => chrono::DateTime::from_timestamp_micros(v),
-                    TimeUnit::NANOS(_) => {
+                    TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
+                    TimeUnit::NANOS => {
                         let secs = v / 1_000_000_000;
                         let nanosecs = (v % 1_000_000_000) as u32;
                         chrono::DateTime::from_timestamp(secs, nanosecs)
@@ -713,7 +708,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::NANOS(parquet::format::NanoSeconds {}),
+                    unit: parquet::basic::TimeUnit::NANOS,
                 }),
                 Value::from("2022-01-01T12:34:56.789123456Z"),
             ),
@@ -721,7 +716,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
+                    unit: parquet::basic::TimeUnit::MICROS,
                 }),
                 Value::from("2022-01-01T12:34:56.789123Z"),
             ),
@@ -729,7 +724,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::MILLIS(parquet::format::MilliSeconds {}),
+                    unit: parquet::basic::TimeUnit::MILLIS,
                 }),
                 Value::from("2022-01-01T12:34:56.789Z"),
             ),

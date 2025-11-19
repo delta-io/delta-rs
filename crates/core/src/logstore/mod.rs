@@ -362,7 +362,7 @@ pub trait LogStore: Send + Sync + AsAny {
                             parsed_path.file_type,
                             LogPathFileType::Commit
                                 | LogPathFileType::SinglePartCheckpoint
-                                | LogPathFileType::UuidCheckpoint(_)
+                                | LogPathFileType::UuidCheckpoint
                                 | LogPathFileType::MultiPartCheckpoint { .. }
                                 | LogPathFileType::CompactedCommit { .. }
                         ) {

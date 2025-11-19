@@ -93,6 +93,11 @@ impl StorageHandler for DataFusionStorageHandler {
                 .flatten(),
         ))
     }
+
+    fn copy_atomic(&self, _from: &Url, _to: &Url) -> DeltaResult<()> {
+        // TODO: Implement atomic copy operation
+        Err(delta_kernel::Error::generic("copy_atomic not implemented"))
+    }
 }
 
 pub(crate) trait AsObjectStoreUrl {
