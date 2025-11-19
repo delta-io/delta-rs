@@ -236,9 +236,7 @@ impl StorageConfig {
     }
 }
 
-pub(super) fn try_parse_impl<T, K, V, I>(
-    options: I,
-) -> DeltaResult<(T, HashMap<String, String>)>
+pub(super) fn try_parse_impl<T, K, V, I>(options: I) -> DeltaResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
