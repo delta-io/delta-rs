@@ -211,7 +211,7 @@ mod datafusion {
 
                 if let Some(mut accumulator) = accumulator {
                     return accumulator
-                        .update_batch(std::slice::from_ref(&array))
+                        .update_batch(std::slice::from_ref(array))
                         .ok()
                         .and_then(|_| accumulator.evaluate().ok())
                         .map(Precision::Exact)
