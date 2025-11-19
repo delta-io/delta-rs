@@ -39,9 +39,9 @@ object_store = { version = "0.12.1" }
 parquet = { version = "57" }
 
 # datafusion
-datafusion = { git = "https://github.com/apache/datafusion", rev = "187c6b2" }
-datafusion-ffi = { git = "https://github.com/apache/datafusion", rev = "187c6b2" }
-datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "187c6b2" }
+datafusion = "51.0"
+datafusion-ffi = "51.0"
+datafusion-proto = "51.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
