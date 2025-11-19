@@ -2,6 +2,7 @@ use std::any::Any;
 
 pub mod cast;
 pub mod partitions;
+#[allow(clippy::module_inception)]
 mod schema;
 
 pub use cast::*;
