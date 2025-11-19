@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use arrow::datatypes::Schema as ArrowSchema;
+use arrow::record_batch::RecordBatch;
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
@@ -344,13 +346,30 @@ impl EagerSnapshot {
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
 
+        let files = self.files()?;
+        if files.is_empty() {
+            // When there are no add actions, create an empty RecordBatch with the correct schema
+            let DataType::Struct(struct_type) = &table_schema else {
+                return Err(DeltaTableError::Generic(
+                    "Expected Struct type for table schema".to_string(),
+                ));
+            };
+            let arrow_schema: ArrowSchema = struct_type.as_ref().try_into_arrow()?;
+            let empty_batch = RecordBatch::new_empty(Arc::new(arrow_schema));
+
+            return if flatten {
+                Ok(empty_batch.normalize(".", None)?)
+            } else {
+                Ok(empty_batch)
+            };
+        }
+
         let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let evaluator =
             ARROW_HANDLER.new_expression_evaluator(input_schema, expression.into(), table_schema);
 
-        let results = self
-            .files()?
+        let results = files
             .iter()
             .map(|file| evaluator.evaluate_arrow(file.clone()))
             .collect::<Result<Vec<_>, _>>()?;
@@ -362,5 +381,27 @@ impl EagerSnapshot {
         } else {
             Ok(result)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DeltaOps, DeltaResult};
+
+    /// <https://github.com/delta-io/delta-rs/issues/3918>
+    #[tokio::test]
+    async fn test_add_actions_empty() -> DeltaResult<()> {
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(delta_kernel::schema::PrimitiveType::Long),
+                true,
+                None,
+            )
+            .await?;
+        let _actions = table.snapshot()?.add_actions_table(false)?;
+        Ok(())
     }
 }
