@@ -690,10 +690,11 @@ impl TableFeatures {
 }
 
 ///Storage type of deletion vector
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
+    #[default]
     UuidRelativePath,
     /// Stored as inline string.
     #[serde(rename = "i")]
@@ -701,12 +702,6 @@ pub enum StorageType {
     /// Stored at an absolute path.
     #[serde(rename = "p")]
     AbsolutePath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
-    }
 }
 
 impl FromStr for StorageType {
@@ -1035,7 +1030,7 @@ pub struct Sidecar {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
 /// The isolation level applied during transaction
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
@@ -1043,6 +1038,7 @@ pub enum IsolationLevel {
     /// exists a serial sequence of executing them one-at-a-time that generates
     /// the same outcome as that seen in the table. For the write operations,
     /// the serial sequence is exactly the same as that seen in the table’s history.
+    #[default]
     Serializable,
 
     /// A weaker isolation level than Serializable. It ensures only that the write
@@ -1060,11 +1056,6 @@ pub enum IsolationLevel {
 
 // Spark assumes Serializable as default isolation level
 // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L1023
-impl Default for IsolationLevel {
-    fn default() -> Self {
-        Self::Serializable
-    }
-}
 
 impl AsRef<str> for IsolationLevel {
     fn as_ref(&self) -> &str {
