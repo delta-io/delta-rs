@@ -9,3 +9,9 @@ rustflags = [
   "-C", "link-arg=-undefined",
   "-C", "link-arg=dynamic_lookup",
 ]
+
+[build]
+rustflags = ["-A", "deprecated"]
+
+[lints.clippy]
+deprecated = "allow"
