@@ -19,8 +19,8 @@ use url::Url;
 use uuid::Uuid;
 
 use self::{
-    add_column::AddColumnBuilder, add_feature::AddTableFeatureBuilder, create::CreateBuilder,
-    filesystem_check::FileSystemCheckBuilder, restore::RestoreBuilder,
+    add_column::AddColumnBuilder, add_feature::AddTableFeatureBuilder, clone::CloneBuilder,
+    create::CreateBuilder, filesystem_check::FileSystemCheckBuilder, restore::RestoreBuilder,
     set_tbl_properties::SetTablePropertiesBuilder,
     update_field_metadata::UpdateFieldMetadataBuilder,
     update_table_metadata::UpdateTableMetadataBuilder, vacuum::VacuumBuilder,
@@ -40,6 +40,7 @@ use crate::DeltaTable;
 
 pub mod add_column;
 pub mod add_feature;
+pub mod clone;
 pub mod convert_to_delta;
 pub mod create;
 pub mod drop_constraints;
@@ -227,6 +228,13 @@ impl DeltaOps {
     /// Generate a symlink_format_manifest for other engines
     pub fn generate(self) -> GenerateBuilder {
         GenerateBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
+    }
+
+    /// Shallow-clone a table from a source location into a target location via builder API
+    ///
+    /// Construct a [`CloneBuilder`], then set `target`. The source is the active table of this `DeltaOps`.
+    pub fn clone_table(self) -> CloneBuilder {
+        CloneBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Load data from a DeltaTable
