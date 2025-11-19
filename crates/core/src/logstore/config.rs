@@ -236,14 +236,14 @@ impl StorageConfig {
     }
 }
 
-pub(super) fn try_parse_impl<T: std::fmt::Debug, K, V, I>(
+pub(super) fn try_parse_impl<T, K, V, I>(
     options: I,
 ) -> DeltaResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
-    T: TryUpdateKey,
+    T: TryUpdateKey + std::fmt::Debug,
 {
     let result = ParseResult::from_iter(options);
     result.raise_errors()?;
