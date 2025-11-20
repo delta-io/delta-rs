@@ -7,6 +7,8 @@
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 use std::collections::HashMap;
+#[cfg(feature = "datafusion")]
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 #[cfg(feature = "datafusion")]
@@ -413,12 +415,12 @@ pub fn get_num_idx_cols_and_stats_columns(
 pub(crate) fn get_target_file_size(
     config: Option<&TableProperties>,
     configuration: &HashMap<String, Option<String>>,
-) -> u64 {
+) -> NonZeroU64 {
     match &config {
-        Some(conf) => conf.target_file_size().get(),
+        Some(conf) => conf.target_file_size(),
         _ => configuration
             .get("delta.targetFileSize")
-            .and_then(|v| v.clone().map(|v| v.parse::<u64>().unwrap()))
+            .and_then(|v| v.clone().and_then(|v| v.parse::<NonZeroU64>().ok()))
             .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
     }
 }
