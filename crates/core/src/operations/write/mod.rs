@@ -617,12 +617,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     .map(|snapshot| snapshot.table_properties());
 
                 let target_file_size = this.target_file_size.unwrap_or_else(|| {
-                    Some(
-                        this.snapshot
-                            .as_ref()
-                            .map(|snapshot| snapshot.table_properties().target_file_size())
-                            .unwrap_or(DEFAULT_TARGET_FILE_SIZE),
-                    )
+                    Some(super::get_target_file_size(config, &this.configuration))
                 });
 
                 let (num_indexed_cols, stats_columns) =

@@ -7,6 +7,8 @@
 //! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 use std::collections::HashMap;
+#[cfg(feature = "datafusion")]
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 #[cfg(feature = "datafusion")]
@@ -404,6 +406,23 @@ pub fn get_num_idx_cols_and_stats_columns(
             .clone()
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     )
+}
+
+/// Get the target_file_size from the table configuration in the sates
+/// If table_config does not exist (only can occur in the first write action) it takes
+/// the configuration that was passed to the writerBuilder.
+#[cfg(feature = "datafusion")]
+pub(crate) fn get_target_file_size(
+    config: Option<&TableProperties>,
+    configuration: &HashMap<String, Option<String>>,
+) -> NonZeroU64 {
+    match &config {
+        Some(conf) => conf.target_file_size(),
+        _ => configuration
+            .get("delta.targetFileSize")
+            .and_then(|v| v.clone().and_then(|v| v.parse::<NonZeroU64>().ok()))
+            .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
+    }
 }
 
 #[cfg(feature = "datafusion")]
