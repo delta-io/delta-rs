@@ -71,7 +71,7 @@ jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
 version = "0.26"
-features = ["extension-module", "abi3", "abi3-py39"]
+features = ["extension-module", "abi3", "abi3-py310"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"

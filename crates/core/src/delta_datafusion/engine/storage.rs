@@ -98,6 +98,11 @@ impl StorageHandler for DataFusionStorageHandler {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("copy_atomic not implemented"))
     }
+
+    fn head(&self, path: &Url) -> DeltaResult<FileMeta> {
+        // TODO: Implement atomic copy operation
+        Err(delta_kernel::Error::generic("head not implemented"))
+    }
 }
 
 pub(crate) trait AsObjectStoreUrl {
