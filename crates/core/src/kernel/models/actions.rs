@@ -537,6 +537,11 @@ impl ProtocolInner {
                 }
             }
         }
+        // When reader version is 3, and reader features exists, write features must also exist.
+        if self.min_reader_version == 3 && self.writer_features.is_none() {
+            self.writer_features = Some(HashSet::from([]));
+        }
+
         Ok(self)
     }
 
