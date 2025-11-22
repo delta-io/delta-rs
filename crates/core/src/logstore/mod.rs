@@ -338,13 +338,12 @@ pub trait LogStore: Send + Sync + AsAny {
         &DELTA_LOG_PATH
     }
 
-    #[deprecated(
-        since = "0.1.0",
-        note = "DO NOT USE: Just a stop gap to support lakefs during kernel migration"
-    )]
-    fn transaction_url(&self, _operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
-        panic!("WHY IS THIS HERE OMG");
-        Ok(base.clone())
+    /// Generate the appropriate [Url] to use for executing an operation.
+    ///
+    ///  This can be useful for branching LogStore implementations such as LakeFS which may return
+    ///  something other than the base URL.
+    fn transaction_url(&self, _operation_id: Option<Uuid>) -> DeltaResult<Url> {
+        Ok(self.config().location.clone())
     }
 
     /// Check if the location is a delta table location

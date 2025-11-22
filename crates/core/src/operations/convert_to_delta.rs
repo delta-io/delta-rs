@@ -629,7 +629,7 @@ mod tests {
         );
 
         // Execute the future, blocking the current thread until completion
-        let mut files = file_paths_from(table.snapshot().unwrap().snapshot(), table.log_store())
+        let mut files = file_paths_from(table.snapshot().unwrap(), &table.log_store())
             .await
             .unwrap();
 
@@ -760,9 +760,9 @@ mod tests {
             path,
             0,
             vec![
-                "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+                "x=A/A/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
                     .to_string(),
-                "x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
+                "x=B B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
                     .to_string(),
             ],
             vec![
@@ -848,7 +848,7 @@ mod tests {
             ],
             vec![schema_field("value", PrimitiveType::Integer, false)],
             &[],
-        );
+        ).await;
 
         let path = "../test/tests/data/delta-0.8-empty";
         let table = open_created_delta_table(path, Vec::new()).await;
@@ -862,7 +862,7 @@ mod tests {
             ],
             vec![schema_field("column", PrimitiveType::Long, true)],
             &[],
-        );
+        ).await;
 
         let path = "../test/tests/data/delta-0.8.0";
         let table = open_created_delta_table(path, Vec::new()).await;
