@@ -2277,6 +2277,77 @@ mod tests {
         );
         assert_batches_sorted_eq!(&expected, &actual);
     }
+    #[tokio::test]
+    async fn test_merge_schema_evolution_simple_update_with_simple_insert() {
+        let (table, _) = setup().await;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("inserted_by", ArrowDataType::Utf8, true),
+        ]));
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![50, 200, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = DeltaOps(table)
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value").add(lit(1)))
+                    .update("modified", col("source.modified"))
+                    .update("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+                    .set("inserted_by", "source.inserted_by")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
+        let expected = vec![
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 1     | 2021-02-01 |             |",
+            "| B  | 51    | 2021-02-02 | B1          |",
+            "| C  | 201   | 2023-07-04 | C1          |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "+----+-------+------------+-------------+",
+        ];
+        let actual = get_data(&table).await;
+        let expected_schema_struct: StructType = Arc::clone(&schema).try_into_kernel().unwrap();
+        assert_eq!(
+            &expected_schema_struct,
+            table.snapshot().unwrap().schema().as_ref()
+        );
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
 
     #[tokio::test]
     async fn test_merge_schema_evolution_simple_insert() {
