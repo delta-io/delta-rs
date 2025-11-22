@@ -298,6 +298,82 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
     assert result.schema == expected.schema
     assert result == expected
 
+def test_merge_when_matched_update_wo_predicate_and_insert_with_schema_evolution(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "customer": Array(
+                ["john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
+        },
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update(
+        {"price": "s.price", "sold": "s.sold+int'10'", "customer": "s.customer"}
+    ).when_not_matched_insert_all().execute()
+
+    expected = Table(
+        {
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 20, 30],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "customer": Array(
+                [None, None, None, "john", "doe"],
+                ArrowField("customer", type=DataType.string(), nullable=True),
+            ),
+        },
+    )
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result.schema == expected.schema
+    assert result == expected
+
 
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_matched_update_all_wo_predicate(
