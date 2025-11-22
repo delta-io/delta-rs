@@ -374,8 +374,13 @@ impl LogStore for LakeFSLogStore {
         &self.config
     }
 
-    fn transaction_url(&self, operation_id: Uuid, base: &Url) -> DeltaResult<Url> {
-        self.get_transaction_url(operation_id, base.to_string())
+    fn transaction_url(&self, operation_id: Option<Uuid>) -> DeltaResult<Url> {
+        match operation_id {
+            Some(op) => self.get_transaction_url(op, self.config.location.to_string()),
+            None => {
+                Err(DeltaTableError::InvalidData { violations: vec!["LakeFS must use operation_ids for operations".into()] })
+            }
+        }
     }
 }
 

@@ -36,12 +36,7 @@ pub(crate) async fn create_checkpoint_for(
     log_store: &dyn LogStore,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let table_root = if let Some(op_id) = operation_id {
-        #[allow(deprecated)]
-        log_store.transaction_url(op_id, &log_store.table_root_url())?
-    } else {
-        log_store.table_root_url()
-    };
+    let table_root = log_store.transaction_url(operation_id)?;
     let engine = log_store.engine(operation_id);
 
     let task_engine = engine.clone();
