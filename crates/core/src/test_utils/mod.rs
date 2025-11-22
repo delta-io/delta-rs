@@ -7,18 +7,19 @@ use url::Url;
 pub use self::factories::*;
 use crate::kernel::{EagerSnapshot, LogicalFileView};
 use crate::logstore::LogStoreRef;
+use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTableBuilder};
 use futures::TryStreamExt;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
-pub async fn file_paths_from(
-    snapshot: &EagerSnapshot,
-    log_store: LogStoreRef,
+pub(crate) async fn file_paths_from(
+    state: &DeltaTableState,
+    log_store: &LogStoreRef,
 ) -> DeltaResult<Vec<String>> {
-    Ok(snapshot
-        .file_views(&log_store, None)
+    Ok(state.snapshot()
+        .file_views(log_store, None)
         .try_collect::<Vec<LogicalFileView>>()
         .await?
         .iter()
