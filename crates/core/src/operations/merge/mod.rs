@@ -1501,16 +1501,19 @@ fn modify_schema(
             let error = arrow::error::ArrowError::SchemaError("Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.".to_string());
             return Err(DeltaTableError::Arrow { source: error });
         }
-
-        if let Ok(target_field) = target_schema.field_from_column(columns) {
-            // for nested data types we need to first merge then see if there a change then replace the pre-existing field
-            let new_field = merge_arrow_field(target_field, source_field, true)?;
-            if &new_field == target_field {
-                continue;
+        //Check if the columns in the source schema exist in the target schema
+        match target_schema.field_from_column(columns) {
+            Ok(target_field) => {
+                // This case is when there is an added column in an nested datatype
+                let new_field = merge_arrow_field(target_field, source_field, true)?;
+                if &new_field != target_field {
+                    ending_schema.try_merge(&Arc::new(new_field))?;
+                }
             }
-            ending_schema.try_merge(&Arc::new(new_field))?;
-        } else {
-            ending_schema.push(source_field.to_owned().with_nullable(true));
+            Err(_) => {
+                // This function is called multiple time with different operations so this handle any collisions
+                ending_schema.try_merge(&Arc::new(source_field.to_owned().with_nullable(true)))?;
+            }
         }
     }
     Ok(())
@@ -2338,6 +2341,7 @@ mod tests {
             "| B  | 51    | 2021-02-02 | B1          |",
             "| C  | 201   | 2023-07-04 | C1          |",
             "| D  | 100   | 2021-02-02 |             |",
+            "| X  | 30    | 2023-07-04 | X1          |",
             "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
