@@ -1000,7 +1000,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::logstore::{commit_uri_from_version, default_logstore::DefaultLogStore, LogStore};
+    use crate::logstore::{
+        commit_uri_from_version, default_logstore::DefaultLogStore, LogStore, StorageConfig,
+    };
     use object_store::{memory::InMemory, ObjectStore, PutPayload};
     use url::Url;
 
@@ -1019,10 +1021,7 @@ mod tests {
         let log_store = DefaultLogStore::new(
             store.clone(),
             store.clone(),
-            crate::logstore::LogStoreConfig {
-                location: url,
-                options: Default::default(),
-            },
+            crate::logstore::LogStoreConfig::new(url, StorageConfig::default()),
         );
         let version_path = Path::from("_delta_log/00000000000000000000.json");
         store.put(&version_path, PutPayload::new()).await.unwrap();
