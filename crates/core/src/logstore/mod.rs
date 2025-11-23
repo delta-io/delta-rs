@@ -148,10 +148,7 @@ pub fn default_logstore(
     Arc::new(default_logstore::DefaultLogStore::new(
         prefixed_store,
         root_store,
-        LogStoreConfig {
-            location: location.clone(),
-            options: options.clone(),
-        },
+        LogStoreConfig::new(location.clone(), options.clone()),
     ))
 }
 
@@ -234,12 +231,32 @@ pub enum PeekCommit {
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
     /// url corresponding to the storage location.
-    pub location: Url,
+    location: Url,
     // Options used for configuring backend storage
-    pub options: StorageConfig,
+    options: StorageConfig,
 }
 
 impl LogStoreConfig {
+    pub fn new(mut location: Url, options: StorageConfig) -> Self {
+        if !location.path().ends_with('/') {
+            if let Ok(mut segments) = location.path_segments_mut() {
+                // Pushing an empty string ensures that the [Url] has a trailing slash
+                segments.push("");
+            } else {
+                warn!("A recoverable error occurred when trying to sanitize the URL, input URL could not have a trailing slash added which can cause inconsistent behavior");
+            }
+        }
+        Self { location, options }
+    }
+
+    pub fn location(&self) -> &Url {
+        &self.location
+    }
+
+    pub fn options(&self) -> &StorageConfig {
+        &self.options
+    }
+
     pub fn decorate_store<T: ObjectStore + Clone>(
         &self,
         store: T,
@@ -343,7 +360,7 @@ pub trait LogStore: Send + Sync + AsAny {
     ///  This can be useful for branching LogStore implementations such as LakeFS which may return
     ///  something other than the base URL.
     fn transaction_url(&self, _operation_id: Option<Uuid>) -> DeltaResult<Url> {
-        Ok(self.config().location.clone())
+        Ok(self.config().location().clone())
     }
 
     /// Check if the location is a delta table location
@@ -744,8 +761,20 @@ pub async fn abort_commit_entry(
 #[cfg(test)]
 pub(crate) mod tests {
     use futures::TryStreamExt;
+    use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn test_logstore_config_ctor() {
+        let location = Url::parse("nonexistent://table").unwrap();
+        let config = LogStoreConfig::new(location, StorageConfig::default());
+        assert_eq!(config.location().to_string(), "nonexistent://table/");
+        assert_eq!(
+            config.location().join("_delta_log/").unwrap(),
+            Url::parse("nonexistent://table/_delta_log/").unwrap()
+        );
+    }
 
     #[test]
     fn logstore_with_invalid_url() {
