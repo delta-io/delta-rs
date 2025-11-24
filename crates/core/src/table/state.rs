@@ -370,8 +370,8 @@ impl EagerSnapshot {
             input_schema,
             expression.into(),
             table_schema,
-)?;
-        
+        )?;
+
         let results = files
             .iter()
             .map(|file| evaluator.evaluate_arrow(file.clone()))
