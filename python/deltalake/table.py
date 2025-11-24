@@ -861,15 +861,6 @@ class DeltaTable:
 
         if (
             table_protocol.reader_features
-            and "columnMapping" in table_protocol.reader_features
-        ):
-            raise DeltaProtocolError(
-                "The table requires reader feature 'columnMapping' "
-                "but this is not supported using pyarrow Datasets."
-            )
-
-        if (
-            table_protocol.reader_features
             and "deletionVectors" in table_protocol.reader_features
         ):
             raise DeltaProtocolError(
