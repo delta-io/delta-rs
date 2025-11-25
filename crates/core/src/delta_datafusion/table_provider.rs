@@ -43,6 +43,8 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::StreamExt as _;
 use itertools::Itertools;
@@ -438,6 +440,8 @@ impl<'a> DeltaScanBuilder<'a> {
             Some(schema.clone()),
         )?;
 
+        let column_mapping_mode = self.snapshot.table_configuration().column_mapping_mode();
+
         let logical_schema = if let Some(used_columns) = self.projection {
             let mut fields = Vec::with_capacity(used_columns.len());
             for idx in used_columns {
@@ -592,14 +596,40 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
-        let file_schema = Arc::new(Schema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<arrow::datatypes::FieldRef>>(),
-        ));
+        let physical_delta_schema = if column_mapping_mode != ColumnMappingMode::None {
+            delta_kernel::schema::StructType::try_new(
+                self.snapshot
+                    .snapshot()
+                    .schema()
+                    .fields()
+                    .map(|field| field.make_physical(column_mapping_mode)),
+            )?
+        } else {
+            (*self.snapshot.snapshot().schema()).clone()
+        };
+        let physical_arrow_schema: SchemaRef = Arc::new((&physical_delta_schema).try_into_arrow()?);
+
+        let file_schema = if column_mapping_mode != ColumnMappingMode::None {
+            // Use the logical schema (which has logical names and physical name metadata)
+            Arc::new(Schema::new(
+                logical_schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !table_partition_cols.contains(f.name()))
+                    .cloned()
+                    .collect::<Vec<arrow::datatypes::FieldRef>>(),
+            ))
+        } else {
+            // Use the physical schema for non-mapped tables
+            Arc::new(Schema::new(
+                physical_arrow_schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !table_partition_cols.contains(f.name()))
+                    .cloned()
+                    .collect::<Vec<arrow::datatypes::FieldRef>>(),
+            ))
+        };
 
         let mut table_partition_cols = table_partition_cols
             .iter()
@@ -661,7 +691,9 @@ impl<'a> DeltaScanBuilder<'a> {
             file_source = file_source.with_predicate(predicate);
         };
         let file_source =
-            file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
+            file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {
+                column_mapping_mode,
+            }))?;
 
         let file_scan_config =
             FileScanConfigBuilder::new(self.log_store.object_store_url(), file_schema, file_source)
