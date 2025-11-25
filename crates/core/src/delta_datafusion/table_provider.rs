@@ -462,7 +462,17 @@ impl<'a> DeltaScanBuilder<'a> {
             logical_schema
         };
 
-        let df_schema = logical_schema.clone().to_dfschema()?;
+        let logical_schema_for_scan = if column_mapping_mode != ColumnMappingMode::None {
+            df_logical_schema(
+                self.snapshot,
+                &config.file_column_name,
+                Some(schema.clone()),
+            )?
+        } else {
+            logical_schema.clone()
+        };
+
+        let df_schema = logical_schema_for_scan.clone().to_dfschema()?;
 
         let logical_filter = self
             .filter
@@ -596,23 +606,10 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
-        let physical_delta_schema = if column_mapping_mode != ColumnMappingMode::None {
-            delta_kernel::schema::StructType::try_new(
-                self.snapshot
-                    .snapshot()
-                    .schema()
-                    .fields()
-                    .map(|field| field.make_physical(column_mapping_mode)),
-            )?
-        } else {
-            (*self.snapshot.snapshot().schema()).clone()
-        };
-        let physical_arrow_schema: SchemaRef = Arc::new((&physical_delta_schema).try_into_arrow()?);
-
         let file_schema = if column_mapping_mode != ColumnMappingMode::None {
             // Use the logical schema (which has logical names and physical name metadata)
             Arc::new(Schema::new(
-                logical_schema
+                logical_schema_for_scan
                     .fields()
                     .iter()
                     .filter(|f| !table_partition_cols.contains(f.name()))
@@ -620,9 +617,9 @@ impl<'a> DeltaScanBuilder<'a> {
                     .collect::<Vec<arrow::datatypes::FieldRef>>(),
             ))
         } else {
-            // Use the physical schema for non-mapped tables
+            // Use the original schema for non-mapped tables
             Arc::new(Schema::new(
-                physical_arrow_schema
+                schema
                     .fields()
                     .iter()
                     .filter(|f| !table_partition_cols.contains(f.name()))
