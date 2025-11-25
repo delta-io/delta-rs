@@ -59,7 +59,7 @@ SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = 2
-SUPPORTED_READER_FEATURES = {"timestampNtz"}
+SUPPORTED_READER_FEATURES = {"timestampNtz", "columnMapping"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
