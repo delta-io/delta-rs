@@ -88,13 +88,11 @@ impl DeltaSchemaAdapter {
         table_field: &Field,
         file_schema: &Schema,
     ) -> Option<usize> {
-        // Try direct name match first
         if let Some((file_idx, _)) = file_schema.fields.find(table_field.name()) {
             return Some(file_idx);
         }
 
         let physical_name = self.get_physical_name(proj_idx, table_field)?;
-        // Try resolving via column mapping
         file_schema
             .fields
             .find(physical_name.as_str())
@@ -108,15 +106,8 @@ impl DeltaSchemaAdapter {
             ColumnMappingMode::Id => "delta.columnMapping.id",
         };
 
-        // Check the projected field's metadata
         if let Some(physical_name) = table_field.metadata().get(key) {
             return Some(physical_name.clone());
-        }
-
-        // Fallback: check original field at same position (for aliased columns)
-        if proj_idx < self.table_schema.fields().len() {
-            let original_field = &self.table_schema.fields()[proj_idx];
-            return original_field.metadata().get(key).cloned();
         }
 
         None
