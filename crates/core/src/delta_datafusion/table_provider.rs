@@ -606,7 +606,6 @@ impl<'a> DeltaScanBuilder<'a> {
         }
 
         let file_schema = if column_mapping_mode != ColumnMappingMode::None {
-            // Use the logical schema (which has logical names and physical name metadata)
             Arc::new(Schema::new(
                 logical_schema_for_scan
                     .fields()
@@ -616,7 +615,6 @@ impl<'a> DeltaScanBuilder<'a> {
                     .collect::<Vec<arrow::datatypes::FieldRef>>(),
             ))
         } else {
-            // Use the original schema for non-mapped tables
             Arc::new(Schema::new(
                 schema
                     .fields()
