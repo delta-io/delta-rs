@@ -298,6 +298,7 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
     assert result.schema == expected.schema
     assert result == expected
 
+
 def test_merge_when_matched_update_wo_predicate_and_insert_with_schema_evolution(
     tmp_path: pathlib.Path, sample_table: Table
 ):
