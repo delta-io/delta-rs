@@ -144,8 +144,41 @@ pub(crate) struct SchemaMapping {
 
 impl SchemaMapper for SchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let record_batch = cast_record_batch(&batch, self.logical_schema.clone(), false, true)?;
-        Ok(record_batch)
+        // Cast individual columns to match the target schema types
+        // This handles type differences like timestamp precision mismatches
+        let batch_columns = batch.columns().to_vec();
+        let mut casted_columns = Vec::with_capacity(batch_columns.len());
+
+        for (col, target_field) in batch_columns
+            .iter()
+            .zip(self.logical_schema.fields().iter())
+        {
+            if col.data_type() == target_field.data_type() {
+                // Types match, use column as-is
+                casted_columns.push(col.clone());
+            } else {
+                // Types differ, cast the column
+                match cast_with_options(col, target_field.data_type(), &CastOptions::default()) {
+                    Ok(casted) => casted_columns.push(casted),
+                    Err(e) => {
+                        return Err(datafusion::error::DataFusionError::Internal(format!(
+                            "Failed to cast column '{}' from {} to {}: {}",
+                            target_field.name(),
+                            col.data_type(),
+                            target_field.data_type(),
+                            e
+                        )))
+                    }
+                }
+            }
+        }
+
+        RecordBatch::try_new_with_options(
+            self.logical_schema.clone(),
+            casted_columns,
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )
+        .map_err(|e| datafusion::error::DataFusionError::ArrowError(Box::new(e), None))
     }
 
     fn map_column_statistics(
