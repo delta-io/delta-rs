@@ -61,7 +61,7 @@ SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = 2
-SUPPORTED_READER_FEATURES = {"timestampNtz"}
+SUPPORTED_READER_FEATURES = {"timestampNtz", "columnMapping"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
@@ -921,15 +921,6 @@ class DeltaTable:
                     f"The table has set these reader features: {missing_features} "
                     "but these are not yet supported by the deltalake reader."
                 )
-
-        if (
-            table_protocol.reader_features
-            and "columnMapping" in table_protocol.reader_features
-        ):
-            raise DeltaProtocolError(
-                "The table requires reader feature 'columnMapping' "
-                "but this is not supported using pyarrow Datasets."
-            )
 
         if (
             table_protocol.reader_features
