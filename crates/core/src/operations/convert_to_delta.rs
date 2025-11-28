@@ -531,8 +531,8 @@ mod tests {
 
     use super::*;
     use crate::kernel::{DataType, PrimitiveType};
+    use crate::open_table;
     use crate::test_utils::file_paths_from;
-    use crate::{open_table, Path};
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {
         StructField::new(key.to_string(), DataType::Primitive(primitive), nullable)
@@ -848,7 +848,8 @@ mod tests {
             ],
             vec![schema_field("value", PrimitiveType::Integer, false)],
             &[],
-        ).await;
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8-empty";
         let table = open_created_delta_table(path, Vec::new()).await;
@@ -862,7 +863,8 @@ mod tests {
             ],
             vec![schema_field("column", PrimitiveType::Long, true)],
             &[],
-        ).await;
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8.0";
         let table = open_created_delta_table(path, Vec::new()).await;
