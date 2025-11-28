@@ -135,8 +135,6 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 

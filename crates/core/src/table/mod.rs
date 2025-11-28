@@ -92,9 +92,11 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store =
-                    crate::logstore::logstore_for(storage_config.location, storage_config.options)
-                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store = crate::logstore::logstore_for(
+                    storage_config.location().clone(),
+                    storage_config.options().clone(),
+                )
+                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
 
                 let table = DeltaTable {
                     state,

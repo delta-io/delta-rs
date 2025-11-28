@@ -42,7 +42,6 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use schema_evolution::try_cast_schema;
 use serde::{Deserialize, Serialize};
-use tracing::log::*;
 use tracing::Instrument;
 
 pub use self::configs::WriterStatsConfig;
