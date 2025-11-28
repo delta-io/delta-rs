@@ -194,7 +194,6 @@ pub fn crate_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use futures::TryStreamExt as _;
-    use itertools::Itertools;
 
     use super::*;
     use crate::table::PeekCommit;

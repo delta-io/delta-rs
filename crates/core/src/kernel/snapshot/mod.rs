@@ -652,13 +652,11 @@ impl EagerSnapshot {
             .boxed()
     }
 
-    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
-    pub fn file_views_by_partitions(
+    pub(crate) fn file_views_by_partitions(
         &self,
         log_store: &dyn LogStore,
         filters: &[PartitionFilter],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        panic!("YOU'RE CALLING A DEPRECATED FUNCTION IDIOT");
         if filters.is_empty() {
             return self.file_views(log_store, None);
         }

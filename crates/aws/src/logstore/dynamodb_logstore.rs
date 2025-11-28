@@ -85,10 +85,9 @@ impl S3DynamoDbLogStore {
             .prefixed_store(prefixed_store)
             .root_store(root_store)
             .lock_client(lock_client)
-            .config(LogStoreConfig {
-                location,
-                options: options.clone(),
-            })
+            .config(LogStoreConfig::new(
+                location.clone(), options.clone())
+            )
             .table_path(table_path)
             .build())
     }

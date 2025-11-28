@@ -147,22 +147,6 @@ impl DeltaOps {
         }
     }
 
-    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri string (deprecated).
-    ///
-    /// ```
-    /// use deltalake_core::DeltaOps;
-    ///
-    /// async {
-    ///     let ops = DeltaOps::try_from_uri_str("memory:///").await.unwrap();
-    /// };
-    /// ```
-    #[deprecated(note = "Use try_from_uri with url::Url instead")]
-    pub async fn try_from_uri_str(uri: impl AsRef<str>) -> DeltaResult<Self> {
-        panic!("STOP USING THIS JEEZ");
-        let url = ensure_table_uri(uri)?;
-        Self::try_from_uri(url).await
-    }
-
     /// Create a [`DeltaOps`] instance from URL with storage options
     pub async fn try_from_uri_with_storage_options(
         uri: Url,
@@ -177,17 +161,6 @@ impl DeltaOps {
             Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
             Err(err) => Err(err),
         }
-    }
-
-    /// Create a [`DeltaOps`] instance from uri string with storage options (deprecated)
-    #[deprecated(note = "Use try_from_uri_with_storage_options with url::Url instead")]
-    pub async fn try_from_uri_str_with_storage_options(
-        uri: impl AsRef<str>,
-        storage_options: HashMap<String, String>,
-    ) -> DeltaResult<Self> {
-        panic!("EW GROSS");
-        let url = ensure_table_uri(uri)?;
-        Self::try_from_uri_with_storage_options(url, storage_options).await
     }
 
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
