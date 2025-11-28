@@ -648,7 +648,7 @@ mod tests {
         use parquet::arrow::async_reader::ParquetObjectReader;
         use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
-        for pq in table.snapshot()?.file_paths_iter() {
+        for pq in table.get_files_by_partitions(&[]).await? {
             let store = table.log_store().object_store(None);
             let reader = ParquetObjectReader::new(store, pq);
             let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;

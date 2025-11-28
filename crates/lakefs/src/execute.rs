@@ -30,7 +30,7 @@ impl CustomExecuteHandler for LakeFSCustomExecuteHandler {
         if let Some(lakefs_store) = log_store.clone().as_any().downcast_ref::<LakeFSLogStore>() {
             let (repo, _, _) = lakefs_store
                 .client
-                .decompose_url(lakefs_store.config().location.to_string());
+                .decompose_url(lakefs_store.config().location().to_string());
             let result = lakefs_store
                 .client
                 .delete_branch(repo, lakefs_store.client.get_transaction(operation_id)?)

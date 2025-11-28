@@ -7,7 +7,6 @@ use std::sync::Arc;
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use tracing::log::*;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
