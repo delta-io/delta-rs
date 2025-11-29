@@ -176,7 +176,10 @@ def test_set_table_properties_min_reader_version(
         mode="append",
     )
     dt = DeltaTable(tmp_path)
-    configuration = {"delta.minReaderVersion": min_reader_version, "delta.minWriterVersion": "7"}
+    configuration = {
+        "delta.minReaderVersion": min_reader_version,
+        "delta.minWriterVersion": "7",
+    }
     dt.alter.set_table_properties(configuration)
 
     protocol = dt.protocol()
