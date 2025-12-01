@@ -18,6 +18,7 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileSource,
 };
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::TableType;
 use datafusion::error::DataFusionError;
@@ -48,6 +49,8 @@ use futures::StreamExt as _;
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
+use std::path::Path as StdPath;
+use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
@@ -574,7 +577,104 @@ impl<'a> DeltaScanBuilder<'a> {
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         for action in files.iter() {
-            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
+            // Normalize path using shared utilities to avoid duplication and support full path URIs
+            let mut adjusted = action.clone();
+            let root = self.log_store.config().location.clone();
+            let p = adjusted.path.as_str();
+
+            if root.scheme() == "file" {
+                // For local filesystem tables, DataFusion reads via the table's registered object
+                // store which may be prefixed. We prefer relative paths under the table dir when
+                // possible. If the log contains an absolute path, keep it as-is only for URI
+                // reporting; when constructing DataFusion files, attempt to relativize to table
+                // root if under it, otherwise leave as-is and hope the underlying store can
+                // resolve it (best-effort and consistent with existing behavior).
+                match root.to_file_path() {
+                    Ok(root_fs) => {
+                        let input_fs = StdPath::new(p);
+                        if input_fs.is_absolute() {
+                            if let Ok(rel) = input_fs.strip_prefix(&root_fs) {
+                                adjusted.path = rel
+                                    .to_str()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| rel.to_string_lossy().into_owned());
+                            } else {
+                                // Leave absolute path to be handled downstream
+                                adjusted.path = input_fs
+                                    .to_str()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| input_fs.to_string_lossy().into_owned());
+                            }
+                        } else {
+                            // relative path remains as-is
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback: treat as relative or keep raw
+                    }
+                }
+            } else {
+                // For non-file schemes, strip table root when full URI is given so paths are
+                // relative to the table-scoped object store.
+                match Url::parse(p) {
+                    Ok(_) => {
+                        adjusted.path = crate::logstore::strip_table_root_from_full_uri(&root, p);
+                    }
+                    Err(_) => {
+                        // Not a URI; keep as-is (typically already relative to the store)
+                    }
+                }
+            }
+
+            // Build PartitionedFile with ObjectMeta that matches the selected store
+            let ts_secs = adjusted.modification_time / 1000;
+            let ts_ns = (adjusted.modification_time % 1000) * 1_000_000;
+            let last_modified = Utc.from_utc_datetime(
+                &DateTime::from_timestamp(ts_secs, ts_ns as u32)
+                    .unwrap()
+                    .naive_utc(),
+            );
+
+            let object_meta = if root.scheme() == "file" {
+                // Use a root-scoped filesystem store; provide absolute path without leading '/'
+                let abs = match root.to_file_path() {
+                    Ok(root_fs) => {
+                        let input_fs = StdPath::new(adjusted.path.as_str());
+                        if input_fs.is_absolute() {
+                            input_fs.to_path_buf()
+                        } else {
+                            root_fs.join(input_fs)
+                        }
+                    }
+                    Err(_) => StdPath::new(adjusted.path.as_str()).to_path_buf(),
+                };
+                let rel_from_root = abs
+                    .to_str()
+                    .map(|s| s.trim_start_matches(['/', '\\']).to_string())
+                    .unwrap_or_else(|| abs.to_string_lossy().trim_start_matches('/').to_string());
+
+                ObjectMeta {
+                    location: object_store::path::Path::from(rel_from_root.as_str()),
+                    last_modified,
+                    size: adjusted.size as u64,
+                    e_tag: None,
+                    version: None,
+                }
+            } else {
+                ObjectMeta {
+                    last_modified,
+                    ..adjusted.try_into().unwrap()
+                }
+            };
+
+            let mut part = PartitionedFile {
+                object_meta,
+                partition_values: vec![],
+                range: None,
+                extensions: None,
+                statistics: None,
+                metadata_size_hint: None,
+            };
 
             if config.file_column_name.is_some() {
                 let partition_value = if config.wrap_partition_values {
@@ -662,8 +762,20 @@ impl<'a> DeltaScanBuilder<'a> {
         let file_source =
             file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
 
+        // If using local filesystem, register a root-scoped store and scan against that
+        let (scan_store_url, _) = if self.log_store.config().location.scheme() == "file" {
+            let url = ObjectStoreUrl::parse("delta-rs://file-root").unwrap();
+            // Ensure a root store is registered for the session runtime
+            self.session
+                .runtime_env()
+                .register_object_store(url.as_ref(), self.log_store.root_object_store(None));
+            (url, ())
+        } else {
+            (self.log_store.object_store_url(), ())
+        };
+
         let file_scan_config =
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), file_schema, file_source)
+            FileScanConfigBuilder::new(scan_store_url, file_schema, file_source)
                 .with_file_groups(
                     // If all files were filtered out, we still need to emit at least one partition to
                     // pass datafusion sanity checks.

@@ -150,6 +150,10 @@ name = "commit_info_format"
 required-features = ["datafusion"]
 
 [[test]]
+name = "full_path"
+required-features = ["datafusion"]
+
+[[test]]
 name = "integration"
 required-features = ["datafusion"]
 
