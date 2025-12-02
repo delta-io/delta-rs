@@ -13,8 +13,8 @@ use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::ensure_table_uri;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::logstore::{commit_uri_from_version, StorageConfig};
-use deltalake_core::logstore::{logstore_for, CommitOrBytes, LogStore};
+use deltalake_core::logstore::{CommitOrBytes, LogStore, logstore_for};
+use deltalake_core::logstore::{StorageConfig, commit_uri_from_version};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
@@ -56,15 +56,17 @@ fn make_client() -> TestResult<DynamoDbLockClient> {
 #[test]
 #[serial]
 fn client_configs_via_env_variables() -> TestResult<()> {
-    std::env::set_var(
-        deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME,
-        "64",
-    );
-    std::env::set_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME, "some_table");
-    std::env::set_var(
-        deltalake_aws::constants::BILLING_MODE_KEY_NAME,
-        "PAY_PER_REQUEST",
-    );
+    unsafe {
+        std::env::set_var(
+            deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME,
+            "64",
+        );
+        std::env::set_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME, "some_table");
+        std::env::set_var(
+            deltalake_aws::constants::BILLING_MODE_KEY_NAME,
+            "PAY_PER_REQUEST",
+        );
+    }
     let client = make_client()?;
     let config = client.get_dynamodb_config();
     let options: S3StorageOptions = S3StorageOptions::try_default().unwrap();
@@ -77,9 +79,11 @@ fn client_configs_via_env_variables() -> TestResult<()> {
             .build(),
         *config,
     );
-    std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
-    std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
-    std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
+    unsafe {
+        std::env::remove_var(deltalake_aws::constants::LOCK_TABLE_KEY_NAME);
+        std::env::remove_var(deltalake_aws::constants::MAX_ELAPSED_REQUEST_TIME_KEY_NAME);
+        std::env::remove_var(deltalake_aws::constants::BILLING_MODE_KEY_NAME);
+    }
     Ok(())
 }
 
@@ -306,21 +310,25 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
         .await?;
 
     // Abort will fail since we marked the entry as complete
-    assert!(log_store
-        .abort_commit_entry(
-            entry.version,
-            CommitOrBytes::TmpCommit(entry.temp_path.clone()),
-            Uuid::new_v4(),
-        )
-        .await
-        .is_err());
+    assert!(
+        log_store
+            .abort_commit_entry(
+                entry.version,
+                CommitOrBytes::TmpCommit(entry.temp_path.clone()),
+                Uuid::new_v4(),
+            )
+            .await
+            .is_err()
+    );
 
     // Check temp commit file still exists
-    assert!(log_store
-        .object_store(None)
-        .get(&entry.temp_path)
-        .await
-        .is_ok());
+    assert!(
+        log_store
+            .object_store(None)
+            .get(&entry.temp_path)
+            .await
+            .is_ok()
+    );
 
     Ok(())
 }

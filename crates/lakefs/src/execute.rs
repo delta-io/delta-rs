@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use deltalake_core::{
+    DeltaResult, DeltaTableError,
     logstore::{LogStore as _, LogStoreRef},
     operations::CustomExecuteHandler,
-    DeltaResult, DeltaTableError,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -93,7 +93,7 @@ mod tests {
     use crate::register_handlers;
 
     use super::*;
-    use deltalake_core::logstore::{logstore_for, ObjectStoreRegistry, StorageConfig};
+    use deltalake_core::logstore::{ObjectStoreRegistry, StorageConfig, logstore_for};
     use http::StatusCode;
     use maplit::hashmap;
     use std::sync::OnceLock;
@@ -145,13 +145,17 @@ mod tests {
             .as_any()
             .downcast_ref::<LakeFSLogStore>()
         {
-            assert!(lakefs_store
-                .prefixed_registry
-                .get_store(
-                    &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
+            assert!(
+                lakefs_store
+                    .prefixed_registry
+                    .get_store(
+                        &Url::parse(
+                            format!("lakefs://repo/delta-tx-{operation_id}/table").as_str()
+                        )
                         .unwrap()
-                )
-                .is_ok());
+                    )
+                    .is_ok()
+            );
 
             assert!(lakefs_store.client.get_transaction(operation_id).is_ok())
         } else {
@@ -186,13 +190,17 @@ mod tests {
             .as_any()
             .downcast_ref::<LakeFSLogStore>()
         {
-            assert!(lakefs_store
-                .prefixed_registry
-                .get_store(
-                    &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
+            assert!(
+                lakefs_store
+                    .prefixed_registry
+                    .get_store(
+                        &Url::parse(
+                            format!("lakefs://repo/delta-tx-{operation_id}/table").as_str()
+                        )
                         .unwrap()
-                )
-                .is_ok());
+                    )
+                    .is_ok()
+            );
 
             assert!(lakefs_store.client.get_transaction(operation_id).is_ok())
         } else {

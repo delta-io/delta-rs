@@ -1,5 +1,5 @@
 //! Auxiliary module for generating a valig Mount configuration.
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::str::FromStr;
 
 use crate::error::{Error, Result};

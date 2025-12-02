@@ -4,13 +4,13 @@
 //! provide credentials for a service principal. Some of this configuration may
 //! partially be specified in the environment. This module establishes a structured
 //! way how we discover valid credentials and some heuristics on how they are prioritized.
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::ffi::OsStr;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use object_store::gcp::GoogleConfigKey;
 use object_store::Error as ObjectStoreError;
+use object_store::gcp::GoogleConfigKey;
 
 use crate::error::Result;
 

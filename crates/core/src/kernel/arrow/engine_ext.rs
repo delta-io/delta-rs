@@ -455,6 +455,7 @@ mod tests {
 
     use super::*;
 
+    use delta_kernel::EvaluationHandler;
     use delta_kernel::arrow::array::Int32Array;
     use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use delta_kernel::arrow::record_batch::RecordBatch;
@@ -462,7 +463,6 @@ mod tests {
     use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
     use delta_kernel::expressions::*;
     use delta_kernel::schema::{ArrayType, DataType};
-    use delta_kernel::EvaluationHandler;
     use pretty_assertions::assert_eq;
 
     #[test]

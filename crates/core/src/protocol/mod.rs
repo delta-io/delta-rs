@@ -508,7 +508,9 @@ impl FromStr for SaveMode {
             "overwrite" => Ok(SaveMode::Overwrite),
             "error" => Ok(SaveMode::ErrorIfExists),
             "ignore" => Ok(SaveMode::Ignore),
-            _ => Err(DeltaTableError::Generic(format!("Invalid save mode provided: {s}, only these are supported: ['append', 'overwrite', 'error', 'ignore']"))),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid save mode provided: {s}, only these are supported: ['append', 'overwrite', 'error', 'ignore']"
+            ))),
         }
     }
 }
@@ -742,19 +744,38 @@ mod tests {
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
-                ("path", Arc::new(array::StringArray::from(vec![
-                    "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet",
-                    "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet"
-                ]))),
-                ("size_bytes", Arc::new(array::Int64Array::from(vec![460, 460]))),
-                ("modification_time", Arc::new(arrow::array::Int64Array::from(vec![
-                    1627990384000, 1627990384000
-                ]))),
-                ("num_records", Arc::new(array::Int64Array::from(vec![None, None]))),
-                ("null_count.v", Arc::new(array::Int64Array::from(vec![None, None]))),
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet",
+                        "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet",
+                    ])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![460, 460])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::Int64Array::from(vec![
+                        1627990384000,
+                        1627990384000,
+                    ])),
+                ),
+                (
+                    "num_records",
+                    Arc::new(array::Int64Array::from(vec![None, None])),
+                ),
+                (
+                    "null_count.v",
+                    Arc::new(array::Int64Array::from(vec![None, None])),
+                ),
                 ("min.v", Arc::new(array::Int64Array::from(vec![None, None]))),
                 ("max.v", Arc::new(array::Int64Array::from(vec![None, None]))),
-                ("partition.k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
+                (
+                    "partition.k",
+                    Arc::new(array::StringArray::from(vec![Some("A"), None])),
+                ),
             ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 

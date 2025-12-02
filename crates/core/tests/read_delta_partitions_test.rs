@@ -58,7 +58,7 @@ async fn read_null_partitions_from_checkpoint() {
 async fn load_from_delta_8_0_table_with_special_partition() {
     use datafusion::physical_plan::SendableRecordBatchStream;
     use deltalake_core::{DeltaOps, DeltaTable};
-    use futures::{future, StreamExt};
+    use futures::{StreamExt, future};
 
     let path = "../test/tests/data/delta-0.8.0-special-partition";
     let table = deltalake_core::open_table(

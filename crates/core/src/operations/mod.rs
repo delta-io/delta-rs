@@ -31,12 +31,12 @@ use self::{
     drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
     merge::MergeBuilder, optimize::OptimizeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
+use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
-use crate::table::builder::{ensure_table_uri, DeltaTableBuilder};
-use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
-use crate::DeltaTable;
+use crate::table::builder::{DeltaTableBuilder, ensure_table_uri};
+use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
 
 pub mod add_column;
 pub mod add_feature;
@@ -403,7 +403,7 @@ mod datafusion_utils {
     use datafusion::logical_expr::Expr;
     use datafusion::{catalog::Session, common::DFSchema};
 
-    use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
+    use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     #[derive(Debug, Clone)]

@@ -3,7 +3,7 @@ use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake_core::kernel::{DataType, PrimitiveType};
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
 use deltalake_core::{
-    ensure_table_uri, errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore,
+    DeltaOps, DeltaTableBuilder, ObjectStore, ensure_table_uri, errors::DeltaResult,
 };
 use deltalake_test::utils::*;
 use object_store::path::Path;
@@ -237,9 +237,10 @@ async fn test_checkpoint_with_domain_meta() -> DeltaResult<()> {
         .snapshot()
         .domain_metadata(&table.log_store(), "delta.clustering")
         .await;
-    assert!(metadata
-        .unwrap_err()
-        .to_string()
-        .contains("User DomainMetadata are not allowed to use system-controlled 'delta.*' domain"));
+    assert!(
+        metadata.unwrap_err().to_string().contains(
+            "User DomainMetadata are not allowed to use system-controlled 'delta.*' domain"
+        )
+    );
     Ok(())
 }

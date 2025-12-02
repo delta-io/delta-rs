@@ -6,11 +6,11 @@ use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
 use serde_json::Value;
 
+use crate::DeltaTable;
 use crate::errors::DeltaTableError;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add};
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
-use crate::DeltaTable;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
@@ -32,7 +32,9 @@ pub(crate) enum DeltaWriterError {
     MissingPartitionColumn(String),
 
     /// The Arrow RecordBatch schema does not match the expected schema.
-    #[error("Arrow RecordBatch schema does not match: RecordBatch schema: {record_batch_schema}, {expected_schema}")]
+    #[error(
+        "Arrow RecordBatch schema does not match: RecordBatch schema: {record_batch_schema}, {expected_schema}"
+    )]
     SchemaMismatch {
         /// The record batch schema.
         record_batch_schema: SchemaRef,

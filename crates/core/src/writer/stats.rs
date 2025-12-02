@@ -19,7 +19,7 @@ use parquet::{
 use tracing::warn;
 
 use super::*;
-use crate::kernel::{scalars::ScalarExt, Add};
+use crate::kernel::{Add, scalars::ScalarExt};
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
@@ -631,15 +631,15 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
+        DeltaTable,
         errors::DeltaTableError,
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
-        DeltaTable,
     };
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
     use parquet::{basic::Compression, file::properties::WriterProperties};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::LazyLock;
