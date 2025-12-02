@@ -34,18 +34,18 @@ use delta_kernel::{
     Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
 };
 use futures::future::ready;
-use futures::stream::{once, BoxStream};
+use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::path::Path;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use serde_json::Deserializer;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
-use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
-use crate::kernel::{spawn_blocking_with_span, StructType, ARROW_HANDLER};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, kernel_to_arrow};
+use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
 pub use iterators::*;
@@ -718,7 +718,7 @@ mod tests {
     use super::*;
     use crate::{
         kernel::transaction::CommitData,
-        test_utils::{assert_batches_sorted_eq, TestResult, TestTables},
+        test_utils::{TestResult, TestTables, assert_batches_sorted_eq},
     };
 
     impl Snapshot {

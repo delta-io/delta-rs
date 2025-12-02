@@ -1,15 +1,15 @@
 //! Delta Table read and write implementation
 
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures::future::ready;
-use futures::stream::{once, BoxStream};
+use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{path::Path, ObjectStore};
+use object_store::{ObjectStore, path::Path};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -18,8 +18,8 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
 use crate::logstore::{
-    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
-    LogStoreRef, ObjectStoreRef,
+    LogStoreConfig, LogStoreExt, LogStoreRef, ObjectStoreRef, commit_uri_from_version,
+    extract_version_from_filename,
 };
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
@@ -237,7 +237,7 @@ impl DeltaTable {
     pub async fn history(
         &self,
         limit: Option<usize>,
-    ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
         let infos = self
             .snapshot()?
             .snapshot()
@@ -387,7 +387,7 @@ impl DeltaTable {
             Err(DeltaTableError::InvalidVersion(_)) => {
                 return Err(DeltaTableError::NotATable(
                     log_store.table_root_url().to_string(),
-                ))
+                ));
             }
             Err(e) => return Err(e),
         };

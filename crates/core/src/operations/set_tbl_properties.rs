@@ -6,12 +6,12 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
-use crate::logstore::LogStoreRef;
-use crate::protocol::DeltaOperation;
 use crate::DeltaResult;
 use crate::DeltaTable;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
@@ -133,8 +133,8 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::writer::test_utils::create_initialized_table;
     use crate::DeltaOps;
+    use crate::writer::test_utils::create_initialized_table;
     use std::collections::HashMap;
     use std::env::temp_dir;
 

@@ -53,16 +53,16 @@ use std::sync::{Arc, LazyLock};
 use bytes::Bytes;
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
-use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::log_segment::LogSegment;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::{AsAny, Engine};
 use futures::StreamExt;
 use object_store::ObjectStoreScheme;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{Error as ObjectStoreError, ObjectStore, path::Path};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
@@ -74,13 +74,13 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::kernel::transaction::TransactionError;
-use crate::kernel::{spawn_blocking_with_span, Action};
+use crate::kernel::{Action, spawn_blocking_with_span};
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::config::StorageConfig;
 pub use self::factories::{
-    logstore_factories, object_store_factories, store_for, LogStoreFactory,
-    LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
+    LogStoreFactory, LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
+    logstore_factories, object_store_factories, store_for,
 };
 pub use self::storage::utils::commit_uri_from_version;
 pub use self::storage::{
@@ -243,7 +243,9 @@ impl LogStoreConfig {
                 // Pushing an empty string ensures that the [Url] has a trailing slash
                 segments.push("");
             } else {
-                warn!("A recoverable error occurred when trying to sanitize the URL, input URL could not have a trailing slash added which can cause inconsistent behavior");
+                warn!(
+                    "A recoverable error occurred when trying to sanitize the URL, input URL could not have a trailing slash added which can cause inconsistent behavior"
+                );
             }
         }
         Self { location, options }
@@ -818,10 +820,12 @@ pub(crate) mod tests {
         let location = Url::parse("memory:///table").unwrap();
         let store =
             logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
-        assert!(!store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to look at table"));
+        assert!(
+            !store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to look at table")
+        );
 
         // Let's put a failed commit into the directory and then see if it's still considered a
         // delta table (it shouldn't be).
@@ -835,10 +839,12 @@ pub(crate) mod tests {
             )
             .await
             .expect("Failed to put");
-        assert!(!store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to look at table"));
+        assert!(
+            !store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to look at table")
+        );
     }
 
     #[tokio::test]
@@ -848,10 +854,12 @@ pub(crate) mod tests {
         let location = Url::parse("memory:///table").unwrap();
         let store =
             logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
-        assert!(!store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to identify table"));
+        assert!(
+            !store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to identify table")
+        );
 
         // Save a commit to the transaction log
         let payload = PutPayload::from_static(b"test");
@@ -865,10 +873,12 @@ pub(crate) mod tests {
             .await
             .expect("Failed to put");
         // The table should be considered a delta table
-        assert!(store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to identify table"));
+        assert!(
+            store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to identify table")
+        );
     }
 
     #[tokio::test]
@@ -878,10 +888,12 @@ pub(crate) mod tests {
         let location = Url::parse("memory:///table").unwrap();
         let store =
             logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
-        assert!(!store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to identify table"));
+        assert!(
+            !store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to identify table")
+        );
 
         // Save a "checkpoint" file to the transaction log directory
         let payload = PutPayload::from_static(b"test");
@@ -895,10 +907,12 @@ pub(crate) mod tests {
             .await
             .expect("Failed to put");
         // The table should be considered a delta table
-        assert!(store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to identify table"));
+        assert!(
+            store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to identify table")
+        );
     }
 
     #[tokio::test]
@@ -908,10 +922,12 @@ pub(crate) mod tests {
         let location = Url::parse("memory:///table").unwrap();
         let store =
             logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
-        assert!(!store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to identify table"));
+        assert!(
+            !store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to identify table")
+        );
 
         // Save .crc files to the transaction log directory (all 3 formats)
         let payload = PutPayload::from_static(b"test");
@@ -958,10 +974,12 @@ pub(crate) mod tests {
             .expect("Failed to put");
 
         // The table should be considered a delta table
-        assert!(store
-            .is_delta_table_location()
-            .await
-            .expect("Failed to identify table"));
+        assert!(
+            store
+                .is_delta_table_location()
+                .await
+                .expect("Failed to identify table")
+        );
     }
 
     /// <https://github.com/delta-io/delta-rs/issues/3297>:w

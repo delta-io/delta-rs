@@ -5,7 +5,7 @@ use chrono::DateTime;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::commit_uri_from_version;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{ensure_table_uri, DeltaOps, DeltaTable};
+use deltalake_core::{DeltaOps, DeltaTable, ensure_table_uri};
 use futures::TryStreamExt;
 use itertools::Itertools;
 use rand::Rng;

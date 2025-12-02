@@ -6,14 +6,14 @@ use chrono::Utc;
 use delta_kernel::schema::{DataType, PrimitiveType};
 use delta_kernel::table_features::TableFeature;
 use itertools::Itertools;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde_json::json;
 
-use super::{get_parquet_bytes, DataFactory, FileStats};
+use super::{DataFactory, FileStats, get_parquet_bytes};
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
+use crate::kernel::{ProtocolInner, partitions_schema};
 
 pub struct ActionFactory;
 

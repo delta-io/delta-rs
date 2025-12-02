@@ -7,14 +7,14 @@ use datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::ExecutionPlan;
 
 use crate::{
-    delta_datafusion::DataFusionMixins, operations::load_cdf::CdfLoadBuilder, DeltaResult,
-    DeltaTableError,
+    DeltaResult, DeltaTableError, delta_datafusion::DataFusionMixins,
+    operations::load_cdf::CdfLoadBuilder,
 };
 
 use super::ADD_PARTITION_SCHEMA;

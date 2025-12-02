@@ -27,7 +27,7 @@ use std::{
 use async_trait::async_trait;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::{
-    case, col, lit, when, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
 };
 use datafusion::{
     catalog::Session,
@@ -38,7 +38,7 @@ use datafusion::{
     datasource::provider_as_source,
     execution::context::SessionState,
     execution::session_state::SessionStateBuilder,
-    physical_plan::{metrics::MetricBuilder, ExecutionPlan},
+    physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
 };
 use futures::future::BoxFuture;
@@ -50,25 +50,25 @@ use uuid::Uuid;
 use super::datafusion_utils::Expression;
 use super::write::WriterStatsConfig;
 use super::{
-    write::execution::{write_execution_plan, write_execution_plan_cdc},
     CustomExecuteHandler, Operation,
+    write::execution::{write_execution_plan, write_execution_plan_cdc},
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::{
     delta_datafusion::{
-        create_session,
+        DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaTableProvider, create_session,
         expr::fmt_expr_to_sql,
         logical::MetricObserver,
-        physical::{find_metric_node, get_metric, MetricObserverExec},
-        session_state_from_session, DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder,
-        DeltaTableProvider,
+        physical::{MetricObserverExec, find_metric_node, get_metric},
+        session_state_from_session,
     },
     kernel::{
-        transaction::{CommitBuilder, CommitProperties, PROTOCOL},
         Action, EagerSnapshot, Remove,
+        transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
 };
@@ -76,7 +76,6 @@ use crate::{
     delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
     kernel::resolve_snapshot,
 };
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
 pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";
@@ -549,8 +548,8 @@ mod tests {
 
     use crate::kernel::{Action, PrimitiveType, StructField, StructType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-    use crate::operations::load_cdf::*;
     use crate::operations::DeltaOps;
+    use crate::operations::load_cdf::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
@@ -660,7 +659,11 @@ mod tests {
                     .is_err(),
                 "The schema contains __delta_rs_update_predicate which is incorrect!"
             );
-            assert_eq!(schema.fields.len(), 3, "Expected the Parquet file to only have three fields in the schema, something is amiss!");
+            assert_eq!(
+                schema.fields.len(),
+                3,
+                "Expected the Parquet file to only have three fields in the schema, something is amiss!"
+            );
         }
         Ok(())
     }

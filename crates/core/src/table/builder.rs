@@ -12,7 +12,7 @@ use tracing::debug;
 use url::Url;
 
 use crate::logstore::storage::IORuntime;
-use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
+use crate::logstore::{LogStoreRef, StorageConfig, object_store_factories};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table

@@ -16,12 +16,12 @@ use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::DeltaTableConfig;
-use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol,
-    TombstoneView, ARROW_HANDLER,
+    ARROW_HANDLER, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata,
+    Protocol, TombstoneView,
 };
 use crate::logstore::LogStore;
 use crate::partitions::PartitionFilter;

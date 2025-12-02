@@ -5,8 +5,8 @@
 use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
 use std::sync::{Arc, LazyLock};
 use tokio::task::JoinHandle;
-use tracing::dispatcher;
 use tracing::Span;
+use tracing::dispatcher;
 
 pub mod arrow;
 pub mod error;

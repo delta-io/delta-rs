@@ -3,12 +3,12 @@ use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use deltalake_core::logstore::{
-    commit_uri_from_version, DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    DefaultObjectStoreRegistry, ObjectStoreRegistry, commit_uri_from_version,
 };
 use deltalake_core::{
-    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
+    DeltaResult, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
-use deltalake_core::{logstore::*, DeltaTableError};
+use deltalake_core::{DeltaTableError, logstore::*};
 use object_store::{Error as ObjectStoreError, ObjectStore, PutOptions};
 use tracing::debug;
 use url::Url;

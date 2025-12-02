@@ -8,11 +8,11 @@ compile_error!(
 );
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, object_store::RetryConfig, LogStore, LogStoreFactory,
-    StorageConfig,
+    LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories,
+    object_store::RetryConfig,
 };
-use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use reqwest::Url;
+use reqwest::header::{AUTHORIZATION, HeaderValue, InvalidHeaderValue};
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
@@ -30,13 +30,13 @@ use crate::models::{
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
-    ensure_table_uri, DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder,
-    DeltaTableError, ObjectStoreError, Path,
+    DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError,
+    ObjectStoreError, Path, ensure_table_uri,
 };
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    config::str_is_truthy, object_store_factories, ObjectStoreFactory, ObjectStoreRef,
+    ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
 pub mod client;
 pub mod credential;
@@ -936,10 +936,10 @@ impl std::fmt::Debug for UnityCatalog {
 
 #[cfg(test)]
 mod tests {
+    use crate::UnityCatalogBuilder;
     use crate::client::ClientOptions;
     use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
     use crate::models::*;
-    use crate::UnityCatalogBuilder;
     use deltalake_core::DataCatalog;
     use httpmock::prelude::*;
     use std::collections::HashMap;
@@ -1060,8 +1060,10 @@ mod tests {
 
     #[test]
     fn test_env_with_storage_options_override() {
-        std::env::set_var("DATABRICKS_HOST", "https://env.databricks.com");
-        std::env::set_var("DATABRICKS_TOKEN", "env_token");
+        unsafe {
+            std::env::set_var("DATABRICKS_HOST", "https://env.databricks.com");
+            std::env::set_var("DATABRICKS_TOKEN", "env_token");
+        }
 
         let mut storage_options = HashMap::new();
         storage_options.insert(
@@ -1079,8 +1081,10 @@ mod tests {
         );
         assert_eq!(builder.bearer_token, Some("env_token".to_string()));
 
-        std::env::remove_var("DATABRICKS_HOST");
-        std::env::remove_var("DATABRICKS_TOKEN");
+        unsafe {
+            std::env::remove_var("DATABRICKS_HOST");
+            std::env::remove_var("DATABRICKS_TOKEN");
+        }
     }
 
     #[test]

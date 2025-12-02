@@ -8,6 +8,7 @@
  */
 use chrono::prelude::*;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use deltalake::Path;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::errors::DeltaTableError;
@@ -17,7 +18,6 @@ use deltalake::parquet::{
     file::properties::WriterProperties,
 };
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::Path;
 use deltalake::*;
 use std::sync::Arc;
 use tracing::*;

@@ -5,7 +5,7 @@
 
 use crate::errors::LockClientError;
 use crate::storage::S3StorageOptions;
-use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
+use crate::{CommitEntry, DynamoDbLockClient, UpdateLogEntryResult, constants};
 
 use bytes::Bytes;
 use deltalake_core::{ObjectStoreError, Path};
@@ -15,7 +15,7 @@ use url::Url;
 
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult, DeltaTableError,
+    DeltaResult, DeltaTableError, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
 use uuid::Uuid;
 
@@ -85,9 +85,7 @@ impl S3DynamoDbLogStore {
             .prefixed_store(prefixed_store)
             .root_store(root_store)
             .lock_client(lock_client)
-            .config(LogStoreConfig::new(
-                location.clone(), options.clone())
-            )
+            .config(LogStoreConfig::new(location.clone(), options.clone()))
             .table_path(table_path)
             .build())
     }
@@ -118,7 +116,10 @@ impl S3DynamoDbLogStore {
                 Err(TransactionError::ObjectStore {
                     source: ObjectStoreError::NotFound { .. },
                 }) => {
-                    warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
+                    warn!(
+                        "It looks like the {}.json has already been moved, we got 404 from ObjectStorage.",
+                        entry.version
+                    );
                     return self.try_complete_entry(entry, false).await;
                 }
                 Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),

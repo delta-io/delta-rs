@@ -9,7 +9,7 @@ use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
-use deltalake::{protocol::SaveMode, DeltaOps, DeltaTableError};
+use deltalake::{DeltaOps, DeltaTableError, protocol::SaveMode};
 use url::Url;
 
 use std::sync::Arc;
