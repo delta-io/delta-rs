@@ -35,7 +35,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, SessionState};
-use datafusion::logical_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
+use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::future::BoxFuture;
@@ -51,22 +51,22 @@ use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
+use crate::delta_datafusion::{DataFusionMixins, session_state_from_session};
 use crate::delta_datafusion::{create_session, register_store};
-use crate::delta_datafusion::{session_state_from_session, DataFusionMixins};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    new_metadata, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType,
-    StructTypeExt,
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
+    new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::DeltaTable;
 
 pub mod configs;
 pub(crate) mod execution;
@@ -87,7 +87,7 @@ pub(crate) enum WriteError {
     AlreadyExists(String),
 
     #[error(
-        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}",
+        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}"
     )]
     PartitionColumnMismatch {
         expected: Vec<String>,
@@ -119,7 +119,9 @@ impl FromStr for SchemaMode {
         match s.to_ascii_lowercase().as_str() {
             "overwrite" => Ok(SchemaMode::Overwrite),
             "merge" => Ok(SchemaMode::Merge),
-            _ => Err(DeltaTableError::Generic(format!("Invalid schema write mode provided: {s}, only these are supported: ['overwrite', 'merge']"))),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid schema write mode provided: {s}, only these are supported: ['overwrite', 'merge']"
+            ))),
         }
     }
 }
@@ -745,11 +747,12 @@ impl std::future::IntoFuture for WriteBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TableProperty;
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
     use crate::logstore::get_actions;
     use crate::operations::load_cdf::collect_batches;
-    use crate::operations::{collect_sendable_stream, DeltaOps};
+    use crate::operations::{DeltaOps, collect_sendable_stream};
     use crate::protocol::SaveMode;
     use crate::test_utils::{TestResult, TestSchemas};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted, write_batch};
@@ -757,14 +760,13 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use crate::TableProperty;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use itertools::Itertools;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     async fn get_write_metrics(table: DeltaTable) -> WriteMetrics {
         let mut commit_info: Vec<crate::kernel::CommitInfo> =

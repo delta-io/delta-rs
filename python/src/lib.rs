@@ -1215,7 +1215,7 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         */
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
-            /*
+        /*
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {

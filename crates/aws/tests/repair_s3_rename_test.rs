@@ -43,8 +43,10 @@ async fn repair_when_worker_pauses_after_rename_test() {
 }
 
 async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), ObjectStoreError> {
-    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
-    std::env::set_var("DYNAMO_LOCK_LEASE_DURATION", "2");
+    unsafe {
+        std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
+        std::env::set_var("DYNAMO_LOCK_LEASE_DURATION", "2");
+    }
     let context = IntegrationContext::new(Box::new(S3Integration::default())).unwrap();
 
     let root_path = Path::from(path);

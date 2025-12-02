@@ -7,7 +7,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
+use arrow_array::{Array, ArrayRef, RecordBatch, UInt32Array, new_null_array};
 use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
@@ -17,7 +17,7 @@ use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
-use object_store::{path::Path, ObjectStore};
+use object_store::{ObjectStore, path::Path};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use tracing::log::*;
@@ -25,19 +25,19 @@ use uuid::Uuid;
 
 use super::stats::create_add;
 use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-    ShareableBuffer,
+    ShareableBuffer, arrow_schema_without_partitions, next_data_path,
+    record_batch_without_partitions,
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use crate::DeltaTable;
 use crate::errors::DeltaTableError;
+use crate::kernel::MetadataExt as _;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::transaction::CommitProperties;
-use crate::kernel::MetadataExt as _;
-use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
+use crate::kernel::{Action, Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -1173,7 +1173,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(add_actions.len(), 1);
-            let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
+            let expected_stats = "{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
             assert_eq!(
                 expected_stats.parse::<serde_json::Value>().unwrap(),
                 add_actions

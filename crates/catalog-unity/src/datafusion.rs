@@ -6,8 +6,8 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
-use moka::future::Cache;
 use moka::Expiry;
+use moka::future::Cache;
 use std::any::Any;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use super::models::{
     TableTempCredentialsResponse, TemporaryTableCredentials,
 };
 use super::{DataCatalogResult, UnityCatalog, UnityCatalogError};
-use deltalake_core::{ensure_table_uri, DeltaTableBuilder};
+use deltalake_core::{DeltaTableBuilder, ensure_table_uri};
 
 /// In-memory list of catalogs populated by unity catalog
 #[derive(Debug)]

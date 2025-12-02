@@ -16,6 +16,7 @@ use aws_config::SdkConfig;
 pub use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::{
+    Client,
     operation::{
         create_table::CreateTableError, delete_item::DeleteItemError, get_item::GetItemError,
         put_item::PutItemError, query::QueryError, update_item::UpdateItemError,
@@ -24,12 +25,11 @@ use aws_sdk_dynamodb::{
         AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
         ScalarAttributeType,
     },
-    Client,
 };
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, object_store_factories, LogStore, LogStoreFactory,
-    ObjectStoreRef, StorageConfig,
+    LogStore, LogStoreFactory, ObjectStoreRef, StorageConfig, default_logstore, logstore_factories,
+    object_store_factories,
 };
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
@@ -69,8 +69,12 @@ impl LogStoreFactory for S3LogStoreFactory {
             ]
             .contains(&key.as_str())
         }) {
-            debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
-            warn!("Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put.");
+            debug!(
+                "S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required"
+            );
+            warn!(
+                "Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put."
+            );
             return Ok(logstore::default_s3_logstore(
                 prefixed_store,
                 root_store,
@@ -81,7 +85,9 @@ impl LogStoreFactory for S3LogStoreFactory {
 
         let s3_options = S3StorageOptions::from_map(&s3_options)?;
         if s3_options.locking_provider.as_deref() == Some("dynamodb") {
-            debug!("S3LogStoreFactory has been asked to create a LogStore with the dynamodb locking provider");
+            debug!(
+                "S3LogStoreFactory has been asked to create a LogStore with the dynamodb locking provider"
+            );
             return Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
                 location.clone(),
                 options,

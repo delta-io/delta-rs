@@ -115,7 +115,9 @@ pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
 
     // Set all the new environment variables
     for (key, value) in vars {
-        std::env::set_var(key, value);
+        unsafe {
+            std::env::set_var(key, value);
+        }
     }
 
     // Create a cleanup struct that will restore original values when dropped
@@ -125,8 +127,8 @@ pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
         fn drop(&mut self) {
             for (key, maybe_value) in self.0.iter() {
                 match maybe_value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
                 }
             }
         }

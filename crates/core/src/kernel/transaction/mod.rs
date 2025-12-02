@@ -81,8 +81,8 @@ use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
-use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
+use object_store::path::Path;
 use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
@@ -100,7 +100,7 @@ use crate::protocol::DeltaOperation;
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::{crate_version, DeltaResult};
+use crate::{DeltaResult, crate_version};
 
 pub use self::conflict_checker::CommitConflictError;
 pub use self::protocol::INSTANCE as PROTOCOL;
@@ -925,7 +925,9 @@ impl PostCommit {
         operation_id: Uuid,
     ) -> DeltaResult<bool> {
         if !table_state.load_config().require_files {
-            warn!("Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files.");
+            warn!(
+                "Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files."
+            );
             return Ok(false);
         }
 
@@ -1001,9 +1003,9 @@ mod tests {
 
     use super::*;
     use crate::logstore::{
-        commit_uri_from_version, default_logstore::DefaultLogStore, LogStore, StorageConfig,
+        LogStore, StorageConfig, commit_uri_from_version, default_logstore::DefaultLogStore,
     };
-    use object_store::{memory::InMemory, ObjectStore, PutPayload};
+    use object_store::{ObjectStore, PutPayload, memory::InMemory};
     use url::Url;
 
     #[test]

@@ -9,7 +9,7 @@ use delta_kernel::{
     expressions::{Scalar, StructData},
     schema::StructField,
 };
-use percent_encoding_rfc3986::{utf8_percent_encode, AsciiSet, CONTROLS};
+use percent_encoding_rfc3986::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde_json::Value;
 
 // ASCII set that needs to be encoded, derived from

@@ -1,10 +1,10 @@
 use dashmap::DashMap;
-use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::DeltaResult;
+use deltalake_core::kernel::transaction::TransactionError;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -195,7 +195,9 @@ impl LakeFSClient {
             "squash_merge": true,
         });
 
-        debug!("Merging LakeFS, source `{transaction_branch}` into target `{target_branch}` in repo: {repo}");
+        debug!(
+            "Merging LakeFS, source `{transaction_branch}` into target `{target_branch}` in repo: {repo}"
+        );
         let response = self
             .http_client
             .post(&request_url)

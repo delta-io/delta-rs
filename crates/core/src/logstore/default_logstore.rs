@@ -6,10 +6,10 @@ use bytes::Bytes;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use uuid::Uuid;
 
-use super::storage::{utils::commit_uri_from_version, ObjectStoreRef};
+use super::storage::{ObjectStoreRef, utils::commit_uri_from_version};
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
-use crate::kernel::transaction::TransactionError;
 use crate::DeltaResult;
+use crate::kernel::transaction::TransactionError;
 
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();

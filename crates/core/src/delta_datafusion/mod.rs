@@ -29,7 +29,7 @@ use std::sync::Arc;
 use arrow::array::types::UInt16Type;
 use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::display::array_value_to_string;
-use arrow_cast::{cast_with_options, CastOptions};
+use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
@@ -41,9 +41,9 @@ use datafusion::common::{
 };
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::{MemTable, TableProvider};
+use datafusion::execution::TaskContext;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::TaskContext;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -68,7 +68,7 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
-use crate::{open_table, open_table_with_storage_options, DeltaTable};
+use crate::{DeltaTable, open_table, open_table_with_storage_options};
 
 pub use self::session::*;
 pub(crate) use find_files::*;
@@ -839,8 +839,8 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::logstore::ObjectStoreRef;
+    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
@@ -853,22 +853,22 @@ mod tests {
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion::prelude::{col, SessionConfig};
+    use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
+    use datafusion::prelude::{SessionConfig, col};
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use delta_kernel::schema::ArrayType;
-    use futures::{stream::BoxStream, StreamExt};
+    use futures::{StreamExt, stream::BoxStream};
     use object_store::ObjectMeta;
     use object_store::{
-        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutMultipartOptions,
+        PutOptions, PutPayload, PutResult, path::Path,
     };
     use serde_json::json;
     use std::fmt::{self, Debug, Display, Formatter};
     use std::ops::{Deref, Range};
-    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
     use super::*;
 
@@ -962,20 +962,24 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await
-            .is_ok());
+        assert!(
+            DeltaDataChecker::new_with_invariants(invariants)
+                .check_batch(&batch)
+                .await
+                .is_ok()
+        );
 
         // Valid invariants return Ok(())
         let invariants = vec![
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await
-            .is_ok());
+        assert!(
+            DeltaDataChecker::new_with_invariants(invariants)
+                .check_batch(&batch)
+                .await
+                .is_ok()
+        );
 
         // Violated invariants returns an error with list of violations
         let invariants = vec![
@@ -1032,20 +1036,24 @@ mod tests {
         .unwrap();
         // Empty constraints is okay
         let constraints: Vec<Constraint> = vec![];
-        assert!(DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await
-            .is_ok());
+        assert!(
+            DeltaDataChecker::new_with_constraints(constraints)
+                .check_batch(&batch)
+                .await
+                .is_ok()
+        );
 
         // Valid invariants return Ok(())
         let constraints = vec![
             Constraint::new("custom_a", "a is not null"),
             Constraint::new("custom_b", "b < 1000"),
         ];
-        assert!(DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await
-            .is_ok());
+        assert!(
+            DeltaDataChecker::new_with_constraints(constraints)
+                .check_batch(&batch)
+                .await
+                .is_ok()
+        );
 
         // Violated invariants returns an error with list of violations
         let constraints = vec![
@@ -1093,10 +1101,12 @@ mod tests {
             Constraint::new("custom a", "a is not null"),
             Constraint::new("custom_b", "`b bop` < 1000"),
         ];
-        assert!(DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await
-            .is_ok());
+        assert!(
+            DeltaDataChecker::new_with_constraints(constraints)
+                .check_batch(&batch)
+                .await
+                .is_ok()
+        );
 
         // Violated invariants returns an error with list of violations
         let constraints = vec![
@@ -1172,15 +1182,15 @@ mod tests {
 
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
-        let expected = vec! [
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| c3 | c1 | c2 | file_source                                                                   |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
-                "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
-                "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-            ];
+        let expected = vec![
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| c3 | c1 | c2 | file_source                                                                   |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
+            "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
+            "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -1794,9 +1804,9 @@ mod tests {
     #[tokio::test]
     async fn test_delta_scan_uses_parquet_column_pruning() {
         let small: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["a"]));
-        let large: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["b"
-            .repeat(1024)
-            .as_str()]));
+        let large: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec![
+            "b".repeat(1024).as_str(),
+        ]));
         let batch = RecordBatch::try_from_iter(vec![("small", small), ("large", large)]).unwrap();
         let table = crate::DeltaOps::new_in_memory()
             .write(vec![batch])

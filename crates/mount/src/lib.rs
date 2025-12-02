@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use deltalake_core::logstore::DeltaIOStorageBackend;
 use deltalake_core::logstore::{
-    config::str_is_truthy, default_logstore, logstore_factories, object_store_factories, LogStore,
-    LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    LogStore, LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    config::str_is_truthy, default_logstore, logstore_factories, object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
-use object_store::local::LocalFileSystem;
 use object_store::DynObjectStore;
+use object_store::local::LocalFileSystem;
 use url::Url;
 
 mod config;
