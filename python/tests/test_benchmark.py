@@ -120,7 +120,7 @@ def test_benchmark_optimize(
 
     dt = DeltaTable(tmp_path)
 
-    assert len(dt.files()) == files_per_part * len(parts)
+    assert len(dt.file_uris()) == files_per_part * len(parts)
     initial_version = dt.version()
 
     def setup():
@@ -186,7 +186,7 @@ def test_benchmark_optimize_minio(
 
     dt = DeltaTable(table_path, storage_options=storage_options)
 
-    assert len(dt.files()) == files_per_part * len(parts)
+    assert len(dt.file_uris()) == files_per_part * len(parts)
     initial_version = dt.version()
 
     def setup():

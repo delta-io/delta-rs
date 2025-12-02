@@ -652,7 +652,7 @@ impl EagerSnapshot {
             .boxed()
     }
 
-    pub(crate) fn file_views_by_partitions(
+    pub fn file_views_by_partitions(
         &self,
         log_store: &dyn LogStore,
         filters: &[PartitionFilter],

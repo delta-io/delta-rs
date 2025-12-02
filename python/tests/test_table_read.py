@@ -423,11 +423,14 @@ def test_read_special_partition():
         r"x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
     )
 
-    assert set(dt.files()) == {file1, file2}
+    def path_matcher(full_path, expected):
+        return full_path.endswith(expected)
 
-    assert dt.files([("x", "=", "A/A")]) == [file1]
-    assert dt.files([("x", "=", "B B")]) == [file2]
-    assert dt.files([("x", "=", "c")]) == []
+    files = dt.file_uris()
+    assert path_matcher(files[0], file1) and path_matcher(files[1], file2)
+    assert path_matcher(dt.file_uris([("x", "=", "A/A")])[0], file1)
+    assert path_matcher(dt.file_uris([("x", "=", "B B")])[0], file2)
+    assert dt.file_uris([("x", "=", "c")]) == []
 
     table = dt.to_pyarrow_table()
 
@@ -553,7 +556,6 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    assert dt.files(partition_filters) == expected_paths
     absolute_paths = [os.path.join(dt.table_uri, path) for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
 
@@ -610,7 +612,7 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("invalid_operation", "=>", "3")]
     with pytest.raises(Exception) as exception:
-        dt.files(partition_filters)
+        dt.file_uris(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: ("invalid_operation", "=>", "3").'
@@ -618,7 +620,7 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("invalid_operation", "=", ["3", "20"])]
     with pytest.raises(Exception) as exception:
-        dt.files(partition_filters)
+        dt.file_uris(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: ("invalid_operation", "=", ["3", "20"]).'
@@ -626,7 +628,7 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("unknown", "=", "3")]
     with pytest.raises(Exception) as exception:
-        dt.files(partition_filters)
+        dt.file_uris(partition_filters)
     assert (
         str(exception.value)
         == "Data does not match the schema or partitions of the table: Field 'unknown' is not a root table field."
