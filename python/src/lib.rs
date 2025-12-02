@@ -218,9 +218,7 @@ impl RawDeltaTable {
             let target_url = deltalake::table::builder::ensure_table_uri(&target_uri)
                 .map_err(PythonError::from)?;
 
-            let cmd = DeltaOps(table)
-                .clone_table()
-                .with_target(target_url);
+            let cmd = DeltaOps(table).clone_table().with_target(target_url);
 
             let target_table = rt()
                 .block_on(cmd.into_future())
