@@ -10,7 +10,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    resolve_snapshot, EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt,
+    EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;

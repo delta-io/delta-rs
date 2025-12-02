@@ -37,7 +37,7 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{plan_err, Column, DFSchema, ExprSchema, ScalarValue, TableReference};
+use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference, plan_err};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -45,10 +45,10 @@ use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{
-    col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType,
+    Expr, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
 };
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
+    Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::metrics::MetricBuilder;
@@ -56,7 +56,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
     physical_plan::ExecutionPlan,
-    prelude::{cast, DataFrame, SessionContext},
+    prelude::{DataFrame, SessionContext, cast},
 };
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
@@ -69,27 +69,27 @@ use tracing::*;
 use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
-use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
+use super::datafusion_utils::{Expression, into_expr, maybe_into_expr};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
+use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
-    register_store, DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder,
-    DeltaSessionContext, DeltaTableProvider,
+    DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder, DeltaSessionContext,
+    DeltaTableProvider, register_store,
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{new_metadata, resolve_snapshot, Action, EagerSnapshot, StructTypeExt};
+use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
+use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
     able_to_gc, add_generated_columns, add_missing_generated_columns,
 };
-use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -561,15 +561,15 @@ impl MergeOperation {
                                     spans,
                                 }
                             } else {
-                                return Err(DeltaTableError::Generic(
-                                    format!("Table alias '{table}' in column reference '{table}.{name}' unknown. Hint: You must reference the Delta Table with alias '{alias}'.")
-                                ));
+                                return Err(DeltaTableError::Generic(format!(
+                                    "Table alias '{table}' in column reference '{table}.{name}' unknown. Hint: You must reference the Delta Table with alias '{alias}'."
+                                )));
                             }
                         }
                         _ => {
                             return Err(DeltaTableError::Generic(
                                 "Column must reference column in Delta table".into(),
-                            ))
+                            ));
                         }
                     }
                 }
@@ -1039,10 +1039,10 @@ async fn execute(
                 OperationType::Delete => "delete",
                 OperationType::Insert => "insert",
                 OperationType::SourceDelete => {
-                    return Err(DeltaTableError::Generic("Invalid action type".to_string()))
+                    return Err(DeltaTableError::Generic("Invalid action type".to_string()));
                 }
                 OperationType::Copy => {
-                    return Err(DeltaTableError::Generic("Invalid action type".to_string()))
+                    return Err(DeltaTableError::Generic("Invalid action type".to_string()));
                 }
             };
 
@@ -1595,17 +1595,17 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::DeltaTable;
+    use crate::TableProperty;
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
+    use crate::operations::DeltaOps;
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
-    use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
-    use crate::DeltaTable;
-    use crate::TableProperty;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -1613,10 +1613,10 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::common::Column;
     use datafusion::common::TableReference;
+    use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::col;
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
-    use datafusion::logical_expr::Expr;
     use datafusion::prelude::*;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;

@@ -1,4 +1,5 @@
 use chrono::Utc;
+use deltalake_core::DeltaTable;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
@@ -6,7 +7,6 @@ use deltalake_core::kernel::{
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
     MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,

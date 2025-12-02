@@ -5,13 +5,13 @@ use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use datafusion::common::Column;
 use datafusion::dataframe::DataFrame;
-use datafusion::logical_expr::{col, lit, Expr};
+use datafusion::logical_expr::{Expr, col, lit};
 use datafusion::prelude::SessionContext;
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::merge::MergeMetrics;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{open_table, DeltaOps, DeltaResult, DeltaTable, DeltaTableError};
+use deltalake_core::{DeltaOps, DeltaResult, DeltaTable, DeltaTableError, open_table};
 use std::sync::Arc;
 use url::Url;
 

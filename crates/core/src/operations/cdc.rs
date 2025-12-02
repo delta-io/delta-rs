@@ -2,9 +2,9 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
+use crate::DeltaResult;
 use crate::kernel::EagerSnapshot;
 use crate::table::config::TablePropertiesExt as _;
-use crate::DeltaResult;
 
 use datafusion::common::ScalarValue;
 use datafusion::prelude::*;

@@ -7,16 +7,16 @@ use datafusion::common::ToDFSchema;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
 use delta_kernel::table_features::TableFeature;
-use futures::future::BoxFuture;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 
 use super::datafusion_utils::into_expr;
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{create_session, register_store, DeltaDataChecker, DeltaScanBuilder};
+use crate::delta_datafusion::{DeltaDataChecker, DeltaScanBuilder, create_session, register_store};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    resolve_snapshot, EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner,
+    EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
@@ -170,11 +170,15 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 // when the expression is different in the conflicted constraint --> error out due not knowing how to resolve it
                 if !metadata.configuration()[configuration_key].eq(&constraints_sql_mapper[name]) {
                     return Err(DeltaTableError::Generic(format!(
-                                    "Cannot add constraint '{name}': a constraint with this name already exists with a different expression. Existing: '{}', New: '{}'", 
-                                        metadata.configuration()[configuration_key],constraints_sql_mapper[name]
-                                    )));
+                        "Cannot add constraint '{name}': a constraint with this name already exists with a different expression. Existing: '{}', New: '{}'",
+                        metadata.configuration()[configuration_key],
+                        constraints_sql_mapper[name]
+                    )));
                 }
-                tracing::warn!("Skipping constraint '{name}': identical constraint already exists with expression '{}'",constraints_sql_mapper[name]);
+                tracing::warn!(
+                    "Skipping constraint '{name}': identical constraint already exists with expression '{}'",
+                    constraints_sql_mapper[name]
+                );
             }
             let constraints_checker: Vec<Constraint> = constraints_sql_mapper
                 .iter()

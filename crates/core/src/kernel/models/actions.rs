@@ -6,9 +6,9 @@ use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::{error::Error, DeltaResult};
-use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
+use crate::kernel::{DeltaResult, error::Error};
+use crate::kernel::{StructType, StructTypeExt};
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
@@ -452,11 +452,15 @@ impl ProtocolInner {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
+                        return Err(Error::Generic(format!(
+                            "delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']"
+                        )));
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
+                    return Err(Error::Generic(format!(
+                        "delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']"
+                    )));
                 }
             }
         }
@@ -472,11 +476,15 @@ impl ProtocolInner {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
+                        return Err(Error::Generic(format!(
+                            "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                        )));
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
+                    return Err(Error::Generic(format!(
+                        "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                    )));
                 }
             }
         }
@@ -503,7 +511,9 @@ impl ProtocolInner {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!("delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']")))
+                    return Err(Error::Generic(format!(
+                        "delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']"
+                    )));
                 }
             }
         }
@@ -533,7 +543,9 @@ impl ProtocolInner {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!("delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']")))
+                    return Err(Error::Generic(format!(
+                        "delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']"
+                    )));
                 }
             }
         }
@@ -1112,7 +1124,7 @@ impl FromStr for IsolationLevel {
 pub(crate) mod serde_path {
     use std::str::Utf8Error;
 
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+    use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>

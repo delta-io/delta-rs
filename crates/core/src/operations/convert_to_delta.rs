@@ -11,8 +11,8 @@ use arrow_schema::{
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::schema::StructType;
-use futures::future::{self, BoxFuture};
 use futures::TryStreamExt;
+use futures::future::{self, BoxFuture};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -26,14 +26,14 @@ use crate::kernel::transaction::CommitProperties;
 use crate::logstore::StorageConfig;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
-    kernel::{scalars::ScalarExt, Add, DataType, StructField},
+    DeltaResult, DeltaTable, DeltaTableError, NULL_PARTITION_VALUE_DATA_PATH, ObjectStoreError,
+    kernel::{Add, DataType, StructField, scalars::ScalarExt},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
     table::builder::ensure_table_uri,
     table::config::TableProperty,
     writer::stats::stats_from_parquet_metadata,
-    DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
 
 fn convert_timestamps_to_microseconds(schema: ArrowSchema) -> Result<ArrowSchema, ArrowError> {
@@ -97,7 +97,9 @@ enum Error {
     TryFromUsize(#[from] TryFromIntError),
     #[error("No parquet file is found in the given location")]
     ParquetFileNotFound,
-    #[error("The schema of partition columns must be provided to convert a Parquet table to a Delta table")]
+    #[error(
+        "The schema of partition columns must be provided to convert a Parquet table to a Delta table"
+    )]
     MissingPartitionSchema,
     #[error("Partition column provided by the user does not exist in the parquet files")]
     PartitionColumnNotExist,

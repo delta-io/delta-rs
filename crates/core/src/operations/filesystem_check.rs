@@ -18,25 +18,25 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use futures::future::BoxFuture;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use object_store::ObjectStore;
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 use url::{ParseError, Url};
 use uuid::Uuid;
 
 use super::CustomExecuteHandler;
 use super::Operation;
+use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::EagerSnapshot;
 use crate::kernel::resolve_snapshot;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::EagerSnapshot;
 use crate::kernel::{Action, Add, Remove};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
 
 /// Audit the Delta Table's active files with the underlying file system.
 /// See this module's documentation for more information
@@ -299,14 +299,18 @@ mod tests {
 
     #[test]
     fn absolute_path() {
-        assert!(!is_absolute_path(
-            "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet"
-        )
-        .unwrap());
-        assert!(!is_absolute_path(
-            "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
-        )
-        .unwrap());
+        assert!(
+            !is_absolute_path(
+                "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet"
+            )
+            .unwrap()
+        );
+        assert!(
+            !is_absolute_path(
+                "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
+            )
+            .unwrap()
+        );
 
         assert!(is_absolute_path("abfss://container@account_name.blob.core.windows.net/full/part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet").unwrap());
         assert!(is_absolute_path("file:///C:/my_table/windows.parquet").unwrap());

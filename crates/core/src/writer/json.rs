@@ -25,13 +25,13 @@ use super::utils::{
     record_batch_without_partitions,
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use crate::DeltaTable;
 use crate::errors::DeltaTableError;
-use crate::kernel::{scalars::ScalarExt, Add, PartitionsExt};
+use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
-use crate::table::builder::{ensure_table_uri, DeltaTableBuilder};
+use crate::table::builder::{DeltaTableBuilder, ensure_table_uri};
 use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
-use crate::DeltaTable;
 
 type BadValue = (Value, ParquetError);
 
@@ -94,7 +94,9 @@ impl DataArrowWriter {
         json_buffer: Vec<Value>,
         parquet_error: ParquetError,
     ) -> Result<(), DeltaWriterError> {
-        warn!("Failed with parquet error while writing record batch. Attempting quarantine of bad records.");
+        warn!(
+            "Failed with parquet error while writing record batch. Attempting quarantine of bad records."
+        );
         let (good, bad) = quarantine_failed_parquet_rows(arrow_schema.clone(), json_buffer)?;
         let record_batch = record_batch_from_message(arrow_schema, good.as_slice())?;
         self.write_record_batch(partition_columns, record_batch)
@@ -317,7 +319,9 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         mode: WriteMode,
     ) -> Result<(), DeltaTableError> {
         if mode != WriteMode::Default {
-            warn!("The JsonWriter does not currently support non-default write modes, falling back to default mode");
+            warn!(
+                "The JsonWriter does not currently support non-default write modes, falling back to default mode"
+            );
         }
         let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();

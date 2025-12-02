@@ -1,10 +1,10 @@
 use chrono::Duration;
 use deltalake_core::kernel::StructType;
-use deltalake_core::operations::vacuum::Clock;
 use deltalake_core::operations::DeltaOps;
+use deltalake_core::operations::vacuum::Clock;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{Error as ObjectStoreError, ObjectStore, path::Path};
 use serde_json::json;
 use std::sync::Arc;
 

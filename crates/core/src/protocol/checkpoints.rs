@@ -7,24 +7,24 @@ use url::Url;
 use arrow::compute::filter_record_batch;
 use arrow_array::{BooleanArray, RecordBatch};
 use chrono::{TimeZone, Utc};
+use delta_kernel::FileMeta;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
 use delta_kernel::snapshot::Snapshot;
-use delta_kernel::FileMeta;
 use futures::{StreamExt, TryStreamExt};
-use object_store::path::Path;
 use object_store::ObjectStore;
-use parquet::arrow::async_writer::ParquetObjectWriter;
+use object_store::path::Path;
 use parquet::arrow::AsyncArrowWriter;
+use parquet::arrow::async_writer::ParquetObjectWriter;
 use regex::Regex;
 use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::kernel::spawn_blocking_with_span;
-use crate::logstore::{LogStore, LogStoreExt, DELTA_LOG_REGEX};
+use crate::logstore::{DELTA_LOG_REGEX, LogStore, LogStoreExt};
 use crate::table::config::TablePropertiesExt as _;
-use crate::{open_table_with_version, DeltaTable};
 use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaTable, open_table_with_version};
 
 static CHECKPOINT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
@@ -305,14 +305,14 @@ mod tests {
     use super::*;
 
     use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
-    use object_store::path::Path;
     use object_store::Error;
+    use object_store::path::Path;
     use tracing::warn;
 
+    use crate::DeltaResult;
     use crate::kernel::transaction::TableReference;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
-    use crate::DeltaResult;
 
     /// Try reading the `_last_checkpoint` file.
     ///
@@ -406,8 +406,8 @@ mod tests {
         use std::sync::Arc;
 
         use crate::ensure_table_uri;
-        use crate::kernel::transaction::CommitBuilder;
         use crate::kernel::Action;
+        use crate::kernel::transaction::CommitBuilder;
 
         async fn setup_table() -> DeltaTable {
             use arrow_schema::{DataType, Field};

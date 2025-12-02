@@ -138,8 +138,9 @@ mod tests {
         // try get non-existent key
         let url = Url::parse("not-registered://host").unwrap();
         let err = registry.get_store(&url).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("No suitable object store found for 'not-registered://host'."));
+        assert!(
+            err.to_string()
+                .contains("No suitable object store found for 'not-registered://host'.")
+        );
     }
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion::physical_plan::{metrics::MetricBuilder, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::{
     execution::SessionState,
     physical_planner::{ExtensionPlanner, PhysicalPlanner},

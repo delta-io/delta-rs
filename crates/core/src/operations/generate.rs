@@ -78,9 +78,9 @@ use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
-use crate::logstore::object_store::PutPayload;
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
+use crate::logstore::object_store::PutPayload;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -185,9 +185,9 @@ mod tests {
 
     use futures::StreamExt;
 
+    use crate::DeltaOps;
     use crate::kernel::schema::{DataType, PrimitiveType};
     use crate::kernel::{Action, Add};
-    use crate::DeltaOps;
 
     #[tokio::test]
     async fn test_generate() -> DeltaResult<()> {
@@ -216,7 +216,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix");
+        assert!(
+            found,
+            "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix"
+        );
         Ok(())
     }
 
@@ -261,7 +264,10 @@ mod tests {
                 "The 'root' manifest file is not expected in a partitioned table!"
             );
         }
-        assert!(found, "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix");
+        assert!(
+            found,
+            "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix"
+        );
         Ok(())
     }
 }

@@ -8,7 +8,7 @@ use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{lit, Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator};
+use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use either::{Left, Right};
 use futures::TryStreamExt as _;

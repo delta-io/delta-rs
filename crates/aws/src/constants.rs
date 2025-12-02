@@ -156,8 +156,8 @@ pub static CONDITION_EXPR_CREATE: LazyLock<String> = LazyLock::new(|| {
 
 pub static CONDITION_DELETE_INCOMPLETE: LazyLock<String> = LazyLock::new(|| {
     format!(
-    "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
-)
+        "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
+    )
 });
 
 pub const CONDITION_UPDATE_INCOMPLETE: &str = "complete = :f";

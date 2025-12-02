@@ -6,19 +6,19 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use aws_config::SdkConfig;
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
 use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_config::sts::AssumeRoleProvider;
-use aws_config::SdkConfig;
-use aws_credential_types::provider::error::CredentialsError;
-use aws_credential_types::provider::{future, ProvideCredentials};
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::error::CredentialsError;
+use aws_credential_types::provider::{ProvideCredentials, future};
 
+use deltalake_core::DeltaResult;
 use deltalake_core::logstore::object_store::aws::{AmazonS3ConfigKey, AwsCredential};
 use deltalake_core::logstore::object_store::{
     CredentialProvider, Error as ObjectStoreError, Result as ObjectStoreResult,
 };
-use deltalake_core::DeltaResult;
 use tokio::sync::Mutex;
 use tracing::log::*;
 
@@ -186,7 +186,10 @@ mod options_tests {
         ]);
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
-        assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
+        assert!(
+            result.is_ok(),
+            "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve"
+        );
         let result = result.unwrap();
         assert_eq!(result.access_key_id(), "key");
         assert_eq!(result.secret_access_key(), "secret");
@@ -200,7 +203,10 @@ mod options_tests {
         ]);
         let provider = OptionsCredentialsProvider { options };
         let result = provider.credentials();
-        assert!(result.is_ok(), "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve");
+        assert!(
+            result.is_ok(),
+            "StorageOptions with at least AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should resolve"
+        );
         let result = result.unwrap();
         assert_eq!(result.access_key_id(), "key");
         assert_eq!(result.secret_access_key(), "secret");

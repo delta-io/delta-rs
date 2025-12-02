@@ -11,16 +11,16 @@ use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion::assert_batches_sorted_eq;
-use datafusion::common::scalar::ScalarValue;
 use datafusion::common::ScalarValue::*;
+use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor, visit_execution_plan};
 use datafusion::physical_plan::{common::collect, metrics::Label};
-use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
@@ -33,9 +33,8 @@ use deltalake_core::operations::write::SchemaMode;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
-    ensure_table_uri, open_table,
-    operations::{write::WriteBuilder, DeltaOps},
-    DeltaTable, DeltaTableError,
+    DeltaTable, DeltaTableError, ensure_table_uri, open_table,
+    operations::{DeltaOps, write::WriteBuilder},
 };
 use deltalake_test::utils::*;
 use serial_test::serial;
@@ -51,12 +50,13 @@ pub fn context_with_delta_table_factory() -> SessionContext {
 
 mod local {
     use super::*;
+    use TableProviderFilterPushDown::{Exact, Inexact};
     use datafusion::catalog::Session;
     use datafusion::common::assert_contains;
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::{
-        lit, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan,
+        LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan, lit,
     };
     use datafusion::physical_plan::displayable;
     use datafusion::prelude::SessionConfig;
@@ -68,7 +68,6 @@ mod local {
     };
     use itertools::Itertools;
     use object_store::local::LocalFileSystem;
-    use TableProviderFilterPushDown::{Exact, Inexact};
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
@@ -316,7 +315,7 @@ mod local {
             let mut result = vec![];
 
             plan.apply(|node| {
-                if let LogicalPlan::TableScan(TableScan { ref filters, .. }) = node {
+                if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
                     result = filters.iter().collect();
                     Ok(TreeNodeRecursion::Stop) // Stop traversal once found
                 } else {
@@ -330,7 +329,9 @@ mod local {
 
         for pp in pruning_predicates {
             let pred = pp.sql;
-            let sql = format!("SELECT CAST( day as int ) as my_day FROM demo WHERE {pred} ORDER BY CAST( day as int ) ASC");
+            let sql = format!(
+                "SELECT CAST( day as int ) as my_day FROM demo WHERE {pred} ORDER BY CAST( day as int ) ASC"
+            );
             println!("\nExecuting query: {sql}");
 
             let df = ctx.sql(sql.as_str()).await?;
@@ -1502,12 +1503,14 @@ async fn test_schema_adapter_empty_batch() {
     // Write single column
     let a_arr = Int32Array::from(vec![1, 2, 3]);
     let table = DeltaOps(table)
-        .write(vec![RecordBatch::try_from_iter_with_nullable(vec![(
-            "a",
-            Arc::new(a_arr) as ArrayRef,
-            false,
-        )])
-        .unwrap()])
+        .write(vec![
+            RecordBatch::try_from_iter_with_nullable(vec![(
+                "a",
+                Arc::new(a_arr) as ArrayRef,
+                false,
+            )])
+            .unwrap(),
+        ])
         .await
         .unwrap();
 
@@ -1515,11 +1518,13 @@ async fn test_schema_adapter_empty_batch() {
     let a_arr = Int32Array::from(vec![4, 5, 6]);
     let b_arr = Int32Array::from(vec![7, 8, 9]);
     let table = DeltaOps(table)
-        .write(vec![RecordBatch::try_from_iter_with_nullable(vec![
-            ("a", Arc::new(a_arr) as ArrayRef, false),
-            ("b", Arc::new(b_arr) as ArrayRef, true),
+        .write(vec![
+            RecordBatch::try_from_iter_with_nullable(vec![
+                ("a", Arc::new(a_arr) as ArrayRef, false),
+                ("b", Arc::new(b_arr) as ArrayRef, true),
+            ])
+            .unwrap(),
         ])
-        .unwrap()])
         .with_schema_mode(SchemaMode::Merge)
         .await
         .unwrap();
@@ -1644,7 +1649,7 @@ mod date_partitions {
 
 mod insert_into_tests {
     use super::*;
-    use arrow_array::{types, Int64Array, PrimitiveArray, StringArray};
+    use arrow_array::{Int64Array, PrimitiveArray, StringArray, types};
     use datafusion::datasource::MemTable;
     use datafusion::logical_expr::dml::InsertOp;
     use deltalake_core::operations::create::CreateBuilder;

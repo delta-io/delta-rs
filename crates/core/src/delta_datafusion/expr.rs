@@ -29,7 +29,7 @@ use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDate};
 use datafusion::catalog::Session;
 use datafusion::common::Result as DFResult;
-use datafusion::common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
+use datafusion::common::{DFSchema, Result, ScalarValue, TableReference, config::ConfigOptions};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_nested::make_array::MakeArray;
@@ -586,7 +586,7 @@ mod test {
     use datafusion::functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
     use datafusion::functions_nested::expr_fn::cardinality;
     use datafusion::logical_expr::expr::ScalarFunction;
-    use datafusion::logical_expr::{col, lit, BinaryExpr, Cast, Expr, ExprSchemable};
+    use datafusion::logical_expr::{BinaryExpr, Cast, Expr, ExprSchemable, col, lit};
     use datafusion::prelude::SessionContext;
 
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};

@@ -2,8 +2,9 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        checkpoints, ensure_table_uri, kernel::transaction::CommitProperties, kernel::Transaction,
-        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
+        DeltaOps, DeltaTableBuilder, checkpoints, ensure_table_uri, kernel::Transaction,
+        kernel::transaction::CommitProperties, protocol::SaveMode,
+        writer::test_utils::get_record_batch,
     };
 
     #[tokio::test]
