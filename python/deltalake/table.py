@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Generator, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,7 +20,6 @@ from arro3.core.types import (
     ArrowSchemaExportable,
     ArrowStreamExportable,
 )
-from deprecated import deprecated
 
 from deltalake._internal import (
     DeltaError,
@@ -294,50 +292,6 @@ class DeltaTable:
             partitions.append({k: v for (k, v) in partition})
         return partitions
 
-    @deprecated(
-        version="1.0.0",
-        reason="Not compatible with modern delta features (e.g. shallow clones). Use `file_uris` instead.",
-    )
-    def files(
-        self, partition_filters: list[tuple[str, str, Any]] | None = None
-    ) -> list[str]:
-        """
-        Get the .parquet files of the DeltaTable.
-
-        The paths are as they are saved in the delta log, which may either be
-        relative to the table root or absolute URIs.
-
-        Args:
-            partition_filters: the partition filters that will be used for
-                                getting the matched files
-
-        Returns:
-            list of the .parquet files referenced for the current version of the DeltaTable
-
-        Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
-        DNF allows arbitrary boolean logical combinations of single partition predicates.
-        The innermost tuples each describe a single partition predicate. The list of inner
-        predicates is interpreted as a conjunction (AND), forming a more selective and
-        multiple partition predicates. Each tuple has format: (key, op, value) and compares
-        the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
-        the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-        The supported type for value is str. Use empty string `''` for Null partition value.
-
-        Example:
-            ```
-            ("x", "=", "a")
-            ("x", "!=", "a")
-            ("y", "in", ["a", "b", "c"])
-            ("z", "not in", ["a","b"])
-            ```
-        """
-        warnings.warn(
-            "Method `files` is deprecated, Use DeltaTable.file_uris(predicate) instead.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._table.files(self._stringify_partition_values(partition_filters))
-
     def file_uris(
         self, partition_filters: FilterConjunctionType | None = None
     ) -> list[str]:
@@ -471,23 +425,6 @@ class DeltaTable:
             the current Schema registered in the transaction log
         """
         return self._table.schema
-
-    @deprecated(
-        version="1.2.1",
-        reason="Not compatible with modern Delta features (e.g. shallow clones). Use `file_uris` instead.",
-    )
-    def files_by_partitions(self, partition_filters: PartitionFilterType) -> list[str]:
-        """
-        Get the files for each partition
-
-        """
-        warnings.warn(
-            "Method `files_by_partitions` is deprecated, please use DeltaTable.file_uris() instead.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-
-        return self.files(partition_filters)
 
     def metadata(self) -> Metadata:
         """

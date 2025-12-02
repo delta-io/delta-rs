@@ -29,7 +29,7 @@ def test_delete_no_predicates(existing_sample_table: DeltaTable):
     data = qb.execute("select * from tbl").read_all()
 
     assert data.num_rows == 0
-    assert len(existing_sample_table.files()) == 0
+    assert len(existing_sample_table.file_uris()) == 0
 
 
 @pytest.mark.pyarrow
@@ -51,7 +51,7 @@ def test_delete_a_partition(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Tab
 
     table = dt.to_pyarrow_table()
     assert table.equals(expected_table)
-    assert len(dt.files()) == 1
+    assert len(dt.file_uris()) == 1
 
 
 @pytest.mark.pyarrow
