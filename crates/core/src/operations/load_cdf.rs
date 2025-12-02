@@ -448,8 +448,7 @@ impl CdfLoadBuilder {
 
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
         // being for development. I plan to parallelize the reads once the base idea is correct.
-        let union_scan: Arc<dyn ExecutionPlan> =
-            Arc::new(UnionExec::new(vec![cdc_scan, add_scan, remove_scan]));
+        let union_scan = UnionExec::try_new(vec![cdc_scan, add_scan, remove_scan])?;
 
         // We project the union in the order of the input_schema + cdc cols at the end
         // This is to ensure the DeltaCdfTableProvider uses the correct schema construction.
