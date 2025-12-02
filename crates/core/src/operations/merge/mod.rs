@@ -3543,7 +3543,7 @@ mod tests {
 
         let expected_filter = Expr::Placeholder(Placeholder {
             id: "id_0".to_owned(),
-            data_type: None,
+            field: None,
         })
         .eq(col(Column::new(target.clone().into(), "id")));
 
@@ -3577,12 +3577,12 @@ mod tests {
         // id_1 = target.id OR (id_2 and target.id is null)
         let expected_filter = Expr::Placeholder(Placeholder {
             id: "id_0".to_owned(),
-            data_type: None,
+            field: None,
         })
         .eq(target_id.clone())
         .or(Expr::Placeholder(Placeholder {
             id: "id_1".to_owned(),
-            data_type: None,
+            field: None,
         })
         .and(target_id.clone().is_null()));
 
@@ -3621,7 +3621,7 @@ mod tests {
 
         let expected_filter = Expr::Placeholder(Placeholder {
             id: "id_0".to_owned(),
-            data_type: None,
+            field: None,
         })
         .eq(col(Column::new(target.clone().into(), "id")));
 
@@ -3662,7 +3662,7 @@ mod tests {
         // id_0 = target.id and target.id = 'C'
         let expected_filter = Expr::Placeholder(Placeholder {
             id: "id_0".to_owned(),
-            data_type: None,
+            field: None,
         })
         .eq(col(Column::new(target.clone().into(), "id")))
         .and(col(Column::new(target.clone().into(), "id")).eq(lit("C")));
@@ -3691,11 +3691,11 @@ mod tests {
         .unwrap();
         let expected_filter_l = Expr::Placeholder(Placeholder {
             id: "id_0_min".to_owned(),
-            data_type: None,
+            field: None,
         });
         let expected_filter_h = Expr::Placeholder(Placeholder {
             id: "id_0_max".to_owned(),
-            data_type: None,
+            field: None,
         });
         let expected_filter = col(Column::new(target.clone().into(), "id"))
             .between(expected_filter_l, expected_filter_h);
@@ -3726,7 +3726,7 @@ mod tests {
 
         let expected_filter = Expr::Placeholder(Placeholder {
             id: "id_0".to_owned(),
-            data_type: None,
+            field: None,
         })
         .eq(col(Column::new(target.clone().into(), "id")));
 

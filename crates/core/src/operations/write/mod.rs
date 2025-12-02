@@ -56,7 +56,6 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
-use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{create_session, register_store};
 use crate::delta_datafusion::{session_state_from_session, DataFusionMixins};
 use crate::errors::{DeltaResult, DeltaTableError};
