@@ -57,7 +57,7 @@ pub struct FileSystemCheckBuilder {
 pub struct FileSystemCheckMetrics {
     /// Was this a dry run
     pub dry_run: bool,
-    /// Files that where removed successfully
+    /// Files that were removed successfully
     #[serde(
         serialize_with = "serialize_vec_string",
         deserialize_with = "deserialize_vec_string"
