@@ -279,7 +279,7 @@ impl VacuumBuilder {
         };
 
         let expired_tombstones =
-            get_stale_files(&snapshot, retention_period, now_millis, &self.log_store).await?;
+            get_stale_files(snapshot, retention_period, now_millis, &self.log_store).await?;
         let valid_files: HashSet<_> = snapshot
             .file_views(self.log_store.as_ref(), None)
             .map_ok(|f| f.object_store_path())

@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "delta-inspect", "python"]
-exclude = ["proofs"]
+exclude = []
 resolver = "2"
 
 [workspace.package]
@@ -16,32 +16,32 @@ documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.16.0", features = [
-    "arrow-56",
+delta_kernel = { version = "0.18.0", features = [
+    "arrow-57",
     "default-engine-rustls",
     "internal-api",
 ] }
 
 
 # arrow
-arrow = { version = "56.2" }
-arrow-arith = { version = "56.2" }
-arrow-array = { version = "56.2", features = ["chrono-tz"] }
-arrow-buffer = { version = "56.2" }
-arrow-cast = { version = "56.2" }
-arrow-ipc = { version = "56.2" }
-arrow-json = { version = "56.2" }
-arrow-ord = { version = "56.2" }
-arrow-row = { version = "56.2" }
-arrow-schema = { version = "56.2" }
-arrow-select = { version = "56.2" }
+arrow = { version = "57" }
+arrow-arith = { version = "57" }
+arrow-array = { version = "57", features = ["chrono-tz"] }
+arrow-buffer = { version = "57" }
+arrow-cast = { version = "57" }
+arrow-ipc = { version = "57" }
+arrow-json = { version = "57" }
+arrow-ord = { version = "57" }
+arrow-row = { version = "57" }
+arrow-schema = { version = "57" }
+arrow-select = { version = "57" }
 object_store = { version = "0.12.1" }
-parquet = { version = "56.2" }
+parquet = { version = "57" }
 
 # datafusion
-datafusion = "50.2"
-datafusion-ffi = "50.2"
-datafusion-proto = "50.2"
+datafusion = "51.0"
+datafusion-ffi = "51.0"
+datafusion-proto = "51.0"
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -127,15 +127,15 @@ debug = true
 # CI profile - optimized for Continuous Integration
 # Usage: cargo build --profile=ci
 [profile.ci]
-inherits = "dev"           
-debug = false              
-incremental = false        
+inherits = "dev"
+debug = false
+incremental = false
 
 [profile.ci.package."*"]
-opt-level = 3              
-debug = false             
-debug-assertions = false   
-strip = "debuginfo"       
+opt-level = 3
+debug = false
+debug-assertions = false
+strip = "debuginfo"
 incremental = false
 
 # Python wheel release profile - for PyPI distribution
@@ -144,4 +144,4 @@ incremental = false
 inherits = "release"
 opt-level = 3
 codegen-units = 1
-lto = "fat"         
+lto = "fat"

@@ -14,7 +14,8 @@ use delta_kernel::{
     },
     error::DeltaResult as KernelResult,
     schema::SchemaRef,
-    EngineData, FileDataReadResultIterator, FileMeta, JsonHandler, ParquetHandler, PredicateRef,
+    EngineData, FileDataReadResultIterator, FileMeta, FilteredEngineData, JsonHandler,
+    ParquetHandler, PredicateRef,
 };
 use itertools::Itertools;
 use tokio::runtime::{Handle, RuntimeFlavor};
@@ -167,7 +168,7 @@ impl JsonHandler for DataFusionFileFormatHandler {
     fn write_json_file(
         &self,
         path: &url::Url,
-        data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send + '_>,
+        data: Box<dyn Iterator<Item = KernelResult<FilteredEngineData>> + Send + '_>,
         overwrite: bool,
     ) -> KernelResult<()> {
         self.get_or_create_json(path.as_object_store_url())?

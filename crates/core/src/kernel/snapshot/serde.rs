@@ -189,7 +189,7 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             ascending_compaction_files,
             checkpoint_parts,
             latest_crc_file,
-            // latest_commit_file,
+            None, // latest_commit_file
         )
         .map_err(de::Error::custom)?;
 
