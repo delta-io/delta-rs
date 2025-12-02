@@ -124,7 +124,7 @@ def test_delete(lakefs_path: str, sample_table: Table, lakefs_storage_options):
 
     dataset = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     assert dataset.num_rows == 0
-    assert len(dt.files()) == 0
+    assert len(dt.file_uris()) == 0
 
 
 @pytest.mark.lakefs

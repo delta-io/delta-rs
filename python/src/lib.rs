@@ -1204,7 +1204,6 @@ impl RawDeltaTable {
 
         let state = self.cloned_state()?;
         let log_store = self.log_store()?;
-        /*
         let adds: Vec<_> = rt()
             .block_on(async {
                 state
@@ -1213,9 +1212,7 @@ impl RawDeltaTable {
                     .await
             })
             .map_err(PythonError::from)?;
-        */
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
-        /*
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
@@ -1236,7 +1233,6 @@ impl RawDeltaTable {
                 )
             })
             .collect();
-            */
 
         let active_partitions = active_partitions
             .into_iter()
