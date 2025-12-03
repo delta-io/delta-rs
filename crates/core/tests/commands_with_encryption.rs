@@ -1,5 +1,3 @@
-#![cfg(feature = "kms_encryption_tests")]
-
 use arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
     datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
@@ -16,15 +14,20 @@ use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::operations::collect_sendable_stream;
 use deltalake_core::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake_core::table::file_format_options::{FileFormatRef, SimpleFileFormatOptions};
-use deltalake_core::test_utils::kms_encryption::{KmsFileFormatOptions, TableEncryption};
 use deltalake_core::{arrow, parquet, DeltaOps};
 use deltalake_core::{operations::optimize::OptimizeType, DeltaTable, DeltaTableError};
+
+// KMS encryption disabled until we update parquet_key_management to use datafusion v51
+/*
+use deltalake_core::test_utils::kms_encryption::{KmsFileFormatOptions, TableEncryption};
 use parquet_key_management::{
     crypto_factory::{CryptoFactory, DecryptionConfiguration, EncryptionConfiguration},
     datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions},
     kms::KmsConnectionConfig,
     test_kms::TestAsyncKmsClientFactory,
 };
+*/
+
 use paste::paste;
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
@@ -293,6 +296,8 @@ fn plain_crypto_format_bad_decryptor() -> Result<FileFormatRef, DeltaTableError>
     let decryption_key: Vec<_> = b"0123456789012345".to_vec();
     create_plain_crypto_format(encryption_key.clone(), decryption_key.clone())
 }
+// KMS encryption disabled until we update parquet_key_management to use datafusion v51
+/*
 fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     let crypto_factory =
         CryptoFactory::new_async_with_tokio(TestAsyncKmsClientFactory::with_default_keys());
@@ -314,6 +319,7 @@ fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
         Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as FileFormatRef;
     Ok(file_format_options)
 }
+*/
 
 fn full_table_data() -> Vec<&'static str> {
     vec![
@@ -389,6 +395,7 @@ async fn test_create_and_read(file_format_options: FileFormatRef, decrypt_final_
 }
 
 // Macro to generate the common encryption test matrix for a given runner function
+// KMS tests temporarily disabled due to datafusion version incompatibility
 macro_rules! encryption_tests {
     ($runner:ident) => {
         paste! {
@@ -405,6 +412,8 @@ macro_rules! encryption_tests {
                 $runner(file_format_options, false).await;
             }
 
+            // KMS encryption disabled until we update parquet_key_management to use datafusion v51
+            /*
             #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
             async fn [<$runner _kms>]() {
                 let file_format_options = kms_crypto_format().unwrap();
@@ -417,6 +426,7 @@ macro_rules! encryption_tests {
                 let file_format_options = kms_crypto_format().unwrap();
                 $runner(file_format_options, false).await;
             }
+            */
         }
     };
 }
