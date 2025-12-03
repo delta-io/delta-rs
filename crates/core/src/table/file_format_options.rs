@@ -96,8 +96,7 @@ fn build_writer_properties_tpo(
         if let Some(enc) = tpo.crypto.file_encryption {
             // Convert config encryption properties into parquet FileEncryptionProperties
             // and wrap into Arc as required by the builder.
-            wp_build = wp_build
-                .with_file_encryption_properties(Arc::new(enc.into()));
+            wp_build = wp_build.with_file_encryption_properties(Arc::new(enc.into()));
         }
         wp_build.build()
     })
