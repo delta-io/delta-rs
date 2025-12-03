@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use deltalake_derive::DeltaConfig;
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
+use tracing::log::*;
 use url::Url;
 
 use crate::{DeltaResult, DeltaTableError};
@@ -40,7 +41,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 #[derive(Clone)]
 pub struct DefaultObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
+    object_stores: DashMap<Url, Arc<dyn ObjectStore>>,
 }
 
 impl Default for DefaultObjectStoreRegistry {
@@ -51,7 +52,7 @@ impl Default for DefaultObjectStoreRegistry {
 
 impl DefaultObjectStoreRegistry {
     pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        let object_stores: DashMap<Url, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }
     }
 }
@@ -77,17 +78,46 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_stores.insert(url.to_string(), store)
+        self.object_stores.insert(normalize_table_url(url), store)
     }
 
     fn get_store(&self, url: &Url) -> DeltaResult<Arc<dyn ObjectStore>> {
         self.object_stores
-            .get(&url.to_string())
+            .get(&normalize_table_url(url))
             .map(|o| Arc::clone(o.value()))
             .ok_or_else(|| {
                 DeltaTableError::generic(format!("No suitable object store found for '{url}'."))
             })
     }
+}
+
+/// Normalize a given [Url] to **always** contain a trailing slash. This is critically important
+/// for assumptions about [Url] equivalency and more importantly for **joining** on a Url`.
+///
+/// ```
+///  left.join("_delta_log"); // produces `s3://bucket/prefix/_delta_log`
+///  right.join("_delta_log"); // produces `s3://bucket/_delta_log`
+/// ```
+fn normalize_table_url(url: &Url) -> Url {
+    let mut new_segments = vec![];
+    for segment in url.path().split('/') {
+        if !segment.is_empty() {
+            new_segments.push(segment);
+        }
+    }
+    // Add a trailing slash segment
+    new_segments.push("");
+
+    let mut url = url.clone();
+    if let Ok(mut path_segments) = url.path_segments_mut() {
+        path_segments.clear();
+        path_segments.extend(new_segments);
+    } else {
+        error!(
+            "Was not able to normalize the table URL. This is non-fatal but may produce curious results!"
+        );
+    }
+    url
 }
 
 #[derive(Debug, Clone, Default, DeltaConfig)]
@@ -107,6 +137,25 @@ mod tests {
     use super::*;
     use crate::logstore::config::TryUpdateKey;
     use crate::test_utils::with_env;
+
+    #[test]
+    fn test_normalize_table_url() {
+        for (u, path) in [
+            (Url::parse("s3://bucket/prefix/").unwrap(), "/prefix/"),
+            (Url::parse("s3://bucket/prefix").unwrap(), "/prefix/"),
+            (
+                Url::parse("s3://bucket/prefix/with/redundant/slashes//").unwrap(),
+                "/prefix/with/redundant/slashes/",
+            ),
+        ] {
+            assert_eq!(
+                normalize_table_url(&u).path(),
+                path,
+                "Failed to normalize: {}",
+                u.as_str()
+            );
+        }
+    }
 
     #[test]
     fn test_limit_config() {
