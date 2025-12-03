@@ -291,23 +291,35 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter],
     ) -> Result<Vec<String>, DeltaTableError> {
-        let files = self.get_files_by_partitions(filters).await?;
+        // Avoid degrading absolute paths to object_store::Path. Build URIs directly
+        // from the string paths in the log using the table root as needed.
+        let root = self.log_store().config().location.clone();
+        let files: Vec<_> = self
+            .get_active_add_actions_by_partitions(filters)
+            .try_collect()
+            .await?;
         Ok(files
             .iter()
-            .map(|fname| self.log_store.to_uri(fname))
+            .map(|view| {
+                let p = view.path();
+                crate::logstore::to_uri_from_str(&root, p.as_ref())
+            })
             .collect())
     }
 
     /// Returns a URIs for all active files present in the current table version.
     pub fn get_file_uris(&self) -> DeltaResult<impl Iterator<Item = String> + '_> {
+        let root = self.log_store().config().location.clone();
         Ok(self
             .state
             .as_ref()
             .ok_or(DeltaTableError::NotInitialized)?
             .log_data()
             .into_iter()
-            .map(|add| add.object_store_path())
-            .map(|path| self.log_store.to_uri(&path)))
+            .map(move |view| {
+                let p = view.path();
+                crate::logstore::to_uri_from_str(&root, p.as_ref())
+            }))
     }
 
     /// Returns the currently loaded state snapshot.
