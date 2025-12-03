@@ -93,9 +93,11 @@ fn build_writer_properties_tpo(
         tpo.global.skip_arrow_metadata = true;
         let mut wp_build = WriterPropertiesBuilder::try_from(&tpo)
             .expect("Failed to convert TableParquetOptions to ParquetWriterOptions");
-        if tpo.crypto.file_encryption.is_some() {
+        if let Some(enc) = tpo.crypto.file_encryption {
+            // Convert config encryption properties into parquet FileEncryptionProperties
+            // and wrap into Arc as required by the builder.
             wp_build = wp_build
-                .with_file_encryption_properties(tpo.crypto.file_encryption.unwrap().into());
+                .with_file_encryption_properties(Arc::new(enc.into()));
         }
         wp_build.build()
     })

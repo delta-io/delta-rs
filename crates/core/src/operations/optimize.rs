@@ -687,7 +687,7 @@ impl MergePlan {
                             let meta = ObjectMeta::try_from(file).unwrap();
                             let file_format_options = file_format_options.clone();
                             async move {
-                                let decrypt: Option<FileDecryptionProperties> =
+                                let decrypt: Option<Arc<FileDecryptionProperties>> =
                                     match &*file_format_options {
                                         Some(ffo) => {
                                             get_file_decryption_properties(ffo, &meta.location)
@@ -1123,10 +1123,10 @@ async fn build_zorder_plan(
 async fn get_file_decryption_properties(
     file_format_options: &FileFormatRef,
     file_path: &object_store::path::Path,
-) -> Result<Option<FileDecryptionProperties>, DataFusionError> {
+) -> Result<Option<Arc<FileDecryptionProperties>>, DataFusionError> {
     let parquet_options = file_format_options.table_options().parquet;
     if let Some(props) = &parquet_options.crypto.file_decryption {
-        return Ok(Some(props.clone().into()));
+        return Ok(Some(Arc::new(props.clone().into())));
     }
     if let Some(factory_id) = &parquet_options.crypto.factory_id {
         // Create a temporary DataFusion session to access the encryption factory

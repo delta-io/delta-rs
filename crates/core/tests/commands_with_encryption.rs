@@ -1,3 +1,5 @@
+#![cfg(feature = "kms_encryption_tests")]
+
 use arrow::{
     array::{Int32Array, StringArray, TimestampMicrosecondArray},
     datatypes::{DataType as ArrowDataType, Field, Schema, Schema as ArrowSchema, TimeUnit},
