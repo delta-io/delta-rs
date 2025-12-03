@@ -145,16 +145,12 @@ mod tests {
             .as_any()
             .downcast_ref::<LakeFSLogStore>()
         {
+            let table_url =
+                Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
+                    .unwrap();
             assert!(
-                lakefs_store
-                    .prefixed_registry
-                    .get_store(
-                        &Url::parse(
-                            format!("lakefs://repo/delta-tx-{operation_id}/table").as_str()
-                        )
-                        .unwrap()
-                    )
-                    .is_ok()
+                lakefs_store.prefixed_registry.get_store(&table_url).is_ok(),
+                "The LakeFSLogStore did not have the URL {table_url:?} we expected: {lakefs_store:?}"
             );
 
             assert!(lakefs_store.client.get_transaction(operation_id).is_ok())
