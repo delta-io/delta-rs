@@ -15,22 +15,13 @@ use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake::{arrow, parquet, DeltaOps};
 use deltalake_core::table::file_format_options::{FileFormatRef, SimpleFileFormatOptions};
+use deltalake_core::test_utils::kms_encryption::{KmsFileFormatOptions, MockKmsClient, TableEncryption};
 use deltalake_core::{
     datafusion::common::test_util::format_batches, operations::optimize::OptimizeType, DeltaTable,
     DeltaTableError,
 };
 
-// Disabled until we update parquet-key-management
-/*
-use deltalake_core::test_utils::kms_encryption::{KmsFileFormatOptions, TableEncryption};
-use parquet_key_management::{
-    crypto_factory::{CryptoFactory, DecryptionConfiguration, EncryptionConfiguration},
-    datafusion::{KmsEncryptionFactory, KmsEncryptionFactoryOptions},
-    kms::KmsConnectionConfig,
-    test_kms::TestAsyncKmsClientFactory,
-};
-*/
-
+use deltalake::datafusion::config::EncryptionFactoryOptions;
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
 use url::Url;
@@ -295,31 +286,14 @@ fn plain_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
     Ok(file_format_options)
 }
 
-// Disabled until we update parquet-key-management
-/*
 fn kms_crypto_format() -> Result<FileFormatRef, DeltaTableError> {
-    let crypto_factory =
-        CryptoFactory::new_async_with_tokio(TestAsyncKmsClientFactory::with_default_keys());
-
-    let kms_connection_config = Arc::new(KmsConnectionConfig::default());
-    let encryption_factory = Arc::new(KmsEncryptionFactory::new(
-        crypto_factory,
-        kms_connection_config,
-    ));
-
-    let encryption_config = EncryptionConfiguration::builder("kf".into()).build()?;
-    let decryption_config = DecryptionConfiguration::builder().build();
-    let kms_options = KmsEncryptionFactoryOptions::new(encryption_config, decryption_config);
-
-    let table_encryption =
-        TableEncryption::new_with_extension_options(encryption_factory, &kms_options)?;
-
+    let encryption_factory = Arc::new(MockKmsClient::new());
+    let configuration = EncryptionFactoryOptions::default();
+    let table_encryption = TableEncryption::new(encryption_factory, configuration);
     let file_format_options =
-        Arc::new(KmsFileFormatOptions::new(table_encryption.clone())) as FileFormatRef;
+        Arc::new(KmsFileFormatOptions::new(table_encryption)) as FileFormatRef;
     Ok(file_format_options)
 }
-
-*/
 
 async fn round_trip_test(
     file_format_options: FileFormatRef,
@@ -350,8 +324,6 @@ async fn main() -> Result<(), DeltaTableError> {
     println!("End Plain encryption test");
     println!("====================");
 
-    // Disabled until we update parquet-key-management
-    /*
     println!("\n\n");
     println!("====================");
     println!("Begin KMS encryption test");
@@ -359,6 +331,6 @@ async fn main() -> Result<(), DeltaTableError> {
     round_trip_test(file_format_options).await?;
     println!("End KMS encryption test");
     println!("====================");
-    */
+
     Ok(())
 }
