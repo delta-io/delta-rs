@@ -15,7 +15,9 @@ use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake::{arrow, parquet, DeltaOps};
 use deltalake_core::table::file_format_options::{FileFormatRef, SimpleFileFormatOptions};
-use deltalake_core::test_utils::kms_encryption::{KmsFileFormatOptions, MockKmsClient, TableEncryption};
+use deltalake_core::test_utils::kms_encryption::{
+    KmsFileFormatOptions, MockKmsClient, TableEncryption,
+};
 use deltalake_core::{
     datafusion::common::test_util::format_batches, operations::optimize::OptimizeType, DeltaTable,
     DeltaTableError,

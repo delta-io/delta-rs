@@ -231,11 +231,9 @@ impl EncryptionFactory for MockKmsClient {
         file_path: &Path,
     ) -> datafusion::error::Result<Option<Arc<FileDecryptionProperties>>> {
         let keys = self.encryption_keys.lock().unwrap();
-        let key = keys
-            .get(file_path)
-            .ok_or_else(|| datafusion::error::DataFusionError::Execution(
-                format!("No key for file {file_path:?}")
-            ))?;
+        let key = keys.get(file_path).ok_or_else(|| {
+            datafusion::error::DataFusionError::Execution(format!("No key for file {file_path:?}"))
+        })?;
         let decryption_properties = FileDecryptionProperties::builder(key.clone()).build()?;
         Ok(Some(decryption_properties))
     }
