@@ -230,11 +230,13 @@ impl DeltaScanStream {
                 .try_into_kernel()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?,
         );
-        let evaluator = ARROW_HANDLER.new_expression_evaluator(
-            input_schema,
-            transform.clone(),
-            self.kernel_schema.clone().into(),
-        );
+        let evaluator = ARROW_HANDLER
+            .new_expression_evaluator(
+                input_schema,
+                transform.clone(),
+                self.kernel_schema.clone().into(),
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let result = evaluator
             .evaluate_arrow(batch)

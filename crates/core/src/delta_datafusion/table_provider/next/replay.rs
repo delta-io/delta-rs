@@ -123,16 +123,14 @@ where
                 this.metrics.num_scanned += ctx.count;
                 this.metrics.num_skipped += scan_data
                     .scan_files
-                    .selection_vector
+                    .selection_vector()
                     .len()
                     .saturating_sub(ctx.count);
 
-                let batch =
-                    ArrowEngineData::try_from_engine_data(scan_data.scan_files.data)?.into();
-                let scan_files = filter_record_batch(
-                    &batch,
-                    &BooleanArray::from(scan_data.scan_files.selection_vector),
-                )?;
+                let (data, selection_vector) = scan_data.scan_files.into_parts();
+                let batch = ArrowEngineData::try_from_engine_data(data)?.into();
+                let scan_files =
+                    filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
 
                 let stats_schema = Arc::new(stats_schema(
                     this.kernel_scan.physical_schema(),
