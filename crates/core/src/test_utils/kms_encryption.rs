@@ -9,6 +9,9 @@
 //! passed to the `DeltaTable::create` method. This class can also be directly used in
 //! `DeltaOps` via the `with_file_format_options` method.
 //! See `crates/deltalake/examples/basic_operations_encryption.rs` for a working example.
+//!
+//! The `MockKmsClient` struct provides a mock implementation of `EncryptionFactory` for testing
+//! purposes. It generates unique encryption keys for each file and stores them for later decryption.
 
 use crate::table::file_format_options::{
     FileFormatOptions, TableOptions, WriterPropertiesFactory, WriterPropertiesFactoryRef,
@@ -21,10 +24,14 @@ use datafusion::config::{ConfigField, EncryptionFactoryOptions, ExtensionOptions
 use datafusion::execution::parquet_encryption::EncryptionFactory;
 use object_store::path::Path;
 use parquet::basic::Compression;
+use parquet::encryption::decrypt::FileDecryptionProperties;
+use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 pub type SchemaRef = Arc<ArrowSchema>;
@@ -178,5 +185,56 @@ impl FileFormatOptions for KmsFileFormatOptions {
             Arc::clone(self.table_encryption.encryption_factory()),
         );
         Ok(())
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Mock KMS client for testing purposes
+// -------------------------------------------------------------------------------------------------
+
+/// Mock encryption factory implementation for use in tests.
+/// Generates unique encryption keys for each file and stores them for later decryption.
+#[derive(Debug, Default)]
+pub struct MockKmsClient {
+    encryption_keys: Mutex<HashMap<Path, Vec<u8>>>,
+    counter: AtomicU8,
+}
+
+impl MockKmsClient {
+    pub fn new() -> Self {
+        Self {
+            encryption_keys: Mutex::new(HashMap::new()),
+            counter: AtomicU8::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl EncryptionFactory for MockKmsClient {
+    async fn get_file_encryption_properties(
+        &self,
+        _config: &EncryptionFactoryOptions,
+        _schema: &SchemaRef,
+        file_path: &Path,
+    ) -> datafusion::error::Result<Option<Arc<FileEncryptionProperties>>> {
+        let file_idx = self.counter.fetch_add(1, Ordering::Relaxed);
+        let key = vec![file_idx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut keys = self.encryption_keys.lock().unwrap();
+        keys.insert(file_path.clone(), key.clone());
+        let encryption_properties = FileEncryptionProperties::builder(key).build()?;
+        Ok(Some(encryption_properties))
+    }
+
+    async fn get_file_decryption_properties(
+        &self,
+        _config: &EncryptionFactoryOptions,
+        file_path: &Path,
+    ) -> datafusion::error::Result<Option<Arc<FileDecryptionProperties>>> {
+        let keys = self.encryption_keys.lock().unwrap();
+        let key = keys.get(file_path).ok_or_else(|| {
+            datafusion::error::DataFusionError::Execution(format!("No key for file {file_path:?}"))
+        })?;
+        let decryption_properties = FileDecryptionProperties::builder(key.clone()).build()?;
+        Ok(Some(decryption_properties))
     }
 }
