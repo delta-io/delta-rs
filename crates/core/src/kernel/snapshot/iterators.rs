@@ -20,6 +20,8 @@ use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
+#[cfg(feature = "datafusion")]
+pub(crate) use self::scan_row::parse_stats_column_with_schema;
 pub(crate) use self::scan_row::{scan_row_in_eval, ScanRowOutStream};
 pub use self::tombstones::TombstoneView;
 
