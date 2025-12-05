@@ -1,13 +1,15 @@
 //! Delta Table read and write implementation
 
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::fmt;
 use std::fmt::Formatter;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::future::ready;
+use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{path::Path, ObjectStore};
+use object_store::{ObjectStore, path::Path};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -16,8 +18,8 @@ use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
 use crate::logstore::{
-    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
-    LogStoreRef, ObjectStoreRef,
+    LogStoreConfig, LogStoreExt, LogStoreRef, ObjectStoreRef, commit_uri_from_version,
+    extract_version_from_filename,
 };
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
@@ -90,9 +92,11 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store =
-                    crate::logstore::logstore_for(storage_config.location, storage_config.options)
-                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store = crate::logstore::logstore_for(
+                    storage_config.location().clone(),
+                    storage_config.options().clone(),
+                )
+                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
 
                 let table = DeltaTable {
                     state,
@@ -233,7 +237,7 @@ impl DeltaTable {
     pub async fn history(
         &self,
         limit: Option<usize>,
-    ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
         let infos = self
             .snapshot()?
             .snapshot()
@@ -266,9 +270,19 @@ impl DeltaTable {
                 Err(DeltaTableError::NotInitialized)
             }));
         };
+
+        if filters.is_empty() {
+            return state.snapshot().file_views(&self.log_store, None);
+        }
+
+        let predicate =
+            match crate::to_kernel_predicate(filters, state.snapshot().schema().as_ref()) {
+                Ok(predicate) => Arc::new(predicate),
+                Err(err) => return Box::pin(once(ready(Err(err)))),
+            };
         state
             .snapshot()
-            .file_views_by_partitions(&self.log_store, filters)
+            .file_views(&self.log_store, Some(predicate))
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -373,7 +387,7 @@ impl DeltaTable {
             Err(DeltaTableError::InvalidVersion(_)) => {
                 return Err(DeltaTableError::NotATable(
                     log_store.table_root_url().to_string(),
-                ))
+                ));
             }
             Err(e) => return Err(e),
         };

@@ -7,11 +7,11 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, EagerSnapshot, ProtocolExt as _, TableFeatures};
+use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 /// Enable table features for a table
@@ -154,12 +154,12 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
 #[cfg(test)]
 mod tests {
     use crate::{
+        DeltaOps,
         kernel::TableFeatures,
         writer::test_utils::{create_bare_table, get_record_batch},
-        DeltaOps,
     };
-    use delta_kernel::table_features::TableFeature;
     use delta_kernel::DeltaResult;
+    use delta_kernel::table_features::TableFeature;
 
     #[tokio::test]
     async fn add_feature() -> DeltaResult<()> {
@@ -176,13 +176,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(&result
-            .snapshot()
-            .unwrap()
-            .protocol()
-            .writer_features()
-            .unwrap_or_default()
-            .contains(&TableFeature::ChangeDataFeed));
+        assert!(
+            &result
+                .snapshot()
+                .unwrap()
+                .protocol()
+                .writer_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::ChangeDataFeed)
+        );
 
         let result = DeltaOps(result)
             .add_feature()
@@ -192,14 +194,18 @@ mod tests {
             .unwrap();
 
         let current_protocol = &result.snapshot().unwrap().protocol().clone();
-        assert!(&current_protocol
-            .writer_features()
-            .unwrap_or_default()
-            .contains(&TableFeature::DeletionVectors));
-        assert!(&current_protocol
-            .reader_features()
-            .unwrap_or_default()
-            .contains(&TableFeature::DeletionVectors));
+        assert!(
+            &current_protocol
+                .writer_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::DeletionVectors)
+        );
+        assert!(
+            &current_protocol
+                .reader_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::DeletionVectors)
+        );
         assert_eq!(result.version(), Some(2));
         Ok(())
     }

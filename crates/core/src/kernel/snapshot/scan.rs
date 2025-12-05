@@ -7,13 +7,13 @@ use delta_kernel::scan::{Scan as KernelScan, ScanBuilder as KernelScanBuilder, S
 use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::{Engine, EngineData, PredicateRef, SnapshotRef, Version};
+use futures::Stream;
 use futures::future::ready;
 use futures::stream::once;
-use futures::Stream;
 use url::Url;
 
-use crate::kernel::{scan_row_in_eval, ReceiverStreamBuilder};
 use crate::DeltaResult;
+use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
 
 pub type SendableScanMetadataStream = Pin<Box<dyn Stream<Item = DeltaResult<ScanMetadata>> + Send>>;
 

@@ -38,7 +38,9 @@ def test_local_convert_to_delta(
     dt = DeltaTable(tmp_path)
 
     assert dt.version() == 0
-    assert dt.files() == ["part-0.parquet"]
+    assert dt.file_uris()[0].endswith("part-0.parquet"), (
+        f"dt.file_uris() does not contain the expected file: {dt.file_uris()}"
+    )
     assert dt.metadata().name == name
     assert dt.metadata().description == description
     assert dt.metadata().configuration == {"delta.appendOnly": "true"}

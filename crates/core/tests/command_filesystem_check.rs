@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use deltalake_core::Path;
-use deltalake_core::{errors::DeltaTableError, DeltaOps};
+use deltalake_core::{DeltaOps, errors::DeltaTableError};
 use deltalake_test::utils::*;
 use futures::TryStreamExt as _;
 use serial_test::serial;

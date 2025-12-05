@@ -8,18 +8,18 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::TableProvider;
+use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
+use datafusion::datasource::TableType;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileSource,
+    FileGroup, FileSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
-use datafusion::datasource::TableType;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -32,14 +32,14 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
-    stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
-    PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+    stream::RecordBatchStreamAdapter,
 };
 use datafusion::{
     catalog::Session,
     common::{HashMap, HashSet},
     datasource::listing::PartitionedFile,
-    logical_expr::{utils::conjunction, TableProviderFilterPushDown},
+    logical_expr::{TableProviderFilterPushDown, utils::conjunction},
     prelude::Expr,
     scalar::ScalarValue,
 };
@@ -51,17 +51,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
-    get_null_of_arrow_type, register_store, to_correct_scalar_value, DataFusionMixins as _,
-    LogDataHandler,
+    DataFusionMixins as _, LogDataHandler, get_null_of_arrow_type, register_store,
+    to_correct_scalar_value,
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
 use crate::kernel::{Action, Add, EagerSnapshot, Remove};
-use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::{ensure_table_uri, DeltaTable};
-use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTableError, logstore::LogStoreRef};
+use crate::{DeltaTable, ensure_table_uri};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -864,7 +864,7 @@ impl TableProvider for DeltaTableProvider {
             InsertOp::Replace => {
                 return Err(DataFusionError::Plan(
                     "Replace operation is not supported for DeltaTableProvider".to_string(),
-                ))
+                ));
             }
         };
 
@@ -1061,7 +1061,7 @@ fn get_pushdown_filters(
 fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| match expr {
-        Expr::Column(Column { ref name, .. }) => {
+        Expr::Column(Column { name, .. }) => {
             is_applicable &= partition_cols.contains(name);
 
             // TODO: decide if we should constrain this to Utf8 columns (including views, dicts etc)
@@ -1072,7 +1072,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
                 Ok(TreeNodeRecursion::Stop)
             }
         }
-        Expr::BinaryExpr(BinaryExpr { ref op, .. }) => {
+        Expr::BinaryExpr(BinaryExpr { op, .. }) => {
             is_applicable &= matches!(
                 op,
                 Operator::And
@@ -1165,8 +1165,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use chrono::{TimeZone, Utc};
     use datafusion::common::ScalarValue;
-    use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::MemTable;
+    use datafusion::datasource::listing::PartitionedFile;
     use datafusion::execution::context::SessionState;
     use datafusion::logical_expr::dml::InsertOp;
     use object_store::path::Path;

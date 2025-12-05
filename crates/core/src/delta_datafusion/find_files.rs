@@ -8,15 +8,15 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::{col, Expr, Volatility};
+use datafusion::logical_expr::{Expr, Volatility, col};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::ExecutionPlan;
 use itertools::Itertools;
 use tracing::*;
 
 use crate::delta_datafusion::{
-    df_logical_schema, get_path_column, DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN,
+    DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN, df_logical_schema, get_path_column,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot};
@@ -200,7 +200,7 @@ fn join_batches_with_add_actions(
                 None => {
                     return Err(DeltaTableError::Generic(
                         "Unable to map __delta_rs_path to action.".to_owned(),
-                    ))
+                    ));
                 }
             }
         }

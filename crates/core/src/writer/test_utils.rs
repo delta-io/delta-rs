@@ -8,10 +8,10 @@ use arrow_select::take::take;
 use url::Url;
 
 use crate::kernel::{
-    new_metadata, DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType,
+    DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType, new_metadata,
 };
-use crate::operations::create::CreateBuilder;
 use crate::operations::DeltaOps;
+use crate::operations::create::CreateBuilder;
 use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -317,9 +317,9 @@ pub async fn create_initialized_table(table_path: &str, partition_cols: &[String
 
 #[cfg(feature = "datafusion")]
 pub mod datafusion {
+    use crate::DeltaTable;
     use crate::operations::DeltaOps;
     use crate::writer::SaveMode;
-    use crate::DeltaTable;
     use arrow_array::RecordBatch;
     use datafusion::prelude::SessionContext;
     use std::sync::Arc;

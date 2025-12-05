@@ -11,17 +11,17 @@ use deltalake_core::errors::DeltaTableError;
 use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::ObjectStoreRef;
-use deltalake_core::operations::optimize::{
-    create_merge_plan, MetricDetails, Metrics, OptimizeType,
-};
 use deltalake_core::operations::DeltaOps;
+use deltalake_core::operations::optimize::{
+    MetricDetails, Metrics, OptimizeType, create_merge_plan,
+};
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
 use object_store::ObjectStore;
-use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
@@ -675,10 +675,12 @@ async fn test_zorder_rejects_zero_columns() -> Result<(), Box<dyn Error>> {
         .with_type(OptimizeType::ZOrder(vec![]))
         .await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Z-order requires at least one column"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Z-order requires at least one column")
+    );
     Ok(())
 }
 
@@ -717,10 +719,12 @@ async fn test_zorder_rejects_partition_column() -> Result<(), Box<dyn Error>> {
         .with_type(OptimizeType::ZOrder(vec!["date".to_string()]))
         .await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Z-order columns cannot be partition columns. Found: [\"date\"]"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Z-order columns cannot be partition columns. Found: [\"date\"]")
+    );
 
     Ok(())
 }
@@ -758,7 +762,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.total_considered_files, 2);
 
     // Check data
-    let files = dt.snapshot()?.file_paths_iter().collect::<Vec<_>>();
+    let files = dt.get_files_by_partitions(&[]).await?;
     assert_eq!(files.len(), 1);
 
     let actual = read_parquet_file(&files[0], dt.object_store()).await?;

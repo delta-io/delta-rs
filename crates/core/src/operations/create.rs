@@ -7,15 +7,14 @@ use std::sync::Arc;
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use tracing::log::*;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    new_metadata, Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField,
-    StructType,
+    Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField, StructType,
+    new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};

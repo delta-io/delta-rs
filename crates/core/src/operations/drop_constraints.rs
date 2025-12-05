@@ -5,12 +5,12 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 /// Remove constraints from the table
@@ -135,8 +135,6 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
     use crate::{DeltaOps, DeltaResult, DeltaTable};
 

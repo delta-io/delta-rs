@@ -155,7 +155,7 @@ def test_create_or_replace_existing_table(tmp_path: pathlib.Path, sample_table: 
         mode="overwrite",
     )
 
-    assert dt.files() == []
+    assert dt.file_uris() == []
 
 
 def test_delta_table_invalid_path_raises_error(tmp_path: pathlib.Path):

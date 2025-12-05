@@ -3,10 +3,10 @@ use std::sync::OnceLock;
 
 use bytes::Bytes;
 use deltalake_derive::DeltaConfig;
-use futures::future::BoxFuture;
-use futures::stream::BoxStream;
 use futures::FutureExt;
 use futures::TryFutureExt;
+use futures::future::BoxFuture;
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
     Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,

@@ -4,11 +4,11 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::parse::Parser;
-use syn::{
-    parse_macro_input, punctuated::Punctuated, Data, DeriveInput, Field, Fields, Lit, Meta,
-    MetaNameValue, Token, Type,
-};
 use syn::{Attribute, Error, Expr, Ident, Result};
+use syn::{
+    Data, DeriveInput, Field, Fields, Lit, Meta, MetaNameValue, Token, Type, parse_macro_input,
+    punctuated::Punctuated,
+};
 
 /// Derive macro for implementing the TryUpdateKey trait
 ///
@@ -251,8 +251,11 @@ fn determine_parser(ty: &Type) -> Result<(proc_macro2::TokenStream, bool)> {
             } else if type_str.contains("String") {
                 quote! { crate::logstore::config::parse_string }
             } else {
-                return Err(Error::new_spanned(ty,
-                    format!("Unsupported field type: {type_str}. Consider implementing a custom parser.")
+                return Err(Error::new_spanned(
+                    ty,
+                    format!(
+                        "Unsupported field type: {type_str}. Consider implementing a custom parser."
+                    ),
                 ));
             };
 

@@ -2,8 +2,8 @@
 mod fs_common;
 
 use deltalake_core::crate_version;
-use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::Action;
+use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;

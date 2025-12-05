@@ -5,7 +5,7 @@ use chrono::DateTime;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::commit_uri_from_version;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{ensure_table_uri, DeltaOps, DeltaTable};
+use deltalake_core::{DeltaOps, DeltaTable, ensure_table_uri};
 use futures::TryStreamExt;
 use itertools::Itertools;
 use rand::Rng;
@@ -106,8 +106,8 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
     table.0.load_version(1).await?;
-    let curr_files = table.0.snapshot()?.file_paths_iter().collect_vec();
-    let result_files = result.0.snapshot()?.file_paths_iter().collect_vec();
+    let curr_files = table.0.get_files_by_partitions(&[]).await?;
+    let result_files = result.0.get_files_by_partitions(&[]).await?;
     assert_eq!(curr_files, result_files);
 
     let result = DeltaOps(result.0)
