@@ -128,6 +128,7 @@ async fn truncated_commit_log(log_segment: LogSegment, log_store: &dyn LogStore,
             .to_vec()
     };
     let mut truncated_log_size = 0_u64; // keep track of the total size to cut it shorter if needed
+    let latest_commit_file = truncated_log.last().cloned();
     Ok(LogSegment {
         end_version: log_segment.end_version,
         ascending_commit_files: truncated_log.into_iter()
@@ -145,7 +146,7 @@ async fn truncated_commit_log(log_segment: LogSegment, log_store: &dyn LogStore,
         log_root: log_store.log_root_url(),
         checkpoint_version: None,
         latest_crc_file: None,
-        latest_commit_file: None,
+        latest_commit_file,
     })
 }
 
@@ -669,7 +670,7 @@ mod tests {
                     log_root: log_store.log_root_url(),
                     checkpoint_version: None,
                     latest_crc_file: None,
-                    latest_commit_file: None,
+                    latest_commit_file: Some(parsed_log_path("delta_table/_delta_log/00000000000000000005.json", 128)),
                 }
             );
 
@@ -691,7 +692,7 @@ mod tests {
                     log_root: log_store.log_root_url(),
                     checkpoint_version: Some(30),
                     latest_crc_file: None,
-                    latest_commit_file: None,
+                    latest_commit_file: Some(parsed_log_path("delta_table/_delta_log/00000000000000000032.json", 128)),
                 }
             );
 
@@ -718,7 +719,7 @@ mod tests {
                     log_root: log_store.log_root_url(),
                     checkpoint_version: Some(90),
                     latest_crc_file: None,
-                    latest_commit_file: None,
+                    latest_commit_file: Some(parsed_log_path("delta_table/_delta_log/00000000000000000097.json", 128),),
                 }
             );
 
