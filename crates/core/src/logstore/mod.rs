@@ -83,6 +83,11 @@ pub use self::factories::{
     LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
 };
 pub use self::storage::utils::commit_uri_from_version;
+pub use self::storage::utils::is_absolute_uri_or_path;
+pub use self::storage::utils::{
+    normalize_add_path_for_scan, normalize_path_for_file_scheme, object_store_path_for_file_root,
+    relativize_path_for_file_scheme, relativize_uri_to_bucket_root, strip_table_root_from_full_uri,
+};
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
     ObjectStoreRegistry, ObjectStoreRetryExt,
@@ -532,31 +537,35 @@ pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
     })
 }
 
-/// TODO
+/// Build a full URI string from a root URL and a location path.
+/// If the location already appears to be an absolute URI or absolute path,
+/// return it unchanged.
 pub fn to_uri(root: &Url, location: &Path) -> String {
+    to_uri_from_str(root, location.as_ref())
+}
+
+/// Build a full URI string from a root URL and a raw string location.
+/// If the location already appears to be an absolute URI or absolute path,
+/// return it unchanged.
+pub fn to_uri_from_str(root: &Url, location: &str) -> String {
+    if crate::logstore::is_absolute_uri_or_path(location) {
+        return location.to_string();
+    }
     match root.scheme() {
         "file" => {
             #[cfg(windows)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file:///", "");
+            let uri = format!("{}/{}", root.as_ref().trim_end_matches('/'), location)
+                .replace("file:///", "");
             #[cfg(unix)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file://", "");
+            let uri = format!("{}/{}", root.as_ref().trim_end_matches('/'), location)
+                .replace("file://", "");
             uri
         }
         _ => {
-            if location.as_ref().is_empty() || location.as_ref() == "/" {
+            if location.is_empty() || location == "/" {
                 root.as_ref().to_string()
             } else {
-                format!("{}/{}", root.as_ref(), location.as_ref())
+                format!("{}/{}", root.as_ref().trim_end_matches('/'), location)
             }
         }
     }
