@@ -257,7 +257,7 @@ impl DeltaOps {
         VacuumBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
-    /// Audit active files with files present on the filesystem
+    /// Audit and repair active files with files present on the filesystem
     #[must_use]
     pub fn filesystem_check(self) -> FileSystemCheckBuilder {
         FileSystemCheckBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
