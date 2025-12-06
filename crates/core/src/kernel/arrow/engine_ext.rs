@@ -41,7 +41,7 @@ pub(crate) struct ScanMetadataArrow {
     /// - `None`: No transformation is needed; the data is already in the correct logical form.
     ///
     /// Note: This vector can be indexed by row number.
-    scan_file_transforms: Vec<Option<ExpressionRef>>,
+    _scan_file_transforms: Vec<Option<ExpressionRef>>,
 }
 
 /// Internal extension traits to the Kernel Snapshot.
@@ -398,7 +398,7 @@ pub(crate) fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadat
     let scan_files = filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
     Ok(ScanMetadataArrow {
         scan_files,
-        scan_file_transforms,
+        _scan_file_transforms: scan_file_transforms,
     })
 }
 
