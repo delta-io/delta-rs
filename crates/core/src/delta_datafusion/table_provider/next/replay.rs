@@ -4,8 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::array::BooleanArray;
-use arrow::compute::filter_record_batch;
+use arrow::{array::BooleanArray, compute::filter_record_batch};
 use datafusion::{
     common::{
         error::DataFusionErrorBuilder, stats::Precision, ColumnStatistics, HashMap, Statistics,

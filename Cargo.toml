@@ -16,7 +16,7 @@ documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.18.0", features = [
+delta_kernel = { version = "0.18.2", features = [
     "arrow-57",
     "default-engine-rustls",
     "internal-api",

@@ -221,7 +221,7 @@ fn _arrow_schema(
 ) -> ArrowSchemaRef {
     let fields = schema
         .fields()
-        .into_iter()
+        .iter()
         .filter(|f| !partition_columns.contains(&f.name().to_string()))
         .cloned()
         .chain(
@@ -232,7 +232,7 @@ fn _arrow_schema(
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
-                        // // https://github.com/apache/arrow-datafusion/pull/5545
+                        // https://github.com/apache/arrow-datafusion/pull/5545
                         ArrowDataType::Utf8
                         | ArrowDataType::LargeUtf8
                         | ArrowDataType::Binary
@@ -867,7 +867,7 @@ mod tests {
     };
     use serde_json::json;
     use std::fmt::{self, Debug, Display, Formatter};
-    use std::ops::{Deref, Range};
+    use std::ops::Range;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     use super::*;

@@ -115,7 +115,9 @@ fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
             Some(value) => Ok(Scalar::Boolean(*value)),
             None => Ok(Scalar::Null(DataType::BOOLEAN)),
         },
-        ScalarValue::Utf8(maybe_value) => match maybe_value {
+        ScalarValue::Utf8(maybe_value)
+        | ScalarValue::LargeUtf8(maybe_value)
+        | ScalarValue::Utf8View(maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::String(value.clone())),
             None => Ok(Scalar::Null(DataType::STRING)),
         },
@@ -155,7 +157,10 @@ fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
             Some(value) => Ok(Scalar::Date(*value)),
             None => Ok(Scalar::Null(DataType::DATE)),
         },
-        ScalarValue::Binary(maybe_value) => match maybe_value {
+        ScalarValue::Binary(maybe_value)
+        | ScalarValue::LargeBinary(maybe_value)
+        | ScalarValue::BinaryView(maybe_value)
+        | ScalarValue::FixedSizeBinary(_, maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::Binary(value.clone())),
             None => Ok(Scalar::Null(DataType::BINARY)),
         },
@@ -171,6 +176,7 @@ fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
                 DecimalType::try_new(*precision, *scale as u8).map_err(to_df_err)?,
             )))),
         },
+        ScalarValue::Dictionary(_, value) => datafusion_scalar_to_scalar(value.as_ref()),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported scalar value: {:?}",
             scalar

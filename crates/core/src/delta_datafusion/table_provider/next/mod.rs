@@ -34,13 +34,16 @@ use crate::delta_datafusion::engine::{
 };
 use crate::delta_datafusion::table_provider::get_pushdown_filters;
 use crate::delta_datafusion::table_provider::next::replay::{ScanFileContext, ScanFileStream};
-use crate::delta_datafusion::table_provider::next::scan::DeltaScanExec;
+pub use crate::delta_datafusion::table_provider::next::scan::DeltaScanExec;
 use crate::delta_datafusion::DataFusionMixins as _;
 use crate::kernel::{EagerSnapshot, Scan, Snapshot};
 use crate::DeltaTableError;
 
 mod replay;
 mod scan;
+
+pub type ScanMetadataStream =
+    Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 
 impl Snapshot {
     fn kernel_scan(&self, projection: Option<&Vec<usize>>, filters: &[Expr]) -> Result<Arc<Scan>> {
@@ -57,7 +60,7 @@ impl Snapshot {
         &self,
         session: &dyn Session,
         scan: Arc<Scan>,
-        stream: Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>,
+        stream: ScanMetadataStream,
         engine: Arc<dyn Engine>,
         projection: Option<&Vec<usize>>,
         limit: Option<usize>,
@@ -113,6 +116,8 @@ impl Snapshot {
             ))
         };
 
+        // Group the files by their object store url. Since datafusion assumes that all files in a
+        // DataSourceExec are stored in the same object store, we need to create one plan per store
         let files_by_store = files
             .into_iter()
             .flat_map(|fs| fs.into_iter().map(to_partitioned_file))
