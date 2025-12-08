@@ -1970,7 +1970,7 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     approximately, that CDC files are being written
     """
     raw_commit = r"""{"metaData":{"id":"bb0fdeb2-76dd-4f5e-b1ea-845ecec8fa7e","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{"delta.enableChangeDataFeed":"true"},"createdTime":1713110303902}}
-{"protocol":{"minReaderVersion":1,"minWriterVersion":4,"writerFeatures":["changeDataFeed"]}}
+{"protocol":{"minReaderVersion":1,"minWriterVersion":7,"writerFeatures":["changeDataFeed"]}}
 """
     # timestampNtz looks like it might be an unnecessary requirement to write from Python
     os.mkdir(os.path.join(tmp_path, "_delta_log"))

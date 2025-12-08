@@ -48,7 +48,7 @@ class QueryBuilder:
         ```python
         from deltalake import DeltaTable, QueryBuilder
         dt = DeltaTable("my_table")
-        data = QueryBuilder().register('test', dt).execute("select * from my_table").read_all()
+        data = QueryBuilder().register('test', dt).execute("select * from test").read_all()
         ```
         """
         return self._query_builder.execute(sql)
