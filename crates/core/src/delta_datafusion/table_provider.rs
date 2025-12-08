@@ -49,11 +49,13 @@ use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
+use crate::delta_datafusion::dv_filter::DeletionVectorFilterExec;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, register_store, to_correct_scalar_value, DataFusionMixins as _,
     LogDataHandler,
 };
+use crate::kernel::deletion_vector::load_deletion_vector;
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
 use crate::kernel::{Action, Add, EagerSnapshot, Remove};
@@ -61,6 +63,7 @@ use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::{ensure_table_uri, DeltaTable};
+use crate::logstore::LogStoreExt as _;
 use crate::{logstore::LogStoreRef, DeltaResult, DeltaTableError};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
@@ -689,9 +692,66 @@ impl<'a> DeltaScanBuilder<'a> {
             .global_counter("files_pruned")
             .add(files_pruned);
 
+        // Check if any files have deletion vectors
+        let files_with_dvs: Vec<_> = files
+            .iter()
+            .filter(|f| f.deletion_vector.is_some())
+            .collect();
+        let has_deletion_vectors = !files_with_dvs.is_empty();
+
+        let parquet_scan: Arc<dyn ExecutionPlan> =
+            DataSourceExec::from_data_source(file_scan_config);
+
+        // If there are deletion vectors, wrap the scan with a DV filter
+        let parquet_scan = if has_deletion_vectors {
+            // Load deletion vectors for files that have them
+            let table_root = self.log_store.table_root_url();
+            let object_store = self.log_store.object_store(None);
+            let mut deletion_vectors = std::collections::HashMap::new();
+
+            for file in &files {
+                if let Some(ref dv_desc) = file.deletion_vector {
+                    // Load deletion vector synchronously in this context
+                    // Note: In production, this should be done asynchronously
+                    match futures::executor::block_on(load_deletion_vector(
+                        dv_desc,
+                        &table_root,
+                        object_store.as_ref(),
+                    )) {
+                        Ok(dv) => {
+                            deletion_vectors.insert(file.path.clone(), dv);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to load deletion vector for {}: {}",
+                                file.path,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+
+            if !deletion_vectors.is_empty() {
+                MetricBuilder::new(&metrics)
+                    .global_counter("files_with_dvs")
+                    .add(deletion_vectors.len());
+
+                Arc::new(DeletionVectorFilterExec::new(
+                    parquet_scan,
+                    deletion_vectors,
+                    config.file_column_name.clone(),
+                ))
+            } else {
+                parquet_scan
+            }
+        } else {
+            parquet_scan
+        };
+
         Ok(DeltaScan {
             table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
-            parquet_scan: DataSourceExec::from_data_source(file_scan_config),
+            parquet_scan,
             config,
             logical_schema,
             metrics,

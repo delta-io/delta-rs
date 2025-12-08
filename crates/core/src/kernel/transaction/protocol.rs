@@ -10,8 +10,21 @@ use crate::kernel::{
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 
-static READER_V2: LazyLock<HashSet<TableFeature>> =
-    LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
+/// Supported reader features for Delta Lake V2
+/// 
+/// This includes all table features that delta-rs can read:
+/// - ColumnMapping: Support for column name/ID mapping
+/// - DeletionVectors: Support for row-level deletion tracking
+/// - V2Checkpoint: Support for UUID-based checkpoint files with sidecars
+/// - TimestampWithoutTimezone: Support for timestamp_ntz data type
+static READER_V2: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
+    HashSet::from_iter([
+        TableFeature::ColumnMapping,
+        TableFeature::DeletionVectors,
+        TableFeature::V2Checkpoint,
+        TableFeature::TimestampWithoutTimezone,
+    ])
+});
 #[cfg(feature = "datafusion")]
 static WRITER_V2: LazyLock<HashSet<TableFeature>> =
     LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));

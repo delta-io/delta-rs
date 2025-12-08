@@ -32,6 +32,11 @@ const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
+const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
+
+// Row tracking fields (inside fileConstantValues)
+const FIELD_NAME_BASE_ROW_ID: &str = "baseRowId";
+const FIELD_NAME_DEFAULT_ROW_COMMIT_VERSION: &str = "defaultRowCommitVersion";
 
 const STATS_FIELD_NUM_RECORDS: &str = "numRecords";
 const STATS_FIELD_MIN_VALUES: &str = "minValues";
@@ -246,6 +251,36 @@ impl LogicalFileView {
         self.deletion_vector().map(|dv| dv.descriptor())
     }
 
+    /// Returns the base row ID for row tracking, if available.
+    ///
+    /// The base row ID is the default generated Row ID of the first row in the file.
+    /// The default generated Row IDs of other rows can be reconstructed by adding
+    /// the physical index of the row within the file to this base Row ID.
+    pub fn base_row_id(&self) -> Option<i64> {
+        self.file_constant_values()
+            .and_then(|fcv| fcv.column_by_name(FIELD_NAME_BASE_ROW_ID))
+            .and_then(|col| col.as_primitive_opt::<Int64Type>())
+            .and_then(|arr| arr.is_valid(self.index).then(|| arr.value(self.index)))
+    }
+
+    /// Returns the default row commit version for row tracking, if available.
+    ///
+    /// This is the first commit version in which an add action with the same path
+    /// was committed to the table.
+    pub fn default_row_commit_version(&self) -> Option<i64> {
+        self.file_constant_values()
+            .and_then(|fcv| fcv.column_by_name(FIELD_NAME_DEFAULT_ROW_COMMIT_VERSION))
+            .and_then(|col| col.as_primitive_opt::<Int64Type>())
+            .and_then(|arr| arr.is_valid(self.index).then(|| arr.value(self.index)))
+    }
+
+    /// Returns the file constant values struct, if available.
+    fn file_constant_values(&self) -> Option<&StructArray> {
+        self.files
+            .column_by_name(FIELD_NAME_FILE_CONSTANT_VALUES)
+            .and_then(|col| col.as_struct_opt())
+    }
+
     /// Returns a view into the deletion vector for this file, if present.
     fn deletion_vector(&self) -> Option<DeletionVectorView<'_>> {
         let dv_col = self
@@ -281,9 +316,9 @@ impl LogicalFileView {
             stats: self.stats(),
             tags: None,
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
-            base_row_id: None,
-            default_row_commit_version: None,
-            clustering_provider: None,
+            base_row_id: self.base_row_id(),
+            default_row_commit_version: self.default_row_commit_version(),
+            clustering_provider: None, // TODO: Extract from log if available
         }
     }
 
@@ -299,8 +334,8 @@ impl LogicalFileView {
             partition_values: Some(self.partition_values_map()),
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
             tags: None,
-            base_row_id: None,
-            default_row_commit_version: None,
+            base_row_id: self.base_row_id(),
+            default_row_commit_version: self.default_row_commit_version(),
         }
     }
 }

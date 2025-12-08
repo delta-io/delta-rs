@@ -9,7 +9,9 @@ use tracing::dispatcher;
 use tracing::Span;
 
 pub mod arrow;
+pub mod deletion_vector;
 pub mod error;
+pub mod liquid_clustering;
 pub mod models;
 pub mod scalars;
 pub mod schema;
