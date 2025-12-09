@@ -45,12 +45,11 @@ impl MountConfigHelper {
     ) -> Result<Self> {
         let mut env_config = HashMap::new();
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("MOUNT_") {
-                    if let Ok(config_key) = MountConfigKey::from_str(&key.to_ascii_lowercase()) {
-                        env_config.insert(config_key, value.to_string());
-                    }
-                }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && key.starts_with("MOUNT_")
+                && let Ok(config_key) = MountConfigKey::from_str(&key.to_ascii_lowercase())
+            {
+                env_config.insert(config_key, value.to_string());
             }
         }
 

@@ -171,7 +171,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
     let table = prepare_table(&context, "repair_needed").await?;
     let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
-        ensure_table_uri(table.table_uri())?,
+        ensure_table_uri(table.table_url())?,
         &options,
         &S3_OPTIONS,
         table.log_store().object_store(None),
@@ -181,7 +181,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
     // create an incomplete log entry, commit file not yet moved from its temporary location
     let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
     let read_entry = client
-        .get_latest_entry(&table.table_uri())
+        .get_latest_entry(&table.table_url().as_str())
         .await?
         .expect("no latest entry!");
     assert_eq!(entry, read_entry);
@@ -197,7 +197,7 @@ async fn test_repair_commit_entry() -> TestResult<()> {
         .await?;
 
     let read_entry = client
-        .get_latest_entry(&table.table_uri())
+        .get_latest_entry(&table.table_url().as_str())
         .await?
         .expect("no latest entry!");
     assert_eq!(entry, read_entry);
@@ -247,7 +247,7 @@ async fn test_abort_commit_entry() -> TestResult<()> {
     let table = prepare_table(&context, "abort_entry").await?;
     let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
-        ensure_table_uri(table.table_uri())?,
+        ensure_table_uri(table.table_url())?,
         &options,
         &S3_OPTIONS,
         table.log_store().object_store(None),
@@ -265,7 +265,7 @@ async fn test_abort_commit_entry() -> TestResult<()> {
         .await?;
 
     // The entry should have been aborted - the latest entry should be one version lower
-    if let Some(new_entry) = client.get_latest_entry(&table.table_uri()).await? {
+    if let Some(new_entry) = client.get_latest_entry(&table.table_url().as_str()).await? {
         assert_eq!(entry.version - 1, new_entry.version);
     }
     // Temp commit file should have been deleted
@@ -295,7 +295,7 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     let table = prepare_table(&context, "abort_entry_fail").await?;
     let options: StorageConfig = OPTIONS.clone().into_iter().collect();
     let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
-        ensure_table_uri(table.table_uri())?,
+        ensure_table_uri(table.table_url())?,
         &options,
         &S3_OPTIONS,
         table.log_store().object_store(None),
@@ -306,7 +306,7 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
 
     // Mark entry as complete
     client
-        .update_commit_entry(entry.version, &table.table_uri())
+        .update_commit_entry(entry.version, table.table_url().as_str())
         .await?;
 
     // Abort will fail since we marked the entry as complete
@@ -344,7 +344,7 @@ async fn test_concurrent_writers() -> TestResult<()> {
     println!(">>> preparing table");
     let table = prepare_table(&context, "concurrent_writes").await?;
     println!(">>> table prepared");
-    let table_uri = table.table_uri();
+    let table_uri = table.table_url();
     println!("Starting workers on {table_uri}");
 
     let mut workers = Vec::new();
@@ -373,9 +373,8 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn new(path: &str, name: String) -> Self {
-        let table_uri = Url::parse(path).unwrap();
-        let table = DeltaTableBuilder::from_uri(table_uri)
+    pub async fn new(table_url: &Url, name: String) -> Self {
+        let table = DeltaTableBuilder::from_url(table_url.clone())
             .unwrap()
             .with_allow_http(true)
             .with_storage_options(OPTIONS.clone())
@@ -436,7 +435,7 @@ async fn create_incomplete_commit_entry(
         .temp_path(tmp_commit.to_owned())
         .build();
     make_client()?
-        .put_commit_entry(&table.table_uri(), &commit_entry)
+        .put_commit_entry(&table.table_url().as_str(), &commit_entry)
         .await?;
     Ok(commit_entry)
 }
@@ -471,7 +470,7 @@ async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestRe
         true,
     )])?;
     let table_url = Url::parse(&table_uri).unwrap();
-    let table = DeltaTableBuilder::from_uri(table_url)
+    let table = DeltaTableBuilder::from_url(table_url)
         .unwrap()
         .with_allow_http(true)
         .with_storage_options(OPTIONS.clone())
@@ -511,7 +510,10 @@ async fn append_to_table(
 /// of versions, with monotonically non-decreasing expiration timestamps.
 async fn validate_lock_table_state(table: &DeltaTable, expected_version: i64) -> TestResult<()> {
     let client = make_client()?;
-    let lock_entry = client.get_latest_entry(&table.table_uri()).await?.unwrap();
+    let lock_entry = client
+        .get_latest_entry(&table.table_url().as_str())
+        .await?
+        .unwrap();
     assert!(lock_entry.complete);
     assert_eq!(lock_entry.version, expected_version);
     assert_eq!(lock_entry.version, table.get_latest_version().await?);
@@ -519,7 +521,7 @@ async fn validate_lock_table_state(table: &DeltaTable, expected_version: i64) ->
     validate_commit_entry(&lock_entry)?;
 
     let latest = client
-        .get_latest_entries(&table.table_uri(), WORKERS * COMMITS)
+        .get_latest_entries(&table.table_url().as_str(), WORKERS * COMMITS)
         .await?;
     let max_version = latest.first().unwrap().version;
     assert_eq!(max_version, expected_version);

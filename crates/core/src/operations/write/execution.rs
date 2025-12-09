@@ -371,7 +371,7 @@ pub(crate) async fn write_execution_plan_v2(
         };
 
         let actions = adds.into_iter().map(Action::Add).collect::<Vec<_>>();
-        return Ok((actions, metrics));
+        Ok((actions, metrics))
     } else {
         // CDC branch: create two writer tasks (normal + cdf) and drive partition streams concurrently
         let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
@@ -563,6 +563,6 @@ pub(crate) async fn write_execution_plan_v2(
             write_time_ms,
         };
 
-        return Ok((actions, metrics));
+        Ok((actions, metrics))
     }
 }

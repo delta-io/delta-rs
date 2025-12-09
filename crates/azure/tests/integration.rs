@@ -72,7 +72,7 @@ async fn test_object_store_onelake_abfs() -> TestResult {
 #[allow(dead_code)]
 async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> TestResult {
     let table_uri = Url::parse(&context.root_uri()).unwrap();
-    let delta_store = DeltaTableBuilder::from_uri(table_uri)
+    let delta_store = DeltaTableBuilder::from_url(table_uri)
         .unwrap()
         .with_allow_http(true)
         .build_storage()?

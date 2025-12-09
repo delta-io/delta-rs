@@ -630,7 +630,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             table_data: None,
                             custom_execute_handler: this.post_commit_hook_handler,
                             metrics: CommitMetrics { num_retries: 0 },
-                        })
+                        });
                     }
                     Err(TransactionError::VersionAlreadyExists(0)) => {
                         // Table was created by another writer since the `this.table_data.is_none()` check.

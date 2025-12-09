@@ -199,7 +199,7 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
     let table_url = Url::parse(&format!("file://{}", table_path.as_ref())).unwrap();
-    DeltaOps::try_from_uri(table_url)
+    DeltaOps::try_from_url(table_url)
         .await
         .unwrap()
         .create()

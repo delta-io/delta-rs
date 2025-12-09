@@ -31,7 +31,7 @@ async fn test_log_buffering() {
     let max_iter = 10;
     let buf_size = 10;
 
-    let location = Url::from_directory_path(&path).unwrap();
+    let location = Url::from_directory_path(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
     let store = std::sync::Arc::new(fs_common::SlowStore::new(location.clone()).unwrap());
@@ -39,7 +39,7 @@ async fn test_log_buffering() {
     let mut seq_version = 0;
     let t = SystemTime::now();
     for _x in 0..max_iter {
-        let mut table_seq = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
+        let mut table_seq = DeltaTableBuilder::from_url(Url::from_directory_path(path).unwrap())
             .unwrap()
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
@@ -56,7 +56,7 @@ async fn test_log_buffering() {
     let mut buf_version = 0;
     let t2 = SystemTime::now();
     for _x in 0..max_iter {
-        let mut table_buf = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
+        let mut table_buf = DeltaTableBuilder::from_url(Url::from_directory_path(path).unwrap())
             .unwrap()
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
@@ -172,7 +172,7 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 #[ignore = "not implemented"]
 async fn test_read_table_features() -> DeltaResult<()> {
     let path = "../test/tests/data/simple_table_features";
-    let table_uri = Url::from_directory_path(&path).unwrap();
+    let table_uri = Url::from_directory_path(path).unwrap();
     let mut _table = deltalake_core::open_table(table_uri).await?;
     let rf = _table.snapshot()?.protocol().reader_features();
     let wf = _table.snapshot()?.protocol().writer_features();

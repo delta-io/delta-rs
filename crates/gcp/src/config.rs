@@ -57,12 +57,11 @@ fn parse_environment(
     vars: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
 ) -> HashMap<GoogleConfigKey, String> {
     HashMap::from_iter(vars.into_iter().filter_map(|(os_key, os_value)| {
-        if let (Some(key), Some(value)) = (os_key.as_ref().to_str(), os_value.as_ref().to_str()) {
-            if key.starts_with("GOOGLE_") {
-                if let Ok(config_key) = GoogleConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    return Some((config_key, value.to_string()));
-                }
-            }
+        if let (Some(key), Some(value)) = (os_key.as_ref().to_str(), os_value.as_ref().to_str())
+            && key.starts_with("GOOGLE_")
+            && let Ok(config_key) = GoogleConfigKey::from_str(&key.to_ascii_lowercase())
+        {
+            return Some((config_key, value.to_string()));
         }
         None
     }))
@@ -160,10 +159,10 @@ impl GcpConfigHelper {
         // work purely using defaults, but partial config may be present in the environment.
         // Preference of conflicting configs (e.g. msi resource id vs. client id is handled in object store)
         for key in self.env_config.keys() {
-            if !omit_keys.contains(key) {
-                if let Entry::Vacant(e) = self.config.entry(*key) {
-                    e.insert(self.env_config.get(key).unwrap().to_owned());
-                }
+            if !omit_keys.contains(key)
+                && let Entry::Vacant(e) = self.config.entry(*key)
+            {
+                e.insert(self.env_config.get(key).unwrap().to_owned());
             }
         }
 
@@ -174,7 +173,7 @@ impl GcpConfigHelper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::format::parse;
+
     use pretty_assertions::assert_eq;
 
     #[test]

@@ -205,10 +205,10 @@ impl DeltaTable {
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        if let Some(snapshot) = &self.state {
-            if snapshot.version() > version {
-                self.state = None;
-            }
+        if let Some(snapshot) = &self.state
+            && snapshot.version() > version
+        {
+            self.state = None;
         }
         self.update_incremental(Some(version)).await
     }

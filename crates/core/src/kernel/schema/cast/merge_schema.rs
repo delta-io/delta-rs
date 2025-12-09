@@ -269,15 +269,14 @@ pub(crate) fn merge_arrow_field(
                         | DataType::Decimal256(left_precision, left_scale),
                         DataType::Decimal128(right_precision, right_scale),
                     ) = (right.data_type(), new_field.data_type())
+                        && !(left_precision <= right_precision && left_scale <= right_scale)
                     {
-                        if !(left_precision <= right_precision && left_scale <= right_scale) {
-                            return Err(ArrowError::SchemaError(format!(
-                                "Cannot merge field {} from {} to {}",
-                                right.name(),
-                                right.data_type(),
-                                new_field.data_type()
-                            )));
-                        }
+                        return Err(ArrowError::SchemaError(format!(
+                            "Cannot merge field {} from {} to {}",
+                            right.name(),
+                            right.data_type(),
+                            new_field.data_type()
+                        )));
                     };
                     // If it's not Decimal datatype, the new_field remains the left table field.
                 }

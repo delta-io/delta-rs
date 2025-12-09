@@ -1369,15 +1369,15 @@ async fn execute(
             .select(write_projection)?
     };
 
-    if let Some(generated_col_expressions) = generated_col_exp {
-        if let Some(missing_generated_columns) = missing_generated_col {
-            projected = add_generated_columns(
-                projected,
-                &generated_col_expressions,
-                &missing_generated_columns,
-                &state,
-            )?;
-        }
+    if let Some(generated_col_expressions) = generated_col_exp
+        && let Some(missing_generated_columns) = missing_generated_col
+    {
+        projected = add_generated_columns(
+            projected,
+            &generated_col_expressions,
+            &missing_generated_columns,
+            &state,
+        )?;
     }
 
     let merge_final = &projected.into_unoptimized_plan();

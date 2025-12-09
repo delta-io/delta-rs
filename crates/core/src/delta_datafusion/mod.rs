@@ -48,7 +48,6 @@ use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
@@ -1942,10 +1941,10 @@ mod tests {
         fn from(value: &Path) -> Self {
             let dummy_url = Url::parse("dummy:///").unwrap();
             let parsed = ParsedLogPath::try_from(dummy_url.join(value.as_ref()).unwrap()).unwrap();
-            if let Some(parsed) = parsed {
-                if matches!(parsed.file_type, LogPathFileType::Commit) {
-                    return LocationType::Commit;
-                }
+            if let Some(parsed) = parsed
+                && matches!(parsed.file_type, LogPathFileType::Commit)
+            {
+                return LocationType::Commit;
             }
             if value.to_string().starts_with("part-") {
                 LocationType::Data

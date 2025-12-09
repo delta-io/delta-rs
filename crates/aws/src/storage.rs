@@ -488,12 +488,12 @@ pub(crate) trait S3StorageOptionsConversion {
             .collect();
 
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    options
-                        .entry(config_key.as_ref().to_string())
-                        .or_insert(value.to_string());
-                }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())
+            {
+                options
+                    .entry(config_key.as_ref().to_string())
+                    .or_insert(value.to_string());
             }
         }
 

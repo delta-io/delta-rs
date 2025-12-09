@@ -68,7 +68,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     let ops = if let Ok(table_uri) = std::env::var("TABLE_URI") {
         let table_url = Url::parse(&table_uri)
             .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
-        DeltaOps::try_from_uri(table_url).await?
+        DeltaOps::try_from_url(table_url).await?
     } else {
         DeltaOps::new_in_memory()
     };
