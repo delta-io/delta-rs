@@ -297,7 +297,7 @@ pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
     let table_uri = Url::from_directory_path(table_path).unwrap();
-    DeltaTableBuilder::from_uri(table_uri)
+    DeltaTableBuilder::from_url(table_uri)
         .unwrap()
         .build()
         .unwrap()

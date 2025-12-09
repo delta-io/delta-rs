@@ -183,10 +183,6 @@ impl LogStore for S3DynamoDbLogStore {
         "S3DynamoDbLogStore".into()
     }
 
-    fn root_uri(&self) -> String {
-        self.table_path.clone()
-    }
-
     async fn refresh(&self) -> DeltaResult<()> {
         let entry = self
             .lock_client

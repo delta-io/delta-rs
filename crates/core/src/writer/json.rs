@@ -29,7 +29,7 @@ use crate::DeltaTable;
 use crate::errors::DeltaTableError;
 use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
-use crate::table::builder::{DeltaTableBuilder, ensure_table_uri};
+use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
 
@@ -193,7 +193,7 @@ impl JsonWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaTableError> {
-        let table = DeltaTableBuilder::from_uri(ensure_table_uri(&table_url)?)?
+        let table = DeltaTableBuilder::from_url(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .load()
             .await?;
@@ -486,7 +486,6 @@ mod tests {
 
     use crate::arrow::array::Int32Array;
     use crate::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
-    use crate::ensure_table_uri;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::get_delta_schema;
 
@@ -513,7 +512,7 @@ mod tests {
         let table = get_test_table(&table_dir).await;
         let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
-            ensure_table_uri(&table.table_uri()).unwrap(),
+            table.table_url().clone(),
             arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
@@ -589,7 +588,7 @@ mod tests {
 
         let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
-            ensure_table_uri(&table.table_uri()).unwrap(),
+            table.table_url().clone(),
             arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
@@ -665,7 +664,7 @@ mod tests {
             let mut table = get_test_table(&table_dir).await;
 
             let mut writer = JsonWriter::try_new(
-                ensure_table_uri(&table.table_uri()).unwrap(),
+                table.table_url().clone(),
                 table.snapshot().unwrap().snapshot().arrow_schema(),
                 Some(vec!["modified".to_string()]),
                 None,
@@ -772,7 +771,7 @@ mod tests {
         assert_eq!(table.version(), Some(0));
         let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
-            crate::ensure_table_uri(&table.table_uri()).unwrap(),
+            table.table_url().clone(),
             arrow_schema,
             Some(vec!["modified".to_string()]),
             None,
@@ -837,7 +836,7 @@ mod tests {
         assert_eq!(table.version(), Some(0));
         let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
-            crate::ensure_table_uri(&table.table_uri()).unwrap(),
+            table.table_url().clone(),
             arrow_schema,
             Some(vec!["modified".to_string()]),
             None,

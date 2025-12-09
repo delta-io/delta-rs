@@ -556,7 +556,9 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    absolute_paths = [os.path.join(dt.table_uri, path) for path in expected_paths]
+    from urllib.parse import urlparse
+    table_path = urlparse(dt.table_uri).path
+    absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
 
 
@@ -775,12 +777,12 @@ def test_read_multiple_tables_from_s3(s3_localstack):
     """
     for path in ["s3://deltars/simple", "s3://deltars/simple"]:
         t = DeltaTable(path)
-        assert t.files() == [
-            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+        assert t.file_uris() == [
+            "s3://deltars/simple/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "s3://deltars/simple/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "s3://deltars/simple/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
 
 
@@ -795,12 +797,12 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
     def read_table():
         b.wait()
         t = DeltaTable("s3://deltars/simple")
-        assert t.files() == [
-            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+        assert t.file_uris() == [
+            "s3://deltars/simple/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "s3://deltars/simple/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "s3://deltars/simple/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
 
     threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]

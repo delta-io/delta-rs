@@ -127,7 +127,7 @@ mod tests {
         let table_path = Path::new("../test/tests/data/delta-0.8.0");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaTableBuilder::from_uri(table_uri)?
+        let table = DeltaTableBuilder::from_url(table_uri)?
             .load()
             .await
             .unwrap();

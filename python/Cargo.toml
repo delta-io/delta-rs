@@ -19,6 +19,7 @@ doc = false
 
 [dependencies]
 delta_kernel.workspace = true
+url.workspace = true
 
 pyo3-arrow = { version = "0.14.0", default-features = false }
 

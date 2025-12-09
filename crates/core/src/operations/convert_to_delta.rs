@@ -324,7 +324,7 @@ impl ConvertToDeltaBuilder {
         }
         debug!(
             "Converting Parquet table in log store location: {:?}",
-            self.log_store().root_uri()
+            self.log_store().root_url()
         );
 
         // Get all the parquet files in the location

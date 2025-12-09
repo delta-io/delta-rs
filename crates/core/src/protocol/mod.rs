@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use url::Url;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -236,7 +237,7 @@ pub enum DeltaOperation {
         /// The save mode used during the create.
         mode: SaveMode,
         /// The storage location of the new table
-        location: String,
+        location: Url,
         /// The min reader and writer protocol versions of the table
         protocol: Protocol,
         /// Metadata associated with the new table

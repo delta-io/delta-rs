@@ -1604,7 +1604,7 @@ pub(super) mod zorder {
             let table_uri =
                 ensure_table_uri(tmp_dir.path().join(table_name).to_str().unwrap()).unwrap();
             // Run optimize
-            let (_, metrics) = DeltaOps::try_from_uri(table_uri)
+            let (_, metrics) = DeltaOps::try_from_url(table_uri)
                 .await
                 .unwrap()
                 .optimize()

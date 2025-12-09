@@ -19,7 +19,7 @@
 //! let schema = Arc::new(arrow::datatypes::Schema::new(vec![id_field]));
 //! let ids = arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5]);
 //! let batch = RecordBatch::try_new(schema, vec![Arc::new(ids)])?;
-//! let ops = DeltaOps::try_from_uri("../path/to/empty/dir").await?;
+//! let ops = DeltaOps::try_from_url("../path/to/empty/dir").await?;
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
@@ -43,6 +43,7 @@ use parquet::file::properties::WriterProperties;
 use schema_evolution::try_cast_schema;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
+use url::Url;
 
 pub use self::configs::WriterStatsConfig;
 use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
@@ -84,7 +85,7 @@ pub(crate) enum WriteError {
     WriteTask { source: tokio::task::JoinError },
 
     #[error("A table already exists at: {0}")]
-    AlreadyExists(String),
+    AlreadyExists(Url),
 
     #[error(
         "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}"
@@ -380,7 +381,7 @@ impl WriteBuilder {
                 }
                 match self.mode {
                     SaveMode::ErrorIfExists => {
-                        Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
+                        Err(WriteError::AlreadyExists(self.log_store.root_url().clone()).into())
                     }
                     _ => Ok(vec![]),
                 }
@@ -415,7 +416,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-        let table_uri = this.log_store.root_uri();
+        let table_uri = this.log_store.root_url().clone();
         let mode = this.mode;
 
         Box::pin(
@@ -1403,7 +1404,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
             .unwrap();
 
-        let ops = DeltaOps::try_from_uri(
+        let ops = DeltaOps::try_from_url(
             ensure_table_uri(tmp_path.as_os_str().to_str().unwrap()).unwrap(),
         )
         .await

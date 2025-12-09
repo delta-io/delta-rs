@@ -23,7 +23,11 @@ async fn read_null_partitions_from_checkpoint() {
     )
     .await;
 
-    let delta_log = std::path::Path::new(&table.table_uri()).join("_delta_log");
+    let delta_log = table
+        .table_url()
+        .to_file_path()
+        .expect("Failed to convert to file path")
+        .join("_delta_log");
 
     let add = |partition: Option<String>| Add {
         partition_values: HashMap::from([("color".to_string(), partition)]),
@@ -45,11 +49,9 @@ async fn read_null_partitions_from_checkpoint() {
     assert!(cp.exists());
 
     // verify that table loads from checkpoint and handles null partitions
-    let table = deltalake_core::open_table(
-        Url::from_directory_path(std::path::Path::new(&table.table_uri())).unwrap(),
-    )
-    .await
-    .unwrap();
+    let table = deltalake_core::open_table(table.table_url().clone())
+        .await
+        .unwrap();
     assert_eq!(table.version(), Some(2));
 }
 

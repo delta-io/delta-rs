@@ -860,7 +860,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
         let table_url = ensure_table_uri(&table_path)?;
-        let mut builder = DeltaTableBuilder::from_uri(table_url)?;
+        let mut builder = DeltaTableBuilder::from_url(table_url)?;
 
         if let Some(runtime) = &config.runtime {
             builder = builder.with_io_runtime(runtime.clone());

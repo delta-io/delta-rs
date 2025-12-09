@@ -48,6 +48,7 @@ use futures::StreamExt as _;
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::{
@@ -60,8 +61,8 @@ use crate::kernel::{Action, Add, EagerSnapshot, Remove};
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::{DeltaResult, DeltaTableError, logstore::LogStoreRef};
-use crate::{DeltaTable, ensure_table_uri};
+use crate::table::normalize_table_url;
+use crate::{DeltaResult, DeltaTable, DeltaTableError, logstore::LogStoreRef};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -690,7 +691,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .add(files_pruned);
 
         Ok(DeltaScan {
-            table_uri: ensure_table_uri(self.log_store.root_uri())?.as_str().into(),
+            table_url: self.log_store.root_url().clone(),
             parquet_scan: DataSourceExec::from_data_source(file_scan_config),
             config,
             logical_schema,
@@ -883,23 +884,52 @@ impl TableProvider for DeltaTableProvider {
 /// A wrapper for parquet scans
 #[derive(Debug)]
 pub struct DeltaScan {
-    /// The URL of the ObjectStore root
-    pub table_uri: String,
+    /// The normalized [Url] of the ObjectStore root
+    table_url: Url,
     /// Column that contains an index that maps to the original metadata Add
-    pub config: DeltaScanConfig,
+    pub(crate) config: DeltaScanConfig,
     /// The parquet scan to wrap
-    pub parquet_scan: Arc<dyn ExecutionPlan>,
+    pub(crate) parquet_scan: Arc<dyn ExecutionPlan>,
     /// The schema of the table to be used when evaluating expressions
-    pub logical_schema: Arc<Schema>,
+    pub(crate) logical_schema: Arc<Schema>,
     /// Metrics for scan reported via DataFusion
-    pub(super) metrics: ExecutionPlanMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
+impl DeltaScan {
+    pub(crate) fn new(
+        table_url: &Url,
+        config: DeltaScanConfig,
+        parquet_scan: Arc<dyn ExecutionPlan>,
+        logical_schema: Arc<Schema>,
+    ) -> Self {
+        Self {
+            table_url: normalize_table_url(table_url),
+            metrics: ExecutionPlanMetricsSet::new(),
+            config,
+            parquet_scan,
+            logical_schema,
+        }
+    }
+}
+
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct DeltaScanWire {
-    pub table_uri: String,
-    pub config: DeltaScanConfig,
-    pub logical_schema: Arc<Schema>,
+    /// This [Url] should have already been passed through [normalize_table_url]
+    pub(crate) table_url: Url,
+    pub(crate) config: DeltaScanConfig,
+    pub(crate) logical_schema: Arc<Schema>,
+}
+
+impl From<&DeltaScan> for DeltaScanWire {
+    fn from(scan: &DeltaScan) -> Self {
+        Self {
+            table_url: scan.table_url.clone(),
+            config: scan.config.clone(),
+            logical_schema: scan.logical_schema.clone(),
+        }
+    }
 }
 
 impl DisplayAs for DeltaScan {
@@ -940,7 +970,7 @@ impl ExecutionPlan for DeltaScan {
             )));
         }
         Ok(Arc::new(DeltaScan {
-            table_uri: self.table_uri.clone(),
+            table_url: self.table_url.clone(),
             config: self.config.clone(),
             parquet_scan: children[0].clone(),
             logical_schema: self.logical_schema.clone(),
@@ -955,7 +985,7 @@ impl ExecutionPlan for DeltaScan {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(parquet_scan) = self.parquet_scan.repartitioned(target_partitions, config)? {
             Ok(Some(Arc::new(DeltaScan {
-                table_uri: self.table_uri.clone(),
+                table_url: self.table_url.clone(),
                 config: self.config.clone(),
                 parquet_scan,
                 logical_schema: self.logical_schema.clone(),
