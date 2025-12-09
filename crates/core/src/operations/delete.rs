@@ -370,7 +370,7 @@ async fn execute_non_empty_expr(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_uri()))]
+#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,

@@ -733,7 +733,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_uri()))]
+#[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
     predicate: Expression,
     mut source: DataFrame,

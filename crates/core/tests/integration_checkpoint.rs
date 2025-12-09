@@ -31,7 +31,7 @@ async fn cleanup_metadata_fs_test() -> TestResult {
 async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     let table_uri = context.root_uri();
     let table_url = deltalake_core::table::builder::parse_table_uri(table_uri).unwrap();
-    let log_store = DeltaTableBuilder::from_uri(table_url)?
+    let log_store = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .build_storage()?;
     let object_store = log_store.object_store(None);
@@ -91,7 +91,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     let path = std::path::Path::new("./tests/data/issue_1420")
         .canonicalize()
         .unwrap();
-    let mut table = DeltaOps::try_from_uri(url::Url::from_directory_path(path).unwrap())
+    let mut table = DeltaOps::try_from_url(url::Url::from_directory_path(path).unwrap())
         .await?
         .create()
         .with_column(

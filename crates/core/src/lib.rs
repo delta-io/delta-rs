@@ -125,8 +125,8 @@ compile_error!("You must enable at least one of the features: `rustls` or `nativ
 /// Infers the storage backend to use from the scheme in the given table URL.
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
-pub async fn open_table(table_uri: Url) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)?.load().await?;
+pub async fn open_table(table_url: Url) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_url(table_url)?.load().await?;
     Ok(table)
 }
 
@@ -135,10 +135,10 @@ pub async fn open_table(table_uri: Url) -> Result<DeltaTable, DeltaTableError> {
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_storage_options(
-    table_uri: Url,
+    table_url: Url,
     storage_options: HashMap<String, String>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_storage_options(storage_options)
         .load()
         .await?;
@@ -153,7 +153,7 @@ pub async fn open_table_with_version(
     table_url: Url,
     version: i64,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_version(version)
         .load()
         .await?;
@@ -167,10 +167,10 @@ pub async fn open_table_with_version(
 ///
 /// Will fail fast if specified `table_uri` is a local path but doesn't exist.
 pub async fn open_table_with_ds(
-    table_uri: Url,
+    table_url: Url,
     ds: impl AsRef<str>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_datestring(ds)?
         .load()
         .await?;

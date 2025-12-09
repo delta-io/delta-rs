@@ -18,7 +18,7 @@ use url::Url;
 async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTable {
     let table_schema = get_delta_schema();
     let table_url = url::Url::from_directory_path(table_uri).unwrap();
-    let ops = DeltaOps::try_from_uri(table_url).await.unwrap();
+    let ops = DeltaOps::try_from_url(table_url).await.unwrap();
     let table = ops
         .create()
         .with_columns(table_schema.fields().cloned())

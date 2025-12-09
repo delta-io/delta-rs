@@ -61,7 +61,7 @@ impl TestContext {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
         let table_url = ensure_table_uri(&uri).unwrap();
-        DeltaTableBuilder::from_uri(table_url)
+        DeltaTableBuilder::from_url(table_url)
             .unwrap()
             .with_storage_options(config)
             .build_storage()

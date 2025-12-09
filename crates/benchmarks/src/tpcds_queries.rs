@@ -71,7 +71,7 @@ pub async fn register_tpcds_tables(
 
         let batches = parquet_df.collect().await?;
         let fields: Vec<StructField> = delta_schema.fields().cloned().collect();
-        let table = DeltaOps::try_from_uri(temp_table_url)
+        let table = DeltaOps::try_from_url(temp_table_url)
             .await?
             .create()
             .with_columns(fields)

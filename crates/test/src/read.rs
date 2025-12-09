@@ -39,7 +39,7 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
 
     let table_uri = integration.uri_for_table(TestTables::Simple);
     let table_url = url::Url::parse(&table_uri)?;
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await?;
@@ -89,7 +89,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     let table_uri = integration.uri_for_table(TestTables::Simple);
     let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .with_version(3)
         .load()
@@ -141,7 +141,7 @@ pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Golden);
     let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await
@@ -158,7 +158,7 @@ async fn verify_store(integration: &IntegrationContext, root_path: &str) -> Test
     let table_uri = format!("{}/{root_path}", integration.root_uri());
     let table_url = url::Url::parse(&table_uri)?;
 
-    let storage = DeltaTableBuilder::from_uri(table_url)?
+    let storage = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .build_storage()?
         .object_store(None);
@@ -180,7 +180,7 @@ async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -
     let table_uri = format!("{}/{root_path}", integration.root_uri());
     let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await?;

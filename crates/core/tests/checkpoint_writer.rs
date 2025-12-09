@@ -1,5 +1,4 @@
 mod fs_common;
-use deltalake_core::protocol::DeltaOperation;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
@@ -156,9 +155,14 @@ mod delete_expired_delta_log_in_checkpoint {
         )
         .await;
 
-        let table_path = table.table_uri();
+        let table_path = table
+            .table_url()
+            .to_file_path()
+            .expect("Failed toc convert the table's Url to a file path");
         let set_file_last_modified = |version: usize, last_modified_millis: u64| {
-            let path = format!("{table_path}_delta_log/{version:020}.json");
+            let mut path = table_path.clone();
+            path.push("_delta_log");
+            path.push(format!("{version:020}.json"));
             let file = OpenOptions::new().write(true).open(path).unwrap();
             let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
             let times = FileTimes::new()
@@ -182,8 +186,8 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(1).await.expect("Cannot load version 1");
         table.load_version(2).await.expect("Cannot load version 2");
 
-        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
+        checkpoints::create_checkpoint_from_table_url_and_cleanup(
+            table.table_url().clone(),
             table.version().unwrap(),
             None,
             None,
@@ -235,9 +239,14 @@ mod delete_expired_delta_log_in_checkpoint {
         )
         .await;
 
-        let table_path = table.table_uri();
+        let table_path = table
+            .table_url()
+            .to_file_path()
+            .expect("Failed toc convert the table's Url to a file path");
         let set_file_last_modified = |version: usize, last_modified_millis: u64, suffix: &str| {
-            let path = format!("{table_path}_delta_log/{version:020}.{suffix}");
+            let mut path = table_path.clone();
+            path.push("_delta_log");
+            path.push(format!("{version:020}.{suffix}"));
             let file = OpenOptions::new().write(true).open(path).unwrap();
             let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
             let times = FileTimes::new()
@@ -270,8 +279,8 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(4).await.expect("Cannot load version 4");
 
         // Create checkpoint for version 1
-        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
+        checkpoints::create_checkpoint_from_table_url_and_cleanup(
+            deltalake_core::ensure_table_uri(&table.table_url()).unwrap(),
             1,
             Some(false),
             None,
@@ -283,8 +292,8 @@ mod delete_expired_delta_log_in_checkpoint {
         set_file_last_modified(1, 20 * 60 * 1000 - 10, "checkpoint.parquet");
 
         // Checkpoint final version
-        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
+        checkpoints::create_checkpoint_from_table_url_and_cleanup(
+            deltalake_core::ensure_table_uri(&table.table_url()).unwrap(),
             table.version().unwrap(),
             None,
             None,
@@ -334,8 +343,8 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");
 
-        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_uri()).unwrap(),
+        checkpoints::create_checkpoint_from_table_url_and_cleanup(
+            deltalake_core::ensure_table_uri(&table.table_url()).unwrap(),
             table.version().unwrap(),
             None,
             None,

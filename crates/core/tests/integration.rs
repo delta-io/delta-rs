@@ -1,8 +1,6 @@
 use deltalake_test::read::read_table_paths;
 use deltalake_test::utils::*;
 use deltalake_test::{test_concurrent_writes, test_read_tables};
-use futures::TryStreamExt as _;
-use object_store::path::Path;
 use serial_test::serial;
 
 #[allow(dead_code)]

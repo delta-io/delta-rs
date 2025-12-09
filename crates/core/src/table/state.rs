@@ -11,8 +11,6 @@ use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
-use futures::{StreamExt as _, TryStreamExt as _};
-use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::DeltaTableConfig;
@@ -20,11 +18,9 @@ use super::DeltaTableConfig;
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
-    ARROW_HANDLER, Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata,
-    Protocol, TombstoneView,
+    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
 };
 use crate::logstore::LogStore;
-use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -114,7 +110,8 @@ impl DeltaTableState {
             actions,
             DeltaOperation::Create {
                 mode: SaveMode::Append,
-                location: Path::default().to_string(),
+                location: url::Url::parse("memory:///example")
+                    .expect("Failed to parse a hard-coded URL, that's magical isn't it"),
                 protocol: protocol.clone(),
                 metadata: metadata.clone(),
             },

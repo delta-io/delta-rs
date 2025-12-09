@@ -35,7 +35,7 @@ pub async fn run_smoke_once(table_url: &Url, params: &SmokeParams) -> DeltaResul
         ],
     )?;
 
-    let table = DeltaOps::try_from_uri(table_url.clone())
+    let table = DeltaOps::try_from_url(table_url.clone())
         .await?
         .write(vec![batch])
         .with_save_mode(SaveMode::Overwrite)

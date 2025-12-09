@@ -19,7 +19,7 @@ mod tests {
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::try_from_uri(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+        let table = DeltaOps::try_from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
             .await
             .unwrap()
             .write(vec![batch.clone()])
@@ -55,7 +55,7 @@ mod tests {
         // Test Txn Id can be read from existing table
 
         let mut table2 =
-            DeltaTableBuilder::from_uri(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+            DeltaTableBuilder::from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
                 .unwrap()
                 .load()
                 .await
@@ -123,7 +123,7 @@ mod tests {
         // Create a checkpoint and then load
         checkpoints::create_checkpoint(&table, None).await.unwrap();
         let table3 =
-            DeltaTableBuilder::from_uri(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+            DeltaTableBuilder::from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
                 .unwrap()
                 .load()
                 .await

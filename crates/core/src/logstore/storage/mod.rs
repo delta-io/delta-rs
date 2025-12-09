@@ -5,9 +5,9 @@ use dashmap::DashMap;
 use deltalake_derive::DeltaConfig;
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
-use tracing::log::*;
 use url::Url;
 
+use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
 pub use retry_ext::ObjectStoreRetryExt;
@@ -91,35 +91,6 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-/// Normalize a given [Url] to **always** contain a trailing slash. This is critically important
-/// for assumptions about [Url] equivalency and more importantly for **joining** on a Url`.
-///
-/// ```
-///  left.join("_delta_log"); // produces `s3://bucket/prefix/_delta_log`
-///  right.join("_delta_log"); // produces `s3://bucket/_delta_log`
-/// ```
-fn normalize_table_url(url: &Url) -> Url {
-    let mut new_segments = vec![];
-    for segment in url.path().split('/') {
-        if !segment.is_empty() {
-            new_segments.push(segment);
-        }
-    }
-    // Add a trailing slash segment
-    new_segments.push("");
-
-    let mut url = url.clone();
-    if let Ok(mut path_segments) = url.path_segments_mut() {
-        path_segments.clear();
-        path_segments.extend(new_segments);
-    } else {
-        error!(
-            "Was not able to normalize the table URL. This is non-fatal but may produce curious results!"
-        );
-    }
-    url
-}
-
 #[derive(Debug, Clone, Default, DeltaConfig)]
 pub struct LimitConfig {
     #[delta(alias = "concurrency_limit", env = "OBJECT_STORE_CONCURRENCY_LIMIT")]
@@ -137,25 +108,6 @@ mod tests {
     use super::*;
     use crate::logstore::config::TryUpdateKey;
     use crate::test_utils::with_env;
-
-    #[test]
-    fn test_normalize_table_url() {
-        for (u, path) in [
-            (Url::parse("s3://bucket/prefix/").unwrap(), "/prefix/"),
-            (Url::parse("s3://bucket/prefix").unwrap(), "/prefix/"),
-            (
-                Url::parse("s3://bucket/prefix/with/redundant/slashes//").unwrap(),
-                "/prefix/with/redundant/slashes/",
-            ),
-        ] {
-            assert_eq!(
-                normalize_table_url(&u).path(),
-                path,
-                "Failed to normalize: {}",
-                u.as_str()
-            );
-        }
-    }
 
     #[test]
     fn test_limit_config() {

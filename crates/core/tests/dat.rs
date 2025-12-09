@@ -29,7 +29,7 @@ fn reader_test_eager(path: &Path) -> datatest_stable::Result<()> {
         .block_on(async move {
             let case = read_dat_case(root_dir).unwrap();
 
-            let table = DeltaTableBuilder::from_uri(case.table_root().unwrap())
+            let table = DeltaTableBuilder::from_url(case.table_root().unwrap())
                 .unwrap()
                 .load()
                 .await

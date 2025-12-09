@@ -131,7 +131,7 @@ mod local {
         let table_uri = table_path.to_str().unwrap().to_string();
         let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
-        let mut table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+        let mut table = DeltaOps::try_from_url(ensure_table_uri(table_uri).unwrap())
             .await
             .unwrap()
             .create()
@@ -1325,7 +1325,7 @@ mod local {
             true,
         )];
         let schema = StructType::try_new(fields).unwrap();
-        let table = deltalake_core::DeltaTableBuilder::from_uri(
+        let table = deltalake_core::DeltaTableBuilder::from_url(
             url::Url::from_directory_path(
                 std::path::Path::new("./tests/data/issue-1619")
                     .canonicalize()
@@ -1487,7 +1487,7 @@ async fn test_schema_adapter_empty_batch() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     // Create table with a single column
-    let table = DeltaOps::try_from_uri(ensure_table_uri(&table_uri).unwrap())
+    let table = DeltaOps::try_from_url(ensure_table_uri(&table_uri).unwrap())
         .await
         .unwrap()
         .create()
@@ -1574,7 +1574,7 @@ mod date_partitions {
             ),
         ];
 
-        let dt = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+        let dt = DeltaOps::try_from_url(ensure_table_uri(table_uri).unwrap())
             .await?
             .create()
             .with_columns(columns)

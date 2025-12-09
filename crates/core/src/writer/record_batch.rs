@@ -69,7 +69,7 @@ impl RecordBatchWriter {
     ) -> Result<Self, DeltaTableError> {
         let table_url = url::Url::parse(table_uri.as_ref())
             .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
-        let delta_table = DeltaTableBuilder::from_uri(table_url)?
+        let delta_table = DeltaTableBuilder::from_url(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
         // Initialize writer properties for the underlying arrow writer
@@ -530,7 +530,6 @@ mod tests {
     use arrow::json::ReaderBuilder;
     use arrow_schema::Schema as ArrowSchema;
     use delta_kernel::schema::StructType;
-    use std::path::Path;
 
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::*;
@@ -763,8 +762,10 @@ mod tests {
             String::from("modified=2021-02-02/id=A"),
             String::from("modified=2021-02-02/id=B"),
         ];
-        let table_uri = table.table_uri();
-        let table_dir = Path::new(&table_uri);
+        let table_dir = table
+            .table_url()
+            .to_file_path()
+            .expect("Failed to turn table URL back into file path");
         for key in expected_keys {
             let partition_dir = table_dir.join(key);
             assert!(partition_dir.exists())

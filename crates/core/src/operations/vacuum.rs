@@ -723,7 +723,7 @@ mod tests {
         }
 
         let table_url = url::Url::parse("memory:///").unwrap();
-        let mut table = crate::DeltaTableBuilder::from_uri(table_url.clone())
+        let mut table = crate::DeltaTableBuilder::from_url(table_url.clone())
             .unwrap()
             .with_storage_backend(Arc::new(store), table_url)
             .build()
@@ -883,7 +883,7 @@ mod tests {
             .unwrap();
 
         let table_url = url::Url::parse("memory:///").unwrap();
-        let mut table = crate::DeltaTableBuilder::from_uri(table_url.clone())
+        let mut table = crate::DeltaTableBuilder::from_url(table_url.clone())
             .unwrap()
             .with_storage_backend(Arc::new(store), table_url)
             .build()

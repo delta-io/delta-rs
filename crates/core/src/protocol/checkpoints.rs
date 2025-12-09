@@ -21,7 +21,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::kernel::spawn_blocking_with_span;
-use crate::logstore::{DELTA_LOG_REGEX, LogStore, LogStoreExt};
+use crate::logstore::{DELTA_LOG_REGEX, LogStore};
 use crate::table::config::TablePropertiesExt as _;
 use crate::{DeltaResult, DeltaTableError};
 use crate::{DeltaTable, open_table_with_version};
@@ -30,7 +30,7 @@ static CHECKPOINT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
 
 /// Creates checkpoint for a given table version, table state and object store
-#[tracing::instrument(skip(log_store), fields(operation = "checkpoint", version = version, table_uri = %log_store.root_uri()))]
+#[tracing::instrument(skip(log_store), fields(operation = "checkpoint", version = version, table_uri = %log_store.root_url()))]
 pub(crate) async fn create_checkpoint_for(
     version: u64,
     log_store: &dyn LogStore,
@@ -156,10 +156,10 @@ pub async fn cleanup_metadata(
     .await
 }
 
-/// Loads table from given `table_uri` at given `version` and creates checkpoint for it.
+/// Loads table from given table [Url] at given `version` and creates checkpoint for it.
 /// The `cleanup` param decides whether to run metadata cleanup of obsolete logs.
 /// If it's empty then the table's `enableExpiredLogCleanup` is used.
-pub async fn create_checkpoint_from_table_uri_and_cleanup(
+pub async fn create_checkpoint_from_table_url_and_cleanup(
     table_url: Url,
     version: i64,
     cleanup: Option<bool>,
@@ -310,7 +310,6 @@ mod tests {
     use tracing::warn;
 
     use crate::DeltaResult;
-    use crate::kernel::transaction::TableReference;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
 
@@ -407,7 +406,7 @@ mod tests {
 
         use crate::ensure_table_uri;
         use crate::kernel::Action;
-        use crate::kernel::transaction::CommitBuilder;
+        use crate::kernel::transaction::{CommitBuilder, TableReference};
 
         async fn setup_table() -> DeltaTable {
             use arrow_schema::{DataType, Field};
@@ -640,7 +639,7 @@ mod tests {
             let temp_dir = tempfile::tempdir()?;
             let table_path = temp_dir.path().to_str().unwrap();
             let table_uri = ensure_table_uri(table_path).unwrap();
-            let mut table = DeltaOps::try_from_uri(table_uri)
+            let mut table = DeltaOps::try_from_url(table_uri)
                 .await?
                 .create()
                 .with_columns(table_schema.fields().cloned())
@@ -732,7 +731,7 @@ mod tests {
             .unwrap();
 
             let table_uri = Url::from_directory_path(&tmp_path).unwrap();
-            let mut table = DeltaOps::try_from_uri(table_uri)
+            let mut table = DeltaOps::try_from_url(table_uri)
                 .await?
                 .write(vec![batch])
                 .await?;
@@ -752,7 +751,7 @@ mod tests {
             .unwrap();
 
             let table_uri = Url::from_directory_path(&tmp_path).unwrap();
-            let table = DeltaOps::try_from_uri(table_uri)
+            let table = DeltaOps::try_from_url(table_uri)
                 .await?
                 .write(vec![batch])
                 .with_save_mode(SaveMode::Overwrite)
