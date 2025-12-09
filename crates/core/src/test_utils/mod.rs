@@ -90,7 +90,7 @@ impl TestTables {
                 self.as_path().to_string_lossy().into_owned(),
             )
         })?;
-        DeltaTableBuilder::from_uri(url).map(|b| b.with_allow_http(true))
+        DeltaTableBuilder::from_url(url).map(|b| b.with_allow_http(true))
     }
 }
 

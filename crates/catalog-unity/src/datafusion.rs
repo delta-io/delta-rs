@@ -237,7 +237,7 @@ impl SchemaProvider for UnitySchemaProvider {
                 })?;
                 let table_url = ensure_table_uri(&table.storage_location)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let table = DeltaTableBuilder::from_uri(table_url)
+                let table = DeltaTableBuilder::from_url(table_url)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .with_storage_options(new_storage_opts)
                     .load()

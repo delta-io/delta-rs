@@ -692,13 +692,12 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
-        let delta_scan = DeltaScan {
-            table_uri: wire.table_uri,
-            parquet_scan: (*inputs)[0].clone(),
-            config: wire.config,
-            logical_schema: wire.logical_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-        };
+        let delta_scan = DeltaScan::new(
+            &wire.table_url,
+            wire.config,
+            (*inputs)[0].clone(),
+            wire.logical_schema,
+        );
         Ok(Arc::new(delta_scan))
     }
 
@@ -712,11 +711,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
 
-        let wire = DeltaScanWire {
-            table_uri: delta_scan.table_uri.to_owned(),
-            config: delta_scan.config.clone(),
-            logical_schema: delta_scan.logical_schema.clone(),
-        };
+        let wire = DeltaScanWire::from(delta_scan);
         serde_json::to_writer(buf, &wire)
             .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
         Ok(())
@@ -867,7 +862,7 @@ mod tests {
     };
     use serde_json::json;
     use std::fmt::{self, Debug, Display, Formatter};
-    use std::ops::{Deref, Range};
+    use std::ops::Range;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
     use super::*;
@@ -1140,13 +1135,12 @@ mod tests {
             Field::new("a", ArrowDataType::Utf8, false),
             Field::new("b", ArrowDataType::Int32, false),
         ]));
-        let exec_plan = Arc::from(DeltaScan {
-            table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
-            config: DeltaScanConfig::default(),
-            logical_schema: schema.clone(),
-            metrics: ExecutionPlanMetricsSet::new(),
-        });
+        let exec_plan = Arc::from(DeltaScan::new(
+            &Url::parse("s3://my_bucket/this/is/some/path").unwrap(),
+            DeltaScanConfig::default(),
+            Arc::from(EmptyExec::new(schema.clone())),
+            schema.clone(),
+        ));
         let proto: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
                 .expect("to proto");

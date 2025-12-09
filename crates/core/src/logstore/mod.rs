@@ -348,8 +348,8 @@ pub trait LogStore: Send + Sync + AsAny {
     }
 
     /// Get fully qualified uri for table root
-    fn root_uri(&self) -> String {
-        self.to_uri(&Path::from(""))
+    fn root_url(&self) -> &Url {
+        &self.config().location
     }
 
     /// [Path] to Delta log
@@ -493,8 +493,8 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
         T::to_uri(self, location)
     }
 
-    fn root_uri(&self) -> String {
-        T::root_uri(self)
+    fn root_url(&self) -> &Url {
+        T::root_url(self)
     }
 
     fn log_path(&self) -> &Path {
@@ -602,10 +602,9 @@ pub fn get_actions(
         .collect()
 }
 
-// TODO: maybe a bit of a hack, required to `#[derive(Debug)]` for the operation builders
 impl std::fmt::Debug for dyn LogStore + '_ {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.name(), self.root_uri())
+        write!(f, "{}({})", self.name(), self.root_url())
     }
 }
 
@@ -997,7 +996,7 @@ pub(crate) mod tests {
             .expect("Failed to write log file");
 
         let table_uri = url::Url::parse("memory:///delta-table").unwrap();
-        let table = crate::DeltaTableBuilder::from_uri(table_uri.clone())
+        let table = crate::DeltaTableBuilder::from_url(table_uri.clone())
             .unwrap()
             .with_storage_backend(memory_store, table_uri)
             .build()?;

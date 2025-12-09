@@ -443,7 +443,7 @@ pub async fn prepare_source_and_table(
 
     let batches = parquet_df.collect().await?;
     let fields: Vec<StructField> = delta_schema.fields().cloned().collect();
-    let table = DeltaOps::try_from_uri(temp_table_url)
+    let table = DeltaOps::try_from_url(temp_table_url)
         .await?
         .create()
         .with_columns(fields)

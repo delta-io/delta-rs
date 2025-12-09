@@ -520,7 +520,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -573,7 +573,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -623,7 +623,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -678,7 +678,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(4)
@@ -701,7 +701,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(5)
@@ -723,7 +723,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(5)
@@ -750,7 +750,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
@@ -773,7 +773,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
@@ -799,7 +799,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/simple_table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_version(0)
@@ -822,7 +822,7 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaOps::try_from_url(table_uri)
             .await?
             .load_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())

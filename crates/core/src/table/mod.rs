@@ -13,6 +13,7 @@ use object_store::{ObjectStore, path::Path};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use url::Url;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
@@ -149,8 +150,8 @@ impl DeltaTable {
     }
 
     /// The URI of the underlying data
-    pub fn table_uri(&self) -> String {
-        self.log_store.root_uri()
+    pub fn table_url(&self) -> &Url {
+        self.log_store.root_url()
     }
 
     /// get a shared reference to the log store
@@ -424,15 +425,40 @@ impl DeltaTable {
 
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "DeltaTable({})", self.table_uri())?;
+        writeln!(f, "DeltaTable({})", self.table_url())?;
         writeln!(f, "\tversion: {:?}", self.version())
     }
 }
 
 impl std::fmt::Debug for DeltaTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "DeltaTable <{}>", self.table_uri())
+        write!(f, "DeltaTable <{}>", self.table_url())
     }
+}
+
+/// Normalize a given [Url] to **always** contain a trailing slash. This is critically important
+/// for assumptions about [Url] equivalency and more importantly for **joining** on a Url`.
+///
+/// This function will also remove redundant slashes in the ]Url] path which can cause other
+/// equivalency failures
+///
+/// ```ignore
+///  left.join("_delta_log"); // produces `s3://bucket/prefix/_delta_log`
+///  right.join("_delta_log"); // produces `s3://bucket/_delta_log`
+/// ```
+pub(crate) fn normalize_table_url(url: &Url) -> Url {
+    let mut new_segments = vec![];
+    for segment in url.path().split('/') {
+        if !segment.is_empty() {
+            new_segments.push(segment);
+        }
+    }
+    // Add a trailing slash segment
+    new_segments.push("");
+
+    let mut url = url.clone();
+    url.set_path(&new_segments.join("/"));
+    url
 }
 
 #[cfg(test)]
@@ -443,6 +469,30 @@ mod tests {
     use super::*;
     use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
+
+    #[test]
+    fn test_normalize_table_url() {
+        for (u, path) in [
+            (Url::parse("s3://bucket/prefix/").unwrap(), "/prefix/"),
+            (Url::parse("s3://bucket/prefix").unwrap(), "/prefix/"),
+            (
+                Url::parse("s3://bucket/prefix with space/").unwrap(),
+                "/prefix%20with%20space/",
+            ),
+            //(Url::parse("s3://bucket/special&chars/你好/😊").unwrap(), "/special&chars/你好/😊/"),
+            (
+                Url::parse("s3://bucket/prefix/with/redundant/slashes//").unwrap(),
+                "/prefix/with/redundant/slashes/",
+            ),
+        ] {
+            assert_eq!(
+                normalize_table_url(&u).path(),
+                path,
+                "Failed to normalize: {}",
+                u.as_str()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn table_round_trip() {

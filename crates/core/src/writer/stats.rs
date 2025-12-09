@@ -986,12 +986,10 @@ mod tests {
     }
 
     async fn load_table(
-        table_uri: &Url,
+        table_url: &Url,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        let table_uri = table_uri.clone();
-        DeltaTableBuilder::from_uri(table_uri)
-            .unwrap()
+        DeltaTableBuilder::from_url(table_url.clone())?
             .with_storage_options(options)
             .load()
             .await
