@@ -119,7 +119,7 @@ fn create_s3_backend(
 ) -> (Arc<S3StorageBackend>, Arc<Mutex<bool>>) {
     let pause_until_true = Arc::new(Mutex::new(false));
     let table_uri = Url::parse(&context.root_uri()).unwrap();
-    let store = DeltaTableBuilder::from_uri(table_uri)
+    let store = DeltaTableBuilder::from_url(table_uri)
         .unwrap()
         .with_allow_http(true)
         .build_storage()

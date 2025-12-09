@@ -449,15 +449,13 @@ impl UnityCatalogBuilder {
     pub fn from_env() -> Self {
         let mut builder = Self::builder().build();
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("UNITY_") || key.starts_with("DATABRICKS_") {
-                    tracing::debug!("Found relevant env: {key}");
-                    if let Ok(config_key) =
-                        UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        tracing::debug!("Trying: {key} with {value}");
-                        builder = builder.try_with_option(config_key, value).unwrap();
-                    }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && (key.starts_with("UNITY_") || key.starts_with("DATABRICKS_"))
+            {
+                tracing::debug!("Found relevant env: {key}");
+                if let Ok(config_key) = UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase()) {
+                    tracing::debug!("Trying: {key} with {value}");
+                    builder = builder.try_with_option(config_key, value).unwrap();
                 }
             }
         }
@@ -1180,13 +1178,14 @@ mod tests {
             let result = UnityCatalogBuilder::get_uc_location_and_token(uri, None).await;
             assert!(result.is_err(), "Expected error for URI: {}", uri);
 
-            if let Err(e) = result {
-                if uri.starts_with("uc://") && uri.len() > 5 {
-                    assert!(matches!(
-                        e,
-                        crate::UnityCatalogError::InvalidTableURI { .. }
-                    ));
-                }
+            if let Err(e) = result
+                && uri.starts_with("uc://")
+                && uri.len() > 5
+            {
+                assert!(matches!(
+                    e,
+                    crate::UnityCatalogError::InvalidTableURI { .. }
+                ));
             }
         }
     }

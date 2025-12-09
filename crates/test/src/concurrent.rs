@@ -40,7 +40,7 @@ pub async fn test_concurrent_table_creation(context: &IntegrationContext) -> Tes
         let schema = schema.clone();
         futures.push(tokio::spawn(async move {
             let table_url = url::Url::parse(&uri).unwrap();
-            let table = DeltaTableBuilder::from_uri(table_url)
+            let table = DeltaTableBuilder::from_url(table_url)
                 .unwrap()
                 .with_allow_http(true)
                 .build()

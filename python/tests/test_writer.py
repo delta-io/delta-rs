@@ -5,6 +5,7 @@ import pathlib
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from urllib.request import urlopen
 
 import pytest
 from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
@@ -825,7 +826,7 @@ def get_add_actions(table: DeltaTable) -> list[str]:
 
     actions = []
 
-    for line in open(log_path).readlines():
+    for line in urlopen(log_path).readlines():
         log_entry = json.loads(line)
 
         if "add" in log_entry:
@@ -955,7 +956,7 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     ) == _normalize_path(
         (
             delta_table,
-            str(tmp_path / "delta_table") + "/",
+            "file://" + str(tmp_path / "delta_table") + "/",
         )
     )
 

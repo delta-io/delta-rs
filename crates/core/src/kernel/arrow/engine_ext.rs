@@ -278,10 +278,10 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
 
         // Check if the number of columns is set and if the added columns exceed the limit
         // In the constructor we assert this will always be None if column_names are specified
-        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns {
-            if self.added_columns >= n_cols {
-                return None;
-            }
+        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns
+            && self.added_columns >= n_cols
+        {
+            return None;
         }
 
         self.path.push(field.name.clone());

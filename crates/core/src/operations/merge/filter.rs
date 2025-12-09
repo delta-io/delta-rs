@@ -30,7 +30,7 @@ impl ReferenceTableCheck {
 }
 
 fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
-    let res = match expr {
+    match expr {
         Expr::Alias(alias) => references_table(&alias.expr, table),
         Expr::Column(col) => col
             .relation
@@ -56,8 +56,7 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
         Expr::IsNull(inner) => references_table(inner, table),
         Expr::Literal(_, _) => ReferenceTableCheck::NoReference,
         _ => ReferenceTableCheck::Unknown,
-    };
-    res
+    }
 }
 
 fn construct_placeholder(

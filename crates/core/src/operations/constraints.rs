@@ -129,8 +129,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
 
             let configuration_key_mapper: HashMap<String, String> = HashMap::from_iter(
                 this.check_constraints
-                    .iter()
-                    .map(|(name, _)| (name.clone(), format!("delta.constraints.{name}"))),
+                    .keys()
+                    .map(|name| (name.clone(), format!("delta.constraints.{name}"))),
             );
 
             // Hold all the conflicted constraints
@@ -181,8 +181,8 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 );
             }
             let constraints_checker: Vec<Constraint> = constraints_sql_mapper
-                .iter()
-                .map(|(_, sql)| Constraint::new("*", sql))
+                .values()
+                .map(|sql| Constraint::new("*", sql))
                 .collect();
 
             // Checker built here with the one time constraint to check.

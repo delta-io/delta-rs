@@ -557,6 +557,7 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
     from urllib.parse import urlparse
+
     table_path = urlparse(dt.table_uri).path
     absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths

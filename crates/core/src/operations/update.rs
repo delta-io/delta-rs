@@ -223,26 +223,26 @@ impl ExtensionPlanner for UpdateMetricExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
-            if metric_observer.id.eq(UPDATE_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    UPDATE_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        let array = batch.column_by_name(UPDATE_PREDICATE_COLNAME).unwrap();
-                        let copied_rows = array.null_count();
-                        let num_updated = array.len() - copied_rows;
+        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
+            && metric_observer.id.eq(UPDATE_COUNT_ID)
+        {
+            return Ok(Some(MetricObserverExec::try_new(
+                UPDATE_COUNT_ID.into(),
+                physical_inputs,
+                |batch, metrics| {
+                    let array = batch.column_by_name(UPDATE_PREDICATE_COLNAME).unwrap();
+                    let copied_rows = array.null_count();
+                    let num_updated = array.len() - copied_rows;
 
-                        MetricBuilder::new(metrics)
-                            .global_counter(UPDATE_ROW_COUNT)
-                            .add(num_updated);
+                    MetricBuilder::new(metrics)
+                        .global_counter(UPDATE_ROW_COUNT)
+                        .add(num_updated);
 
-                        MetricBuilder::new(metrics)
-                            .global_counter(COPIED_ROW_COUNT)
-                            .add(copied_rows);
-                    },
-                )?));
-            }
+                    MetricBuilder::new(metrics)
+                        .global_counter(COPIED_ROW_COUNT)
+                        .add(copied_rows);
+                },
+            )?));
         }
         Ok(None)
     }

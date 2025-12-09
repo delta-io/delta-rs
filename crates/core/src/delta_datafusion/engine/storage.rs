@@ -170,8 +170,8 @@ mod tests {
         let handle = Handle::current();
         let session = SessionContext::new();
         let ctx = session.task_ctx();
-        let storage = DataFusionStorageHandler::new(ctx, handle);
-        storage
+
+        DataFusionStorageHandler::new(ctx, handle)
     }
 
     pub fn delta_path_for_version(version: u64, suffix: &str) -> Path {

@@ -76,9 +76,9 @@ impl LakeFSLogStore {
         client: LakeFSClient,
     ) -> Self {
         let prefixed_registry = DefaultObjectStoreRegistry::new();
-        prefixed_registry.register_store(&config.location(), prefixed_store);
+        prefixed_registry.register_store(config.location(), prefixed_store);
         let root_registry = DefaultObjectStoreRegistry::new();
-        root_registry.register_store(&config.location(), root_store);
+        root_registry.register_store(config.location(), root_store);
         Self {
             prefixed_registry,
             root_registry,
@@ -96,9 +96,7 @@ impl LakeFSLogStore {
 
         if let Some(entry) = self.config().object_store_factory().get(&scheme) {
             debug!("Creating new storage with storage provider for {scheme} ({url})");
-            let (store, _prefix) = entry
-                .value()
-                .parse_url_opts(url, &self.config().options())?;
+            let (store, _prefix) = entry.value().parse_url_opts(url, self.config().options())?;
             return Ok(store);
         }
         Err(DeltaTableError::InvalidTableLocation(url.to_string()))
@@ -138,7 +136,7 @@ impl LakeFSLogStore {
         // Create LakeFS Branch for transaction
         let (lakefs_url, tnx_branch) = self
             .client
-            .create_branch(&self.config.location(), operation_id)
+            .create_branch(self.config.location(), operation_id)
             .await?;
 
         // Build new object store store using the new lakefs url
@@ -237,7 +235,7 @@ impl LogStore for LakeFSLogStore {
 
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         read_commit_entry(
-            &self.prefixed_registry.get_store(&self.config.location())?,
+            &self.prefixed_registry.get_store(self.config.location())?,
             version,
         )
         .await
@@ -360,7 +358,7 @@ impl LogStore for LakeFSLogStore {
             }
             _ => self
                 .prefixed_registry
-                .get_store(&self.config.location())
+                .get_store(self.config.location())
                 .unwrap(),
         }
     }
@@ -373,7 +371,7 @@ impl LogStore for LakeFSLogStore {
             }
             _ => self
                 .root_registry
-                .get_store(&self.config.location())
+                .get_store(self.config.location())
                 .unwrap(),
         }
     }

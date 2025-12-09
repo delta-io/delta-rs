@@ -36,7 +36,7 @@ pub struct S3DynamoDbLogStore {
     config: LogStoreConfig,
     /// Table path URI
     #[builder(setter(into))]
-    table_path: String,
+    table_path: Url,
 }
 
 impl std::fmt::Debug for S3DynamoDbLogStore {
@@ -80,13 +80,12 @@ impl S3DynamoDbLogStore {
                 source: Box::new(err),
             },
         })?;
-        let table_path = to_uri(&location, &Path::from(""));
         Ok(Self::builder()
             .prefixed_store(prefixed_store)
             .root_store(root_store)
             .lock_client(lock_client)
             .config(LogStoreConfig::new(location.clone(), options.clone()))
-            .table_path(table_path)
+            .table_path(location)
             .build())
     }
 
@@ -141,7 +140,7 @@ impl S3DynamoDbLogStore {
         for retry in 0..=MAX_REPAIR_RETRIES {
             match self
                 .lock_client
-                .update_commit_entry(entry.version, &self.table_path)
+                .update_commit_entry(entry.version, self.table_path.as_str())
                 .await
                 .map_err(|err| TransactionError::LogStoreError {
                     msg: format!(
@@ -186,7 +185,7 @@ impl LogStore for S3DynamoDbLogStore {
     async fn refresh(&self) -> DeltaResult<()> {
         let entry = self
             .lock_client
-            .get_latest_entry(&self.table_path)
+            .get_latest_entry(self.table_path.as_str())
             .await
             .map_err(|err| DeltaTableError::GenericError {
                 source: Box::new(err),
@@ -200,7 +199,7 @@ impl LogStore for S3DynamoDbLogStore {
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         let entry = self
             .lock_client
-            .get_commit_entry(&self.table_path, version)
+            .get_commit_entry(&self.table_path.to_string(), version)
             .await;
         if let Ok(Some(entry)) = entry {
             self.repair_entry(&entry).await?;
@@ -230,7 +229,7 @@ impl LogStore for S3DynamoDbLogStore {
         debug!("Writing commit entry for {self:?}: {entry:?}");
         // create log entry in dynamo db: complete = false, no expireTime
         self.lock_client
-            .put_commit_entry(&self.table_path, &entry)
+            .put_commit_entry(self.table_path.as_str(), &entry)
             .await
             .map_err(|err| match err {
                 LockClientError::VersionAlreadyExists { version, .. } => {
@@ -277,7 +276,7 @@ impl LogStore for S3DynamoDbLogStore {
             _ => unreachable!(), // S3DynamoDBLogstore should never get Bytes
         };
         self.lock_client
-            .delete_commit_entry(version, &self.table_path)
+            .delete_commit_entry(version, self.table_path.as_str())
             .await
             .map_err(|err| match err {
                 LockClientError::ProvisionedThroughputExceeded => todo!(
@@ -304,7 +303,7 @@ impl LogStore for S3DynamoDbLogStore {
         debug!("Retrieving latest version of {self:?} at v{current_version}");
         let entry = self
             .lock_client
-            .get_latest_entry(&self.table_path)
+            .get_latest_entry(self.table_path.as_str())
             .await
             .map_err(|err| DeltaTableError::GenericError {
                 source: Box::new(err),
@@ -343,3 +342,6 @@ pub enum RepairLogEntryResult {
     /// Both parts of the repair process where already carried.
     AlreadyCompleted,
 }
+
+#[cfg(test)]
+mod tests {}

@@ -376,17 +376,17 @@ pub trait LogStore: Send + Sync + AsAny {
             match res {
                 Ok(meta) => {
                     let file_url = dummy_url.join(meta.location.as_ref()).unwrap();
-                    if let Ok(Some(parsed_path)) = ParsedLogPath::try_from(file_url) {
-                        if matches!(
+                    if let Ok(Some(parsed_path)) = ParsedLogPath::try_from(file_url)
+                        && matches!(
                             parsed_path.file_type,
                             LogPathFileType::Commit
                                 | LogPathFileType::SinglePartCheckpoint
                                 | LogPathFileType::UuidCheckpoint
                                 | LogPathFileType::MultiPartCheckpoint { .. }
                                 | LogPathFileType::CompactedCommit { .. }
-                        ) {
-                            return Ok(true);
-                        }
+                        )
+                    {
+                        return Ok(true);
                     }
                     continue;
                 }

@@ -737,7 +737,7 @@ mod local {
             )),
             Arc::new(BooleanArray::from_iter(
                 (0..not_null_rows)
-                    .map(|x| Some((x + offset) % 2 == 0))
+                    .map(|x| Some((x + offset).is_multiple_of(2)))
                     .chain((0..null_rows).map(|_| None)),
             )),
             Arc::new(BinaryArray::from_iter(
@@ -1487,7 +1487,7 @@ async fn test_schema_adapter_empty_batch() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     // Create table with a single column
-    let table = DeltaOps::try_from_url(ensure_table_uri(&table_uri).unwrap())
+    let table = DeltaOps::try_from_url(ensure_table_uri(table_uri).unwrap())
         .await
         .unwrap()
         .create()
@@ -1769,11 +1769,11 @@ mod insert_into_tests {
             Some(&serde_json::Value::String("Append".to_string()))
         );
 
-        if let Some(partition_by) = operation_params.get("partitionBy") {
-            if let serde_json::Value::Array(partition_array) = partition_by {
-                assert_eq!(partition_array.len(), 1);
-                assert_eq!(partition_array[0], "part");
-            }
+        if let Some(partition_by) = operation_params.get("partitionBy")
+            && let serde_json::Value::Array(partition_array) = partition_by
+        {
+            assert_eq!(partition_array.len(), 1);
+            assert_eq!(partition_array[0], "part");
         }
 
         Ok(())
@@ -2160,13 +2160,13 @@ mod insert_into_tests {
             Some(&serde_json::Value::String("Append".to_string()))
         );
 
-        if let Some(stats) = final_table.statistics() {
-            if let datafusion::common::stats::Precision::Exact(num_rows) = stats.num_rows {
-                assert_eq!(
-                    num_rows, 4,
-                    "Table should have exactly 4 rows from SQL INSERT"
-                );
-            }
+        if let Some(stats) = final_table.statistics()
+            && let datafusion::common::stats::Precision::Exact(num_rows) = stats.num_rows
+        {
+            assert_eq!(
+                num_rows, 4,
+                "Table should have exactly 4 rows from SQL INSERT"
+            );
         }
 
         let file_count = final_table.get_file_uris()?.count();

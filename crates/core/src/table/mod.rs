@@ -205,10 +205,10 @@ impl DeltaTable {
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        if let Some(snapshot) = &self.state {
-            if snapshot.version() > version {
-                self.state = None;
-            }
+        if let Some(snapshot) = &self.state
+            && snapshot.version() > version
+        {
+            self.state = None;
         }
         self.update_incremental(Some(version)).await
     }
@@ -479,7 +479,10 @@ mod tests {
                 Url::parse("s3://bucket/prefix with space/").unwrap(),
                 "/prefix%20with%20space/",
             ),
-            //(Url::parse("s3://bucket/special&chars/你好/😊").unwrap(), "/special&chars/你好/😊/"),
+            (
+                Url::parse("s3://bucket/special&chars/你好/😊").unwrap(),
+                "/special&chars/%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A/",
+            ),
             (
                 Url::parse("s3://bucket/prefix/with/redundant/slashes//").unwrap(),
                 "/prefix/with/redundant/slashes/",

@@ -115,12 +115,11 @@ mod simple_checkpoint {
                 None => continue,
             };
 
-            if let Some(caps) = re.captures(filename) {
-                if let Ok(num) = caps[1].parse::<u64>() {
-                    if num <= 12 {
-                        continue;
-                    }
-                }
+            if let Some(caps) = re.captures(filename)
+                && let Ok(num) = caps[1].parse::<u64>()
+                && num <= 12
+            {
+                continue;
             }
             let _ = fs::remove_file(path);
         }
@@ -280,7 +279,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         // Create checkpoint for version 1
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_url()).unwrap(),
+            deltalake_core::ensure_table_uri(table.table_url()).unwrap(),
             1,
             Some(false),
             None,
@@ -293,7 +292,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         // Checkpoint final version
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_url()).unwrap(),
+            deltalake_core::ensure_table_uri(table.table_url()).unwrap(),
             table.version().unwrap(),
             None,
             None,
@@ -344,7 +343,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(1).await.expect("Cannot load version 1");
 
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
-            deltalake_core::ensure_table_uri(&table.table_url()).unwrap(),
+            deltalake_core::ensure_table_uri(table.table_url()).unwrap(),
             table.version().unwrap(),
             None,
             None,

@@ -7,7 +7,7 @@ use url::Url;
 #[allow(dead_code)]
 fn builder_for(uri: &str) -> DeltaResult<DeltaTableBuilder> {
     let url = Url::parse(uri).expect("static test URI must parse");
-    DeltaTableBuilder::from_uri(url)
+    DeltaTableBuilder::from_url(url)
 }
 
 #[cfg(feature = "gcs")]

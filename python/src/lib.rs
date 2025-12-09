@@ -1212,7 +1212,7 @@ impl RawDeltaTable {
                     .await
             })
             .map_err(PythonError::from)?;
-        let active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
+        let _active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
@@ -1278,12 +1278,12 @@ impl RawDeltaTable {
 
             match mode {
                 SaveMode::Overwrite => {
-                    let converted_filters =
+                    let _converted_filters =
                         convert_partition_filters(partitions_filters.unwrap_or_default())
                             .map_err(PythonError::from)?;
 
-                    let state = self.cloned_state()?;
-                    let log_store = self.log_store()?;
+                    let _state = self.cloned_state()?;
+                    let _log_store = self.log_store()?;
                     /*
                     let add_actions: Vec<_> = rt()
                         .block_on(async {

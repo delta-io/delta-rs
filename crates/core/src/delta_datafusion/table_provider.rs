@@ -554,10 +554,10 @@ impl<'a> DeltaScanBuilder<'a> {
                         }
                     }
 
-                    if let Some(limit) = self.limit {
-                        if rows_collected < limit as i64 {
-                            files.extend(pruned_without_stats);
-                        }
+                    if let Some(limit) = self.limit
+                        && rows_collected < limit as i64
+                    {
+                        files.extend(pruned_without_stats);
                     }
 
                     let files_scanned = files.len();
@@ -655,10 +655,10 @@ impl<'a> DeltaScanBuilder<'a> {
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
         // filter
-        if let Some(predicate) = pushdown_filter {
-            if config.enable_parquet_pushdown {
-                file_source = file_source.with_predicate(predicate);
-            }
+        if let Some(predicate) = pushdown_filter
+            && config.enable_parquet_pushdown
+        {
+            file_source = file_source.with_predicate(predicate);
         };
         let file_source =
             file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
