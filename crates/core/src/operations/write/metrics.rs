@@ -33,18 +33,18 @@ impl ExtensionPlanner for WriteMetricExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
-            if metric_observer.id.eq(SOURCE_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    SOURCE_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        MetricBuilder::new(metrics)
-                            .global_counter(SOURCE_COUNT_METRIC)
-                            .add(batch.num_rows());
-                    },
-                )?));
-            }
+        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
+            && metric_observer.id.eq(SOURCE_COUNT_ID)
+        {
+            return Ok(Some(MetricObserverExec::try_new(
+                SOURCE_COUNT_ID.into(),
+                physical_inputs,
+                |batch, metrics| {
+                    MetricBuilder::new(metrics)
+                        .global_counter(SOURCE_COUNT_METRIC)
+                        .add(batch.num_rows());
+                },
+            )?));
         }
         Ok(None)
     }

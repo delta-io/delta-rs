@@ -307,7 +307,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let table_url = ensure_table_uri(&uri).unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
     let other_dt = deltalake_core::open_table(table_url).await?;
     let add = &other_dt.snapshot()?.log_data().into_iter().next().unwrap();
     let remove = add.remove_action(true);
@@ -374,7 +374,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let table_url = ensure_table_uri(&uri).unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
     let mut other_dt = deltalake_core::open_table(table_url).await?;
     let mut writer = RecordBatchWriter::for_table(&other_dt)?;
     write(

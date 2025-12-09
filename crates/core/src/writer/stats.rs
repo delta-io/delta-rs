@@ -105,8 +105,7 @@ fn stats_from_file_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> =
-        file_metadata.row_groups().iter().cloned().collect();
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
 
     stats_from_metadata(
         partition_values,

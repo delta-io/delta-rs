@@ -322,10 +322,10 @@ impl Snapshot {
         {
             // safety: object store path are always valid urls paths.
             let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
-            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
-                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
-                    commit_files.push(meta);
-                }
+            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)?
+                && matches!(parsed_path.file_type, LogPathFileType::Commit)
+            {
+                commit_files.push(meta);
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
@@ -652,6 +652,7 @@ impl EagerSnapshot {
             .boxed()
     }
 
+    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
     pub fn file_views_by_partitions(
         &self,
         log_store: &dyn LogStore,

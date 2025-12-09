@@ -135,7 +135,6 @@ impl ObjectStore for GcsStorageBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_it() {}

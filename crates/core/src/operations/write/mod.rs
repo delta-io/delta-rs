@@ -34,7 +34,7 @@ use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
@@ -445,17 +445,16 @@ impl std::future::IntoFuture for WriteBuilder {
                 let mut missing_gen_col = None;
                 let mut source =
                     DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
-                if let Some(snapshot) = &this.snapshot {
-                    if able_to_gc(snapshot)? {
-                        let generated_col_expressions =
-                            snapshot.schema().get_generated_columns()?;
-                        // Add missing generated columns to source_df
-                        let (source_with_gc, missing_generated_columns) =
-                            add_missing_generated_columns(source, &generated_col_expressions)?;
-                        source = source_with_gc;
-                        missing_gen_col = Some(missing_generated_columns);
-                        generated_col_exp = Some(generated_col_expressions);
-                    }
+                if let Some(snapshot) = &this.snapshot
+                    && able_to_gc(snapshot)?
+                {
+                    let generated_col_expressions = snapshot.schema().get_generated_columns()?;
+                    // Add missing generated columns to source_df
+                    let (source_with_gc, missing_generated_columns) =
+                        add_missing_generated_columns(source, &generated_col_expressions)?;
+                    source = source_with_gc;
+                    missing_gen_col = Some(missing_generated_columns);
+                    generated_col_exp = Some(generated_col_expressions);
                 }
 
                 let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
@@ -528,15 +527,15 @@ impl std::future::IntoFuture for WriteBuilder {
                     source = source.select(schema_evolution_projection)?;
                 }
 
-                if let Some(generated_columns_exp) = generated_col_exp {
-                    if let Some(missing_generated_col) = missing_gen_col {
-                        source = add_generated_columns(
-                            source,
-                            &generated_columns_exp,
-                            &missing_generated_col,
-                            state,
-                        )?;
-                    }
+                if let Some(generated_columns_exp) = generated_col_exp
+                    && let Some(missing_generated_col) = missing_gen_col
+                {
+                    source = add_generated_columns(
+                        source,
+                        &generated_columns_exp,
+                        &missing_generated_col,
+                        state,
+                    )?;
                 }
 
                 let source = LogicalPlan::Extension(Extension {

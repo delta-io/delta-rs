@@ -38,8 +38,8 @@ coverage: setup-dat ## Run Rust tests with code-coverage
 .PHONY: check
 check: ## Run basic cargo formatting and other checks (no tests)
 	cargo fmt -- --check
-
-
+	cargo clippy --features azure,datafusion,s3,gcs,glue,hdfs --tests
+	$(MAKE) -C python $@
 
 .PHONY: clean
 clean: ## Remove temporary and downloaded artifacts
