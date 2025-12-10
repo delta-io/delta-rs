@@ -63,7 +63,7 @@ impl PyQueryBuilder {
     /// instances, it may result unexpected memory consumption for queries which return large data
     /// sets.
     pub fn execute(&self, py: Python, sql: &str) -> PyResult<PyRecordBatchReader> {
-        let stream = py.allow_threads(|| {
+        let stream = py.detach(|| {
             rt().block_on(async {
                 let df = self.ctx.sql(sql).await?;
                 df.execute_stream().await

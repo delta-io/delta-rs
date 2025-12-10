@@ -144,14 +144,14 @@ impl DeltaFileSystemHandler {
         let mut infos = Vec::with_capacity(paths.len());
         for file_path in paths {
             let path = Self::parse_path(&file_path);
-            let listed = py.allow_threads(|| {
+            let listed = py.detach(|| {
                 rt().block_on(self.inner.list_with_delimiter(Some(&path)))
                     .map_err(PythonError::from)
             })?;
 
             // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
-                let maybe_meta = py.allow_threads(|| rt().block_on(self.inner.head(&path)));
+                let maybe_meta = py.detach(|| rt().block_on(self.inner.head(&path)));
                 match maybe_meta {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
@@ -480,7 +480,7 @@ impl ObjectInputFile {
         let nbytes = (range.end - range.start) as i64;
         self.pos += nbytes;
         let data = if nbytes > 0 {
-            py.allow_threads(|| {
+            py.detach(|| {
                 rt().block_on(self.store.get_range(&self.path, range))
                     .map_err(PythonError::from)
             })?
@@ -576,7 +576,7 @@ impl ObjectOutputStream {
 #[pymethods]
 impl ObjectOutputStream {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.closed = true;
             if !self.buffer.is_empty() {
                 self.upload_buffer()?;
@@ -632,7 +632,7 @@ impl ObjectOutputStream {
         self.check_closed()?;
         let py = data.py();
         let bytes = data.as_bytes();
-        py.allow_threads(|| {
+        py.detach(|| {
             let len = bytes.len();
             for chunk in bytes.chunks(self.max_buffer_size) {
                 // this will never overflow
@@ -658,7 +658,7 @@ impl ObjectOutputStream {
     }
 
     fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.upload_buffer())
+        py.detach(|| self.upload_buffer())
     }
 
     fn fileno(&self) -> PyResult<()> {

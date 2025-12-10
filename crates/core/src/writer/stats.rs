@@ -188,7 +188,8 @@ fn stats_from_metadata(
             .flat_map(|g| {
                 g.column(idx).statistics().into_iter().filter_map(|s| {
                     let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                        && matches!(column_descr.logical_type_ref(), Some(LogicalType::String))
+                            .not();
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
