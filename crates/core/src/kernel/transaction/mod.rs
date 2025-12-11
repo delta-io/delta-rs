@@ -610,25 +610,48 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
 
-            if this.table_data.is_none() {
-                debug!("committing initial table version 0");
-                this.log_store
-                    .write_commit_entry(0, commit_or_bytes.clone(), this.operation_id)
-                    .await?;
-                return Ok(PostCommit {
-                    version: 0,
-                    data: this.data,
-                    create_checkpoint: false,
-                    cleanup_expired_logs: None,
-                    log_store: this.log_store,
-                    table_data: None,
-                    custom_execute_handler: this.post_commit_hook_handler,
-                    metrics: CommitMetrics { num_retries: 0 },
-                });
-            }
+            let mut attempt_number: usize = 1;
 
-            // unwrap() is safe here due to the above check
-            let mut read_snapshot = this.table_data.unwrap().eager_snapshot().clone();
+            // Handle the case where table doesn't exist yet (initial table creation)
+            let read_snapshot: EagerSnapshot = if this.table_data.is_none() {
+                debug!("committing initial table version 0");
+                match this
+                    .log_store
+                    .write_commit_entry(0, commit_or_bytes.clone(), this.operation_id)
+                    .await
+                {
+                    Ok(_) => {
+                        return Ok(PostCommit {
+                            version: 0,
+                            data: this.data,
+                            create_checkpoint: false,
+                            cleanup_expired_logs: None,
+                            log_store: this.log_store,
+                            table_data: None,
+                            custom_execute_handler: this.post_commit_hook_handler,
+                            metrics: CommitMetrics { num_retries: 0 },
+                        })
+                    }
+                    Err(TransactionError::VersionAlreadyExists(0)) => {
+                        // Table was created by another writer since the `this.table_data.is_none()` check.
+                        // Load the current table state and continue with the retry loop.
+                        debug!("version 0 already exists, loading table state for retry");
+                        attempt_number = 2;
+                        let latest_version = this.log_store.get_latest_version(0).await?;
+                        EagerSnapshot::try_new(
+                            this.log_store.as_ref(),
+                            Default::default(),
+                            Some(latest_version),
+                        )
+                        .await?
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            } else {
+                this.table_data.unwrap().eager_snapshot().clone()
+            };
+
+            let mut read_snapshot = read_snapshot;
 
             let commit_span = info_span!(
                 "commit_with_retries",
@@ -640,7 +663,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             );
 
             async move {
-                let mut attempt_number = 1;
                 let total_retries = this.max_retries + 1;
                 while attempt_number <= total_retries {
                     Span::current().record("attempt", attempt_number);
