@@ -87,6 +87,7 @@ pub use self::storage::utils::is_absolute_uri_or_path;
 pub use self::storage::utils::{
     normalize_add_path_for_scan, normalize_path_for_file_scheme, object_store_path_for_file_root,
     relativize_path_for_file_scheme, relativize_uri_to_bucket_root, strip_table_root_from_full_uri,
+    DeltaPathHandler,
 };
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,

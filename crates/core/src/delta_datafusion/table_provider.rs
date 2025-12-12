@@ -579,6 +579,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         let root = self.log_store.config().location.clone();
+        let path_handler = crate::logstore::DeltaPathHandler::new(root.clone());
 
         // SECURITY WARNING:
         // Registering a root object store for the file scheme allows reading ANY file on the filesystem,
@@ -596,10 +597,8 @@ impl<'a> DeltaScanBuilder<'a> {
         for action in files.iter() {
             // Normalize path using shared utility to support full path URIs
             let mut action_with_normalized_path = action.clone();
-            let (normalized_path, needs_bucket_root) = crate::logstore::normalize_add_path_for_scan(
-                &root,
-                action_with_normalized_path.path.as_str(),
-            );
+            let (normalized_path, needs_bucket_root) =
+                path_handler.normalize_add_path_for_scan(action_with_normalized_path.path.as_str());
             action_with_normalized_path.path = normalized_path;
             need_bucket_root_store |= needs_bucket_root;
 
@@ -609,7 +608,7 @@ impl<'a> DeltaScanBuilder<'a> {
                 &action_with_normalized_path,
                 table_partition_cols,
                 &schema,
-                &root,
+                &path_handler,
                 allow_unrestricted_file_access,
             );
 
@@ -1183,7 +1182,7 @@ fn partitioned_file_from_action(
     action: &Add,
     partition_columns: &[String],
     schema: &Schema,
-    root: &url::Url,
+    path_handler: &crate::logstore::DeltaPathHandler,
     allow_unrestricted_file_access: bool,
 ) -> PartitionedFile {
     let partition_values = partition_columns
@@ -1219,10 +1218,10 @@ fn partitioned_file_from_action(
             .naive_utc(),
     );
 
-    let object_meta = if root.scheme() == "file" && allow_unrestricted_file_access {
+    let object_meta = if path_handler.root().scheme() == "file" && allow_unrestricted_file_access {
         // Use a root-scoped filesystem store; provide absolute path without leading '/'
         ObjectMeta {
-            location: crate::logstore::object_store_path_for_file_root(root, action.path.as_str()),
+            location: path_handler.object_store_path_for_file_root(action.path.as_str()),
             last_modified,
             size: action.size as u64,
             e_tag: None,
@@ -1378,7 +1377,9 @@ mod tests {
 
         let part_columns = vec!["year".to_string(), "month".to_string()];
         let root = url::Url::parse("s3://test-bucket/").unwrap();
-        let file = partitioned_file_from_action(&action, &part_columns, &schema, &root, false);
+        let path_handler = crate::logstore::DeltaPathHandler::new(root);
+        let file =
+            partitioned_file_from_action(&action, &part_columns, &schema, &path_handler, false);
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()),

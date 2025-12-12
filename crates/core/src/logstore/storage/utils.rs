@@ -9,6 +9,89 @@ use url::Url;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 
+/// A handler for path operations that encapsulates the table root URL.
+///
+/// This struct provides path handling operations without requiring repeated
+/// root parameter passing, improving code organization and API ergonomics.
+#[derive(Debug, Clone)]
+pub struct DeltaPathHandler {
+    root: Url,
+}
+
+impl DeltaPathHandler {
+    /// Create a new DeltaPathHandler with the given table root URL.
+    pub fn new(root: Url) -> Self {
+        Self { root }
+    }
+
+    /// Get a reference to the root URL.
+    pub fn root(&self) -> &Url {
+        &self.root
+    }
+
+    /// Normalize a data file path for tables using the file scheme.
+    ///
+    /// Rules:
+    /// - If input is a file:// URI, convert to a platform filesystem path.
+    /// - If input is another fully-qualified URI or an absolute filesystem path, keep as-is.
+    /// - Otherwise, treat input as relative and join under the filesystem path of root.
+    pub fn normalize_path_for_file_scheme(&self, input: &str) -> String {
+        normalize_path_for_file_scheme(&self.root, input)
+    }
+
+    /// For file scheme tables, attempt to relativize an absolute filesystem path
+    /// to the table root. If the path is under the table root, return the relative
+    /// portion; otherwise return the original path unchanged.
+    pub fn relativize_path_for_file_scheme(&self, input: &str) -> String {
+        relativize_path_for_file_scheme(&self.root, input)
+    }
+
+    /// Convert a path to an object_store::Path for use with a root-scoped filesystem store.
+    ///
+    /// For file scheme tables using a root-scoped store, paths need to be absolute filesystem
+    /// paths with leading slashes stripped (since object_store paths are relative to store root).
+    ///
+    /// Note: This function intentionally removes ALL leading slashes and backslashes from the path
+    /// (e.g., `///path` becomes `path`). This is correct behavior because object_store paths are
+    /// always relative to the store root, and any leading separators would be invalid.
+    pub fn object_store_path_for_file_root(&self, path: &str) -> Path {
+        object_store_path_for_file_root(&self.root, path)
+    }
+
+    /// Normalize a path from an Add action for use in a scan.
+    ///
+    /// Returns a tuple of (normalized_path, needs_bucket_root_store).
+    /// - For file scheme: relativizes absolute paths to table root when possible.
+    /// - For non-file schemes: strips table root prefix or relativizes to bucket root.
+    /// - `needs_bucket_root_store` is true if the path required bucket-level relativization.
+    pub fn normalize_add_path_for_scan(&self, path: &str) -> (String, bool) {
+        normalize_add_path_for_scan(&self.root, path)
+    }
+
+    /// For non-file schemes, if `input` is a fully-qualified URI beginning with root,
+    /// strip the table root prefix so the result is relative to the table root.
+    pub fn strip_table_root_from_full_uri(&self, input: &str) -> String {
+        strip_table_root_from_full_uri(&self.root, input)
+    }
+
+    /// For object store paths (e.g., S3 and S3-compatible HTTP endpoints), if `input`
+    /// is a fully-qualified URI that points to the same bucket as root, return the
+    /// object key relative to the bucket root. Otherwise, return `input` unchanged.
+    ///
+    /// This function is scheme-tolerant: it can match `s3://bucket/key` against
+    /// `http(s)://endpoint/bucket/` (path-style) or `http(s)://bucket.endpoint/`
+    /// (virtual-hosted-style) as long as the bucket names are the same.
+    ///
+    /// **Limitation:** This function compares bucket names only, not full endpoint identity.
+    /// If root is `s3://bucket/prefix` and `input` is `http://endpoint/bucket/key`, they
+    /// will be recognized as the same bucket even though they use different schemes and
+    /// endpoints. This is intentional for S3-compatible endpoint scenarios, but callers
+    /// should be aware that scheme differences are not validated.
+    pub fn relativize_uri_to_bucket_root(&self, input: &str) -> String {
+        relativize_uri_to_bucket_root(&self.root, input)
+    }
+}
+
 /// Return the uri of commit version.
 ///
 /// ```rust
