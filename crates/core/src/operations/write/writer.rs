@@ -321,7 +321,11 @@ impl PartitionWriterConfig {
         max_concurrency_tasks: Option<usize>,
     ) -> DeltaResult<Self> {
         let part_path = partition_values.hive_partition_path();
-        let prefix = Path::parse(part_path)?;
+        // `hive_partition_path` returns a percent-encoded path per Delta protocol.
+        // Using `Path::parse` here would treat `%` as needing encoding again,
+        // producing double-encoded directory names. Construct the `Path` directly
+        // from the already-encoded string.
+        let prefix = Path::from(part_path);
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
