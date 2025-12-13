@@ -525,15 +525,24 @@ impl<'a> ConflictChecker<'a> {
             .read_files()?
             .map(|f| f.path.clone())
             .collect();
-        let deleted_read_overlap = self
+
+        // Only consider removals with data_change = true as conflicts.
+        // Removals with data_change = false (e.g., from OPTIMIZE/compaction)
+        // don't change the logical data, only the physical layout, so they
+        // shouldn't conflict with concurrent read operations.
+        let removed_files_with_data_change: Vec<Remove> = self
             .winning_commit_summary
             .removed_files()
+            .into_iter()
+            .filter(|r| r.data_change)
+            .collect();
+
+        let deleted_read_overlap = removed_files_with_data_change
             .iter()
-            .find(|&f| read_file_path.contains(&f.path))
-            .cloned();
+            .find(|f| read_file_path.contains(&f.path));
+
         if deleted_read_overlap.is_some()
-            || (!self.winning_commit_summary.removed_files().is_empty()
-                && self.txn_info.read_whole_table())
+            || (!removed_files_with_data_change.is_empty() && self.txn_info.read_whole_table())
         {
             Err(CommitConflictError::ConcurrentDeleteRead)
         } else {
