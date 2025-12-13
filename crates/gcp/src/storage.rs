@@ -1,8 +1,8 @@
 //! GCP GCS storage backend.
 
 use bytes::Bytes;
-use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::Path;
+use deltalake_core::logstore::ObjectStoreRef;
 use futures::stream::BoxStream;
 use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};
 use std::ops::Range;
@@ -135,7 +135,6 @@ impl ObjectStore for GcsStorageBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_it() {}

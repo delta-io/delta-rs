@@ -5,14 +5,14 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use chrono::TimeZone;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde_json::Value;
 
+use crate::DeltaResult;
 use crate::delta_datafusion::cdf::CHANGE_TYPE_COL;
 use crate::delta_datafusion::cdf::{CdcDataSpec, FileAction};
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
-use crate::DeltaResult;
 
 pub fn map_action_to_scalar<F: FileAction>(
     action: &F,

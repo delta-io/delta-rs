@@ -13,12 +13,13 @@ use pyo3::types::{IntoPyDict, PyBytes, PyType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::Url;
 
 const DEFAULT_MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
-    pub(crate) root_url: String,
+    pub(crate) root_url: Url,
     pub(crate) options: HashMap<String, String>,
 }
 
@@ -52,7 +53,7 @@ impl DeltaFileSystemHandler {
     ) -> PyResult<Self> {
         let table_url =
             deltalake::table::builder::parse_table_uri(&table_uri).map_err(PythonError::from)?;
-        let storage = DeltaTableBuilder::from_uri(table_url)
+        let storage = DeltaTableBuilder::from_url(table_url.clone())
             .map_err(PythonError::from)?
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
@@ -62,7 +63,7 @@ impl DeltaFileSystemHandler {
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table_uri,
+                root_url: table_url,
                 options: options.unwrap_or_default(),
             },
             known_sizes,
@@ -81,7 +82,7 @@ impl DeltaFileSystemHandler {
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table.with_table(|t| Ok(t.table_uri()))?,
+                root_url: table.with_table(|t| Ok(t.table_url().clone()))?,
                 options: options.unwrap_or_default(),
             },
             known_sizes,
@@ -330,7 +331,7 @@ impl DeltaFileSystemHandler {
 
     pub fn __getnewargs__(&self) -> PyResult<(String, Option<HashMap<String, String>>)> {
         Ok((
-            self.config.root_url.clone(),
+            self.config.root_url.to_string(),
             Some(self.config.options.clone()),
         ))
     }

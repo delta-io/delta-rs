@@ -27,17 +27,17 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use futures::future::BoxFuture;
 use futures::TryStreamExt;
-use object_store::path::Path;
+use futures::future::BoxFuture;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use serde::Serialize;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
 use crate::kernel::{
-    resolve_snapshot, Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove,
+    Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -331,7 +331,7 @@ async fn check_files_available(
             Err(ObjectStoreError::NotFound { .. }) => {
                 return Err(DeltaTableError::from(RestoreError::MissingDataFile(
                     file.path.clone(),
-                )))
+                )));
             }
             Err(e) => return Err(DeltaTableError::from(e)),
         }
@@ -385,8 +385,6 @@ mod tests {
     /// <https://github.com/delta-io/delta-rs/issues/3352>
     #[tokio::test]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
-        use std::collections::HashMap;
-
         use crate::table::config::TablePropertiesExt as _;
 
         let batch = get_record_batch(None, false);

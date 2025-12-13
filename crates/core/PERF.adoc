@@ -1,0 +1,47 @@
+
+= Build performance
+
+== Nightly
+
+=== threads=8
+
+
+[source]
+----
+RUSTFLAGS="-Z threads=8" cargo +nightly build  54.90s user 12.40s system 90% cpu 1:14.54 total
+----
+
+=== basic
+
+[source]
+----
+cargo +nightly build  45.63s user 9.93s system 70% cpu 1:18.59 total
+----
+
+
+=== threads=8 with datafusion
+
+[source]
+----
+RUSTFLAGS="-Z threads=8" cargo +nightly build --features datafusion  109.25s user 17.27s system 72% cpu 2:53.74 total
+----
+
+
+=== no threads
+
+[source]
+----
+cargo +nightly build --features datafusion  80.02s user 13.46s system 41% cpu 3:47.94 total
+----
+
+
+[source]
+----
+RUSTFLAGS="-Zcodegen-backend=cranelift" cargo +nightly build --features   58.19s user 12.43s system 38% cpu 3:03.59 total
+----
+
+[source]
+----
+RUSTFLAGS="-Zthreads=8 -Zcodegen-backend=cranelift" cargo +nightly build    78.85s user 14.81s system 51% cpu 3:02.71 total
+
+----

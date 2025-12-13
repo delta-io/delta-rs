@@ -4,14 +4,14 @@ use std::collections::HashSet;
 use delta_kernel::table_properties::IsolationLevel;
 
 use super::CommitInfo;
+use crate::DeltaTableError;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction};
-use crate::logstore::{get_actions, LogStore};
+use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::DeltaTableError;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
@@ -26,17 +26,23 @@ pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
     /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
     /// can be caused by INSERT, DELETE, UPDATE, or MERGE operations.
-    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    #[error(
+        "Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation."
+    )]
     ConcurrentAppend,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation read.
     /// Common causes are a DELETE, UPDATE, or MERGE operation that rewrites files.
-    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    #[error(
+        "Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation."
+    )]
     ConcurrentDeleteRead,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation also deletes.
     /// This could be caused by two concurrent compaction operations rewriting the same files.
-    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
+    #[error(
+        "Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data."
+    )]
     ConcurrentDeleteDelete,
 
     /// This exception occurs when a concurrent transaction updates the metadata of a Delta table.
@@ -411,9 +417,9 @@ impl<'a> ConflictChecker<'a> {
                 self.txn_info.read_snapshot.protocol().min_writer_version(),
             );
             if curr_read < win_read || win_write < curr_write {
-                return Err(CommitConflictError::ProtocolChanged(
-                    format!("required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
-                ));
+                return Err(CommitConflictError::ProtocolChanged(format!(
+                    "required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"
+                )));
             };
         }
         if !self.winning_commit_summary.protocol().is_empty()

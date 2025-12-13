@@ -6,8 +6,8 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
-use moka::future::Cache;
 use moka::Expiry;
+use moka::future::Cache;
 use std::any::Any;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use super::models::{
     TableTempCredentialsResponse, TemporaryTableCredentials,
 };
 use super::{DataCatalogResult, UnityCatalog, UnityCatalogError};
-use deltalake_core::{ensure_table_uri, DeltaTableBuilder};
+use deltalake_core::{DeltaTableBuilder, ensure_table_uri};
 
 /// In-memory list of catalogs populated by unity catalog
 #[derive(Debug)]
@@ -237,7 +237,7 @@ impl SchemaProvider for UnitySchemaProvider {
                 })?;
                 let table_url = ensure_table_uri(&table.storage_location)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let table = DeltaTableBuilder::from_uri(table_url)
+                let table = DeltaTableBuilder::from_url(table_url)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .with_storage_options(new_storage_opts)
                     .load()

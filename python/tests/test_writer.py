@@ -1567,10 +1567,10 @@ def test_partition_large_arrow_types(tmp_path: pathlib.Path):
     write_deltalake(tmp_path, table, partition_by=["foo"])
 
     dt = DeltaTable(tmp_path)
-    files = dt.files()
+    files = dt.file_uris()
     expected = ["foo=1", "foo=2"]
 
-    result = sorted([file.split("/")[0] for file in files])
+    result = sorted([abs_path.split(os.path.sep)[-2] for abs_path in files])
     assert expected == result
 
 

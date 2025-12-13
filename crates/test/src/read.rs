@@ -35,9 +35,11 @@ pub async fn read_table_paths(
 }
 
 async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
+    use futures::stream::TryStreamExt;
+
     let table_uri = integration.uri_for_table(TestTables::Simple);
     let table_url = url::Url::parse(&table_uri)?;
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await?;
@@ -46,13 +48,20 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
     assert_eq!(
-        snapshot.file_paths_iter().collect::<Vec<_>>(),
+        snapshot
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .iter()
+            .map(|lfv| lfv.path().to_string())
+            .collect::<Vec<_>>(),
         vec![
-            Path::from("part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet"),
-            Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
-            Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
-            Path::from("part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet"),
-            Path::from("part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet"),
+            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
     );
     let tombstones = snapshot
@@ -80,7 +89,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     let table_uri = integration.uri_for_table(TestTables::Simple);
     let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .with_version(3)
         .load()
@@ -90,14 +99,21 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
     assert_eq!(
-        snapshot.file_paths_iter().collect::<Vec<_>>(),
+        snapshot
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .iter()
+            .map(|lfv| lfv.path().to_string())
+            .collect::<Vec<_>>(),
         vec![
-            Path::from("part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet"),
-            Path::from("part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet"),
-            Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
-            Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
-            Path::from("part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet"),
-            Path::from("part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet"),
+            "part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet",
+            "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
+            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
     );
     let tombstones = snapshot
@@ -125,7 +141,7 @@ pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Golden);
     let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await
@@ -142,7 +158,7 @@ async fn verify_store(integration: &IntegrationContext, root_path: &str) -> Test
     let table_uri = format!("{}/{root_path}", integration.root_uri());
     let table_url = url::Url::parse(&table_uri)?;
 
-    let storage = DeltaTableBuilder::from_uri(table_url)?
+    let storage = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .build_storage()?
         .object_store(None);
@@ -164,7 +180,7 @@ async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -
     let table_uri = format!("{}/{root_path}", integration.root_uri());
     let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await?;

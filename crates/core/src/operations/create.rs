@@ -7,20 +7,20 @@ use std::sync::Arc;
 use delta_kernel::schema::MetadataValue;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use tracing::log::*;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    new_metadata, Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField,
-    StructType,
+    Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField, StructType,
+    new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
+use crate::table::normalize_table_url;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -261,15 +261,15 @@ impl CreateBuilder {
 
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
-                ensure_table_uri(log_store.root_uri())?.as_str().to_string(),
+                normalize_table_url(log_store.root_url()),
                 DeltaTable::new(log_store, Default::default()),
             )
         } else {
             let storage_url =
                 ensure_table_uri(self.location.clone().ok_or(CreateError::MissingLocation)?)?;
             (
-                storage_url.as_str().to_string(),
-                DeltaTableBuilder::from_uri(storage_url)?
+                storage_url.clone(),
+                DeltaTableBuilder::from_url(storage_url)?
                     .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )
@@ -433,7 +433,7 @@ mod tests {
         let table_url = url::Url::from_directory_path(table_path)
             .map_err(|_| DeltaTableError::InvalidTableLocation(relative_path.clone()))
             .unwrap();
-        let table = DeltaOps::try_from_uri(table_url)
+        let table = DeltaOps::try_from_url(table_url)
             .await
             .unwrap()
             .create()

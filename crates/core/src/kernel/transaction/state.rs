@@ -96,11 +96,7 @@ impl<'a> AddContainer<'a> {
             .zip(pruning_predicate.prune(self)?)
             .filter_map(
                 |(action, keep_file)| {
-                    if keep_file {
-                        Some(action)
-                    } else {
-                        None
-                    }
+                    if keep_file { Some(action) } else { None }
                 },
             ))
     }
@@ -256,7 +252,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
-    use crate::delta_datafusion::{files_matching_predicate, DataFusionMixins};
+    use crate::delta_datafusion::{DataFusionMixins, files_matching_predicate};
     use crate::kernel::Action;
     use crate::test_utils::{ActionFactory, TestSchemas};
 

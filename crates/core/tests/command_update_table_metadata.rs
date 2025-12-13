@@ -1,8 +1,8 @@
-use deltalake_core::kernel::transaction::CommitProperties;
 use deltalake_core::kernel::StructType;
+use deltalake_core::kernel::transaction::CommitProperties;
 
-use deltalake_core::operations::update_table_metadata::TableMetadataUpdate;
 use deltalake_core::operations::DeltaOps;
+use deltalake_core::operations::update_table_metadata::TableMetadataUpdate;
 use serde_json::json;
 
 /// Basic schema for testing
@@ -348,9 +348,9 @@ async fn test_with_commit_properties() {
 #[tokio::test]
 async fn test_with_custom_execute_handler() {
     use async_trait::async_trait;
+    use deltalake_core::DeltaResult;
     use deltalake_core::logstore::LogStoreRef;
     use deltalake_core::operations::CustomExecuteHandler;
-    use deltalake_core::DeltaResult;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -427,10 +427,14 @@ async fn test_with_custom_execute_handler() {
     assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 
-    assert!(handler
-        .pre_execute_called
-        .load(std::sync::atomic::Ordering::SeqCst));
-    assert!(handler
-        .post_execute_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        handler
+            .pre_execute_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    assert!(
+        handler
+            .post_execute_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
 }

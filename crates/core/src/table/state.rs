@@ -11,20 +11,16 @@ use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
-use futures::{StreamExt as _, TryStreamExt as _};
-use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::DeltaTableConfig;
-use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 #[cfg(test)]
 use crate::kernel::Action;
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
-    Add, DataType, EagerSnapshot, LogDataHandler, LogicalFileView, Metadata, Protocol,
-    TombstoneView, ARROW_HANDLER,
+    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
 };
 use crate::logstore::LogStore;
-use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -114,7 +110,8 @@ impl DeltaTableState {
             actions,
             DeltaOperation::Create {
                 mode: SaveMode::Append,
-                location: Path::default().to_string(),
+                location: url::Url::parse("memory:///example")
+                    .expect("Failed to parse a hard-coded URL, that's magical isn't it"),
                 protocol: protocol.clone(),
                 metadata: metadata.clone(),
             },
@@ -138,45 +135,6 @@ impl DeltaTableState {
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
         self.snapshot.snapshot().tombstones(log_store)
-    }
-
-    /// Full list of add actions representing all parquet files that are part of the current
-    /// delta table state.
-    #[deprecated(
-        since = "0.29.1",
-        note = "Use `.snapshot().file_views(log_store, predicate)` instead."
-    )]
-    pub async fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
-        self.snapshot
-            .file_views(log_store, None)
-            .map_ok(|v| v.add_action())
-            .try_collect()
-            .await
-    }
-
-    /// Full list of add actions representing all parquet files that are part of the current
-    /// delta table state.
-    #[deprecated(
-        since = "0.29.1",
-        note = "Use `.snapshot().file_views(log_store, predicate)` instead."
-    )]
-    pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
-        self.snapshot
-            .file_views(log_store, None)
-            .map_ok(|v| v.add_action())
-            .boxed()
-    }
-
-    /// Returns an iterator of file names present in the loaded state
-    #[inline]
-    #[deprecated(
-        since = "0.29.0",
-        note = "Simple object store paths are not meaningful once we support full urls."
-    )]
-    pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.log_data()
-            .into_iter()
-            .map(|add| add.object_store_path())
     }
 
     /// Get the transaction version for the given application ID.
@@ -206,28 +164,6 @@ impl DeltaTableState {
             .update(log_store, version.map(|v| v as u64))
             .await?;
         Ok(())
-    }
-
-    /// Obtain a stream of logical file views that match the partition filters
-    ///
-    /// ## Arguments
-    ///
-    /// * `log_store` - The log store to use for reading the table's log.
-    /// * `filters` - The partition filters to apply to the file views.
-    ///
-    /// ## Returns
-    ///
-    /// A stream of logical file views that match the partition filters.
-    #[deprecated(
-        since = "0.29.0",
-        note = "Use `.snapshot().files(log_store, predicate)` with a kernel predicate instead."
-    )]
-    pub fn get_active_add_actions_by_partitions(
-        &self,
-        log_store: &dyn LogStore,
-        filters: &[PartitionFilter],
-    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        self.snapshot().file_views_by_partitions(log_store, filters)
     }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.

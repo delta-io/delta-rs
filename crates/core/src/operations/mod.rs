@@ -31,12 +31,12 @@ use self::{
     drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
     merge::MergeBuilder, optimize::OptimizeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
+use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
-use crate::table::builder::{ensure_table_uri, DeltaTableBuilder};
-use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
-use crate::DeltaTable;
+use crate::table::builder::DeltaTableBuilder;
+use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
 
 pub mod add_column;
 pub mod add_feature;
@@ -134,11 +134,11 @@ impl DeltaOps {
     ///
     /// async {
     ///     let url = Url::parse("memory:///").unwrap();
-    ///     let ops = DeltaOps::try_from_uri(url).await.unwrap();
+    ///     let ops = DeltaOps::try_from_url(url).await.unwrap();
     /// };
     /// ```
-    pub async fn try_from_uri(uri: Url) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri)?.build()?;
+    pub async fn try_from_url(uri: Url) -> DeltaResult<Self> {
+        let mut table = DeltaTableBuilder::from_url(uri)?.build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
             Ok(_) => Ok(table.into()),
@@ -147,27 +147,12 @@ impl DeltaOps {
         }
     }
 
-    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri string (deprecated).
-    ///
-    /// ```
-    /// use deltalake_core::DeltaOps;
-    ///
-    /// async {
-    ///     let ops = DeltaOps::try_from_uri_str("memory:///").await.unwrap();
-    /// };
-    /// ```
-    #[deprecated(note = "Use try_from_uri with url::Url instead")]
-    pub async fn try_from_uri_str(uri: impl AsRef<str>) -> DeltaResult<Self> {
-        let url = ensure_table_uri(uri)?;
-        Self::try_from_uri(url).await
-    }
-
     /// Create a [`DeltaOps`] instance from URL with storage options
-    pub async fn try_from_uri_with_storage_options(
+    pub async fn try_from_url_with_storage_options(
         uri: Url,
         storage_options: HashMap<String, String>,
     ) -> DeltaResult<Self> {
-        let mut table = DeltaTableBuilder::from_uri(uri)?
+        let mut table = DeltaTableBuilder::from_url(uri)?
             .with_storage_options(storage_options)
             .build()?;
         // We allow for uninitialized locations, since we may want to create the table
@@ -176,16 +161,6 @@ impl DeltaOps {
             Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
             Err(err) => Err(err),
         }
-    }
-
-    /// Create a [`DeltaOps`] instance from uri string with storage options (deprecated)
-    #[deprecated(note = "Use try_from_uri_with_storage_options with url::Url instead")]
-    pub async fn try_from_uri_str_with_storage_options(
-        uri: impl AsRef<str>,
-        storage_options: HashMap<String, String>,
-    ) -> DeltaResult<Self> {
-        let url = ensure_table_uri(uri)?;
-        Self::try_from_uri_with_storage_options(url, storage_options).await
     }
 
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
@@ -201,7 +176,7 @@ impl DeltaOps {
     #[must_use]
     pub fn new_in_memory() -> Self {
         let url = Url::parse("memory:///").unwrap();
-        DeltaTableBuilder::from_uri(url)
+        DeltaTableBuilder::from_url(url)
             .unwrap()
             .build()
             .unwrap()
@@ -214,7 +189,7 @@ impl DeltaOps {
     /// use deltalake_core::DeltaOps;
     ///
     /// async {
-    ///     let ops = DeltaOps::try_from_uri(url::Url::parse("memory://").unwrap()).await.unwrap();
+    ///     let ops = DeltaOps::try_from_url(url::Url::parse("memory://").unwrap()).await.unwrap();
     ///     let table = ops.create().with_table_name("my_table").await.unwrap();
     ///     assert_eq!(table.version(), Some(0));
     /// };
@@ -428,7 +403,7 @@ mod datafusion_utils {
     use datafusion::logical_expr::Expr;
     use datafusion::{catalog::Session, common::DFSchema};
 
-    use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
+    use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     #[derive(Debug, Clone)]

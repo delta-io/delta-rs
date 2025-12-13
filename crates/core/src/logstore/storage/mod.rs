@@ -7,6 +7,7 @@ use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
 use url::Url;
 
+use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
 pub use retry_ext::ObjectStoreRetryExt;
@@ -40,7 +41,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 #[derive(Clone)]
 pub struct DefaultObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
+    object_stores: DashMap<Url, Arc<dyn ObjectStore>>,
 }
 
 impl Default for DefaultObjectStoreRegistry {
@@ -51,7 +52,7 @@ impl Default for DefaultObjectStoreRegistry {
 
 impl DefaultObjectStoreRegistry {
     pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        let object_stores: DashMap<Url, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }
     }
 }
@@ -77,12 +78,12 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_stores.insert(url.to_string(), store)
+        self.object_stores.insert(normalize_table_url(url), store)
     }
 
     fn get_store(&self, url: &Url) -> DeltaResult<Arc<dyn ObjectStore>> {
         self.object_stores
-            .get(&url.to_string())
+            .get(&normalize_table_url(url))
             .map(|o| Arc::clone(o.value()))
             .ok_or_else(|| {
                 DeltaTableError::generic(format!("No suitable object store found for '{url}'."))
@@ -138,8 +139,9 @@ mod tests {
         // try get non-existent key
         let url = Url::parse("not-registered://host").unwrap();
         let err = registry.get_store(&url).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("No suitable object store found for 'not-registered://host'."));
+        assert!(
+            err.to_string()
+                .contains("No suitable object store found for 'not-registered://host'.")
+        );
     }
 }

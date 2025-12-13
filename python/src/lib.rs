@@ -174,7 +174,7 @@ impl RawDeltaTable {
         py.detach(|| {
             let table_url = deltalake::table::builder::parse_table_uri(table_uri)
                 .map_err(error::PythonError::from)?;
-            let mut builder = deltalake::DeltaTableBuilder::from_uri(table_url)
+            let mut builder = deltalake::DeltaTableBuilder::from_url(table_url)
                 .map_err(error::PythonError::from)?
                 .with_io_runtime(IORuntime::default());
             let options = storage_options.clone().unwrap_or_default();
@@ -195,11 +195,11 @@ impl RawDeltaTable {
 
             let table = rt().block_on(builder.load()).map_err(PythonError::from)?;
             Ok(RawDeltaTable {
-                _table: Arc::new(Mutex::new(table)),
                 _config: FsConfig {
-                    root_url: table_uri.into(),
+                    root_url: table.table_url().clone(),
                     options,
                 },
+                _table: Arc::new(Mutex::new(table)),
             })
         })
     }
@@ -212,7 +212,7 @@ impl RawDeltaTable {
     ) -> PyResult<bool> {
         let table_url = deltalake::table::builder::ensure_table_uri(table_uri)
             .map_err(|_| PyErr::new::<PyValueError, _>("Invalid table URI"))?;
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_url)
+        let mut builder = deltalake::DeltaTableBuilder::from_url(table_url)
             .map_err(|_| PyErr::new::<PyValueError, _>("Failed to create table builder"))?;
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
@@ -228,7 +228,7 @@ impl RawDeltaTable {
     }
 
     pub fn table_uri(&self) -> PyResult<String> {
-        self.with_table(|t| Ok(t.table_uri()))
+        self.with_table(|t| Ok(t.table_url().to_string()))
     }
 
     pub fn version(&self) -> PyResult<Option<i64>> {
@@ -407,9 +407,8 @@ impl RawDeltaTable {
             } else {
                 match self._table.lock() {
                     Ok(table) => Ok(table
-                        .snapshot()
+                        .get_file_uris()
                         .map_err(PythonError::from)?
-                        .file_paths_iter()
                         .map(|f| f.to_string())
                         .collect()),
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
@@ -1213,6 +1212,7 @@ impl RawDeltaTable {
                     .await
             })
             .map_err(PythonError::from)?;
+        let _active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
@@ -1278,12 +1278,13 @@ impl RawDeltaTable {
 
             match mode {
                 SaveMode::Overwrite => {
-                    let converted_filters =
+                    let _converted_filters =
                         convert_partition_filters(partitions_filters.unwrap_or_default())
                             .map_err(PythonError::from)?;
 
-                    let state = self.cloned_state()?;
-                    let log_store = self.log_store()?;
+                    let _state = self.cloned_state()?;
+                    let _log_store = self.log_store()?;
+                    /*
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
                             state
@@ -1297,6 +1298,7 @@ impl RawDeltaTable {
                         let remove_action = Action::Remove(old_add.remove_action(true));
                         actions.push(remove_action);
                     }
+                    */
 
                     // Update metadata with new schema
                     if &schema != existing_schema.as_ref() {
@@ -2385,8 +2387,8 @@ fn write_to_deltalake(
         let options = storage_options.clone().unwrap_or_default();
         let table_url = deltalake::table::builder::ensure_table_uri(&table_uri)?;
         let table = rt()
-            .block_on(DeltaOps::try_from_uri_with_storage_options(
-                table_url,
+            .block_on(DeltaOps::try_from_url_with_storage_options(
+                table_url.clone(),
                 options.clone(),
             ))?
             .0;
@@ -2394,7 +2396,7 @@ fn write_to_deltalake(
         let raw_table = RawDeltaTable {
             _table: Arc::new(Mutex::new(table)),
             _config: FsConfig {
-                root_url: table_uri,
+                root_url: table_url,
                 options,
             },
         };
@@ -2452,7 +2454,7 @@ fn create_deltalake(
     py.detach(|| {
         let table_url =
             deltalake::table::builder::ensure_table_uri(&table_uri).map_err(PythonError::from)?;
-        let table = DeltaTableBuilder::from_uri(table_url)
+        let table = DeltaTableBuilder::from_url(table_url)
             .map_err(PythonError::from)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()
@@ -2532,7 +2534,7 @@ fn create_table_with_add_actions(
     py.detach(|| {
         let table_url =
             deltalake::table::builder::ensure_table_uri(&table_uri).map_err(PythonError::from)?;
-        let table = DeltaTableBuilder::from_uri(table_url)
+        let table = DeltaTableBuilder::from_url(table_url)
             .map_err(PythonError::from)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()

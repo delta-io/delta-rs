@@ -14,11 +14,11 @@ use deltalake_core::logstore::object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
-    config::str_is_truthy, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    ObjectStoreFactory, ObjectStoreRef, StorageConfig, config::str_is_truthy,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
-use futures::stream::BoxStream;
 use futures::Future;
+use futures::stream::BoxStream;
 use object_store::aws::AmazonS3;
 use object_store::client::SpawnedReqwestConnector;
 use tracing::log::*;
@@ -488,12 +488,12 @@ pub(crate) trait S3StorageOptionsConversion {
             .collect();
 
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    options
-                        .entry(config_key.as_ref().to_string())
-                        .or_insert(value.to_string());
-                }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())
+            {
+                options
+                    .entry(config_key.as_ref().to_string())
+                    .or_insert(value.to_string());
             }
         }
 
@@ -579,28 +579,30 @@ mod tests {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
 
-            std::env::set_var(constants::AWS_ENDPOINT_URL, "http://localhost");
-            std::env::set_var(constants::AWS_REGION, "us-west-1");
-            std::env::set_var(constants::AWS_PROFILE, "default");
-            std::env::set_var(constants::AWS_ACCESS_KEY_ID, "default_key_id");
-            std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "default_secret_key");
-            std::env::set_var(constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-            std::env::set_var(
-                constants::AWS_IAM_ROLE_ARN,
-                "arn:aws:iam::123456789012:role/some_role",
-            );
-            std::env::set_var(constants::AWS_IAM_ROLE_SESSION_NAME, "session_name");
-            std::env::set_var(
-                #[allow(deprecated)]
-                constants::AWS_S3_ASSUME_ROLE_ARN,
-                "arn:aws:iam::123456789012:role/some_role",
-            );
-            std::env::set_var(
-                #[allow(deprecated)]
-                constants::AWS_S3_ROLE_SESSION_NAME,
-                "session_name",
-            );
-            std::env::set_var(constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
+            unsafe {
+                std::env::set_var(constants::AWS_ENDPOINT_URL, "http://localhost");
+                std::env::set_var(constants::AWS_REGION, "us-west-1");
+                std::env::set_var(constants::AWS_PROFILE, "default");
+                std::env::set_var(constants::AWS_ACCESS_KEY_ID, "default_key_id");
+                std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "default_secret_key");
+                std::env::set_var(constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+                std::env::set_var(
+                    constants::AWS_IAM_ROLE_ARN,
+                    "arn:aws:iam::123456789012:role/some_role",
+                );
+                std::env::set_var(constants::AWS_IAM_ROLE_SESSION_NAME, "session_name");
+                std::env::set_var(
+                    #[allow(deprecated)]
+                    constants::AWS_S3_ASSUME_ROLE_ARN,
+                    "arn:aws:iam::123456789012:role/some_role",
+                );
+                std::env::set_var(
+                    #[allow(deprecated)]
+                    constants::AWS_S3_ROLE_SESSION_NAME,
+                    "session_name",
+                );
+                std::env::set_var(constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
+            }
 
             let options = S3StorageOptions::try_default().unwrap();
             assert_eq!(
@@ -623,7 +625,9 @@ mod tests {
     fn storage_options_with_only_region_and_credentials() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            std::env::remove_var(constants::AWS_ENDPOINT_URL);
+            unsafe {
+                std::env::remove_var(constants::AWS_ENDPOINT_URL);
+            }
 
             let options = S3StorageOptions::from_map(&HashMap::from([
                 (constants::AWS_REGION.to_string(), "eu-west-1".to_string()),
@@ -790,26 +794,28 @@ mod tests {
     fn storage_options_mixed_test() {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
-            std::env::set_var(constants::AWS_ENDPOINT_URL, "http://localhost");
-            std::env::set_var(
-                constants::AWS_ENDPOINT_URL_DYNAMODB,
-                "http://localhost:dynamodb",
-            );
-            std::env::set_var(constants::AWS_REGION, "us-west-1");
-            std::env::set_var(constants::AWS_PROFILE, "default");
-            std::env::set_var(constants::AWS_ACCESS_KEY_ID, "wrong_key_id");
-            std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "wrong_secret_key");
-            std::env::set_var(constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-            std::env::set_var(
-                constants::AWS_IAM_ROLE_ARN,
-                "arn:aws:iam::123456789012:role/some_role",
-            );
-            std::env::set_var(constants::AWS_IAM_ROLE_SESSION_NAME, "session_name");
-            std::env::set_var(constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
+            unsafe {
+                std::env::set_var(constants::AWS_ENDPOINT_URL, "http://localhost");
+                std::env::set_var(
+                    constants::AWS_ENDPOINT_URL_DYNAMODB,
+                    "http://localhost:dynamodb",
+                );
+                std::env::set_var(constants::AWS_REGION, "us-west-1");
+                std::env::set_var(constants::AWS_PROFILE, "default");
+                std::env::set_var(constants::AWS_ACCESS_KEY_ID, "wrong_key_id");
+                std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "wrong_secret_key");
+                std::env::set_var(constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+                std::env::set_var(
+                    constants::AWS_IAM_ROLE_ARN,
+                    "arn:aws:iam::123456789012:role/some_role",
+                );
+                std::env::set_var(constants::AWS_IAM_ROLE_SESSION_NAME, "session_name");
+                std::env::set_var(constants::AWS_WEB_IDENTITY_TOKEN_FILE, "token_file");
 
-            std::env::set_var(constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
-            std::env::set_var(constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
-            std::env::set_var(constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, "3");
+                std::env::set_var(constants::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
+                std::env::set_var(constants::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
+                std::env::set_var(constants::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES, "3");
+            }
             let options = S3StorageOptions::from_map(&HashMap::from([
                 (
                     constants::AWS_ACCESS_KEY_ID.to_string(),
@@ -893,10 +899,12 @@ mod tests {
         ScopedEnv::run(|| {
             clear_env_of_aws_keys();
             let raw_options = HashMap::new();
-            std::env::set_var(constants::AWS_ACCESS_KEY_ID, "env_key");
-            std::env::set_var(constants::AWS_ENDPOINT_URL, "env_key");
-            std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "env_key");
-            std::env::set_var(constants::AWS_REGION, "env_key");
+            unsafe {
+                std::env::set_var(constants::AWS_ACCESS_KEY_ID, "env_key");
+                std::env::set_var(constants::AWS_ENDPOINT_URL, "env_key");
+                std::env::set_var(constants::AWS_SECRET_ACCESS_KEY, "env_key");
+                std::env::set_var(constants::AWS_REGION, "env_key");
+            }
             let combined_options = S3ObjectStoreFactory {}.with_env_s3(&raw_options);
 
             // Four and then the conditional_put built-in
@@ -924,10 +932,12 @@ mod tests {
                 ),
                 ("AWS_REGION".to_string(), "options_key".to_string()),
             ]);
-            std::env::set_var("aws_access_key_id", "env_key");
-            std::env::set_var("aws_endpoint", "env_key");
-            std::env::set_var("aws_secret_access_key", "env_key");
-            std::env::set_var("aws_region", "env_key");
+            unsafe {
+                std::env::set_var("aws_access_key_id", "env_key");
+                std::env::set_var("aws_endpoint", "env_key");
+                std::env::set_var("aws_secret_access_key", "env_key");
+                std::env::set_var("aws_region", "env_key");
+            }
 
             let combined_options = S3ObjectStoreFactory {}.with_env_s3(&raw_options);
 

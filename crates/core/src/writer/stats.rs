@@ -19,7 +19,7 @@ use parquet::{
 use tracing::warn;
 
 use super::*;
-use crate::kernel::{scalars::ScalarExt, Add};
+use crate::kernel::{Add, scalars::ScalarExt};
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
@@ -105,8 +105,7 @@ fn stats_from_file_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> =
-        file_metadata.row_groups().iter().cloned().collect();
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
 
     stats_from_metadata(
         partition_values,
@@ -631,15 +630,15 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
+        DeltaTable,
         errors::DeltaTableError,
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
-        DeltaTable,
     };
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
     use parquet::{basic::Compression, file::properties::WriterProperties};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::LazyLock;
@@ -986,12 +985,10 @@ mod tests {
     }
 
     async fn load_table(
-        table_uri: &Url,
+        table_url: &Url,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        let table_uri = table_uri.clone();
-        DeltaTableBuilder::from_uri(table_uri)
-            .unwrap()
+        DeltaTableBuilder::from_url(table_url.clone())?
             .with_storage_options(options)
             .load()
             .await
