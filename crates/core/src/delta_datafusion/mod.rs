@@ -76,6 +76,7 @@ pub(crate) use find_files::*;
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
+pub mod dv_filter;
 pub mod engine;
 pub mod expr;
 mod find_files;

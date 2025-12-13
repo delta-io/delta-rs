@@ -87,6 +87,9 @@ sqlparser = { version = "0.59.0" }
 humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
+# Delta Lake V2 features
+roaring = "0.10"  # For deletion vector bitmap decoding
+
 [dev-dependencies]
 criterion = "0.5"
 ctor = "0"
