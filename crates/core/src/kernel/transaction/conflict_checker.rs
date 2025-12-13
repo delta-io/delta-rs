@@ -1204,4 +1204,48 @@ mod tests {
             "Non-conflicting app transactions should succeed"
         );
     }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_replace_where_initial_empty_conflicts_on_concurrent_add() {
+        // Empty predicate read, concurrent add within predicate, then current write -> conflicts
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(simple_add(true, "1", "1").into());
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").gt_eq(lit::<i32>(2))), // no files read
+            vec![simple_add(true, "3", "3").into()], // concurrent add matches predicate
+            vec![simple_add(true, "2", "2").into()],
+            false,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentAppend)),
+            "ReplaceWhere-style empty read should conflict when a matching row is concurrently added"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_replace_where_disjoint_empty_allows_commit() {
+        // Empty predicate read, concurrent add outside predicate, then current write -> allowed
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(simple_add(true, "1", "1").into());
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").gt(lit::<i32>(1)).and(col("value").lt_eq(lit::<i32>(3)))), // empty read
+            vec![simple_add(true, "5", "5").into()], // disjoint from read predicate
+            vec![simple_add(true, "2", "2").into()],
+            false,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Disjoint replaceWhere-style transactions with empty reads should succeed"
+        );
+    }
 }
