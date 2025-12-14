@@ -12,6 +12,7 @@ use crate::{DeltaResult, DeltaTableError};
 pub use retry_ext::ObjectStoreRetryExt;
 pub use runtime::{DeltaIOStorageBackend, IORuntime};
 
+pub(super) mod file_cache;
 pub(super) mod retry_ext;
 pub(super) mod runtime;
 pub(super) mod utils;
