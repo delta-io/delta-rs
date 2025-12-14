@@ -70,6 +70,128 @@ pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 
+impl DeltaTable {
+    #[must_use]
+    pub fn create(&self) -> CreateBuilder {
+        CreateBuilder::default().with_log_store(self.log_store())
+    }
+
+    #[must_use]
+    pub fn restore(self) -> RestoreBuilder {
+        RestoreBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|state| state.snapshot),
+        )
+    }
+
+    /// Vacuum stale files from delta table
+    #[must_use]
+    pub fn vacuum(self) -> VacuumBuilder {
+        VacuumBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|state| state.snapshot),
+        )
+    }
+
+    /// Audit active files with files present on the filesystem
+    #[must_use]
+    pub fn filesystem_check(self) -> FileSystemCheckBuilder {
+        FileSystemCheckBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Enable a table feature for a table
+    #[must_use]
+    pub fn add_feature(self) -> AddTableFeatureBuilder {
+        AddTableFeatureBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Set table properties
+    #[must_use]
+    pub fn set_tbl_properties(self) -> SetTablePropertiesBuilder {
+        SetTablePropertiesBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Add new columns
+    #[must_use]
+    pub fn add_columns(self) -> AddColumnBuilder {
+        AddColumnBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update field metadata
+    #[must_use]
+    pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
+        UpdateFieldMetadataBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update table metadata
+    #[must_use]
+    pub fn update_table_metadata(self) -> UpdateTableMetadataBuilder {
+        UpdateTableMetadataBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+}
+
+#[cfg(feature = "datafusion")]
+impl DeltaTable {
+    #[must_use]
+    pub fn scan_table(&self) -> LoadBuilder {
+        LoadBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|state| state.snapshot),
+        )
+    }
+
+    #[must_use]
+    pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
+        WriteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+            .with_input_batches(batches)
+    }
+
+    /// Audit active files with files present on the filesystem
+    #[must_use]
+    pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
+        OptimizeBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Delete data from Delta table
+    #[must_use]
+    pub fn delete(self) -> DeleteBuilder {
+        DeleteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update data from Delta table
+    #[must_use]
+    pub fn update_table(self) -> UpdateBuilder {
+        UpdateBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update data from Delta table
+    #[must_use]
+    pub fn merge<E: Into<Expression>>(
+        self,
+        source: datafusion::prelude::DataFrame,
+        predicate: E,
+    ) -> MergeBuilder {
+        MergeBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|s| s.snapshot),
+            predicate.into(),
+            source,
+        )
+    }
+
+    /// Add a check constraint to a table
+    #[must_use]
+    pub fn add_constraint(self) -> ConstraintBuilder {
+        ConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Drops constraints from a table
+    #[must_use]
+    pub fn drop_constraints(self) -> DropConstraintBuilder {
+        DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+}
+
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
     // Execute arbitrary code at the start of a delta operation
