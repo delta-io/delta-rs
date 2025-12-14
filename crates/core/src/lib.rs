@@ -250,9 +250,9 @@ mod tests {
         let table_newest_version = crate::open_table(table_url.clone()).await.unwrap();
         let mut table_to_update = crate::open_table_with_version(table_url, 0).await.unwrap();
         // calling update several times should not produce any duplicates
-        table_to_update.update().await.unwrap();
-        table_to_update.update().await.unwrap();
-        table_to_update.update().await.unwrap();
+        table_to_update.update_state().await.unwrap();
+        table_to_update.update_state().await.unwrap();
+        table_to_update.update_state().await.unwrap();
 
         assert_eq!(
             file_paths_from(

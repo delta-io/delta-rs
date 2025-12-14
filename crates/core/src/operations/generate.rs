@@ -185,7 +185,7 @@ mod tests {
 
     use futures::StreamExt;
 
-    use crate::DeltaOps;
+    use crate::DeltaTable;
     use crate::kernel::schema::{DataType, PrimitiveType};
     use crate::kernel::{Action, Add};
 
@@ -195,7 +195,7 @@ mod tests {
             path: "some-files.parquet".into(),
             ..Default::default()
         })];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_actions(actions)
@@ -231,7 +231,7 @@ mod tests {
             partition_values: HashMap::from([("locale".to_string(), Some("us".to_string()))]),
             ..Default::default()
         })];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_column(

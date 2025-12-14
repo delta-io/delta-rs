@@ -326,12 +326,12 @@ impl EagerSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DeltaOps, DeltaResult};
+    use crate::{DeltaResult, DeltaTable};
 
     /// <https://github.com/delta-io/delta-rs/issues/3918>
     #[tokio::test]
     async fn test_add_actions_empty() -> DeltaResult<()> {
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "id",

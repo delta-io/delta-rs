@@ -136,7 +136,7 @@ impl std::future::IntoFuture for DropConstraintBuilder {
 #[cfg(test)]
 mod tests {
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
-    use crate::{DeltaOps, DeltaResult, DeltaTable};
+    use crate::{DeltaResult, DeltaTable};
 
     async fn get_constraint_op_params(table: &mut DeltaTable) -> String {
         let last_commit = table.last_commit().await.unwrap();
@@ -155,20 +155,14 @@ mod tests {
     #[tokio::test]
     async fn drop_valid_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let table = table
             .add_constraint()
             .with_constraint("id", "value < 1000")
             .await?;
 
-        let mut table = DeltaOps(table)
-            .drop_constraints()
-            .with_constraint("id")
-            .await?;
+        let mut table = table.drop_constraints().with_constraint("id").await?;
 
         let expected_name = "id";
         assert_eq!(get_constraint_op_params(&mut table).await, expected_name);
@@ -187,11 +181,9 @@ mod tests {
     #[tokio::test]
     async fn drop_invalid_constraint_not_existing() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let write = create_bare_table().write(vec![batch.clone()]).await?;
 
-        let table = DeltaOps(write)
+        let table = write
             .drop_constraints()
             .with_constraint("not_existing")
             .await;
@@ -203,13 +195,11 @@ mod tests {
     #[tokio::test]
     async fn drop_invalid_constraint_ignore() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let write = create_bare_table().write(vec![batch.clone()]).await?;
 
         let version = write.version();
 
-        let table = DeltaOps(write)
+        let table = write
             .drop_constraints()
             .with_constraint("not_existing")
             .with_raise_if_not_exists(false)

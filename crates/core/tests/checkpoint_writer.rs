@@ -194,7 +194,7 @@ mod delete_expired_delta_log_in_checkpoint {
         .await
         .unwrap();
 
-        table.update().await.unwrap(); // make table to read the checkpoint
+        table.update_state().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
             table.get_files_by_partitions(&[]).await?,
             vec![
@@ -300,7 +300,7 @@ mod delete_expired_delta_log_in_checkpoint {
         .await
         .unwrap();
 
-        table.update().await.unwrap(); // make table to read the checkpoint
+        table.update_state().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
             table.get_files_by_partitions(&[]).await?,
             vec![
@@ -350,7 +350,7 @@ mod delete_expired_delta_log_in_checkpoint {
         )
         .await
         .unwrap();
-        table.update().await.unwrap(); // make table to read the checkpoint
+        table.update_state().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
             table.get_files_by_partitions(&[]).await?,
             vec![

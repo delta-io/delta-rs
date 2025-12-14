@@ -1,10 +1,9 @@
 use chrono::Utc;
+use deltalake_core::DeltaTable;
 use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake_core::kernel::{DataType, PrimitiveType};
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
-use deltalake_core::{
-    DeltaOps, DeltaTableBuilder, ObjectStore, ensure_table_uri, errors::DeltaResult,
-};
+use deltalake_core::{DeltaTableBuilder, ObjectStore, ensure_table_uri, errors::DeltaResult};
 use deltalake_test::utils::*;
 use object_store::path::Path;
 use serde_json::json;
@@ -91,7 +90,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     let path = std::path::Path::new("./tests/data/issue_1420")
         .canonicalize()
         .unwrap();
-    let mut table = DeltaOps::try_from_url(url::Url::from_directory_path(path).unwrap())
+    let mut table = DeltaTable::try_from_url(url::Url::from_directory_path(path).unwrap())
         .await?
         .create()
         .with_column(

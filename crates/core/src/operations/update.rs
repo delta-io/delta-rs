@@ -548,7 +548,6 @@ mod tests {
 
     use crate::kernel::{Action, PrimitiveType, StructField, StructType};
     use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-    use crate::operations::DeltaOps;
     use crate::operations::load_cdf::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
@@ -570,7 +569,7 @@ mod tests {
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
@@ -599,7 +598,10 @@ mod tests {
         )
         .unwrap();
 
-        DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+        DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -608,7 +610,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         // Append
         let table = write_batch(table, batch).await;
-        let _err = DeltaOps(table)
+        let _err = table
             .update()
             .with_update("modified", lit("2023-05-14"))
             .await
@@ -638,7 +640,7 @@ mod tests {
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
 
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .update()
             .with_update("modified", lit("2023-05-14"))
             .with_predicate(col("value").eq(lit(10)))
@@ -692,7 +694,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_update("modified", lit("2023-05-14"))
             .await
@@ -746,7 +748,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
@@ -802,7 +804,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
@@ -837,7 +839,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_predicate(
                 col("modified")
@@ -913,14 +915,14 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         let table = write_batch(table, batch).await;
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .update()
             .with_predicate("mOdified = '2021-02-03'")
             .with_update("mOdified", "'2023-05-14'")
@@ -949,7 +951,7 @@ mod tests {
         assert_eq!(table.version(), Some(0));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_update("value", col("value") + lit(1))
             .await
@@ -978,7 +980,7 @@ mod tests {
 
         // Validate order operators do not include nulls
         let table = prepare_values_table().await;
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_predicate(col("value").gt(lit(2)).or(col("value").lt(lit(2))))
             .with_update("value", lit(10))
@@ -1013,7 +1015,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
 
         let table = prepare_values_table().await;
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_predicate("value is null")
             .with_update("value", "10")
@@ -1045,7 +1047,7 @@ mod tests {
     async fn test_no_updates() {
         // No Update operations are provided
         let table = prepare_values_table().await;
-        let (table, metrics) = DeltaOps(table).update().await.unwrap();
+        let (table, metrics) = table.update().await.unwrap();
 
         assert_eq!(table.version(), Some(0));
         assert_eq!(metrics.num_added_files, 0);
@@ -1056,7 +1058,7 @@ mod tests {
         assert_eq!(metrics.execution_time_ms, 0);
 
         // The predicate does not match any records
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .update()
             .with_predicate(col("value").eq(lit(3)))
             .with_update("value", lit(10))
@@ -1076,7 +1078,7 @@ mod tests {
 
         let table = setup_table(None).await;
 
-        let res = DeltaOps(table)
+        let res = table
             .update()
             .with_predicate(col("value").eq(cast(
                 random() * lit(20.0),
@@ -1088,10 +1090,7 @@ mod tests {
 
         // Expression result types must match the table's schema
         let table = prepare_values_table().await;
-        let res = DeltaOps(table)
-            .update()
-            .with_update("value", lit("a string"))
-            .await;
+        let res = table.update().with_update("value", lit("a string")).await;
         assert!(res.is_err());
     }
 
@@ -1133,14 +1132,14 @@ mod tests {
         )
         .expect("Failed to create record batch");
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
@@ -1153,7 +1152,7 @@ mod tests {
         new_items_builder.append_value([Some(100)]);
         let new_items = ScalarValue::List(Arc::new(new_items_builder.finish()));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .update()
             .with_predicate(col("id").eq(lit(1)))
             .with_update("items", lit(new_items))
@@ -1205,21 +1204,21 @@ mod tests {
         .expect("Failed to create record batch");
         let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
         // Completed the first creation/write
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .update()
             .with_predicate(col("id").eq(lit(1)))
             .with_update("items", "[100]".to_string())
@@ -1244,13 +1243,13 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
         )
         .unwrap();
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .update()
             .with_predicate(col("value").eq(lit(2)))
             .with_update("value", lit(12))
@@ -1280,7 +1279,7 @@ mod tests {
         // so the only way to create a truly CDC enabled table is by shoving the Protocol
         // directly into the actions list
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -1305,13 +1304,13 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
         )
         .unwrap();
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .update()
             .with_predicate(col("value").eq(lit(2)))
             .with_update("value", lit(12))
@@ -1320,8 +1319,8 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
@@ -1357,7 +1356,7 @@ mod tests {
         // so the only way to create a truly CDC enabled table is by shoving the Protocol
         // directly into the actions list
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "year",
@@ -1395,13 +1394,13 @@ mod tests {
             ],
         )
         .unwrap();
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics): (DeltaTable, _) = table
             .update()
             .with_predicate(col("value").eq(lit(2)))
             .with_update("year", "2024")
@@ -1410,8 +1409,8 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await

@@ -506,7 +506,7 @@ pub(crate) mod tests {
 
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
-    use crate::{DeltaOps, DeltaTable, TableProperty};
+    use crate::{DeltaTable, TableProperty};
     use std::path::Path;
     use url::Url;
 
@@ -516,9 +516,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
@@ -569,9 +569,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
             .build(&ctx.state(), None)
@@ -619,9 +619,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
@@ -674,9 +674,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(4)
             .with_ending_version(1)
             .build(&ctx.state(), None)
@@ -697,9 +697,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(5)
             .build(&ctx.state(), None)
             .await;
@@ -719,9 +719,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(5)
             .with_allow_out_of_range()
             .build(&ctx.state(), None)
@@ -746,9 +746,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await;
@@ -769,9 +769,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .with_allow_out_of_range()
             .build(&ctx.state(), None)
@@ -795,9 +795,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/simple_table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await;
@@ -818,9 +818,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await?;
@@ -861,7 +861,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_use_remove_actions_for_deletions() -> TestResult {
         let delta_schema = TestSchemas::simple();
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
@@ -896,13 +896,13 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let table = DeltaOps(table)
+        let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
@@ -910,8 +910,9 @@ pub(crate) mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let cdf_scan = DeltaOps(table.clone())
-            .load_cdf()
+        let cdf_scan = table
+            .clone()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await

@@ -149,7 +149,7 @@ pub async fn commit_actions(
         .await
         .unwrap()
         .version();
-    table.update().await.unwrap();
+    table.update_state().await.unwrap();
     version
 }
 
