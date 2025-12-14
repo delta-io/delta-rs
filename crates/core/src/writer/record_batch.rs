@@ -278,7 +278,12 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let prefix = Path::parse(writer.partition_values.hive_partition_path())?;
+            // `hive_partition_path` already returns a percent-encoded partition prefix
+            // per Delta protocol. Using `Path::parse` here would re-encode the `%`
+            // characters, resulting in double-encoded directory names (e.g. `%2524`).
+            // Construct the `Path` directly from the already-encoded string to avoid
+            // this double encoding.
+            let prefix = Path::from(writer.partition_values.hive_partition_path());
             let uuid = Uuid::new_v4();
             let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
