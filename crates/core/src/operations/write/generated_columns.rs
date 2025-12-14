@@ -1,12 +1,12 @@
 use crate::kernel::EagerSnapshot;
 use datafusion::common::ScalarValue;
-use datafusion::logical_expr::{col, when, ExprSchemable};
+use datafusion::logical_expr::{ExprSchemable, col, when};
 use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
 
-use crate::{kernel::DataCheck, table::GeneratedColumn, DeltaResult};
+use crate::{DeltaResult, kernel::DataCheck, table::GeneratedColumn};
 
 /// check if the writer version is able to write generated columns
 pub fn able_to_gc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {

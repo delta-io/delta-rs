@@ -26,16 +26,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use futures::future::{ready, BoxFuture};
+use futures::future::{BoxFuture, ready};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{path::Path, Error, ObjectStore};
+use object_store::{Error, ObjectStore, path::Path};
 use serde::Serialize;
 use tracing::*;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -226,7 +226,9 @@ impl VacuumBuilder {
         snapshot: &EagerSnapshot,
     ) -> Result<VacuumPlan, VacuumError> {
         if self.mode == VacuumMode::Full {
-            info!("Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!");
+            info!(
+                "Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!"
+            );
         }
 
         let min_retention = Duration::milliseconds(
@@ -331,10 +333,16 @@ impl VacuumBuilder {
                     continue;
                 }
                 if self.mode == VacuumMode::Lite {
-                    debug!("The file {:?} was not referenced in a log file, but VacuumMode::Lite means it will not be vacuumed", &obj_meta.location);
+                    debug!(
+                        "The file {:?} was not referenced in a log file, but VacuumMode::Lite means it will not be vacuumed",
+                        &obj_meta.location
+                    );
                     continue;
                 } else {
-                    debug!("The file {:?} was not referenced in a log file, but VacuumMode::Full means it *will be vacuumed*", &obj_meta.location);
+                    debug!(
+                        "The file {:?} was not referenced in a log file, but VacuumMode::Full means it *will be vacuumed*",
+                        &obj_meta.location
+                    );
                 }
             }
 
@@ -547,7 +555,7 @@ mod tests {
     use std::path::Path;
     use std::{io::Read, time::SystemTime};
 
-    use object_store::{local::LocalFileSystem, memory::InMemory, PutPayload};
+    use object_store::{PutPayload, local::LocalFileSystem, memory::InMemory};
     use url::Url;
 
     use super::*;
@@ -716,7 +724,7 @@ mod tests {
         }
 
         let table_url = url::Url::parse("memory:///").unwrap();
-        let mut table = crate::DeltaTableBuilder::from_uri(table_url.clone())
+        let mut table = crate::DeltaTableBuilder::from_url(table_url.clone())
             .unwrap()
             .with_storage_backend(store.clone(), table_url)
             .build()
@@ -878,7 +886,7 @@ mod tests {
             .unwrap();
 
         let table_url = url::Url::parse("memory:///").unwrap();
-        let mut table = crate::DeltaTableBuilder::from_uri(table_url.clone())
+        let mut table = crate::DeltaTableBuilder::from_url(table_url.clone())
             .unwrap()
             .with_storage_backend(Arc::new(store), table_url)
             .build()

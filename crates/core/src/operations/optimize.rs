@@ -28,10 +28,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -45,7 +45,7 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 use uuid::Uuid;
 
@@ -54,14 +54,14 @@ use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
-use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
+use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
+use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -1045,9 +1045,9 @@ async fn build_zorder_plan(
         .filter(|col| !field_names.contains(col))
         .collect_vec();
     if !unknown_columns.is_empty() {
-        return Err(DeltaTableError::Generic(
-            format!("Z-order columns must be present in the table schema. Unknown columns: {unknown_columns:?}"),
-        ));
+        return Err(DeltaTableError::Generic(format!(
+            "Z-order columns must be present in the table schema. Unknown columns: {unknown_columns:?}"
+        )));
     }
 
     // For now, just be naive and optimize all files in each selected partition.
@@ -1540,7 +1540,7 @@ pub(super) mod zorder {
     #[cfg(test)]
     mod test {
         use arrow_array::{
-            cast::as_generic_binary_array, new_empty_array, StringArray, UInt8Array,
+            StringArray, UInt8Array, cast::as_generic_binary_array, new_empty_array,
         };
         use arrow_schema::DataType;
 
@@ -1604,7 +1604,7 @@ pub(super) mod zorder {
             let table_uri =
                 ensure_table_uri(tmp_dir.path().join(table_name).to_str().unwrap()).unwrap();
             // Run optimize
-            let (_, metrics) = DeltaOps::try_from_uri(table_uri)
+            let (_, metrics) = DeltaOps::try_from_url(table_uri)
                 .await
                 .unwrap()
                 .optimize()

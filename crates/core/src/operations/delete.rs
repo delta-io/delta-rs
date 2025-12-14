@@ -25,10 +25,10 @@ use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{
-    lit, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
 };
-use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
 
@@ -40,23 +40,23 @@ use uuid::Uuid;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
+use super::Operation;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
-use super::Operation;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
+use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    create_session, find_files, register_store, session_state_from_session, DataFusionMixins,
-    DeltaScanConfigBuilder, DeltaTableProvider,
+    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, create_session, find_files,
+    register_store, session_state_from_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{resolve_snapshot, Action, Add, EagerSnapshot, Remove};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot};
 use crate::logstore::LogStoreRef;
-use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
-use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
+use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -243,18 +243,18 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
-            if metric_observer.id.eq(SOURCE_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    SOURCE_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        MetricBuilder::new(metrics)
-                            .global_counter(SOURCE_COUNT_METRIC)
-                            .add(batch.num_rows());
-                    },
-                )?));
-            }
+        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
+            && metric_observer.id.eq(SOURCE_COUNT_ID)
+        {
+            return Ok(Some(MetricObserverExec::try_new(
+                SOURCE_COUNT_ID.into(),
+                physical_inputs,
+                |batch, metrics| {
+                    MetricBuilder::new(metrics)
+                        .global_counter(SOURCE_COUNT_METRIC)
+                        .add(batch.num_rows());
+                },
+            )?));
         }
         Ok(None)
     }
@@ -370,7 +370,7 @@ async fn execute_non_empty_expr(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_uri()))]
+#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
@@ -469,17 +469,17 @@ async fn execute(
 
 #[cfg(test)]
 mod tests {
+    use crate::DeltaTable;
+    use crate::TableProperty;
     use crate::kernel::DataType as DeltaDataType;
-    use crate::operations::collect_sendable_stream;
     use crate::operations::DeltaOps;
+    use crate::operations::collect_sendable_stream;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
-    use crate::DeltaTable;
-    use crate::TableProperty;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;

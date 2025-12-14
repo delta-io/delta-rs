@@ -51,22 +51,24 @@ def test_vacuum_zero_duration(
 
     write_deltalake(table_path, sample_table, mode="overwrite")
     dt = DeltaTable(table_path)
-    original_files = set(dt.files())
+    original_files = set(dt.file_uris())
     write_deltalake(table_path, sample_table, mode="overwrite")
     dt.update_incremental()
-    new_files = set(dt.files())
+    new_files = set(dt.file_uris())
     assert new_files.isdisjoint(original_files)
 
+    file_paths = {f.split(os.path.sep)[-1] for f in original_files}
+
     tombstones = set(dt.vacuum(retention_hours=0, enforce_retention_duration=False))
-    assert tombstones == original_files
+    assert tombstones == file_paths
 
     tombstones = set(
         dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
     )
-    assert tombstones == original_files
+    assert tombstones == file_paths
 
     parquet_files = {f for f in os.listdir(table_path) if f.endswith("parquet")}
-    assert parquet_files == new_files
+    assert parquet_files == {f.split(os.path.sep)[-1] for f in new_files}
 
 
 def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):

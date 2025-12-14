@@ -7,13 +7,13 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
-use crate::delta_datafusion::{create_session, DataFusionMixins as _};
+use crate::DeltaTable;
+use crate::delta_datafusion::{DataFusionMixins as _, create_session};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
-use crate::DeltaTable;
 
 #[derive(Clone)]
 pub struct LoadBuilder {
@@ -116,9 +116,10 @@ impl std::future::IntoFuture for LoadBuilder {
 #[cfg(test)]
 mod tests {
     use crate::delta_datafusion::create_session;
-    use crate::operations::{collect_sendable_stream, DeltaOps};
-    use crate::writer::test_utils::{get_record_batch, TestResult};
+
     use crate::DeltaTableBuilder;
+    use crate::operations::{DeltaOps, collect_sendable_stream};
+    use crate::writer::test_utils::{TestResult, get_record_batch};
     use datafusion::assert_batches_sorted_eq;
     use std::path::Path;
     use std::sync::Arc;
@@ -129,7 +130,7 @@ mod tests {
         let table_path = Path::new("../test/tests/data/delta-0.8.0");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaTableBuilder::from_uri(table_uri)?
+        let table = DeltaTableBuilder::from_url(table_uri)?
             .load()
             .await
             .unwrap();

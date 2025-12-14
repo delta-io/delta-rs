@@ -20,7 +20,7 @@ pub trait StorageIntegration {
     fn object_store(&self) -> DeltaResult<ObjectStoreRef> {
         let table_url = url::Url::parse(&self.root_uri())
             .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
-        Ok(DeltaTableBuilder::from_uri(table_url)?
+        Ok(DeltaTableBuilder::from_url(table_url)?
             .with_allow_http(true)
             .build_storage()?
             .object_store(None))
@@ -114,7 +114,7 @@ impl IntegrationContext {
         let name = table.as_name();
         let table_uri = format!("{}/{}", self.root_uri(), &name);
         let table_url = url::Url::parse(&table_uri).unwrap();
-        DeltaTableBuilder::from_uri(table_url)
+        DeltaTableBuilder::from_url(table_url)
             .unwrap()
             .with_allow_http(true)
     }

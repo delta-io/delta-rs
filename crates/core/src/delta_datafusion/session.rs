@@ -1,6 +1,6 @@
 use datafusion::{
     catalog::Session,
-    common::{exec_datafusion_err, Result as DataFusionResult},
+    common::{Result as DataFusionResult, exec_datafusion_err},
     execution::{SessionState, SessionStateBuilder},
     prelude::{SessionConfig, SessionContext},
     sql::planner::ParserOptions,

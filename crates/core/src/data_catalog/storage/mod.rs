@@ -13,7 +13,7 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
-use crate::logstore::{store_for, StorageConfig};
+use crate::logstore::{StorageConfig, store_for};
 use crate::open_table_with_storage_options;
 use crate::table::builder::ensure_table_uri;
 

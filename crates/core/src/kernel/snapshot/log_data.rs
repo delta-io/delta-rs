@@ -110,10 +110,10 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::{Arc, LazyLock};
 
-    use ::datafusion::common::scalar::ScalarValue;
-    use ::datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use ::datafusion::common::Column;
     use ::datafusion::common::DataFusionError;
+    use ::datafusion::common::scalar::ScalarValue;
+    use ::datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
@@ -132,8 +132,8 @@ mod datafusion {
     use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
     use crate::{DeltaResult, DeltaTableError};
 
-    use crate::kernel::arrow::extract::extract_and_cast;
     use crate::kernel::ARROW_HANDLER;
+    use crate::kernel::arrow::extract::extract_and_cast;
 
     const COL_NUM_RECORDS: &str = "numRecords";
     const COL_MIN_VALUES: &str = "minValues";

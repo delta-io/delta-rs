@@ -6,11 +6,11 @@ use futures::{Future, Stream, StreamExt};
 use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
-use tracing::dispatcher;
 use tracing::Span;
+use tracing::dispatcher;
 
-use crate::errors::DeltaResult;
 use crate::DeltaTableError;
+use crate::errors::DeltaResult;
 
 /// Trait for types that stream [RecordBatch]
 ///

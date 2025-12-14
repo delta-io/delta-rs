@@ -1,14 +1,14 @@
 [workspace]
-members = ["crates/*", "delta-inspect", "python"]
+members = ["crates/*", "python"]
 exclude = []
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
-authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.86"
+authors = ["Qingping Hou <dave2008713@gmail.com>", "R Tyler Croy <rtyler@brokenco.de>"]
+rust-version = "1.88"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 description = "Native Delta Lake implementation in Rust"
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"

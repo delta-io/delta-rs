@@ -12,8 +12,8 @@ use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::scalars::ScalarExt;
@@ -22,7 +22,7 @@ use crate::{DeltaResult, DeltaTableError};
 
 #[cfg(feature = "datafusion")]
 pub(crate) use self::scan_row::parse_stats_column_with_schema;
-pub(crate) use self::scan_row::{scan_row_in_eval, ScanRowOutStream};
+pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval};
 pub use self::tombstones::TombstoneView;
 
 mod scan_row;
