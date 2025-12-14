@@ -145,10 +145,10 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .ok_or_else(|| de::Error::invalid_length(7, &self))?;
         let latest_commit_file: Option<FileMetaSerde> = seq
             .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(7, &self))?;
+            .ok_or_else(|| de::Error::invalid_length(8, &self))?;
         let config: DeltaTableConfig = seq
             .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(8, &self))?;
+            .ok_or_else(|| de::Error::invalid_length(9, &self))?;
 
         let ascending_commit_files = ascending_commit_files
             .into_iter()
