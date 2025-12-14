@@ -168,7 +168,7 @@ impl DeltaTableBuilder {
 
     /// Set the storage backend.
     ///
-    /// If a backend is not provided then it is derived from `table_uri`.
+    /// If a backend is not provided then it is derived from `location`.
     ///
     /// # Arguments
     ///
@@ -253,14 +253,14 @@ impl DeltaTableBuilder {
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), self.table_url.clone(), storage_config)
+            crate::logstore::logstore_with(store.clone(), &self.table_url, storage_config)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
             debug!(
                 "Loading a logstore based off the location: {:?}",
                 self.table_url
             );
-            crate::logstore::logstore_for(self.table_url.clone(), storage_config)
+            crate::logstore::logstore_for(&self.table_url, storage_config)
         }
     }
 

@@ -308,7 +308,7 @@ impl ConvertToDeltaBuilder {
                 StorageConfig::parse_options(self.storage_options.clone().unwrap_or_default())?;
 
             Some(crate::logstore::logstore_for(
-                ensure_table_uri(location)?,
+                &ensure_table_uri(location)?,
                 storage_config,
             )?)
         } else {
@@ -561,7 +561,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, StorageConfig::default())
+        crate::logstore::logstore_for(&location, StorageConfig::default())
             .expect("Failed to create an object store")
     }
 

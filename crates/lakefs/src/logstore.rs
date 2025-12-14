@@ -46,7 +46,7 @@ pub fn lakefs_logstore(
     Ok(Arc::new(LakeFSLogStore::new(
         store,
         root_store,
-        LogStoreConfig::new(location.clone(), options.clone()),
+        LogStoreConfig::new(location, options.clone()),
         client,
     )))
 }
