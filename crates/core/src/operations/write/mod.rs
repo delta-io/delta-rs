@@ -24,6 +24,7 @@
 //! ````
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -67,6 +68,7 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
+use crate::table::config::{TablePropertiesExt, DEFAULT_TARGET_FILE_SIZE};
 use crate::DeltaTable;
 
 pub mod configs;
@@ -142,7 +144,8 @@ pub struct WriteBuilder {
     /// When using `Overwrite` mode, replace data that matches a predicate
     predicate: Option<Expression>,
     /// Size above which we will write a buffered parquet file to disk.
-    target_file_size: Option<usize>,
+    /// If None, the writer will not create a new file until the writer is closed.
+    target_file_size: Option<Option<NonZeroU64>>,
     /// Number of records to be written in single batch to underlying writer
     write_batch_size: Option<usize>,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
@@ -258,7 +261,7 @@ impl WriteBuilder {
     }
 
     /// Specify the target file size for data files written to the delta table.
-    pub fn with_target_file_size(mut self, target_file_size: usize) -> Self {
+    pub fn with_target_file_size(mut self, target_file_size: Option<NonZeroU64>) -> Self {
         self.target_file_size = Some(target_file_size);
         self
     }
@@ -613,9 +616,10 @@ impl std::future::IntoFuture for WriteBuilder {
                     .as_ref()
                     .map(|snapshot| snapshot.table_properties());
 
-                let target_file_size = this.target_file_size.or_else(|| {
-                    Some(super::get_target_file_size(config, &this.configuration) as usize)
+                let target_file_size = this.target_file_size.unwrap_or_else(|| {
+                    Some(super::get_target_file_size(config, &this.configuration))
                 });
+
                 let (num_indexed_cols, stats_columns) =
                     super::get_num_idx_cols_and_stats_columns(config, this.configuration);
 

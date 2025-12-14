@@ -1406,7 +1406,7 @@ async fn execute(
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
-        Some(snapshot.table_properties().target_file_size().get() as usize),
+        Some(snapshot.table_properties().target_file_size()),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),

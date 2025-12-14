@@ -60,6 +60,7 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::future::IntoFuture;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
@@ -604,8 +605,11 @@ impl RawDeltaTable {
                 .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
 
-            if let Some(size) = target_size {
-                cmd = cmd.with_target_size(size);
+            if let Some(target_size) = target_size {
+                let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
+                    PyValueError::new_err("target_file_size must be greater than 0")
+                })?;
+                cmd = cmd.with_target_size(target_size);
             }
             if let Some(commit_interval) = min_commit_interval {
                 cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
@@ -673,8 +677,11 @@ impl RawDeltaTable {
                 .with_max_spill_size(max_spill_size)
                 .with_type(OptimizeType::ZOrder(z_order_columns));
 
-            if let Some(size) = target_size {
-                cmd = cmd.with_target_size(size);
+            if let Some(target_size) = target_size {
+                let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
+                    PyValueError::new_err("target_file_size must be greater than 0")
+                })?;
+                cmd = cmd.with_target_size(target_size);
             }
             if let Some(commit_interval) = min_commit_interval {
                 cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
@@ -1726,7 +1733,7 @@ impl RawDeltaTable {
         schema_mode: Option<String>,
         partition_by: Option<Vec<String>>,
         predicate: Option<String>,
-        target_file_size: Option<usize>,
+        target_file_size: Option<u64>,
         name: Option<String>,
         description: Option<String>,
         configuration: Option<HashMap<String, Option<String>>>,
@@ -1784,7 +1791,10 @@ impl RawDeltaTable {
             };
 
             if let Some(target_file_size) = target_file_size {
-                builder = builder.with_target_file_size(target_file_size)
+                let target_file_size = NonZeroU64::new(target_file_size).ok_or_else(|| {
+                    PyValueError::new_err("target_file_size must be greater than 0")
+                })?;
+                builder = builder.with_target_file_size(Some(target_file_size));
             };
 
             if let Some(config) = configuration {
@@ -2372,7 +2382,7 @@ fn write_to_deltalake(
     schema_mode: Option<String>,
     partition_by: Option<Vec<String>>,
     predicate: Option<String>,
-    target_file_size: Option<usize>,
+    target_file_size: Option<u64>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
