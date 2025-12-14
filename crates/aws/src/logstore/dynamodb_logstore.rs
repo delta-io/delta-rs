@@ -8,14 +8,15 @@ use crate::storage::S3StorageOptions;
 use crate::{CommitEntry, DynamoDbLockClient, UpdateLogEntryResult, constants};
 
 use bytes::Bytes;
-use deltalake_core::{ObjectStoreError, Path};
 use tracing::{debug, error, warn};
 use typed_builder::TypedBuilder;
 use url::Url;
 
 use deltalake_core::logstore::*;
+use deltalake_core::table::normalize_table_url;
 use deltalake_core::{
-    DeltaResult, DeltaTableError, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
+    DeltaResult, DeltaTableError, ObjectStoreError, kernel::transaction::TransactionError,
+    logstore::ObjectStoreRef,
 };
 use uuid::Uuid;
 
@@ -54,6 +55,7 @@ impl S3DynamoDbLogStore {
         prefixed_store: ObjectStoreRef,
         root_store: ObjectStoreRef,
     ) -> DeltaResult<Self> {
+        let location = normalize_table_url(&location);
         let lock_client = DynamoDbLockClient::try_new(
             &s3_options.sdk_config.clone().unwrap(),
             s3_options

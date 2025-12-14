@@ -446,7 +446,7 @@ impl std::fmt::Debug for DeltaTable {
 ///  left.join("_delta_log"); // produces `s3://bucket/prefix/_delta_log`
 ///  right.join("_delta_log"); // produces `s3://bucket/_delta_log`
 /// ```
-pub(crate) fn normalize_table_url(url: &Url) -> Url {
+pub fn normalize_table_url(url: &Url) -> Url {
     let mut new_segments = vec![];
     for segment in url.path().split('/') {
         if !segment.is_empty() {
