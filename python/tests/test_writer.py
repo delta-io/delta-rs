@@ -10,6 +10,7 @@ from urllib.request import urlopen
 import pytest
 from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
+from arro3.core import Schema as ArrowSchema
 
 from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
 from deltalake._internal import (
@@ -2558,3 +2559,35 @@ def test_dots_in_column_names_2624(tmp_path: pathlib.Path):
     # Sorting just to make sure the equivalency matches up
     actual = dt.to_pyarrow_table().sort_by("Product.Id")
     assert expected == actual
+
+
+def test_url_encoding(tmp_path):
+    """issue ref: https://github.com/delta-io/delta-rs/issues/3939"""
+    batch_1 = Table.from_pydict(
+        {
+            "id": Array(["1 2", "2 3", "3 5", "44", "55"], DataType.string()),
+            "price": Array(list(range(5)), DataType.int64()),
+        },
+        schema=ArrowSchema(
+            fields=[
+                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+    write_deltalake(tmp_path, batch_1, partition_by="id")
+
+    batch_2 = Table.from_pydict(
+        {
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=ArrowSchema(
+            fields=[
+                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+
+    write_deltalake(tmp_path, batch_2, mode="overwrite", predicate="id = '1 2'")
