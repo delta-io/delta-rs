@@ -9,6 +9,7 @@ use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
 use datafusion::common::HashMap;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -20,13 +21,13 @@ use delta_kernel::schema::SchemaRef as KernelSchemaRef;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
+use crate::cast_record_batch;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 use crate::kernel::ARROW_HANDLER;
 
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
     /// Output schema for processed data.
-    logical_schema: SchemaRef,
     kernel_logical_schema: KernelSchemaRef,
     /// Execution plan yielding the raw data read from data files.
     input: Arc<dyn ExecutionPlan>,
@@ -36,7 +37,11 @@ pub struct DeltaScanExec {
     selection_vectors: Arc<HashMap<String, Vec<bool>>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Column name for the file id
     file_id_column: String,
+
+    /// plan properties
+    properties: PlanProperties,
 }
 
 impl DisplayAs for DeltaScanExec {
@@ -62,14 +67,20 @@ impl DeltaScanExec {
         file_id_column: String,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(logical_schema),
+            input.properties().partitioning.clone(),
+            input.properties().emission_type.clone(),
+            input.properties().boundedness.clone(),
+        );
         Self {
-            logical_schema,
             kernel_logical_schema,
             input,
             transforms,
             selection_vectors,
             metrics,
             file_id_column,
+            properties,
         }
     }
 }
@@ -84,7 +95,7 @@ impl ExecutionPlan for DeltaScanExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.input.properties()
+        &self.properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -106,15 +117,15 @@ impl ExecutionPlan for DeltaScanExec {
                 children.len()
             )));
         }
-        Ok(Arc::new(Self {
-            logical_schema: self.logical_schema.clone(),
-            kernel_logical_schema: self.kernel_logical_schema.clone(),
-            input: children[0].clone(),
-            transforms: self.transforms.clone(),
-            selection_vectors: self.selection_vectors.clone(),
-            metrics: self.metrics.clone(),
-            file_id_column: self.file_id_column.clone(),
-        }))
+        Ok(Arc::new(Self::new(
+            self.properties.eq_properties.schema().clone(),
+            self.kernel_logical_schema.clone(),
+            children[0].clone(),
+            self.transforms.clone(),
+            self.selection_vectors.clone(),
+            self.file_id_column.clone(),
+            self.metrics.clone(),
+        )))
     }
 
     fn repartitioned(
@@ -122,10 +133,11 @@ impl ExecutionPlan for DeltaScanExec {
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(new_pq) = self.input.repartitioned(target_partitions, config)? {
-            let mut new_plan = self.clone();
-            new_plan.input = new_pq;
-            Ok(Some(Arc::new(new_plan)))
+        if let Some(input) = self.input.repartitioned(target_partitions, config)? {
+            Ok(Some(Arc::new(Self {
+                input,
+                ..self.clone()
+            })))
         } else {
             Ok(None)
         }
@@ -137,7 +149,7 @@ impl ExecutionPlan for DeltaScanExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(DeltaScanStream {
-            schema: Arc::clone(&self.logical_schema),
+            schema: Arc::clone(self.properties.eq_properties.schema()),
             kernel_schema: Arc::clone(&self.kernel_logical_schema),
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
@@ -188,16 +200,19 @@ impl ExecutionPlan for DeltaScanExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // TODO(roeap): this will likely not do much for column mapping enabled tables
-        // since the default methods determines this b ased on existence of columns in child
+        // since the default methods determines this based on existence of columns in child
         // schemas. In the case of column mapping all columns will have a different name.
         FilterDescription::from_children(parent_filters, &self.children())
     }
 }
 
-/// Stream of RecordBatches produced read from delta table.
+/// Stream of RecordBatches produced by scanning a Delta table.
 ///
-/// The data returned by this stream represents the logical data caontained inn the table.
-/// This means all transformations according to the delta protocol are applied.
+/// The data returned by this stream represents the logical data caontained in the table.
+/// This means all transformations according to the Delta protocol are applied. This includes:
+/// - partition values
+/// - column mapping to the logical schema
+/// - deletion vectors
 struct DeltaScanStream {
     schema: SchemaRef,
     kernel_schema: KernelSchemaRef,
@@ -212,12 +227,17 @@ struct DeltaScanStream {
 }
 
 impl DeltaScanStream {
+    /// Apply the per-file transformation to a RecordBatch.
     fn batch_project(&self, mut batch: RecordBatch) -> Result<RecordBatch> {
-        // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
         let (file_id, file_id_idx) = extract_file_id(&batch, &self.file_id_column)?;
         batch.remove_column(file_id_idx);
+
+        // NOTE: this case may occur e.g. in a COUNT(*) query where no columns are projected
+        if batch.num_columns() == 0 {
+            return Ok(batch);
+        }
 
         let Some(transform) = self.transforms.get(&file_id) else {
             let batch = RecordBatch::try_new(self.schema.clone(), batch.columns().to_vec())?;
@@ -242,7 +262,8 @@ impl DeltaScanStream {
             .evaluate_arrow(batch)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        Ok(result)
+        // TODO: all casting should be done in the expression evaluator
+        Ok(cast_record_batch(&result, self.schema.clone(), true, true)?)
     }
 }
 

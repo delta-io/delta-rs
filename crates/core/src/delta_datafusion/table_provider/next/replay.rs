@@ -51,6 +51,7 @@ impl ReplayStats {
 }
 
 pin_project! {
+    /// Stream to read scan file contexts from a scan metadata stream.
     pub(crate) struct ScanFileStream<S> {
         pub(crate) metrics: ReplayStats,
 

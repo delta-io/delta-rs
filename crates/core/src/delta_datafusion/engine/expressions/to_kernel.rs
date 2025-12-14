@@ -19,6 +19,9 @@ pub(crate) fn to_delta_predicate(filters: &[Expr]) -> DFResult<Predicate> {
             Scalar::Boolean(true),
         )));
     };
+    if filters.len() == 1 {
+        return to_predicate(&filters[0]);
+    }
     Ok(Predicate::Junction(JunctionPredicate {
         op: JunctionPredicateOp::And,
         preds: filters.iter().map(to_predicate).try_collect()?,

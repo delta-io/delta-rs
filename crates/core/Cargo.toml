@@ -169,5 +169,9 @@ required-features = ["datafusion"]
 name = "json_parsing"
 harness = false
 
+[[example]]
+name = "df_scan"
+required-features = ["datafusion"]
+
 [package.metadata.cargo-machete]
 ignored = ["foyer"]

@@ -1,10 +1,34 @@
+//! Datafusion TableProvider implementation for Delta Lake tables.
+//!
+//! This module provides an implementation of the DataFusion `TableProvider` trait
+//! for Delta Lake tables, allowing seamless integration with DataFusion's query engine.
+//!
+//! <div class="warning">
+//!
+//! The table provider is based on Snapshots of a Delta Table. Therefore, it represents
+//! a static view of the table at a specific point in time. Changes to the underlying
+//! Delta Table after the snapshot was taken will not be reflected in queries executed.
+//!
+//! To work with a dynamic view of the table that reflects ongoing changes, consider using
+//! the catalog abstractions in this crate, which provide a higher-level interface for managing
+//! Delta Tables within DataFusion sessions.
+//!
+//! </div>
+//!
+//! The TableProvider provides converts the planning information from delta-kernel into
+//! DataFusion's physical plan representation. It supports filter pushdown and projection
+//! pushdown to optimize data access. The actual reading of data files is delegated to
+//! DataFusion's existing Parquet reader implementations, with additional handling for
+//! Delta Lake-specific features.
+//!
+//!
 use std::any::Any;
 use std::pin::Pin;
 use std::{borrow::Cow, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::memory::DataSourceExec;
-use datafusion::common::{DataFusionError, HashMap, Result};
+use datafusion::common::{DataFusionError, HashMap, HashSet, Result};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -44,117 +68,6 @@ mod scan;
 
 pub type ScanMetadataStream =
     Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
-
-impl Snapshot {
-    fn kernel_scan(&self, projection: Option<&Vec<usize>>, filters: &[Expr]) -> Result<Arc<Scan>> {
-        let (_, projected_kernel_schema) = project_schema(self.read_schema(), projection)?;
-        Ok(Arc::new(
-            self.scan_builder()
-                .with_schema(projected_kernel_schema.clone())
-                .with_predicate(Arc::new(to_delta_predicate(filters)?))
-                .build()?,
-        ))
-    }
-
-    async fn execution_plan(
-        &self,
-        session: &dyn Session,
-        scan: Arc<Scan>,
-        stream: ScanMetadataStream,
-        engine: Arc<dyn Engine>,
-        projection: Option<&Vec<usize>>,
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // let (_, projected_kernel_schema) = project_schema(self.read_schema(), projection)?;
-
-        let mut stream = ScanFileStream::new(engine, &scan, stream);
-        let mut files = Vec::new();
-        while let Some(file) = stream.try_next().await? {
-            files.push(file);
-        }
-
-        let transforms: HashMap<_, _> = files
-            .iter()
-            .flatten()
-            .flat_map(|file| {
-                file.transform
-                    .as_ref()
-                    .map(|t| (file.file_url.to_string(), t.clone()))
-            })
-            .collect();
-        let dv_stream = stream.dv_stream.build();
-        let dvs: HashMap<_, _> = dv_stream
-            .try_filter_map(|(url, dv)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
-            .try_collect()
-            .await?;
-
-        let metrics = ExecutionPlanMetricsSet::new();
-        MetricBuilder::new(&metrics)
-            .global_counter("count_files_skipped")
-            .add(stream.metrics.num_skipped);
-        MetricBuilder::new(&metrics)
-            .global_counter("count_files_scanned")
-            .add(stream.metrics.num_scanned);
-
-        let file_id_column = "__delta_rs_file_id".to_string();
-
-        // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
-        // this is used to create a DataSourceExec plan for each store
-        // To correlate the data with the original file, we add the file url as a partition value
-        // This is required to apply the correct transform to the data in downstream processing.
-        let to_partitioned_file = |f: ScanFileContext| {
-            let file_path = Path::from_url_path(f.file_url.path())?;
-            let mut partitioned_file = PartitionedFile::new(file_path.to_string(), f.size)
-                .with_statistics(Arc::new(f.stats));
-            partitioned_file.partition_values =
-                vec![ScalarValue::Utf8(Some(f.file_url.to_string()))];
-            // NB: we need to reassign the location since the 'new' method does incompatible path encoding internally.
-            partitioned_file.object_meta.location = file_path;
-            Ok::<_, DataFusionError>((
-                f.file_url.as_object_store_url(),
-                (partitioned_file, None::<Vec<bool>>),
-            ))
-        };
-
-        // Group the files by their object store url. Since datafusion assumes that all files in a
-        // DataSourceExec are stored in the same object store, we need to create one plan per store
-        let files_by_store = files
-            .into_iter()
-            .flat_map(|fs| fs.into_iter().map(to_partitioned_file))
-            .try_collect::<_, Vec<_>, _>()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .into_iter()
-            .into_group_map();
-
-        let physical_schema = Arc::new(scan.physical_schema().as_ref().try_into_arrow()?);
-        let pq_plan = get_read_plan(
-            files_by_store,
-            &physical_schema,
-            session,
-            limit,
-            Field::new(
-                file_id_column.clone(),
-                DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-                false,
-            ),
-            &metrics,
-        )
-        .await?;
-
-        let (projected_arrow_schema, _) = project_schema(self.read_schema(), projection)?;
-        let exec = DeltaScanExec::new(
-            projected_arrow_schema,
-            scan.logical_schema().clone(),
-            pq_plan,
-            Arc::new(transforms),
-            Arc::new(dvs),
-            file_id_column,
-            metrics,
-        );
-
-        Ok(Arc::new(exec))
-    }
-}
 
 #[async_trait::async_trait]
 impl TableProvider for Snapshot {
@@ -207,9 +120,9 @@ impl TableProvider for Snapshot {
     /// Return the execution plan
     async fn insert_into(
         &self,
-        state: &dyn Session,
-        input: Arc<dyn ExecutionPlan>,
-        insert_op: InsertOp,
+        _state: &dyn Session,
+        _input: Arc<dyn ExecutionPlan>,
+        _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         todo!("Implement insert_into method")
     }
@@ -281,10 +194,157 @@ impl TableProvider for EagerSnapshot {
     }
 }
 
+impl Snapshot {
+    /// Create a kernel scan with the given projection and filters.
+    ///
+    /// The projection is adjusted to include columns referenced in the filters which are not
+    /// part of the original projection. The consumer of the generated Scan is responsible to
+    /// project the final output schema after the scan.
+    fn kernel_scan(&self, projection: Option<&Vec<usize>>, filters: &[Expr]) -> Result<Arc<Scan>> {
+        let pushdowns = get_pushdown_filters(
+            &filters.iter().collect::<Vec<_>>(),
+            self.metadata().partition_columns().as_slice(),
+        );
+        let projection =
+            projection
+                .map(|p| {
+                    let mut projection = p.clone();
+                    let mut column_refs = HashSet::new();
+                    for (f, pd) in filters.iter().zip(pushdowns.iter()) {
+                        match pd {
+                            TableProviderFilterPushDown::Exact => {
+                                for col in f.column_refs() {
+                                    column_refs.insert(col);
+                                }
+                            }
+                            _ => return Err(DataFusionError::Internal(
+                                "Inexact or unknown predicates should be included in projection to be processed by upstream filters".into(),
+                            )),
+                        }
+                    }
+                    for col in column_refs {
+                        let col_idx = self.read_schema().index_of(col.name())?;
+                        if !projection.contains(&col_idx) {
+                            projection.push(col_idx);
+                        }
+                    }
+                    Ok::<_, DataFusionError>(projection)
+                })
+                .transpose()?;
+
+        let (_, projected_kernel_schema) = project_schema(self.read_schema(), projection.as_ref())?;
+        Ok(Arc::new(
+            self.scan_builder()
+                .with_schema(projected_kernel_schema.clone())
+                .with_predicate(Arc::new(to_delta_predicate(filters)?))
+                .build()?,
+        ))
+    }
+
+    async fn execution_plan(
+        &self,
+        session: &dyn Session,
+        scan: Arc<Scan>,
+        stream: ScanMetadataStream,
+        engine: Arc<dyn Engine>,
+        projection: Option<&Vec<usize>>,
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut stream = ScanFileStream::new(engine, &scan, stream);
+        let mut files = Vec::new();
+        while let Some(file) = stream.try_next().await? {
+            files.extend(file);
+        }
+
+        let transforms: HashMap<_, _> = files
+            .iter_mut()
+            .flat_map(|file| {
+                file.transform
+                    .take()
+                    .map(|t| (file.file_url.to_string(), t))
+            })
+            .collect();
+        let dv_stream = stream.dv_stream.build();
+        let dvs: HashMap<_, _> = dv_stream
+            .try_filter_map(|(url, dv)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
+            .try_collect()
+            .await?;
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics)
+            .global_counter("count_files_skipped")
+            .add(stream.metrics.num_skipped);
+        MetricBuilder::new(&metrics)
+            .global_counter("count_files_scanned")
+            .add(stream.metrics.num_scanned);
+
+        let file_id_column = "__delta_rs_file_id".to_string();
+
+        // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
+        // this is used to create a DataSourceExec plan for each store
+        // To correlate the data with the original file, we add the file url as a partition value
+        // This is required to apply the correct transform to the data in downstream processing.
+        let to_partitioned_file = |f: ScanFileContext| {
+            let file_path = Path::from_url_path(f.file_url.path())?;
+            let mut partitioned_file = PartitionedFile::new(file_path.to_string(), f.size)
+                .with_statistics(Arc::new(f.stats));
+            partitioned_file.partition_values =
+                vec![ScalarValue::Utf8(Some(f.file_url.to_string()))];
+            // NB: we need to reassign the location since the 'new' method does incompatible path encoding internally.
+            partitioned_file.object_meta.location = file_path;
+            Ok::<_, DataFusionError>((
+                f.file_url.as_object_store_url(),
+                (partitioned_file, None::<Vec<bool>>),
+            ))
+        };
+
+        // Group the files by their object store url. Since datafusion assumes that all files in a
+        // DataSourceExec are stored in the same object store, we need to create one plan per store
+        let files_by_store = files
+            .into_iter()
+            .map(to_partitioned_file)
+            .try_collect::<_, Vec<_>, _>()?
+            .into_iter()
+            .into_group_map();
+
+        // TODO: the scan should already have the projected schema. We should avoid projecting again here.
+        let (projected_arrow_schema, projected_kernel_schema) =
+            project_schema(self.read_schema(), projection)?;
+
+        let physical_schema: SchemaRef =
+            Arc::new(scan.physical_schema().as_ref().try_into_arrow()?);
+
+        let pq_plan = get_read_plan(
+            files_by_store,
+            &physical_schema,
+            session,
+            limit,
+            Field::new(
+                file_id_column.clone(),
+                DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+                false,
+            ),
+            &metrics,
+        )
+        .await?;
+
+        let exec = DeltaScanExec::new(
+            projected_arrow_schema,
+            projected_kernel_schema,
+            pq_plan,
+            Arc::new(transforms),
+            Arc::new(dvs),
+            file_id_column,
+            metrics,
+        );
+
+        Ok(Arc::new(exec))
+    }
+}
+
+type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
 async fn get_read_plan(
-    files_by_store: impl IntoIterator<
-        Item = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>),
-    >,
+    files_by_store: impl IntoIterator<Item = FilesByStore>,
     physical_schema: &SchemaRef,
     state: &dyn Session,
     limit: Option<usize>,
@@ -324,7 +384,7 @@ async fn get_read_plan(
 
     let plan = match plans.len() {
         1 => plans.remove(0),
-        _ => Arc::new(UnionExec::new(plans)),
+        _ => UnionExec::try_new(plans)?,
     };
     Ok(match plan.with_fetch(limit) {
         Some(limit) => limit,

@@ -57,7 +57,8 @@ impl ScanBuilder {
     /// is `None`, this is a no-op.
     ///
     /// NOTE: The filtering is best-effort and can produce false positives (rows that should should
-    /// have been filtered out but were kept).
+    /// have been filtered out but were kept). When filtering on partition columns, the filtering
+    /// is exact.
     pub fn with_predicate(mut self, predicate: impl Into<Option<PredicateRef>>) -> Self {
         self.inner = self.inner.with_predicate(predicate);
         self
