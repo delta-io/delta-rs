@@ -5,6 +5,7 @@ use bytes::Bytes;
 use deltalake_core::logstore::{
     DefaultObjectStoreRegistry, ObjectStoreRegistry, commit_uri_from_version,
 };
+use deltalake_core::table::normalize_table_url;
 use deltalake_core::{
     DeltaResult, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
@@ -116,7 +117,13 @@ impl LakeFSLogStore {
             "lakefs://{repo}/{}/{table}",
             self.client.get_transaction(operation_id)?,
         );
-        Ok(Url::parse(&string_url).unwrap())
+        Ok(normalize_table_url(&Url::parse(&string_url).map_err(
+            |_| {
+                DeltaTableError::NotATable(format!(
+                    "Could not convert {string_url} into a table URL"
+                ))
+            },
+        )?))
     }
 
     fn get_transaction_objectstore(
@@ -399,3 +406,6 @@ fn put_options() -> &'static PutOptions {
         extensions: Default::default(),
     })
 }
+
+#[cfg(test)]
+mod tests {}

@@ -96,7 +96,7 @@ def test_read_simple_table_from_remote(s3_localstack):
         "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
     ]
 
-    assert dt.file_uris() == [table_path + "/" + path for path in expected_files]
+    assert dt.file_uris() == [table_path + path for path in expected_files]
 
 
 @pytest.mark.pyarrow

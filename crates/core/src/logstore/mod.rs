@@ -551,7 +551,9 @@ pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
     })
 }
 
-/// TODO
+/// Join the given `root` [Url] with the [Path] to produce a URI (String) of the two together.
+///
+/// This is largely a convenience function to help with the nuances of empty [Path] and file [Url]s
 pub fn to_uri(root: &Url, location: &Path) -> String {
     match root.scheme() {
         "file" => {
@@ -575,7 +577,9 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
             if location.as_ref().is_empty() || location.as_ref() == "/" {
                 root.as_ref().to_string()
             } else {
-                format!("{}/{}", root.as_ref(), location.as_ref())
+                root.join(location.as_ref())
+                    .expect("Somehow failed to join on a Url!")
+                    .to_string()
             }
         }
     }
