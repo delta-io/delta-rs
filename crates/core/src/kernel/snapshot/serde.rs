@@ -51,12 +51,12 @@ impl Serialize for Snapshot {
             .latest_crc_file
             .as_ref()
             .map(|f| FileMetaSerde::from(&f.location));
-        // let latest_commit_file = self
-        //     .inner
-        //     .log_segment()
-        //     .latest_commit_file
-        //     .as_ref()
-        //     .map(|f| FileMetaSerde::from(&f.location));
+        let latest_commit_file = self
+            .inner
+            .log_segment()
+            .latest_commit_file
+            .as_ref()
+            .map(|f| FileMetaSerde::from(&f.location));
 
         let mut seq = serializer.serialize_seq(None)?;
 
@@ -68,7 +68,7 @@ impl Serialize for Snapshot {
         seq.serialize_element(&ascending_compaction_files)?;
         seq.serialize_element(&checkpoint_parts)?;
         seq.serialize_element(&latest_crc_file)?;
-        // seq.serialize_element(&latest_commit_file)?;
+        seq.serialize_element(&latest_commit_file)?;
 
         seq.serialize_element(&self.config)?;
 
@@ -143,9 +143,12 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
         let latest_crc_file: Option<FileMetaSerde> = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(7, &self))?;
-        let config: DeltaTableConfig = seq
+        let latest_commit_file: Option<FileMetaSerde> = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(8, &self))?;
+        let config: DeltaTableConfig = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(9, &self))?;
 
         let ascending_commit_files = ascending_commit_files
             .into_iter()
@@ -179,17 +182,17 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .transpose()?
             .flatten();
 
-        // let latest_commit_file = latest_crc_file
-        //     .map(|meta| ParsedLogPath::try_from(meta.into_kernel()).map_err(de::Error::custom))
-        //     .transpose()?
-        //     .flatten();
+        let latest_commit_file = latest_commit_file
+            .map(|meta| ParsedLogPath::try_from(meta.into_kernel()).map_err(de::Error::custom))
+            .transpose()?
+            .flatten();
 
         let listed_log_files = ListedLogFiles::try_new(
             ascending_commit_files,
             ascending_compaction_files,
             checkpoint_parts,
             latest_crc_file,
-            None, // latest_commit_file
+            latest_commit_file,
         )
         .map_err(de::Error::custom)?;
 
