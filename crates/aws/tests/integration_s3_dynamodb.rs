@@ -117,7 +117,7 @@ async fn test_create_s3_table() -> TestResult<()> {
         ),
     ]);
     let storage_config = StorageConfig::parse_options(storage_options)?;
-    let log_store = logstore_for(Url::parse(&table_uri)?, storage_config)?;
+    let log_store = logstore_for(&Url::parse(&table_uri)?, storage_config)?;
 
     let payload = PutPayload::from_static(b"test-drivin");
     let _put = log_store

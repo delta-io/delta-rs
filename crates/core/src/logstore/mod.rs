@@ -75,6 +75,7 @@ use uuid::Uuid;
 
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::{Action, spawn_blocking_with_span};
+use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::config::StorageConfig;
@@ -148,7 +149,7 @@ pub fn default_logstore(
     Arc::new(default_logstore::DefaultLogStore::new(
         prefixed_store,
         root_store,
-        LogStoreConfig::new(location.clone(), options.clone()),
+        LogStoreConfig::new(location, options.clone()),
     ))
 }
 
@@ -170,26 +171,26 @@ pub(crate) static DELTA_LOG_REGEX: LazyLock<Regex> =
 /// # use url::Url;
 /// let location = Url::parse("memory:///").expect("Failed to make location");
 /// let storage_config = StorageConfig::default();
-/// let logstore = logstore_for(location, storage_config).expect("Failed to get a logstore");
+/// let logstore = logstore_for(&location, storage_config).expect("Failed to get a logstore");
 /// ```
-pub fn logstore_for(location: Url, storage_config: StorageConfig) -> DeltaResult<LogStoreRef> {
+pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResult<LogStoreRef> {
     // turn location into scheme
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
     if let Some(entry) = object_store_factories().get(&scheme) {
         debug!("Found a storage provider for {scheme} ({location})");
-        let (root_store, _prefix) = entry.value().parse_url_opts(&location, &storage_config)?;
+        let (root_store, _prefix) = entry.value().parse_url_opts(location, &storage_config)?;
         return logstore_with(root_store, location, storage_config);
     }
 
-    Err(DeltaTableError::InvalidTableLocation(location.into()))
+    Err(DeltaTableError::InvalidTableLocation(location.to_string()))
 }
 
 /// Return the [LogStoreRef] using the given [ObjectStoreRef]
 pub fn logstore_with(
     root_store: ObjectStoreRef,
-    location: Url,
+    location: &Url,
     storage_config: StorageConfig,
 ) -> DeltaResult<LogStoreRef> {
     let scheme = Url::parse(&format!("{}://", location.scheme()))
@@ -199,13 +200,11 @@ pub fn logstore_with(
         debug!("Found a logstore provider for {scheme}");
         return factory
             .value()
-            .with_options_internal(root_store, &location, &storage_config);
+            .with_options_internal(root_store, location, &storage_config);
     }
 
     error!("Could not find a logstore for the scheme {scheme}");
-    Err(DeltaTableError::InvalidTableLocation(
-        location.clone().into(),
-    ))
+    Err(DeltaTableError::InvalidTableLocation(location.to_string()))
 }
 
 /// Holder whether it's tmp_commit path or commit bytes
@@ -237,17 +236,9 @@ pub struct LogStoreConfig {
 }
 
 impl LogStoreConfig {
-    pub fn new(mut location: Url, options: StorageConfig) -> Self {
-        if !location.path().ends_with('/') {
-            if let Ok(mut segments) = location.path_segments_mut() {
-                // Pushing an empty string ensures that the [Url] has a trailing slash
-                segments.push("");
-            } else {
-                warn!(
-                    "A recoverable error occurred when trying to sanitize the URL, input URL could not have a trailing slash added which can cause inconsistent behavior"
-                );
-            }
-        }
+    pub fn new(location: &Url, options: StorageConfig) -> Self {
+        println!("location in: {location:?}");
+        let location = normalize_table_url(location);
         Self { location, options }
     }
 
@@ -772,12 +763,12 @@ pub(crate) mod tests {
 
     #[test]
     fn test_logstore_config_ctor() {
-        let location = Url::parse("nonexistent://table").unwrap();
-        let config = LogStoreConfig::new(location, StorageConfig::default());
-        assert_eq!(config.location().to_string(), "nonexistent://table/");
+        let location = Url::parse("nonexistent://table/bar").unwrap();
+        let config = LogStoreConfig::new(&location, StorageConfig::default());
+        assert_eq!(config.location().to_string(), "nonexistent://table/bar/");
         assert_eq!(
             config.location().join("_delta_log/").unwrap(),
-            Url::parse("nonexistent://table/_delta_log/").unwrap()
+            Url::parse("nonexistent://table/bar/_delta_log/").unwrap()
         );
     }
 
@@ -785,14 +776,14 @@ pub(crate) mod tests {
     fn logstore_with_invalid_url() {
         let location = Url::parse("nonexistent://table").unwrap();
 
-        let store = logstore_for(location, StorageConfig::default());
+        let store = logstore_for(&location, StorageConfig::default());
         assert!(store.is_err());
     }
 
     #[test]
     fn logstore_with_memory() {
         let location = Url::parse("memory:///table").unwrap();
-        let store = logstore_for(location, StorageConfig::default());
+        let store = logstore_for(&location, StorageConfig::default());
         assert!(store.is_ok());
     }
 
@@ -800,7 +791,7 @@ pub(crate) mod tests {
     fn logstore_with_memory_and_rt() {
         let location = Url::parse("memory:///table").unwrap();
         let store = logstore_for(
-            location,
+            &location,
             StorageConfig::default().with_io_runtime(IORuntime::default()),
         );
         assert!(store.is_ok());
@@ -809,7 +800,7 @@ pub(crate) mod tests {
     #[test]
     fn test_logstore_ext() {
         let location = Url::parse("memory:///table").unwrap();
-        let store = logstore_for(location, StorageConfig::default()).unwrap();
+        let store = logstore_for(&location, StorageConfig::default()).unwrap();
         let table_url = store.table_root_url();
         assert!(table_url.path().ends_with('/'));
         let log_url = store.log_root_url();
@@ -822,7 +813,7 @@ pub(crate) mod tests {
         use object_store::{PutOptions, PutPayload};
         let location = Url::parse("memory:///table").unwrap();
         let store =
-            logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
+            logstore_for(&location, StorageConfig::default()).expect("Failed to get logstore");
         assert!(
             !store
                 .is_delta_table_location()
@@ -856,7 +847,7 @@ pub(crate) mod tests {
         use object_store::{PutOptions, PutPayload};
         let location = Url::parse("memory:///table").unwrap();
         let store =
-            logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
+            logstore_for(&location, StorageConfig::default()).expect("Failed to get logstore");
         assert!(
             !store
                 .is_delta_table_location()
@@ -890,7 +881,7 @@ pub(crate) mod tests {
         use object_store::{PutOptions, PutPayload};
         let location = Url::parse("memory:///table").unwrap();
         let store =
-            logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
+            logstore_for(&location, StorageConfig::default()).expect("Failed to get logstore");
         assert!(
             !store
                 .is_delta_table_location()
@@ -924,7 +915,7 @@ pub(crate) mod tests {
         use object_store::{PutOptions, PutPayload};
         let location = Url::parse("memory:///table").unwrap();
         let store =
-            logstore_for(location, StorageConfig::default()).expect("Failed to get logstore");
+            logstore_for(&location, StorageConfig::default()).expect("Failed to get logstore");
         assert!(
             !store
                 .is_delta_table_location()
