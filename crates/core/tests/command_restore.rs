@@ -7,7 +7,6 @@ use deltalake_core::logstore::commit_uri_from_version;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{DeltaOps, DeltaTable, ensure_table_uri};
 use futures::TryStreamExt;
-use itertools::Itertools;
 use rand::Rng;
 use std::error::Error;
 use std::fs;
