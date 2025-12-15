@@ -81,9 +81,6 @@ pub(crate) enum WriteError {
     #[error("No data source supplied to write command.")]
     MissingData,
 
-    #[error("Failed to execute write task: {source}")]
-    WriteTask { source: tokio::task::JoinError },
-
     #[error("A table already exists at: {0}")]
     AlreadyExists(Url),
 

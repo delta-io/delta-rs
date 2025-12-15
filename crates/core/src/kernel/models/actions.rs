@@ -268,6 +268,7 @@ impl Default for ProtocolInner {
 
 impl ProtocolInner {
     /// Create a new protocol action
+    #[cfg(test)]
     pub(crate) fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
