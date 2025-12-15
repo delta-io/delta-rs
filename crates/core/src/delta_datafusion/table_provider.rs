@@ -45,6 +45,7 @@ use datafusion::{
 };
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::StreamExt as _;
+use futures::future::BoxFuture;
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -700,6 +701,55 @@ impl<'a> DeltaScanBuilder<'a> {
             logical_schema,
             metrics,
         })
+    }
+}
+
+pub struct TableProviderBuilder {
+    log_store: Arc<dyn LogStore>,
+    snapshot: Option<EagerSnapshot>,
+    file_column: Option<String>,
+}
+
+impl TableProviderBuilder {
+    fn new(log_store: Arc<dyn LogStore>, snapshot: Option<EagerSnapshot>) -> Self {
+        Self {
+            log_store,
+            snapshot,
+            file_column: None,
+        }
+    }
+
+    pub fn with_file_column(mut self, file_column: String) -> Self {
+        self.file_column = Some(file_column);
+        self
+    }
+}
+
+impl std::future::IntoFuture for TableProviderBuilder {
+    type Output = Result<Arc<dyn TableProvider>>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, false).await?;
+            Ok(Arc::new(snapshot) as Arc<dyn TableProvider>)
+        })
+    }
+}
+
+impl DeltaTable {
+    /// Get a table provider for the table referenced by this DeltaTable.
+    ///
+    /// See [`TableProviderBuilder`] for options when building the provider.
+    pub fn table_provider(&self) -> TableProviderBuilder {
+        TableProviderBuilder::new(
+            self.log_store(),
+            self.snapshot()
+                .ok()
+                .map(|snapshot| snapshot.snapshot().clone()),
+        )
     }
 }
 
