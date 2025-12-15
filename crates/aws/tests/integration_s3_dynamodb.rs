@@ -17,7 +17,7 @@ use deltalake_core::logstore::{CommitOrBytes, LogStore, logstore_for};
 use deltalake_core::logstore::{StorageConfig, commit_uri_from_version};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder, ObjectStoreError};
+use deltalake_core::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
 use object_store::path::Path;
 use serde_json::Value;
@@ -219,7 +219,7 @@ async fn test_repair_on_update() -> TestResult<()> {
     let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let mut table = prepare_table(&context, "repair_on_update").await?;
     let _entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
-    table.update().await?;
+    table.update_state().await?;
     // table update should find and update to newest, incomplete commit entry
     assert_eq!(table.version(), Some(1));
     validate_lock_table_state(&table, 1).await?;
@@ -403,7 +403,7 @@ impl Worker {
         ]));
         let committed_as = append_to_table(&name, &self.table, metadata).await.unwrap();
 
-        self.table.update().await.unwrap();
+        self.table.update_state().await.unwrap();
         (committed_as, name)
     }
 }
@@ -477,7 +477,7 @@ async fn prepare_table(context: &IntegrationContext, table_name: &str) -> TestRe
         .build()?;
     println!("table built: {table:?}");
     // create delta table
-    let table = DeltaOps(table)
+    let table = table
         .create()
         .with_columns(schema.fields().cloned())
         .await?;

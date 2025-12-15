@@ -368,7 +368,7 @@ impl std::future::IntoFuture for RestoreBuilder {
 
             let mut table =
                 DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
-            table.update().await?;
+            table.update_state().await?;
             Ok((table, metrics))
         })
     }
@@ -378,8 +378,8 @@ impl std::future::IntoFuture for RestoreBuilder {
 #[cfg(feature = "datafusion")]
 mod tests {
 
+    use crate::DeltaResult;
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
-    use crate::{DeltaOps, DeltaResult};
 
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>
@@ -388,12 +388,10 @@ mod tests {
         use crate::table::config::TablePropertiesExt as _;
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
         let first_v = table.version().unwrap();
 
-        let constraint = DeltaOps(table)
+        let constraint = table
             .add_constraint()
             .with_constraint("my_custom_constraint", "value < 100")
             .await;
@@ -408,10 +406,7 @@ mod tests {
         assert!(constraints.len() == 1);
         assert_eq!(constraints[0].name, "my_custom_constraint");
 
-        let (table, _metrics) = DeltaOps(table)
-            .restore()
-            .with_version_to_restore(first_v)
-            .await?;
+        let (table, _metrics) = table.restore().with_version_to_restore(first_v).await?;
         assert_ne!(table.version(), Some(first_v));
 
         let constraints = table.state.unwrap().table_config().get_constraints();

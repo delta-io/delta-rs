@@ -472,7 +472,6 @@ mod tests {
     use crate::DeltaTable;
     use crate::TableProperty;
     use crate::kernel::DataType as DeltaDataType;
-    use crate::operations::DeltaOps;
     use crate::operations::collect_sendable_stream;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -499,7 +498,7 @@ mod tests {
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
@@ -516,7 +515,7 @@ mod tests {
         // append some data
         let table = write_batch(table, batch).await;
         // delete
-        let _err = DeltaOps(table)
+        let _err = table
             .delete()
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
@@ -543,7 +542,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
@@ -552,7 +551,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 1);
 
-        let (table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let (table, metrics) = table.delete().await.unwrap();
         let state = table.snapshot().unwrap();
 
         assert_eq!(state.version(), 2);
@@ -563,7 +562,7 @@ mod tests {
         assert_eq!(metrics.num_copied_rows, 0);
 
         // Deletes with no changes to state must not commit
-        let (table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let (table, metrics) = table.delete().await.unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 0);
@@ -596,7 +595,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -621,7 +620,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -630,7 +629,7 @@ mod tests {
         assert_eq!(state.version(), 2);
         assert_eq!(state.log_data().num_files(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .delete()
             .with_predicate(col("value").eq(lit(1)))
             .await
@@ -690,12 +689,15 @@ mod tests {
             )
             .unwrap();
 
-            DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+            DeltaTable::new_in_memory()
+                .write(vec![batch])
+                .await
+                .unwrap()
         }
 
         // Validate behaviour of greater than
         let table = prepare_table().await;
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .delete()
             .with_predicate(col("value").gt(lit(2)))
             .await
@@ -716,7 +718,7 @@ mod tests {
 
         // Validate behaviour of less than
         let table = prepare_table().await;
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .delete()
             .with_predicate(col("value").lt(lit(2)))
             .await
@@ -737,7 +739,7 @@ mod tests {
 
         // Validate behaviour of less plus not null
         let table = prepare_table().await;
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .delete()
             .with_predicate(col("value").lt(lit(2)).or(col("value").is_null()))
             .await
@@ -778,7 +780,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -787,7 +789,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .delete()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .await
@@ -837,7 +839,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -847,7 +849,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 3);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .delete()
             .with_predicate(
                 col("modified")
@@ -911,9 +913,9 @@ mod tests {
         ];
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
-        let table = DeltaOps::new_in_memory().write(batches).await.unwrap();
+        let table = DeltaTable::new_in_memory().write(batches).await.unwrap();
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .delete()
             .with_predicate("props['a'] = '2021-02-02'")
             .await
@@ -938,7 +940,7 @@ mod tests {
 
         let table = setup_table(None).await;
 
-        let res = DeltaOps(table)
+        let res = table
             .delete()
             .with_predicate(col("value").eq(cast(
                 random() * lit(20.0),
@@ -950,7 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_cdc_enabled() {
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -974,13 +976,13 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
         )
         .unwrap();
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .delete()
             .with_predicate(col("value").eq(lit(2)))
             .await
@@ -988,8 +990,8 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
@@ -1020,7 +1022,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_cdc_enabled_partitioned() {
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "year",
@@ -1058,13 +1060,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .delete()
             .with_predicate(col("value").eq(lit(2)))
             .await
@@ -1072,8 +1074,8 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await

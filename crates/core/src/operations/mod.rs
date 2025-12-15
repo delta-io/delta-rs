@@ -70,6 +70,176 @@ pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 
+impl DeltaTable {
+    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given URL.
+    ///
+    /// ```
+    /// use deltalake_core::DeltaTable;
+    /// use url::Url;
+    ///
+    /// async {
+    ///     let url = Url::parse("memory:///").unwrap();
+    ///     let ops = DeltaTable::try_from_url(url).await.unwrap();
+    /// };
+    /// ```
+    pub async fn try_from_url(uri: Url) -> DeltaResult<Self> {
+        let mut table = DeltaTableBuilder::from_url(uri)?.build()?;
+        // We allow for uninitialized locations, since we may want to create the table
+        match table.load().await {
+            Ok(_) => Ok(table.into()),
+            Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Create a [`DeltaTable`] instance from URL with storage options
+    pub async fn try_from_url_with_storage_options(
+        uri: Url,
+        storage_options: HashMap<String, String>,
+    ) -> DeltaResult<Self> {
+        let mut table = DeltaTableBuilder::from_url(uri)?
+            .with_storage_options(storage_options)
+            .build()?;
+        // We allow for uninitialized locations, since we may want to create the table
+        match table.load().await {
+            Ok(_) => Ok(table.into()),
+            Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
+            Err(err) => Err(err),
+        }
+    }
+
+    #[must_use]
+    pub fn create(&self) -> CreateBuilder {
+        CreateBuilder::default().with_log_store(self.log_store())
+    }
+
+    #[must_use]
+    pub fn restore(self) -> RestoreBuilder {
+        RestoreBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|state| state.snapshot),
+        )
+    }
+
+    /// Vacuum stale files from delta table
+    #[must_use]
+    pub fn vacuum(self) -> VacuumBuilder {
+        VacuumBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|state| state.snapshot),
+        )
+    }
+
+    /// Audit active files with files present on the filesystem
+    #[must_use]
+    pub fn filesystem_check(self) -> FileSystemCheckBuilder {
+        FileSystemCheckBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Enable a table feature for a table
+    #[must_use]
+    pub fn add_feature(self) -> AddTableFeatureBuilder {
+        AddTableFeatureBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Set table properties
+    #[must_use]
+    pub fn set_tbl_properties(self) -> SetTablePropertiesBuilder {
+        SetTablePropertiesBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Add new columns
+    #[must_use]
+    pub fn add_columns(self) -> AddColumnBuilder {
+        AddColumnBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update field metadata
+    #[must_use]
+    pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
+        UpdateFieldMetadataBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update table metadata
+    #[must_use]
+    pub fn update_table_metadata(self) -> UpdateTableMetadataBuilder {
+        UpdateTableMetadataBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Generate a symlink_format_manifest for other engines
+    pub fn generate(self) -> GenerateBuilder {
+        GenerateBuilder::new(self.log_store(), self.state.map(|s| s.snapshot))
+    }
+}
+
+#[cfg(feature = "datafusion")]
+impl DeltaTable {
+    #[must_use]
+    pub fn scan_table(&self) -> LoadBuilder {
+        LoadBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|state| state.snapshot),
+        )
+    }
+
+    /// Load a table with CDF Enabled
+    #[must_use]
+    pub fn scan_cdf(self) -> CdfLoadBuilder {
+        CdfLoadBuilder::new(self.log_store(), self.state.map(|s| s.snapshot))
+    }
+
+    #[must_use]
+    pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
+        WriteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+            .with_input_batches(batches)
+    }
+
+    /// Audit active files with files present on the filesystem
+    #[must_use]
+    pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
+        OptimizeBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Delete data from Delta table
+    #[must_use]
+    pub fn delete(self) -> DeleteBuilder {
+        DeleteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update data from Delta table
+    #[must_use]
+    pub fn update(self) -> UpdateBuilder {
+        UpdateBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Update data from Delta table
+    #[must_use]
+    pub fn merge<E: Into<Expression>>(
+        self,
+        source: datafusion::prelude::DataFrame,
+        predicate: E,
+    ) -> MergeBuilder {
+        MergeBuilder::new(
+            self.log_store(),
+            self.state.clone().map(|s| s.snapshot),
+            predicate.into(),
+            source,
+        )
+    }
+
+    /// Add a check constraint to a table
+    #[must_use]
+    pub fn add_constraint(self) -> ConstraintBuilder {
+        ConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Drops constraints from a table
+    #[must_use]
+    pub fn drop_constraints(self) -> DropConstraintBuilder {
+        DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+}
+
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
     // Execute arbitrary code at the start of a delta operation
@@ -123,8 +293,10 @@ pub(crate) trait Operation: std::future::IntoFuture {
 }
 
 /// High level interface for executing commands against a DeltaTable
+#[deprecated(note = "Use methods directly on DeltaTable instead, e.g. `delta_table.create()`")]
 pub struct DeltaOps(pub DeltaTable);
 
+#[allow(deprecated)]
 impl DeltaOps {
     /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given URL.
     ///
@@ -171,7 +343,7 @@ impl DeltaOps {
     /// ```
     /// use deltalake_core::DeltaOps;
     ///
-    /// let ops = DeltaOps::new_in_memory();
+    /// let ops = DeltaTable::new_in_memory();
     /// ```
     #[must_use]
     pub fn new_in_memory() -> Self {
@@ -195,11 +367,13 @@ impl DeltaOps {
     /// };
     /// ```
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::create`] instead")]
     pub fn create(self) -> CreateBuilder {
         CreateBuilder::default().with_log_store(self.0.log_store)
     }
 
     /// Generate a symlink_format_manifest for other engines
+    #[deprecated(note = "Use [`DeltaTable::generate`] instead")]
     pub fn generate(self) -> GenerateBuilder {
         GenerateBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -207,6 +381,7 @@ impl DeltaOps {
     /// Load data from a DeltaTable
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::scan`] instead")]
     pub fn load(self) -> LoadBuilder {
         LoadBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -214,6 +389,7 @@ impl DeltaOps {
     /// Load a table with CDF Enabled
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::scan_cdf`] instead")]
     pub fn load_cdf(self) -> CdfLoadBuilder {
         CdfLoadBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -221,6 +397,7 @@ impl DeltaOps {
     /// Write data to Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::write`] instead")]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
         WriteBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
             .with_input_batches(batches)
@@ -228,12 +405,14 @@ impl DeltaOps {
 
     /// Vacuum stale files from delta table
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::vacuum`] instead")]
     pub fn vacuum(self) -> VacuumBuilder {
         VacuumBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Audit active files with files present on the filesystem
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::filesystem_check`] instead")]
     pub fn filesystem_check(self) -> FileSystemCheckBuilder {
         FileSystemCheckBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -241,6 +420,7 @@ impl DeltaOps {
     /// Audit active files with files present on the filesystem
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::optimize`] instead")]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -248,6 +428,7 @@ impl DeltaOps {
     /// Delete data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::delete`] instead")]
     pub fn delete(self) -> DeleteBuilder {
         DeleteBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -255,12 +436,14 @@ impl DeltaOps {
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::update`] instead")]
     pub fn update(self) -> UpdateBuilder {
         UpdateBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Restore delta table to a specified version or datetime
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::restore`] instead")]
     pub fn restore(self) -> RestoreBuilder {
         RestoreBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -268,6 +451,7 @@ impl DeltaOps {
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::merge`] instead")]
     pub fn merge<E: Into<Expression>>(
         self,
         source: datafusion::prelude::DataFrame,
@@ -284,12 +468,14 @@ impl DeltaOps {
     /// Add a check constraint to a table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::add_constraint`] instead")]
     pub fn add_constraint(self) -> ConstraintBuilder {
         ConstraintBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Enable a table feature for a table
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::add_feature`] instead")]
     pub fn add_feature(self) -> AddTableFeatureBuilder {
         AddTableFeatureBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
@@ -297,43 +483,51 @@ impl DeltaOps {
     /// Drops constraints from a table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::drop_constraints`] instead")]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Set table properties
+    #[deprecated(note = "Use [`DeltaTable::set_tbl_properties`] instead")]
     pub fn set_tbl_properties(self) -> SetTablePropertiesBuilder {
         SetTablePropertiesBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Add new columns
+    #[deprecated(note = "Use [`DeltaTable::add_columns`] instead")]
     pub fn add_columns(self) -> AddColumnBuilder {
         AddColumnBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Update field metadata
+    #[deprecated(note = "Use [`DeltaTable::update_field_metadata`] instead")]
     pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
         UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Update table metadata
+    #[deprecated(note = "Use [`DeltaTable::update_table_metadata`] instead")]
     pub fn update_table_metadata(self) -> UpdateTableMetadataBuilder {
         UpdateTableMetadataBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 }
 
+#[allow(deprecated)]
 impl From<DeltaTable> for DeltaOps {
     fn from(table: DeltaTable) -> Self {
         Self(table)
     }
 }
 
+#[allow(deprecated)]
 impl From<DeltaOps> for DeltaTable {
     fn from(ops: DeltaOps) -> Self {
         ops.0
     }
 }
 
+#[allow(deprecated)]
 impl AsRef<DeltaTable> for DeltaOps {
     fn as_ref(&self) -> &DeltaTable {
         &self.0

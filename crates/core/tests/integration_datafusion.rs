@@ -33,8 +33,7 @@ use deltalake_core::operations::write::SchemaMode;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
-    DeltaTable, DeltaTableError, ensure_table_uri, open_table,
-    operations::{DeltaOps, write::WriteBuilder},
+    DeltaTable, DeltaTableError, ensure_table_uri, open_table, operations::write::WriteBuilder,
 };
 use deltalake_test::utils::*;
 use serial_test::serial;
@@ -130,7 +129,7 @@ mod local {
         let table_uri = table_path.to_str().unwrap().to_string();
         let table_schema: StructType = batches[0].schema().try_into_kernel().unwrap();
 
-        let mut table = DeltaOps::try_from_url(ensure_table_uri(table_uri).unwrap())
+        let mut table = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
             .await
             .unwrap()
             .create()
@@ -141,7 +140,7 @@ mod local {
             .unwrap();
 
         for batch in batches {
-            table = DeltaOps(table)
+            table = table
                 .write(vec![batch])
                 .with_save_mode(save_mode)
                 .await
@@ -836,7 +835,7 @@ mod local {
         let state = ctx.state();
 
         async fn append_to_table(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
-            DeltaOps(table)
+            table
                 .write(vec![batch])
                 .with_save_mode(SaveMode::Append)
                 .await
@@ -1333,7 +1332,7 @@ mod local {
             .unwrap(),
         )?
         .build()?;
-        let _ = DeltaOps::from(table)
+        let _ = table
             .create()
             .with_columns(schema.fields().cloned())
             .await?;
@@ -1486,7 +1485,7 @@ async fn test_schema_adapter_empty_batch() {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
 
     // Create table with a single column
-    let table = DeltaOps::try_from_url(ensure_table_uri(table_uri).unwrap())
+    let table = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
         .await
         .unwrap()
         .create()
@@ -1501,7 +1500,7 @@ async fn test_schema_adapter_empty_batch() {
 
     // Write single column
     let a_arr = Int32Array::from(vec![1, 2, 3]);
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![
             RecordBatch::try_from_iter_with_nullable(vec![(
                 "a",
@@ -1516,7 +1515,7 @@ async fn test_schema_adapter_empty_batch() {
     // Evolve schema by writing a batch with new nullable column
     let a_arr = Int32Array::from(vec![4, 5, 6]);
     let b_arr = Int32Array::from(vec![7, 8, 9]);
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![
             RecordBatch::try_from_iter_with_nullable(vec![
                 ("a", Arc::new(a_arr) as ArrayRef, false),
@@ -1573,7 +1572,7 @@ mod date_partitions {
             ),
         ];
 
-        let dt = DeltaOps::try_from_url(ensure_table_uri(table_uri).unwrap())
+        let dt = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
             .await?
             .create()
             .with_columns(columns)

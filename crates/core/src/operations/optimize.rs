@@ -387,7 +387,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             let mut table =
                 DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
-            table.update().await?;
+            table.update_state().await?;
             Ok((table, metrics))
         })
     }
@@ -1332,13 +1332,13 @@ pub(super) mod zorder {
                 )
                 .unwrap();
                 // write some data
-                let table = crate::DeltaOps::new_in_memory()
+                let table = crate::DeltaTable::new_in_memory()
                     .write(vec![batch.clone()])
                     .with_save_mode(crate::protocol::SaveMode::Append)
                     .await
                     .unwrap();
 
-                let res = crate::DeltaOps(table)
+                let res = table
                     .optimize()
                     .with_type(OptimizeType::ZOrder(vec!["moDified".into()]))
                     .await;
@@ -1378,14 +1378,14 @@ pub(super) mod zorder {
                 )
                 .unwrap();
                 // write some data
-                let table = crate::DeltaOps::new_in_memory()
+                let table = DeltaTable::new_in_memory()
                     .write(vec![batch.clone()])
                     .with_partition_columns(vec!["country"])
                     .with_save_mode(crate::protocol::SaveMode::Overwrite)
                     .await
                     .unwrap();
 
-                let res = crate::DeltaOps(table)
+                let res = table
                     .optimize()
                     .with_type(OptimizeType::ZOrder(vec!["modified".into()]))
                     .await;
@@ -1419,14 +1419,14 @@ pub(super) mod zorder {
                 )
                 .unwrap();
                 // write some data
-                let table = crate::DeltaOps::new_in_memory()
+                let table = DeltaTable::new_in_memory()
                     .write(vec![batch.clone()])
                     .with_partition_columns(vec!["country"])
                     .with_save_mode(crate::protocol::SaveMode::Overwrite)
                     .await
                     .unwrap();
 
-                let res = crate::DeltaOps(table)
+                let res = table
                     .optimize()
                     .with_type(OptimizeType::ZOrder(vec!["modified".into()]))
                     .await;
@@ -1591,7 +1591,6 @@ pub(super) mod zorder {
 
         #[tokio::test]
         async fn works_on_spark_table() {
-            use crate::DeltaOps;
             use tempfile::TempDir;
             // Create a temporary directory
             let tmp_dir = TempDir::new().expect("Failed to make temp dir");
@@ -1604,7 +1603,7 @@ pub(super) mod zorder {
             let table_uri =
                 ensure_table_uri(tmp_dir.path().join(table_name).to_str().unwrap()).unwrap();
             // Run optimize
-            let (_, metrics) = DeltaOps::try_from_url(table_uri)
+            let (_, metrics) = DeltaTable::try_from_url(table_uri)
                 .await
                 .unwrap()
                 .optimize()
