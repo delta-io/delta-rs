@@ -9,10 +9,26 @@ use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::time::sleep;
 use url::Url;
 
-mod fs_common;
+/// Clone an existing test table from the tests crate into a [TempDir] for use in an integration
+/// test
+pub fn clone_table(table_name: impl AsRef<str> + std::fmt::Display) -> TempDir {
+    // Create a temporary directory
+    let tmp_dir = TempDir::new().expect("Failed to make temp dir");
+
+    // Copy recursively from the test data directory to the temporary directory
+    let source_path = format!("../test/tests/data/{table_name}");
+    let options = fs_extra::dir::CopyOptions {
+        content_only: true,
+        ..Default::default()
+    };
+    println!("copying from {source_path}");
+    fs_extra::dir::copy(source_path, tmp_dir.path(), &options).unwrap();
+    tmp_dir
+}
 
 #[tokio::test]
 #[serial]
@@ -199,7 +215,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
 /// This test validates a checkpoint can be updated on a pre deltalake (python) 1.x table
 /// see also: <https://github.com/delta-io/delta-rs/issues/3527>
 async fn test_older_checkpoint_reads() -> DeltaResult<()> {
-    let temp_table = fs_common::clone_table("python-0.25.5-checkpoint");
+    let temp_table = clone_table("python-0.25.5-checkpoint");
     let table_path = temp_table.path().to_str().unwrap();
     let table_url = ensure_table_uri(table_path).unwrap();
     let table = deltalake_core::open_table(table_url).await?;
@@ -211,7 +227,7 @@ async fn test_older_checkpoint_reads() -> DeltaResult<()> {
 #[tokio::test]
 /// This test validates that we can read a table with v2 checkpoints
 async fn test_v2_checkpoint_json() -> DeltaResult<()> {
-    let temp_table = fs_common::clone_table("checkpoint-v2-table");
+    let temp_table = clone_table("checkpoint-v2-table");
     let table_path = temp_table.path().to_str().unwrap();
     let table_url = ensure_table_uri(table_path).unwrap();
     let table = deltalake_core::open_table(table_url).await?;
@@ -225,7 +241,7 @@ async fn test_v2_checkpoint_json() -> DeltaResult<()> {
 /// write domain metadata atm, we can at least test, that accessing restricted
 /// domain metadata in the table fails with a proper error.
 async fn test_checkpoint_with_domain_meta() -> DeltaResult<()> {
-    let temp_table = fs_common::clone_table("table-with-domain-metadata");
+    let temp_table = clone_table("table-with-domain-metadata");
     let table_path = temp_table.path().to_str().unwrap();
     let table =
         deltalake_core::open_table(Url::parse(&format!("file://{table_path}")).unwrap()).await?;

@@ -65,7 +65,6 @@ mod local {
     use deltalake_core::{
         delta_datafusion::DeltaLogicalCodec, logstore::default_logstore, writer::JsonWriter,
     };
-    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
     #[tokio::test]
     #[serial]
