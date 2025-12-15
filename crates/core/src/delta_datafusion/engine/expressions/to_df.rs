@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::common::scalar::ScalarStructBuilder;
-use datafusion::common::{not_impl_err, DataFusionError, Result as DFResult, ScalarValue};
+use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
-use datafusion::logical_expr::{col, lit, Expr};
+use datafusion::logical_expr::{Expr, col, lit};
+use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::expressions::{
@@ -13,7 +14,6 @@ use delta_kernel::expressions::{
     UnaryPredicate, UnaryPredicateOp,
 };
 use delta_kernel::schema::DataType;
-use delta_kernel::Predicate;
 use itertools::Itertools;
 
 pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {

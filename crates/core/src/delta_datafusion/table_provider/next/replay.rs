@@ -7,19 +7,19 @@ use std::{
 use arrow::{array::BooleanArray, compute::filter_record_batch};
 use datafusion::{
     common::{
-        error::DataFusionErrorBuilder, stats::Precision, ColumnStatistics, HashMap, Statistics,
+        ColumnStatistics, HashMap, Statistics, error::DataFusionErrorBuilder, stats::Precision,
     },
     error::DataFusionError,
     scalar::ScalarValue,
 };
 use delta_kernel::{
+    Engine, ExpressionRef,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
     expressions::{Scalar, StructData},
     scan::{
-        state::{DvInfo, Stats},
         Scan as KernelScan, ScanMetadata,
+        state::{DvInfo, Stats},
     },
-    Engine, ExpressionRef,
 };
 use futures::Stream;
 use itertools::Itertools;
@@ -27,12 +27,12 @@ use pin_project_lite::pin_project;
 use url::Url;
 
 use crate::{
+    DeltaResult,
     delta_datafusion::engine::scalar_to_df,
     kernel::{
-        arrow::engine_ext::stats_schema, parse_stats_column_with_schema, LogicalFileView,
-        ReceiverStreamBuilder, Scan, StructDataExt,
+        LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
+        arrow::engine_ext::stats_schema, parse_stats_column_with_schema,
     },
-    DeltaResult,
 };
 
 #[derive(Debug)]

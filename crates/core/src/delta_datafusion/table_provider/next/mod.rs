@@ -29,10 +29,10 @@ use std::{borrow::Cow, sync::Arc};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::{DataFusionError, HashMap, HashSet, Result};
+use datafusion::datasource::TableType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::TableType;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
@@ -41,27 +41,27 @@ use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     catalog::{Session, TableProvider},
-    logical_expr::{dml::InsertOp, LogicalPlan},
+    logical_expr::{LogicalPlan, dml::InsertOp},
     physical_plan::ExecutionPlan,
 };
+use delta_kernel::Engine;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::scan::ScanMetadata;
 use delta_kernel::schema::SchemaRef as KernelSchemaRef;
-use delta_kernel::Engine;
 use futures::future::ready;
 use futures::{Stream, TryStreamExt as _};
 use itertools::Itertools;
 use object_store::path::Path;
 
+use crate::DeltaTableError;
+use crate::delta_datafusion::DataFusionMixins as _;
 use crate::delta_datafusion::engine::{
-    to_delta_predicate, AsObjectStoreUrl as _, DataFusionEngine,
+    AsObjectStoreUrl as _, DataFusionEngine, to_delta_predicate,
 };
 use crate::delta_datafusion::table_provider::get_pushdown_filters;
 use crate::delta_datafusion::table_provider::next::replay::{ScanFileContext, ScanFileStream};
 pub use crate::delta_datafusion::table_provider::next::scan::DeltaScanExec;
-use crate::delta_datafusion::DataFusionMixins as _;
 use crate::kernel::{EagerSnapshot, Scan, Snapshot};
-use crate::DeltaTableError;
 
 mod replay;
 mod scan;
@@ -413,7 +413,7 @@ fn project_schema(
 mod tests {
     use datafusion::{
         datasource::{physical_plan::FileScanConfig, source::DataSource},
-        physical_plan::{collect_partitioned, visit_execution_plan, ExecutionPlanVisitor},
+        physical_plan::{ExecutionPlanVisitor, collect_partitioned, visit_execution_plan},
     };
 
     use crate::{

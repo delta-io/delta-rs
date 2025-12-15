@@ -5,9 +5,9 @@ use std::task::{Context, Poll};
 
 use arrow::array::{ArrayAccessor, AsArray, RecordBatch, StringArray};
 use arrow::datatypes::{SchemaRef, UInt16Type};
+use datafusion::common::HashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
-use datafusion::common::HashMap;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
@@ -22,8 +22,8 @@ use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
 use crate::cast_record_batch;
-use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 use crate::kernel::ARROW_HANDLER;
+use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {

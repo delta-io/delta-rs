@@ -1,12 +1,12 @@
 use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
+use delta_kernel::Error as DeltaKernelError;
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, DecimalData,
     Expression, JunctionPredicate, JunctionPredicateOp, Predicate, Scalar, UnaryPredicate,
     UnaryPredicateOp,
 };
 use delta_kernel::schema::{DataType, DecimalType, PrimitiveType};
-use delta_kernel::Error as DeltaKernelError;
 use itertools::Itertools;
 
 pub(crate) fn to_df_err(e: DeltaKernelError) -> DataFusionError {

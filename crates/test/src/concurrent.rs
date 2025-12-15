@@ -159,7 +159,7 @@ pub struct Worker {
 
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
-        std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
+        unsafe { std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name) };
         let table_url = url::Url::parse(path).unwrap();
         let table = DeltaTableBuilder::from_url(table_url)
             .unwrap()

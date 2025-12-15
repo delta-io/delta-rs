@@ -4,9 +4,9 @@ use arrow_cast::pretty::print_batches;
 use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::collect_partitioned;
 use datafusion::prelude::SessionContext;
+use deltalake_core::DeltaTableError;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
-use deltalake_core::DeltaTableError;
 use url::Url;
 
 static CASES: &[&str] = &[
