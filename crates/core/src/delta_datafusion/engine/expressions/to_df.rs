@@ -16,7 +16,7 @@ use delta_kernel::expressions::{
 use delta_kernel::schema::DataType;
 use itertools::Itertools;
 
-pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {
+pub fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {
     match expr {
         Expression::Literal(scalar) => scalar_to_df(scalar).map(lit),
         Expression::Column(name) => {
@@ -29,10 +29,10 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
         Expression::Predicate(expr) => predicate_to_df(expr, output_type),
         Expression::Struct(fields) => struct_to_df(fields, output_type),
         Expression::Binary(expr) => binary_to_df(expr, output_type),
+        Expression::Unary(expr) => unary_to_df(expr, output_type),
         Expression::Opaque(_) => not_impl_err!("Opaque expressions are not yet supported"),
         Expression::Unknown(_) => not_impl_err!("Unknown expressions are not yet supported"),
         Expression::Transform(_) => not_impl_err!("Transform expressions are not yet supported"),
-        Expression::Unary(_) => not_impl_err!("Unary expressions are not yet supported"),
         Expression::Variadic(_) => not_impl_err!("Variadic expressions are not yet supported"),
     }
 }
