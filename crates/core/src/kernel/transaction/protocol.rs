@@ -662,7 +662,7 @@ mod tests {
         let checker_5 = ProtocolChecker::new(Default::default(), WRITER_V4.clone());
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
 
-        let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
+        let table = crate::DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",

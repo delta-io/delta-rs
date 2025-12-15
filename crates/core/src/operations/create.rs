@@ -402,7 +402,6 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::DeltaOps;
     use crate::table::config::TableProperty;
     use crate::writer::test_utils::get_delta_schema;
     use tempfile::TempDir;
@@ -411,7 +410,7 @@ mod tests {
     async fn test_create() {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_save_mode(SaveMode::Ignore)
@@ -433,7 +432,7 @@ mod tests {
         let table_url = url::Url::from_directory_path(table_path)
             .map_err(|_| DeltaTableError::InvalidTableLocation(relative_path.clone()))
             .unwrap();
-        let table = DeltaOps::try_from_url(table_url)
+        let table = DeltaTable::try_from_url(table_url)
             .await
             .unwrap()
             .create()
@@ -567,7 +566,7 @@ mod tests {
         async fn test_create_or_replace_existing_table() {
             let batch = get_record_batch(None, false);
             let schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .write(vec![batch.clone()])
                 .with_save_mode(SaveMode::ErrorIfExists)
                 .await
@@ -576,7 +575,7 @@ mod tests {
             assert_eq!(state.version(), 0);
             assert_eq!(state.log_data().num_files(), 1);
 
-            let mut table = DeltaOps(table)
+            let mut table = table
                 .create()
                 .with_columns(schema.fields().cloned())
                 .with_save_mode(SaveMode::Overwrite)
@@ -593,7 +592,7 @@ mod tests {
         async fn test_create_or_replace_existing_table_partitioned() {
             let batch = get_record_batch(None, false);
             let schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .write(vec![batch.clone()])
                 .with_save_mode(SaveMode::ErrorIfExists)
                 .await
@@ -602,7 +601,7 @@ mod tests {
             assert_eq!(state.version(), 0);
             assert_eq!(state.log_data().num_files(), 1);
 
-            let mut table = DeltaOps(table)
+            let mut table = table
                 .create()
                 .with_columns(schema.fields().cloned())
                 .with_save_mode(SaveMode::Overwrite)

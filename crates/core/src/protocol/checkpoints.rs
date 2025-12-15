@@ -310,7 +310,6 @@ mod tests {
     use tracing::warn;
 
     use crate::DeltaResult;
-    use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
 
     /// Try reading the `_last_checkpoint` file.
@@ -340,7 +339,7 @@ mod tests {
     async fn test_create_checkpoint_for() {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
@@ -365,7 +364,7 @@ mod tests {
     async fn test_create_checkpoint_for_invalid_version() {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_save_mode(crate::protocol::SaveMode::Ignore)
@@ -421,12 +420,12 @@ mod tests {
             ];
             let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .write(batches.clone())
                 .await
                 .unwrap();
 
-            DeltaOps(table)
+            table
                 .write(batches)
                 .with_save_mode(crate::protocol::SaveMode::Overwrite)
                 .await
@@ -440,7 +439,7 @@ mod tests {
 
             let table_schema = get_delta_schema();
 
-            let mut table = DeltaOps::new_in_memory()
+            let mut table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .with_save_mode(crate::protocol::SaveMode::Ignore)
@@ -625,7 +624,10 @@ mod tests {
                 ("struct_with_list", struct_with_list_array),
             ])
             .unwrap();
-            let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+            let table = DeltaTable::new_in_memory()
+                .write(vec![batch])
+                .await
+                .unwrap();
 
             create_checkpoint(&table, None).await.unwrap();
         }
@@ -639,7 +641,7 @@ mod tests {
             let temp_dir = tempfile::tempdir()?;
             let table_path = temp_dir.path().to_str().unwrap();
             let table_uri = ensure_table_uri(table_path).unwrap();
-            let mut table = DeltaOps::try_from_url(table_uri)
+            let mut table = DeltaTable::try_from_url(table_uri)
                 .await?
                 .create()
                 .with_columns(table_schema.fields().cloned())
@@ -664,7 +666,7 @@ mod tests {
                     ],
                 )
                 .unwrap();
-                let _ = DeltaOps(table.clone()).write(vec![batch]).await?;
+                let _ = table.clone().write(vec![batch]).await?;
             }
 
             table.load().await?;
@@ -731,7 +733,7 @@ mod tests {
             .unwrap();
 
             let table_uri = Url::from_directory_path(&tmp_path).unwrap();
-            let mut table = DeltaOps::try_from_url(table_uri)
+            let mut table = DeltaTable::try_from_url(table_uri)
                 .await?
                 .write(vec![batch])
                 .await?;
@@ -751,7 +753,7 @@ mod tests {
             .unwrap();
 
             let table_uri = Url::from_directory_path(&tmp_path).unwrap();
-            let table = DeltaOps::try_from_url(table_uri)
+            let table = DeltaTable::try_from_url(table_uri)
                 .await?
                 .write(vec![batch])
                 .with_save_mode(SaveMode::Overwrite)

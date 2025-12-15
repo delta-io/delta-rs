@@ -1598,7 +1598,6 @@ mod tests {
     use crate::DeltaTable;
     use crate::TableProperty;
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
-    use crate::operations::DeltaOps;
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
@@ -1632,7 +1631,7 @@ mod tests {
     pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
@@ -1650,7 +1649,7 @@ mod tests {
         // append some data
         let table = write_data(table, &schema).await;
         // merge
-        let _err = DeltaOps(table)
+        let _err = table
             .merge(merge_source(schema), col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1676,7 +1675,7 @@ mod tests {
         )
         .unwrap();
         // write some data
-        DeltaOps(table)
+        table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
@@ -1708,7 +1707,7 @@ mod tests {
         )
         .unwrap();
         // write some data
-        DeltaOps(table)
+        table
             .write(vec![batch.clone()])
             .with_schema_mode(crate::operations::write::SchemaMode::Overwrite)
             .with_save_mode(SaveMode::Overwrite)
@@ -1780,7 +1779,7 @@ mod tests {
     async fn test_merge() {
         let (table, source) = setup().await;
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1846,7 +1845,7 @@ mod tests {
             ),
         ];
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_columns(delta_schema)
@@ -1896,7 +1895,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (merged_table, _) = DeltaOps(table)
+        let (merged_table, _) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -1953,7 +1952,8 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (after_table, metrics) = DeltaOps(table.clone())
+        let (after_table, metrics) = table
+            .clone()
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2061,7 +2061,8 @@ mod tests {
 
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _) = DeltaOps(table.clone())
+        let (table, _) = table
+            .clone()
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2170,7 +2171,7 @@ mod tests {
 
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _) = DeltaOps(table_with_struct)
+        let (table, _) = table_with_struct
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2244,7 +2245,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2307,7 +2308,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2379,7 +2380,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2452,7 +2453,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2501,7 +2502,7 @@ mod tests {
         // Also validates that update and set operations can contain the target alias
         let (table, source) = setup().await;
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, "target.id = source.id")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2560,7 +2561,7 @@ mod tests {
             .with_column_renamed("modified", "source_modified")
             .unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, "id = source_id")
             .when_matched_update(|update| {
                 update
@@ -2599,7 +2600,7 @@ mod tests {
             .with_column_renamed("modified", "source_modified")
             .unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, "id = source_id")
             .with_target_alias("target")
             .when_matched_update(|update| {
@@ -2631,7 +2632,7 @@ mod tests {
     async fn test_merge_failures() {
         // Validate target columns cannot be from the source
         let (table, source) = setup().await;
-        let res = DeltaOps(table)
+        let res = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2646,7 +2647,7 @@ mod tests {
 
         // Validate failure when aliases are the same
         let (table, source) = setup().await;
-        let res = DeltaOps(table)
+        let res = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("source")
@@ -2686,7 +2687,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(
                 source,
                 col("target.id")
@@ -2778,7 +2779,7 @@ mod tests {
         )
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .merge(
                 source,
                 col("target.id")
@@ -2841,7 +2842,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2919,7 +2920,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(
                 source,
                 col("target.id")
@@ -3028,7 +3029,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3097,7 +3098,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3165,7 +3166,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3228,7 +3229,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3297,7 +3298,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3361,7 +3362,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3427,7 +3428,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(
                 source,
                 col("target.id")
@@ -3514,7 +3515,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(
                 source,
                 col("target.id")
@@ -3598,7 +3599,7 @@ mod tests {
             Field::new("mOdifieD", ArrowDataType::Utf8, true),
         ]));
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema)
             .await
@@ -3624,7 +3625,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .merge(source, "target.Id = source.Id")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3892,7 +3893,7 @@ mod tests {
             Field::new("month", ArrowDataType::Utf8, true),
         ]));
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema)
             .await
@@ -3912,7 +3913,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
@@ -3937,7 +3938,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .merge(source, "target.id = source.id and target.cost is null")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -3990,7 +3991,7 @@ mod tests {
             Field::new("month", ArrowDataType::Utf8, true),
         ]));
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema)
             .await
@@ -4026,7 +4027,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch1, batch2])
             .with_write_batch_size(2)
             .with_save_mode(SaveMode::Append)
@@ -4052,7 +4053,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .merge(source, "target.id = source.id and target.id >= 'C'")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -4116,7 +4117,7 @@ mod tests {
         ]));
 
         let part_cols = vec!["month"];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema)
             .with_partition_columns(part_cols)
@@ -4137,7 +4138,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
@@ -4162,7 +4163,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .merge(source, "target.id = source.id and target.cost is null")
             .with_source_alias("source")
             .with_target_alias("target")
@@ -4192,7 +4193,7 @@ mod tests {
     async fn test_merge_cdc_disabled() {
         let (table, source) = setup().await;
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -4244,7 +4245,7 @@ mod tests {
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
@@ -4260,7 +4261,7 @@ mod tests {
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
         let source = merge_source(schema);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -4289,8 +4290,8 @@ mod tests {
         assert_merge(table.clone(), metrics).await;
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
@@ -4337,7 +4338,7 @@ mod tests {
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
@@ -4361,7 +4362,7 @@ mod tests {
         let source = merge_source(schema);
         let source = source.with_column("inserted_by", lit("new_value")).unwrap();
 
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .merge(source.clone(), col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -4409,8 +4410,8 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
@@ -4457,7 +4458,7 @@ mod tests {
         let schema = get_delta_schema();
 
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(actions)
@@ -4473,7 +4474,7 @@ mod tests {
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
         let source = merge_source(schema);
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -4497,8 +4498,8 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await

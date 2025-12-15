@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
 
@@ -47,10 +46,7 @@ pub async fn test_concurrent_table_creation(context: &IntegrationContext) -> Tes
                 .unwrap();
 
             // Each writer tries to create the table
-            let result = DeltaOps(table)
-                .create()
-                .with_columns(schema.fields().cloned())
-                .await;
+            let result = table.create().with_columns(schema.fields().cloned()).await;
 
             (i, result)
         }));
@@ -95,7 +91,7 @@ async fn prepare_table(
         .with_allow_http(true)
         .build()?;
 
-    let table = DeltaOps(table)
+    let table = table
         .create()
         .with_columns(schema.fields().cloned())
         .await?;
@@ -159,7 +155,7 @@ pub struct Worker {
 
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
-        std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
+        unsafe { std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name) };
         let table_url = url::Url::parse(path).unwrap();
         let table = DeltaTableBuilder::from_url(table_url)
             .unwrap()
@@ -209,7 +205,7 @@ impl Worker {
             .await
             .unwrap()
             .version();
-        self.table.update().await.unwrap();
+        self.table.update_state().await.unwrap();
         version
     }
 }

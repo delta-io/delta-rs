@@ -154,7 +154,6 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
 #[cfg(test)]
 mod tests {
     use crate::{
-        DeltaOps,
         kernel::TableFeatures,
         writer::test_utils::{create_bare_table, get_record_batch},
     };
@@ -164,11 +163,10 @@ mod tests {
     #[tokio::test]
     async fn add_feature() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
+        let table = create_bare_table()
             .write(vec![batch.clone()])
             .await
             .unwrap();
-        let table = DeltaOps(write);
         let result = table
             .add_feature()
             .with_feature(TableFeatures::ChangeDataFeed)
@@ -186,7 +184,7 @@ mod tests {
                 .contains(&TableFeature::ChangeDataFeed)
         );
 
-        let result = DeltaOps(result)
+        let result = result
             .add_feature()
             .with_feature(TableFeatures::DeletionVectors)
             .with_allow_protocol_versions_increase(true)
@@ -213,11 +211,10 @@ mod tests {
     #[tokio::test]
     async fn add_feature_disallowed_increase() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
+        let table = create_bare_table()
             .write(vec![batch.clone()])
             .await
             .unwrap();
-        let table = DeltaOps(write);
         let result = table
             .add_feature()
             .with_feature(TableFeatures::ChangeDataFeed)
