@@ -27,6 +27,7 @@ use std::pin::Pin;
 use std::{borrow::Cow, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow_schema::Schema;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::{DataFusionError, HashMap, HashSet, Result};
 use datafusion::datasource::TableType;
@@ -98,10 +99,10 @@ impl TableProvider for Snapshot {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let scan = self.kernel_scan(projection, filters)?;
+        let (scan, drop_count) = self.kernel_scan(projection, filters)?;
         let engine = DataFusionEngine::new_from_session(session);
         let stream = scan.scan_metadata(engine.clone());
-        self.execution_plan(session, scan, stream, engine, projection, limit)
+        self.execution_plan(session, scan, stream, engine, projection, limit, drop_count)
             .await
     }
 
@@ -157,7 +158,7 @@ impl TableProvider for EagerSnapshot {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let scan = self.snapshot().kernel_scan(projection, filters)?;
+        let (scan, drop_count) = self.snapshot().kernel_scan(projection, filters)?;
         let engine = DataFusionEngine::new_from_session(session);
         let stream = if let Ok(files) = self.files() {
             scan.scan_metadata_from(
@@ -170,7 +171,7 @@ impl TableProvider for EagerSnapshot {
             scan.scan_metadata(engine.clone())
         };
         self.snapshot()
-            .execution_plan(session, scan, stream, engine, projection, limit)
+            .execution_plan(session, scan, stream, engine, projection, limit, drop_count)
             .await
     }
 
@@ -200,44 +201,54 @@ impl Snapshot {
     /// The projection is adjusted to include columns referenced in the filters which are not
     /// part of the original projection. The consumer of the generated Scan is responsible to
     /// project the final output schema after the scan.
-    fn kernel_scan(&self, projection: Option<&Vec<usize>>, filters: &[Expr]) -> Result<Arc<Scan>> {
+    fn kernel_scan(
+        &self,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+    ) -> Result<(Arc<Scan>, usize)> {
         let pushdowns = get_pushdown_filters(
             &filters.iter().collect::<Vec<_>>(),
             self.metadata().partition_columns().as_slice(),
         );
-        let projection =
-            projection
-                .map(|p| {
-                    let mut projection = p.clone();
-                    let mut column_refs = HashSet::new();
-                    for (f, pd) in filters.iter().zip(pushdowns.iter()) {
-                        match pd {
-                            TableProviderFilterPushDown::Exact => {
-                                for col in f.column_refs() {
-                                    column_refs.insert(col);
-                                }
+        let mut project_away = 0usize;
+        let projection = projection
+            .map(|p| {
+                let mut projection = p.clone();
+                let mut column_refs = HashSet::new();
+                for (f, pd) in filters.iter().zip(pushdowns.iter()) {
+                    match pd {
+                        TableProviderFilterPushDown::Exact => {
+                            for col in f.column_refs() {
+                                column_refs.insert(col);
                             }
-                            _ => return Err(DataFusionError::Internal(
-                                "Inexact or unknown predicates should be included in projection to be processed by upstream filters".into(),
-                            )),
                         }
+                        // TODO: Inexact and Unknown pushdowns should always be included in the projection,
+                        // otherwise the upstream filters cannot be applied correctly. we could validate this
+                        // here, but for now we assume datafusion handles this correctly. An error is raised
+                        // later in the execution plan if this is not the case.
+                        _ => (),
                     }
-                    for col in column_refs {
-                        let col_idx = self.read_schema().index_of(col.name())?;
-                        if !projection.contains(&col_idx) {
-                            projection.push(col_idx);
-                        }
+                }
+                for col in column_refs {
+                    let col_idx = self.read_schema().index_of(col.name())?;
+                    if !projection.contains(&col_idx) {
+                        projection.push(col_idx);
+                        project_away += 1;
                     }
-                    Ok::<_, DataFusionError>(projection)
-                })
-                .transpose()?;
+                }
+                Ok::<_, DataFusionError>(projection)
+            })
+            .transpose()?;
 
         let (_, projected_kernel_schema) = project_schema(self.read_schema(), projection.as_ref())?;
-        Ok(Arc::new(
-            self.scan_builder()
-                .with_schema(projected_kernel_schema.clone())
-                .with_predicate(Arc::new(to_delta_predicate(filters)?))
-                .build()?,
+        Ok((
+            Arc::new(
+                self.scan_builder()
+                    .with_schema(projected_kernel_schema.clone())
+                    .with_predicate(Arc::new(to_delta_predicate(filters)?))
+                    .build()?,
+            ),
+            project_away,
         ))
     }
 
@@ -249,6 +260,7 @@ impl Snapshot {
         engine: Arc<dyn Engine>,
         projection: Option<&Vec<usize>>,
         limit: Option<usize>,
+        drop_count: usize,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut stream = ScanFileStream::new(engine, &scan, stream);
         let mut files = Vec::new();
@@ -307,10 +319,6 @@ impl Snapshot {
             .into_iter()
             .into_group_map();
 
-        // TODO: the scan should already have the projected schema. We should avoid projecting again here.
-        let (projected_arrow_schema, projected_kernel_schema) =
-            project_schema(self.read_schema(), projection)?;
-
         let physical_schema: SchemaRef =
             Arc::new(scan.physical_schema().as_ref().try_into_arrow()?);
 
@@ -328,14 +336,25 @@ impl Snapshot {
         )
         .await?;
 
+        let logical_fields = scan
+            .logical_schema()
+            .fields()
+            .flat_map(|f| {
+                self.read_schema()
+                    .column_with_name(f.name())
+                    .map(|(_, c)| c.clone())
+            })
+            .collect_vec();
+        let projected_arrow_schema = Arc::new(Schema::new(logical_fields));
         let exec = DeltaScanExec::new(
             projected_arrow_schema,
-            projected_kernel_schema,
+            scan.logical_schema().clone(),
             pq_plan,
             Arc::new(transforms),
             Arc::new(dvs),
             file_id_column,
             metrics,
+            drop_count,
         );
 
         Ok(Arc::new(exec))
@@ -418,7 +437,7 @@ mod tests {
 
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::create_test_session,
+        delta_datafusion::session::create_test_session,
         kernel::Snapshot,
         test_utils::{TestResult, TestTables},
     };

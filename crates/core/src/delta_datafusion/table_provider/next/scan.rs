@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 
 use arrow::array::{ArrayAccessor, AsArray, RecordBatch, StringArray};
 use arrow::datatypes::{SchemaRef, UInt16Type};
+use arrow_schema::Schema;
 use datafusion::common::HashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
@@ -17,9 +18,10 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
-use delta_kernel::schema::SchemaRef as KernelSchemaRef;
+use delta_kernel::schema::{DataType as KernelDataType, SchemaRef as KernelSchemaRef};
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
+use itertools::Itertools;
 
 use crate::cast_record_batch;
 use crate::kernel::ARROW_HANDLER;
@@ -42,6 +44,7 @@ pub struct DeltaScanExec {
 
     /// plan properties
     properties: PlanProperties,
+    drop_count: usize,
 }
 
 impl DisplayAs for DeltaScanExec {
@@ -51,7 +54,7 @@ impl DisplayAs for DeltaScanExec {
             DisplayFormatType::Default
             | DisplayFormatType::Verbose
             | DisplayFormatType::TreeRender => {
-                write!(f, "DeltaScanExec: ")
+                write!(f, "DeltaScanExec: file_id_column={}", self.file_id_column)
             }
         }
     }
@@ -66,7 +69,15 @@ impl DeltaScanExec {
         selection_vectors: Arc<HashMap<String, Vec<bool>>>,
         file_id_column: String,
         metrics: ExecutionPlanMetricsSet,
+        drop_count: usize,
     ) -> Self {
+        let max_idx = logical_schema.fields().len() - drop_count - 1;
+        let output_fields = logical_schema
+            .fields()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, f)| if i <= max_idx { Some(f.clone()) } else { None });
+        let logical_schema = Arc::new(Schema::new(output_fields.collect_vec()));
         let properties = PlanProperties::new(
             EquivalenceProperties::new(logical_schema),
             input.properties().partitioning.clone(),
@@ -81,6 +92,7 @@ impl DeltaScanExec {
             metrics,
             file_id_column,
             properties,
+            drop_count,
         }
     }
 }
@@ -125,6 +137,7 @@ impl ExecutionPlan for DeltaScanExec {
             self.selection_vectors.clone(),
             self.file_id_column.clone(),
             self.metrics.clone(),
+            self.drop_count,
         )))
     }
 
@@ -150,12 +163,14 @@ impl ExecutionPlan for DeltaScanExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(DeltaScanStream {
             schema: Arc::clone(self.properties.eq_properties.schema()),
-            kernel_schema: Arc::clone(&self.kernel_logical_schema),
+            kernel_type: Arc::clone(&self.kernel_logical_schema).into(),
             input: self.input.execute(partition, context)?,
+            kernel_input_schema: Arc::new(self.input.schema().as_ref().try_into_kernel()?),
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_column: self.file_id_column.clone(),
+            drop_count: self.drop_count,
         }))
     }
 
@@ -164,7 +179,8 @@ impl ExecutionPlan for DeltaScanExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
+        // self.input.partition_statistics(None)
+        Ok(Statistics::new_unknown(self.schema().as_ref()))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -190,7 +206,9 @@ impl ExecutionPlan for DeltaScanExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)
+        // TODO: handle statistics conversion properly to leverage parquet plan statistics.
+        // self.input.partition_statistics(partition)
+        Ok(Statistics::new_unknown(self.schema().as_ref()))
     }
 
     fn gather_filters_for_pushdown(
@@ -214,9 +232,14 @@ impl ExecutionPlan for DeltaScanExec {
 /// - column mapping to the logical schema
 /// - deletion vectors
 struct DeltaScanStream {
+    /// Output schema for processed data.
     schema: SchemaRef,
-    kernel_schema: KernelSchemaRef,
+    /// Kernel data type for the data after transformations
+    kernel_type: KernelDataType,
+    /// Input stream yielding raw data read from data files.
     input: SendableRecordBatchStream,
+    /// Kernel schema for the data before transformations
+    kernel_input_schema: KernelSchemaRef,
     baseline_metrics: BaselineMetrics,
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
@@ -224,6 +247,7 @@ struct DeltaScanStream {
     selection_vectors: Arc<HashMap<String, Vec<bool>>>,
     /// Column name for the file id
     file_id_column: String,
+    drop_count: usize,
 }
 
 impl DeltaScanStream {
@@ -244,23 +268,21 @@ impl DeltaScanStream {
             return Ok(batch);
         };
 
-        let input_schema = Arc::new(
-            batch
-                .schema()
-                .try_into_kernel()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        );
         let evaluator = ARROW_HANDLER
             .new_expression_evaluator(
-                input_schema,
+                self.kernel_input_schema.clone(),
                 transform.clone(),
-                self.kernel_schema.clone().into(),
+                self.kernel_type.clone(),
             )
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let result = evaluator
+        let mut result = evaluator
             .evaluate_arrow(batch)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        for _ in 0..self.drop_count {
+            result.remove_column(result.num_columns() - 1);
+        }
 
         // TODO: all casting should be done in the expression evaluator
         Ok(cast_record_batch(&result, self.schema.clone(), true, true)?)
