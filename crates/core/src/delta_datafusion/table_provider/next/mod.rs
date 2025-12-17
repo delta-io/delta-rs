@@ -336,6 +336,8 @@ impl Snapshot {
         )
         .await?;
 
+        // we collect the logical fields from the read schema to ensure
+        // we consider the correct physical types as well (e.g. for StringView etc.)
         let logical_fields = scan
             .logical_schema()
             .fields()

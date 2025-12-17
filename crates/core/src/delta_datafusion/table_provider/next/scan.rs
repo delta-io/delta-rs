@@ -71,12 +71,12 @@ impl DeltaScanExec {
         metrics: ExecutionPlanMetricsSet,
         drop_count: usize,
     ) -> Self {
-        let max_idx = logical_schema.fields().len() - drop_count - 1;
+        let max_idx = logical_schema.fields().len().saturating_sub(drop_count);
         let output_fields = logical_schema
             .fields()
             .into_iter()
             .enumerate()
-            .filter_map(|(i, f)| if i <= max_idx { Some(f.clone()) } else { None });
+            .filter_map(|(i, f)| if i < max_idx { Some(f.clone()) } else { None });
         let logical_schema = Arc::new(Schema::new(output_fields.collect_vec()));
         let properties = PlanProperties::new(
             EquivalenceProperties::new(logical_schema),
