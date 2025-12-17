@@ -126,11 +126,13 @@ async fn compare_table_with_full_paths_to_original_table_s3() {
     deltalake_aws::register_handlers(None);
 
     // Ensure environment is prepared for localstack
-    std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
-    std::env::set_var("AWS_ACCESS_KEY_ID", "deltalake");
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "weloverust");
-    std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
-    std::env::set_var("AWS_ALLOW_HTTP", "true");
+    unsafe {
+        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
+        std::env::set_var("AWS_ACCESS_KEY_ID", "deltalake");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "weloverust");
+        std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
+        std::env::set_var("AWS_ALLOW_HTTP", "true");
+    }
 
     // Path to the original local test table (with relative paths in _delta_log)
     let expected_rel = Path::new("../test/tests/data/delta-0.8.0");
@@ -223,16 +225,18 @@ async fn compare_table_with_full_paths_to_original_table_azure() {
     deltalake_azure::register_handlers(None);
 
     // Ensure environment is prepared for Azurite emulator
-    std::env::set_var("AZURE_STORAGE_USE_EMULATOR", "1");
-    std::env::set_var("AZURE_STORAGE_ACCOUNT_NAME", "devstoreaccount1");
-    std::env::set_var(
-        "AZURE_STORAGE_ACCOUNT_KEY",
-        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
-    );
-    std::env::set_var(
-        "AZURE_STORAGE_CONNECTION_STRING",
-        "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
-    );
+    unsafe {
+        std::env::set_var("AZURE_STORAGE_USE_EMULATOR", "1");
+        std::env::set_var("AZURE_STORAGE_ACCOUNT_NAME", "devstoreaccount1");
+        std::env::set_var(
+            "AZURE_STORAGE_ACCOUNT_KEY",
+            "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+        );
+        std::env::set_var(
+            "AZURE_STORAGE_CONNECTION_STRING",
+            "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
+        );
+    }
 
     // Path to the original local test table (with relative paths in _delta_log)
     let expected_rel = Path::new("../test/tests/data/delta-0.8.0");
@@ -410,7 +414,9 @@ async fn compare_table_with_full_paths_to_original_table_gcp() {
     });
     let account_path = tmpdir_creds.path().join("gcs.json");
     fs::write(&account_path, serde_json::to_vec(&token).unwrap()).unwrap();
-    std::env::set_var("GOOGLE_SERVICE_ACCOUNT", account_path.to_str().unwrap());
+    unsafe {
+        std::env::set_var("GOOGLE_SERVICE_ACCOUNT", account_path.to_str().unwrap());
+    }
 
     // Path to the original local test table (with relative paths in _delta_log)
     let expected_rel = Path::new("../test/tests/data/delta-0.8.0");
