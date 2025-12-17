@@ -5,15 +5,20 @@ use std::{collections::HashMap, path::PathBuf, process::Command};
 use url::Url;
 
 pub use self::factories::*;
+#[cfg(test)]
 use crate::kernel::LogicalFileView;
+#[cfg(test)]
 use crate::logstore::LogStoreRef;
+#[cfg(test)]
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTableBuilder};
+#[cfg(test)]
 use futures::TryStreamExt;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
+#[cfg(test)]
 pub(crate) async fn file_paths_from(
     state: &DeltaTableState,
     log_store: &LogStoreRef,

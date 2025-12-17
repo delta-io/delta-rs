@@ -115,9 +115,9 @@ impl std::future::IntoFuture for LoadBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::DeltaTableBuilder;
-    use crate::operations::{DeltaOps, collect_sendable_stream};
+    use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::{TestResult, get_record_batch};
+    use crate::{DeltaTable, DeltaTableBuilder};
     use datafusion::assert_batches_sorted_eq;
     use std::path::Path;
     use url::Url;
@@ -132,7 +132,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_table, stream) = DeltaOps(table).load().await?;
+        let (_table, stream) = table.scan_table().await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![
@@ -153,9 +153,11 @@ mod tests {
     #[tokio::test]
     async fn test_write_load() -> TestResult {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory().write(vec![batch.clone()]).await?;
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch.clone()])
+            .await?;
 
-        let (_table, stream) = DeltaOps(table).load().await?;
+        let (_table, stream) = table.scan_table().await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![
@@ -184,9 +186,11 @@ mod tests {
     #[tokio::test]
     async fn test_load_with_columns() -> TestResult {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory().write(vec![batch.clone()]).await?;
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch.clone()])
+            .await?;
 
-        let (_table, stream) = DeltaOps(table).load().with_columns(["id", "value"]).await?;
+        let (_table, stream) = table.scan_table().with_columns(["id", "value"]).await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![

@@ -21,7 +21,7 @@ pub fn default_s3_logstore(
     Arc::new(S3LogStore::new(
         store,
         root_store,
-        LogStoreConfig::new(location.clone(), options.clone()),
+        LogStoreConfig::new(location, options.clone()),
     ))
 }
 

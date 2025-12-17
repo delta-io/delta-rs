@@ -531,9 +531,9 @@ mod tests {
     use arrow_schema::Schema as ArrowSchema;
     use delta_kernel::schema::StructType;
 
+    use crate::DeltaResult;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::*;
-    use crate::{DeltaOps, DeltaResult};
 
     use super::*;
 
@@ -612,7 +612,7 @@ mod tests {
         let delta_schema: StructType =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
-        let table = DeltaOps(table)
+        let table = table
             .create()
             .with_partition_columns(partition_cols.to_vec())
             .with_columns(delta_schema.fields().cloned())
@@ -673,7 +673,7 @@ mod tests {
         let delta_schema: StructType =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(vec!["modified"])

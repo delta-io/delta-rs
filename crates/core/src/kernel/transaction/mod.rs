@@ -1023,7 +1023,7 @@ mod tests {
         let log_store = DefaultLogStore::new(
             store.clone(),
             store.clone(),
-            crate::logstore::LogStoreConfig::new(url, StorageConfig::default()),
+            crate::logstore::LogStoreConfig::new(&url, StorageConfig::default()),
         );
         let version_path = Path::from("_delta_log/00000000000000000000.json");
         store.put(&version_path, PutPayload::new()).await.unwrap();

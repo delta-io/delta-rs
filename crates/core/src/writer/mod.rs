@@ -190,7 +190,7 @@ mod tests {
     use delta_kernel::schema::DataType;
 
     use super::*;
-    use crate::{DeltaOps, DeltaResult};
+    use crate::DeltaResult;
     use pretty_assertions::assert_ne;
 
     /// This test doesn't have a great way to _validate_ that logs are not cleaned up as part of
@@ -203,7 +203,7 @@ mod tests {
     /// [flush_and_commit] but that's an API change we isn't desirable at the moment
     #[tokio::test]
     async fn test_flush_and_commit() -> DeltaResult<()> {
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_table_name("my_table")
             .with_column(

@@ -25,7 +25,7 @@ async fn test_commit_info_engine_info() -> Result<(), Box<dyn Error>> {
         .with_actions(actions)
         .build(Some(table.snapshot()?), table.log_store(), operation)
         .await?;
-    table.update().await?;
+    table.update_state().await?;
 
     let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
     let last_commit = &commit_info[0];

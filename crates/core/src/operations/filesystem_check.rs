@@ -287,7 +287,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
 
             let mut table =
                 DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
-            table.update().await?;
+            table.update_state().await?;
             Ok((table, metrics))
         })
     }

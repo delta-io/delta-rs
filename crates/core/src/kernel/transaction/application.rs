@@ -2,8 +2,9 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        DeltaOps, DeltaTableBuilder, checkpoints, ensure_table_uri, kernel::Transaction,
-        kernel::transaction::CommitProperties, protocol::SaveMode,
+        DeltaTable, DeltaTableBuilder, checkpoints, ensure_table_uri,
+        kernel::{Transaction, transaction::CommitProperties},
+        protocol::SaveMode,
         writer::test_utils::get_record_batch,
     };
 
@@ -19,7 +20,7 @@ mod tests {
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::try_from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+        let table = DeltaTable::try_from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
             .await
             .unwrap()
             .write(vec![batch.clone()])
@@ -78,7 +79,7 @@ mod tests {
 
         // Write new data to the table and check that `update` functions work
 
-        let table = DeltaOps::from(table)
+        let table = table
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
                 CommitProperties::default()

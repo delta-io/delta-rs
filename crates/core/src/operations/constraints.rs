@@ -288,7 +288,7 @@ mod tests {
 
     use crate::table::config::TablePropertiesExt as _;
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
-    use crate::{DeltaOps, DeltaResult, DeltaTable};
+    use crate::{DeltaResult, DeltaTable};
 
     fn get_constraint(table: &DeltaTable, name: &str) -> String {
         table
@@ -330,10 +330,7 @@ mod tests {
         // The key of a constraint is allowed to be custom
         // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#check-constraints
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let constraint = table
             .add_constraint()
@@ -354,10 +351,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_constraint_with_invalid_data() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let constraint = table
             .add_constraint()
@@ -370,10 +364,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_valid_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let mut table = table
             .add_constraint()
@@ -400,10 +391,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_valid_multiple_constraints() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let constraints = HashMap::from([("id", "value <    1000"), ("id2", "value <    20")]);
 
@@ -431,10 +419,7 @@ mod tests {
     async fn test_add_constraint_datafusion() -> DeltaResult<()> {
         // Add constraint by providing a datafusion expression.
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let mut table = table
             .add_constraint()
@@ -481,9 +466,12 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
 
-        let mut table = DeltaOps(table)
+        let mut table = table
             .add_constraint()
             .with_constraint("valid_values", "vAlue < 1000") // spellchecker:disable-line
             .await?;
@@ -509,17 +497,13 @@ mod tests {
     #[tokio::test]
     async fn test_add_conflicting_named_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let new_table = table
             .add_constraint()
             .with_constraint("id", "value < 60")
             .await?;
 
-        let new_table = DeltaOps(new_table);
         let second_constraint = new_table
             .add_constraint()
             .with_constraint("id", "value < 10")
@@ -531,15 +515,12 @@ mod tests {
     #[tokio::test]
     async fn test_write_data_that_violates_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
-        let table = DeltaOps(write)
+        let table = table
             .add_constraint()
             .with_constraint("id", "value > 0")
             .await?;
-        let table = DeltaOps(table);
         let invalid_values: Vec<Arc<dyn Array>> = vec![
             Arc::new(StringArray::from(vec!["A"])),
             Arc::new(Int32Array::from(vec![-10])),
@@ -553,18 +534,15 @@ mod tests {
     #[tokio::test]
     async fn test_write_data_that_violates_multiple_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
-        let table = DeltaOps(write)
+        let table = table
             .add_constraint()
             .with_constraints(HashMap::from([
                 ("id", "value > 0"),
                 ("custom_cons", "value < 30"),
             ]))
             .await?;
-        let table = DeltaOps(table);
         let invalid_values: Vec<Arc<dyn Array>> = vec![
             Arc::new(StringArray::from(vec!["A"])),
             Arc::new(Int32Array::from(vec![-10])),
@@ -585,10 +563,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_data_that_does_not_violate_constraint() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
-        let table = DeltaOps(write);
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
 
         let err = table.write(vec![batch]).await;
 

@@ -150,7 +150,7 @@ pub async fn add_file(
             .build(Some(snapshot), table.log_store(), operation)
             .await
             .unwrap();
-        table.update().await.unwrap();
+        table.update_state().await.unwrap();
     }
 }
 
@@ -186,5 +186,5 @@ pub async fn remove_file(
         .build(Some(snapshot), table.log_store(), operation)
         .await
         .unwrap();
-    table.update().await.unwrap();
+    table.update_state().await.unwrap();
 }

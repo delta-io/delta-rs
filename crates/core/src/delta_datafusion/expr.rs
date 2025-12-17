@@ -589,9 +589,9 @@ mod test {
     use datafusion::logical_expr::{BinaryExpr, Cast, Expr, ExprSchemable, col, lit};
     use datafusion::prelude::SessionContext;
 
+    use crate::DeltaTable;
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
-    use crate::{DeltaOps, DeltaTable};
 
     use super::fmt_expr_to_sql;
 
@@ -706,7 +706,7 @@ mod test {
         ])
         .unwrap();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .await

@@ -23,7 +23,7 @@ use crate::logstore::{
     extract_version_from_filename,
 };
 use crate::partitions::PartitionFilter;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
 pub use crate::logstore::PeekCommit;
@@ -94,7 +94,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
                 let log_store = crate::logstore::logstore_for(
-                    storage_config.location().clone(),
+                    storage_config.location(),
                     storage_config.options().clone(),
                 )
                 .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
@@ -123,6 +123,20 @@ impl DeltaTable {
             log_store,
             config,
         }
+    }
+
+    /// Create a new [`DeltaTable`] instance, backed by an un-initialized in memory table
+    ///
+    /// Using this will not persist any changes beyond the lifetime of the table object.
+    /// The main purpose of in-memory tables is for use in testing.
+    ///
+    /// ```
+    /// use deltalake_core::DeltaTable;
+    /// let table = DeltaTable::new_in_memory();
+    /// ```
+    pub fn new_in_memory() -> Self {
+        let url = Url::parse("memory:///").unwrap();
+        DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
     }
 
     /// Create a new [`DeltaTable`] from a [`DeltaTableState`] without loading any
@@ -181,7 +195,7 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
-    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+    pub async fn update_state(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }
 
