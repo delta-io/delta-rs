@@ -3,7 +3,7 @@ use std::sync::Arc;
 use deltalake::{
     datafusion::prelude::SessionContext,
     delta_datafusion::{
-        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionConfig, DeltaTableProvider,
+        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
     },
 };
 use pyo3::prelude::*;
@@ -25,8 +25,8 @@ pub(crate) struct PyQueryBuilder {
 impl PyQueryBuilder {
     #[new]
     pub fn new() -> Self {
-        let config = DeltaSessionConfig::default().into();
-        let ctx = SessionContext::new_with_config(config);
+        let delta_ctx = DeltaSessionContext::new();
+        let ctx = delta_ctx.into_inner();
 
         PyQueryBuilder { ctx }
     }

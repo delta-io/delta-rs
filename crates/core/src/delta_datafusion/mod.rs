@@ -69,7 +69,11 @@ use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{DeltaTable, open_table, open_table_with_storage_options};
 
-pub use self::session::*;
+pub(crate) use self::session::session_state_from_session;
+pub use self::session::{
+    DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
+    create_session,
+};
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -1197,7 +1201,7 @@ mod tests {
             Field::new("value", ArrowDataType::Int32, true),
         ]));
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(get_delta_schema().fields().cloned())
             .with_partition_columns(["modified", "id"])
@@ -1220,7 +1224,7 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = crate::DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1287,7 +1291,7 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1373,13 +1377,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch2])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
 
-        let table = crate::DeltaOps(table)
+        let table = table
             .write(vec![batch1])
             .with_schema_mode(SchemaMode::Merge)
             .with_save_mode(crate::protocol::SaveMode::Append)
@@ -1437,7 +1441,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1527,13 +1531,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch1])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
 
-        let table = crate::DeltaOps(table)
+        let table = table
             .write(vec![batch2])
             .with_schema_mode(SchemaMode::Merge)
             .with_save_mode(crate::protocol::SaveMode::Append)
@@ -1594,7 +1598,7 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1617,7 +1621,7 @@ mod tests {
     async fn test_delta_scan_builder_no_scan_config() {
         let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
         let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1645,7 +1649,7 @@ mod tests {
     async fn test_delta_scan_builder_scan_config_disable_pushdown() {
         let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
         let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1676,7 +1680,7 @@ mod tests {
     async fn test_delta_scan_applies_parquet_options() {
         let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
         let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1801,7 +1805,7 @@ mod tests {
             "b".repeat(1024).as_str(),
         ]));
         let batch = RecordBatch::try_from_iter(vec![("small", small), ("large", large)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1858,7 +1862,7 @@ mod tests {
     async fn test_push_down_filter_panic_2602() -> DeltaResult<()> {
         use crate::kernel::schema::{DataType, PrimitiveType};
         let ctx = SessionContext::new();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_column(

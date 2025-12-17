@@ -1,7 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::{
     catalog::Session,
     common::{Result as DataFusionResult, exec_datafusion_err},
-    execution::{SessionState, SessionStateBuilder},
+    execution::{
+        SessionState, SessionStateBuilder,
+        disk_manager::DiskManagerBuilder,
+        memory_pool::FairSpillPool,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+    },
     prelude::{SessionConfig, SessionContext},
     sql::planner::ParserOptions,
 };
@@ -67,24 +74,77 @@ impl From<DeltaSessionConfig> for SessionConfig {
     }
 }
 
-/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
+/// A builder for configuring DataFusion RuntimeEnv with Delta-specific defaults
+#[derive(Default)]
+pub struct DeltaRuntimeEnvBuilder {
+    inner: RuntimeEnvBuilder,
+}
+
+impl DeltaRuntimeEnvBuilder {
+    pub fn new() -> Self {
+        Self {
+            inner: RuntimeEnvBuilder::new(),
+        }
+    }
+
+    pub fn with_max_spill_size(mut self, size: usize) -> Self {
+        let memory_pool = FairSpillPool::new(size);
+        self.inner = self.inner.with_memory_pool(Arc::new(memory_pool));
+        self
+    }
+
+    pub fn with_max_temp_directory_size(mut self, size: u64) -> Self {
+        let disk_manager = DiskManagerBuilder::default().with_max_temp_directory_size(size);
+        self.inner = self.inner.with_disk_manager_builder(disk_manager);
+        self
+    }
+
+    pub fn build(self) -> Arc<RuntimeEnv> {
+        self.inner.build_arc().unwrap()
+    }
+}
+
+/// A wrapper for DataFusion's SessionContext with Delta-specific defaults
+///
+/// This provides a way of creating DataFusion sessions with consistent
+/// Delta Lake configuration (case-sensitive identifiers, Delta planner, etc.)
 pub struct DeltaSessionContext {
     inner: SessionContext,
 }
 
 impl DeltaSessionContext {
+    /// Create a new DeltaSessionContext with default configuration
     pub fn new() -> Self {
-        let ctx = SessionContext::new_with_config(DeltaSessionConfig::default().into());
+        let config = DeltaSessionConfig::default().into();
+        let runtime_env = RuntimeEnvBuilder::new().build_arc().unwrap();
+        Self::new_with_config_and_runtime(config, runtime_env)
+    }
+
+    /// Create a DeltaSessionContext with a custom RuntimeEnv
+    pub fn with_runtime_env(runtime_env: Arc<RuntimeEnv>) -> Self {
+        let config = DeltaSessionConfig::default().into();
+        Self::new_with_config_and_runtime(config, runtime_env)
+    }
+
+    fn new_with_config_and_runtime(config: SessionConfig, runtime_env: Arc<RuntimeEnv>) -> Self {
         let planner = DeltaPlanner::new();
-        let state = SessionStateBuilder::new_from_existing(ctx.state())
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
             .with_query_planner(planner)
             .build();
+
         let inner = SessionContext::new_with_state(state);
         Self { inner }
     }
 
     pub fn into_inner(self) -> SessionContext {
         self.inner
+    }
+
+    pub fn state(&self) -> SessionState {
+        self.inner.state()
     }
 }
 
