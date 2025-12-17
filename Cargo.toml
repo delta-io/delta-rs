@@ -111,7 +111,7 @@ tpe = "tpe"
 # Usage: cargo test (automatic)
 # <https://github.com/delta-io/delta-rs/issues/1550>
 [profile.test]
-debug = "line-tables-only"
+debug = true
 
 # Benchmark profile with debug symbols for flamegraphs
 # Usage: cargo bench (automatic)
