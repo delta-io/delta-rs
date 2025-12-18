@@ -84,8 +84,8 @@ impl DeltaScanExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(logical_schema),
             input.properties().partitioning.clone(),
-            input.properties().emission_type.clone(),
-            input.properties().boundedness.clone(),
+            input.properties().emission_type,
+            input.properties().boundedness,
         );
         Self {
             kernel_logical_schema,

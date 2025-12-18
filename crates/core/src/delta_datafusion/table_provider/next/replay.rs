@@ -142,7 +142,7 @@ where
                     stats_schema,
                 )?;
 
-                let mut file_statistics = extract_file_statistics(&this.kernel_scan, parsed_stats);
+                let mut file_statistics = extract_file_statistics(this.kernel_scan, parsed_stats);
 
                 Poll::Ready(Some(Ok(ctx
                     .files
@@ -175,7 +175,7 @@ fn extract_file_statistics(
         .filter_map(|view| {
             let num_rows = view
                 .num_records()
-                .map(|num| Precision::Exact(num))
+                .map(Precision::Exact)
                 .unwrap_or(Precision::Absent);
             let total_byte_size = Precision::Exact(view.size() as usize);
 
@@ -216,7 +216,7 @@ fn extract_file_statistics(
                 .collect_vec();
 
             Some((
-                parse_path(&scan.snapshot().table_root(), view.path().as_ref()).ok()?,
+                parse_path(scan.snapshot().table_root(), view.path().as_ref()).ok()?,
                 Statistics {
                     num_rows,
                     total_byte_size,
