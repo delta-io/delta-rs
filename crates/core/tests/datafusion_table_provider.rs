@@ -220,3 +220,21 @@ async fn test_column_mapping() -> TestResult<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_deletion_vectors() -> TestResult<()> {
+    let (snapshot, session) = scan_dat("deletion_vectors").await?;
+
+    let plan = snapshot.scan(&session.state(), None, &[], None).await?;
+    let batches: Vec<_> = collect_plan(plan, &session).await?;
+    let expected = vec![
+        "+--------+-----+------------+",
+        "| letter | int | date       |",
+        "+--------+-----+------------+",
+        "| b      | 228 | 1978-12-01 |",
+        "+--------+-----+------------+",
+    ];
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}

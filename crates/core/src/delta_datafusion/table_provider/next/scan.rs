@@ -4,8 +4,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::{ArrayAccessor, AsArray, RecordBatch, StringArray};
+use arrow::compute::filter_record_batch;
 use arrow::datatypes::{SchemaRef, UInt16Type};
+use arrow_array::BooleanArray;
 use arrow_schema::Schema;
+use dashmap::DashMap;
 use datafusion::common::HashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
@@ -36,7 +39,7 @@ pub struct DeltaScanExec {
     /// Transforms to be applied to data eminating from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Deletion vectors for the table
-    selection_vectors: Arc<HashMap<String, Vec<bool>>>,
+    selection_vectors: Arc<DashMap<String, Vec<bool>>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Column name for the file id
@@ -66,7 +69,7 @@ impl DeltaScanExec {
         kernel_logical_schema: KernelSchemaRef,
         input: Arc<dyn ExecutionPlan>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
-        selection_vectors: Arc<HashMap<String, Vec<bool>>>,
+        selection_vectors: Arc<DashMap<String, Vec<bool>>>,
         file_id_column: String,
         metrics: ExecutionPlanMetricsSet,
         drop_count: usize,
@@ -244,7 +247,7 @@ struct DeltaScanStream {
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
-    selection_vectors: Arc<HashMap<String, Vec<bool>>>,
+    selection_vectors: Arc<DashMap<String, Vec<bool>>>,
     /// Column name for the file id
     file_id_column: String,
     drop_count: usize,
@@ -252,16 +255,42 @@ struct DeltaScanStream {
 
 impl DeltaScanStream {
     /// Apply the per-file transformation to a RecordBatch.
-    fn batch_project(&self, mut batch: RecordBatch) -> Result<RecordBatch> {
+    fn batch_project(&mut self, mut batch: RecordBatch) -> Result<RecordBatch> {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
         let (file_id, file_id_idx) = extract_file_id(&batch, &self.file_id_column)?;
         batch.remove_column(file_id_idx);
 
+        let selection = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
+        {
+            if selection_vector.len() >= batch.num_rows() {
+                let sv: Vec<bool> = selection_vector.drain(0..batch.num_rows()).collect();
+                Some(sv)
+            } else {
+                let remaining = batch.num_rows() - selection_vector.len();
+                let sel_len = selection_vector.len();
+                let mut sv: Vec<bool> = selection_vector.drain(0..sel_len).collect();
+                sv.extend(vec![true; remaining]);
+                Some(sv)
+            }
+        } else {
+            None
+        };
+
         // NOTE: this case may occur e.g. in a COUNT(*) query where no columns are projected
         if batch.num_columns() == 0 {
+            if let Some(selection) = selection {
+                let filtered_batch = filter_record_batch(&batch, &BooleanArray::from(selection))?;
+                return Ok(filtered_batch);
+            }
             return Ok(batch);
         }
+
+        let batch = if let Some(selection) = selection {
+            filter_record_batch(&batch, &BooleanArray::from(selection))?
+        } else {
+            batch
+        };
 
         let Some(transform) = self.transforms.get(&file_id) else {
             let batch = RecordBatch::try_new(self.schema.clone(), batch.columns().to_vec())?;

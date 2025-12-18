@@ -28,6 +28,7 @@ use std::{borrow::Cow, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use arrow_schema::Schema;
+use dashmap::DashMap;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::{DataFusionError, HashMap, HashSet, Result};
 use datafusion::datasource::TableType;
@@ -277,7 +278,7 @@ impl Snapshot {
             })
             .collect();
         let dv_stream = stream.dv_stream.build();
-        let dvs: HashMap<_, _> = dv_stream
+        let dvs: DashMap<_, _> = dv_stream
             .try_filter_map(|(url, dv)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
             .try_collect()
             .await?;
