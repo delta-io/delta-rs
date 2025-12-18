@@ -77,7 +77,7 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, true).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, true, None).await?;
             PROTOCOL.can_read_from(&snapshot)?;
 
             let schema = snapshot.read_schema();

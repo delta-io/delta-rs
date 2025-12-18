@@ -250,7 +250,8 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
             let plan = this.create_fsck_plan(&snapshot).await?;
             if this.dry_run {

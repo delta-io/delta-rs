@@ -43,6 +43,7 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
+use delta_kernel::Version;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
@@ -708,6 +709,7 @@ pub struct TableProviderBuilder {
     log_store: Arc<dyn LogStore>,
     snapshot: Option<EagerSnapshot>,
     file_column: Option<String>,
+    table_version: Option<Version>,
 }
 
 impl TableProviderBuilder {
@@ -716,7 +718,14 @@ impl TableProviderBuilder {
             log_store,
             snapshot,
             file_column: None,
+            table_version: None,
         }
+    }
+
+    /// Specify the version of the table to provide
+    pub fn with_table_version(mut self, version: impl Into<Option<Version>>) -> Self {
+        self.table_version = version.into();
+        self
     }
 
     pub fn with_file_column(mut self, file_column: String) -> Self {
@@ -733,7 +742,8 @@ impl std::future::IntoFuture for TableProviderBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot, false, this.table_version).await?;
             Ok(Arc::new(snapshot) as Arc<dyn TableProvider>)
         })
     }

@@ -84,7 +84,8 @@ impl std::future::IntoFuture for DropConstraintBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let name = this
