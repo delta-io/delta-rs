@@ -347,7 +347,8 @@ impl std::future::IntoFuture for RestoreBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
