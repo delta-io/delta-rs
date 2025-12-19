@@ -34,21 +34,11 @@ use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
 use deltalake::logstore::{IORuntime, ObjectStoreRef};
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
-use deltalake::operations::delete::DeleteBuilder;
-use deltalake::operations::drop_constraints::DropConstraintBuilder;
-use deltalake::operations::filesystem_check::FileSystemCheckBuilder;
-use deltalake::operations::load_cdf::CdfLoadBuilder;
 use deltalake::operations::optimize::{
-    create_session_state_for_optimize, OptimizeBuilder, OptimizeType,
+    create_session_state_for_optimize, OptimizeType,
 };
-use deltalake::operations::restore::RestoreBuilder;
-use deltalake::operations::set_tbl_properties::SetTablePropertiesBuilder;
-use deltalake::operations::update::UpdateBuilder;
-use deltalake::operations::update_field_metadata::UpdateFieldMetadataBuilder;
-use deltalake::operations::update_table_metadata::{
-    TableMetadataUpdate, UpdateTableMetadataBuilder,
-};
-use deltalake::operations::vacuum::{VacuumBuilder, VacuumMode};
+use deltalake::operations::update_table_metadata::TableMetadataUpdate;
+use deltalake::operations::vacuum::VacuumMode;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::{Compression, Encoding};

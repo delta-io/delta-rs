@@ -201,7 +201,7 @@ impl LogStore for S3DynamoDbLogStore {
     async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
         let entry = self
             .lock_client
-            .get_commit_entry(&self.table_path.to_string(), version)
+            .get_commit_entry(self.table_path.as_ref(), version)
             .await;
         if let Ok(Some(entry)) = entry {
             self.repair_entry(&entry).await?;

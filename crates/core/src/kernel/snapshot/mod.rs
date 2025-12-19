@@ -475,13 +475,12 @@ pub(crate) async fn resolve_snapshot(
     version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
     if let Some(snapshot) = maybe_snapshot {
-        if let Some(version) = version {
-            if snapshot.version() as Version != version {
+        if let Some(version) = version
+            && snapshot.version() as Version != version {
                 return Err(DeltaTableError::Generic(
                     "Provided snapshot version does not match the requested version".to_string(),
                 ));
             }
-        }
         if require_files {
             snapshot.with_files(log_store).await
         } else {
