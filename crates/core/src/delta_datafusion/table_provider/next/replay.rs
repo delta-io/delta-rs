@@ -18,7 +18,7 @@ use delta_kernel::{
     expressions::{Scalar, StructData},
     scan::{
         Scan as KernelScan, ScanMetadata,
-        state::{DvInfo, Stats},
+        state::{DvInfo, ScanFile},
     },
 };
 use futures::Stream;
@@ -323,18 +323,8 @@ fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     })
 }
 
-fn visit_scan_file(
-    ctx: &mut ScanContext,
-    path: &str,
-    size: i64,
-    _stats: Option<Stats>,
-    dv_info: DvInfo,
-    transform: Option<ExpressionRef>,
-    // NB: partition values are passed for backwards compatibility
-    // all required transformations are now part of the transform field
-    _: std::collections::HashMap<String, String>,
-) {
-    let file_url = match ctx.parse_path(path) {
+fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
+    let file_url = match ctx.parse_path(&scan_file.path) {
         Ok(v) => v,
         Err(e) => {
             ctx.errs.add_error(e);
@@ -343,10 +333,10 @@ fn visit_scan_file(
     };
 
     ctx.files.push(ScanFileContextInner {
-        dv_info,
-        transform,
+        dv_info: scan_file.dv_info,
+        transform: scan_file.transform,
         file_url,
-        size: size as u64,
+        size: scan_file.size as u64,
     });
     ctx.count += 1;
 }
