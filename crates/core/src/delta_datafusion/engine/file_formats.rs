@@ -128,6 +128,18 @@ impl ParquetHandler for DataFusionFileFormatHandler {
                 .flatten(),
         ))
     }
+
+    fn write_parquet_file(
+        &self,
+        _location: url::Url,
+        _data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
+    ) -> KernelResult<()> {
+        todo!("write parquet file")
+    }
+
+    fn read_parquet_footer(&self, _file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {
+        todo!("read parquet footer")
+    }
 }
 
 impl JsonHandler for DataFusionFileFormatHandler {
