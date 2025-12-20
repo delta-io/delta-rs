@@ -1236,7 +1236,11 @@ mod tests {
 
         let result = execute_test(
             Some(setup_actions),
-            Some(col("value").gt(lit::<i32>(1)).and(col("value").lt_eq(lit::<i32>(3)))), // empty read
+            Some(
+                col("value")
+                    .gt(lit::<i32>(1))
+                    .and(col("value").lt_eq(lit::<i32>(3))),
+            ), // empty read
             vec![simple_add(true, "5", "5").into()], // disjoint from read predicate
             vec![simple_add(true, "2", "2").into()],
             false,
