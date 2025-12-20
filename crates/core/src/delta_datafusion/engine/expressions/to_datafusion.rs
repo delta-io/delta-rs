@@ -4,6 +4,7 @@ use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
+use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator, col, lit};
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
@@ -15,6 +16,8 @@ use delta_kernel::expressions::{
 };
 use delta_kernel::schema::DataType;
 use itertools::Itertools;
+
+use crate::delta_datafusion::engine::expressions::to_json::to_json;
 
 pub fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {
     match expr {
@@ -106,7 +109,10 @@ fn unary_to_df(un: &UnaryExpression, output_type: &DataType) -> DFResult<Expr> {
     let UnaryExpression { op, expr } = un;
     let expr = to_datafusion_expr(expr, output_type)?;
     Ok(match op {
-        UnaryExpressionOp::ToJson => todo!(),
+        UnaryExpressionOp::ToJson => Expr::ScalarFunction(ScalarFunction {
+            func: to_json(),
+            args: vec![expr],
+        }),
     })
 }
 
