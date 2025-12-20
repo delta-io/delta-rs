@@ -616,6 +616,7 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    MaterializePartitionColumns,
 }
 
 impl FromStr for TableFeatures {
@@ -636,6 +637,7 @@ impl FromStr for TableFeatures {
             "rowTracking" => Ok(TableFeatures::RowTracking),
             "domainMetadata" => Ok(TableFeatures::DomainMetadata),
             "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            "materializePartitionColumns" => Ok(TableFeatures::MaterializePartitionColumns),
             _ => Err(()),
         }
     }
@@ -657,6 +659,7 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::RowTracking => "rowTracking",
             TableFeatures::DomainMetadata => "domainMetadata",
             TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+            TableFeatures::MaterializePartitionColumns => "materializePartitionColumns",
         }
     }
 }
@@ -695,7 +698,8 @@ impl TableFeatures {
                     | TableFeature::DomainMetadata
                     | TableFeature::IcebergCompatV1
                     | TableFeature::IcebergCompatV2
-                    | TableFeature::ClusteredTable => (None, Some(feature)),
+                    | TableFeature::ClusteredTable
+                    | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
 
                     // ReaderWriter features
                     TableFeature::CatalogManaged
