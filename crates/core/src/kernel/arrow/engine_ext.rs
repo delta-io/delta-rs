@@ -369,8 +369,10 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
 pub(crate) fn rb_from_scan_meta(metadata: ScanMetadata) -> DeltaResult<RecordBatch> {
     let (underlying_data, selection_vector) = metadata.scan_files.into_parts();
     let batch = ArrowEngineData::try_from_engine_data(underlying_data)?.into();
-    let scan_files = filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
-    Ok(scan_files)
+    Ok(filter_record_batch(
+        &batch,
+        &BooleanArray::from(selection_vector),
+    )?)
 }
 
 /// Internal extension trait for expression evaluators.
