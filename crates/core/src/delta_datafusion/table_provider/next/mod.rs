@@ -103,7 +103,7 @@ impl TableProvider for Snapshot {
         let (scan, drop_count) = self.kernel_scan(projection, filters)?;
         let engine = DataFusionEngine::new_from_session(session);
         let stream = scan.scan_metadata(engine.clone());
-        self.execution_plan(session, scan, stream, engine, projection, limit, drop_count)
+        self.execution_plan(session, scan, stream, engine, limit, drop_count)
             .await
     }
 
@@ -172,7 +172,7 @@ impl TableProvider for EagerSnapshot {
             scan.scan_metadata(engine.clone())
         };
         self.snapshot()
-            .execution_plan(session, scan, stream, engine, projection, limit, drop_count)
+            .execution_plan(session, scan, stream, engine, limit, drop_count)
             .await
     }
 
@@ -259,7 +259,6 @@ impl Snapshot {
         scan: Arc<Scan>,
         stream: ScanMetadataStream,
         engine: Arc<dyn Engine>,
-        projection: Option<&Vec<usize>>,
         limit: Option<usize>,
         drop_count: usize,
     ) -> Result<Arc<dyn ExecutionPlan>> {

@@ -4,7 +4,7 @@ use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
-use datafusion::logical_expr::{BinaryExpr, Distinct, Expr, Operator, col, lit};
+use datafusion::logical_expr::{BinaryExpr, Expr, Operator, col, lit};
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;

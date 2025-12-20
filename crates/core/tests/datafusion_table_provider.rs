@@ -2,18 +2,14 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use arrow_cast::pretty::print_batches;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
 use datafusion::prelude::{SessionContext, col, lit};
-use delta_kernel::Engine;
-use deltalake_core::DeltaTableBuilder;
 use deltalake_core::delta_datafusion::create_session;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
 use deltalake_test::TestResult;
-use deltalake_test::acceptance::data::read_golden;
 use deltalake_test::acceptance::read_dat_case;
 
 async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
