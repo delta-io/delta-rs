@@ -22,6 +22,7 @@ delta_kernel = { workspace = true }
 object_store = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 
@@ -29,7 +30,6 @@ dotenvy = "0"
 fs_extra = "1.3.0"
 futures = { version = "0.3" }
 pretty_assertions = "1.2.1"
-tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
