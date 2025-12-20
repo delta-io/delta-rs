@@ -60,7 +60,7 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
             ))))
         }
         Expr::BinaryExpr(BinaryExpr {
-            op: op @ (Operator::Eq | Operator::Lt | Operator::Gt),
+            op: op @ (Operator::Eq | Operator::Lt | Operator::Gt | Operator::IsDistinctFrom),
             left,
             right,
         }) => Ok(Expression::Predicate(Box::new(Predicate::Binary(
@@ -89,6 +89,17 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
                 }),
             )))))
         }
+        Expr::BinaryExpr(BinaryExpr {
+            op: Operator::IsNotDistinctFrom,
+            left,
+            right,
+        }) => Ok(Expression::Predicate(Box::new(Predicate::Not(Box::new(
+            Predicate::Binary(BinaryPredicate {
+                left: Box::new(to_delta_expression(left.as_ref())?),
+                op: to_binary_predicate_op(Operator::IsDistinctFrom)?,
+                right: Box::new(to_delta_expression(right.as_ref())?),
+            }),
+        ))))),
         Expr::BinaryExpr(BinaryExpr { op, left, right }) => {
             Ok(Expression::Binary(BinaryExpression {
                 left: Box::new(to_delta_expression(left.as_ref())?),
@@ -192,6 +203,7 @@ fn to_binary_predicate_op(op: Operator) -> DFResult<BinaryPredicateOp> {
         Operator::Eq => Ok(BinaryPredicateOp::Equal),
         Operator::Lt => Ok(BinaryPredicateOp::LessThan),
         Operator::Gt => Ok(BinaryPredicateOp::GreaterThan),
+        Operator::IsDistinctFrom => Ok(BinaryPredicateOp::Distinct),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported operator: {:?}",
             op

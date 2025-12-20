@@ -4,7 +4,7 @@ use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
-use datafusion::logical_expr::{Expr, col, lit};
+use datafusion::logical_expr::{BinaryExpr, Distinct, Expr, Operator, col, lit};
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -114,13 +114,16 @@ fn binary_pred_to_df(bin: &BinaryPredicate, output_type: &DataType) -> DFResult<
     let BinaryPredicate { left, op, right } = bin;
     let left_expr = to_datafusion_expr(left, output_type)?;
     let right_expr = to_datafusion_expr(right, output_type)?;
+
     Ok(match op {
         BinaryPredicateOp::Equal => left_expr.eq(right_expr),
         BinaryPredicateOp::LessThan => left_expr.lt(right_expr),
         BinaryPredicateOp::GreaterThan => left_expr.gt(right_expr),
-        BinaryPredicateOp::Distinct => Err(DataFusionError::NotImplemented(
-            "DISTINCT operator not supported".into(),
-        ))?,
+        BinaryPredicateOp::Distinct => Expr::BinaryExpr(BinaryExpr {
+            left: left_expr.into(),
+            op: Operator::IsDistinctFrom,
+            right: right_expr.into(),
+        }),
         BinaryPredicateOp::In => Err(DataFusionError::NotImplemented(
             "IN operator not supported".into(),
         ))?,
