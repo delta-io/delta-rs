@@ -237,7 +237,6 @@ pub struct LogStoreConfig {
 
 impl LogStoreConfig {
     pub fn new(location: &Url, options: StorageConfig) -> Self {
-        println!("location in: {location:?}");
         let location = normalize_table_url(location);
         Self { location, options }
     }
