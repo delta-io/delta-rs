@@ -25,7 +25,7 @@ use crate::delta_datafusion::engine::expressions::to_json::to_json;
 /// into their DataFusion equivalents, using the provided output type for type inference.
 pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {
     match expr {
-        Expression::Literal(scalar) => scalar_to_df(scalar).map(lit),
+        Expression::Literal(scalar) => to_datafusion_scalar(scalar).map(lit),
         Expression::Column(name) => {
             let mut name_iter = name.iter();
             let base_name = name_iter.next().ok_or_else(|| {
@@ -48,7 +48,7 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
 ///
 /// Handles type mapping between Delta Lake's scalar types and DataFusion's scalar types,
 /// including primitive types, temporal types, structs, and null values.
-pub(crate) fn scalar_to_df(scalar: &Scalar) -> DFResult<ScalarValue> {
+pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
     Ok(match scalar {
         Scalar::Boolean(value) => ScalarValue::Boolean(Some(*value)),
         Scalar::String(value) => ScalarValue::Utf8(Some(value.clone())),
@@ -73,7 +73,11 @@ pub(crate) fn scalar_to_df(scalar: &Scalar) -> DFResult<ScalarValue> {
                 .iter()
                 .map(|f| f.try_into_arrow())
                 .try_collect()?;
-            let values: Vec<_> = data.values().iter().map(scalar_to_df).try_collect()?;
+            let values: Vec<_> = data
+                .values()
+                .iter()
+                .map(to_datafusion_scalar)
+                .try_collect()?;
             fields
                 .into_iter()
                 .zip(values.into_iter())
@@ -231,7 +235,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let result = scalar_to_df(&input).unwrap();
+            let result = to_datafusion_scalar(&input).unwrap();
             assert_eq!(result, expected);
         }
     }
@@ -252,7 +256,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let result = scalar_to_df(&input).unwrap();
+            let result = to_datafusion_scalar(&input).unwrap();
             assert_eq!(result, expected);
         }
     }
@@ -275,7 +279,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let result = scalar_to_df(&input).unwrap();
+            let result = to_datafusion_scalar(&input).unwrap();
             assert_eq!(result, expected);
         }
     }
@@ -283,7 +287,7 @@ mod tests {
     /// Test conversion of struct scalar type to DataFusion scalar value
     #[test]
     fn test_scalar_to_df_struct() {
-        let result = scalar_to_df(&Scalar::Struct(
+        let result = to_datafusion_scalar(&Scalar::Struct(
             StructData::try_new(
                 vec![
                     StructField::nullable("a", DataType::INTEGER),
@@ -322,7 +326,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let result = scalar_to_df(&input).unwrap();
+            let result = to_datafusion_scalar(&input).unwrap();
             assert_eq!(result, expected);
         }
     }
@@ -354,7 +358,7 @@ mod tests {
         ];
 
         for (input, expected_error) in test_cases {
-            let result = scalar_to_df(&input);
+            let result = to_datafusion_scalar(&input);
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains(expected_error));
         }
