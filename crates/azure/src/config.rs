@@ -4,12 +4,12 @@
 //! provide credentials for a service principal. Some of this configutaion may
 //! partially be specified in the environment. This module establishes a structured
 //! way how we discover valid credentials and some heuristics on how they are prioritized.
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use object_store::azure::AzureConfigKey;
 use object_store::Error as ObjectStoreError;
+use object_store::azure::AzureConfigKey;
 
 use crate::error::Result;
 
@@ -82,12 +82,11 @@ impl AzureConfigHelper {
     ) -> Result<Self> {
         let mut env_config = HashMap::new();
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("AZURE_") {
-                    if let Ok(config_key) = AzureConfigKey::from_str(&key.to_ascii_lowercase()) {
-                        env_config.insert(config_key, value.to_string());
-                    }
-                }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && key.starts_with("AZURE_")
+                && let Ok(config_key) = AzureConfigKey::from_str(&key.to_ascii_lowercase())
+            {
+                env_config.insert(config_key, value.to_string());
             }
         }
 
@@ -183,10 +182,10 @@ impl AzureConfigHelper {
         // work purely using defaults, but partial config may be present in the environment.
         // Preference of conflicting configs (e.g. msi resource id vs. client id is handled in object store)
         for key in self.env_config.keys() {
-            if !omit_keys.contains(key) {
-                if let Entry::Vacant(e) = self.config.entry(*key) {
-                    e.insert(self.env_config.get(key).unwrap().to_owned());
-                }
+            if !omit_keys.contains(key)
+                && let Entry::Vacant(e) = self.config.entry(*key)
+            {
+                e.insert(self.env_config.get(key).unwrap().to_owned());
             }
         }
 

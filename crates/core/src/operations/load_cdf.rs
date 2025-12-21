@@ -17,25 +17,25 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
-use datafusion::common::config::TableParquetOptions;
 use datafusion::common::ScalarValue;
+use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
-use datafusion::physical_expr::{expressions, PhysicalExpr};
+use datafusion::physical_expr::{PhysicalExpr, expressions};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use tracing::log;
 
-use crate::delta_datafusion::{register_store, DataFusionMixins};
+use crate::DeltaTableError;
+use crate::delta_datafusion::{DataFusionMixins, register_store};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{resolve_snapshot, Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
-use crate::logstore::{get_actions, LogStoreRef};
-use crate::DeltaTableError;
+use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, resolve_snapshot};
+use crate::logstore::{LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
 /// Builder for create a read of change data feeds for delta tables
@@ -127,16 +127,15 @@ impl CdfLoadBuilder {
     async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<i64> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
-            if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
-                if let Ok(actions) = get_actions(v, &bytes) {
-                    if actions.iter().any(|action| {
-                        matches!(action, Action::CommitInfo(CommitInfo {
+            if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await
+                && let Ok(actions) = get_actions(v, &bytes)
+                && actions.iter().any(|action| {
+                    matches!(action, Action::CommitInfo(CommitInfo {
                             timestamp: Some(t), ..
                         }) if ts.timestamp_millis() < *t)
-                    }) {
-                        return Ok(v);
-                    }
-                }
+                })
+            {
+                return Ok(v);
             }
         }
         Ok(0)
@@ -219,14 +218,13 @@ impl CdfLoadBuilder {
             timestamp: Some(latest_timestamp),
             ..
         })) = latest_version_commit
+            && starting_timestamp.timestamp_millis() > *latest_timestamp
         {
-            if starting_timestamp.timestamp_millis() > *latest_timestamp {
-                return if self.allow_out_of_range {
-                    Ok((change_files, add_files, remove_files))
-                } else {
-                    Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
-                };
-            }
+            return if self.allow_out_of_range {
+                Ok((change_files, add_files, remove_files))
+            } else {
+                Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
+            };
         }
 
         log::debug!(
@@ -255,13 +253,11 @@ impl CdfLoadBuilder {
                 if let Some(Action::CommitInfo(CommitInfo {
                     timestamp: Some(t), ..
                 })) = version_commit
+                    && (starting_timestamp.timestamp_millis() > *t
+                        || *t > ending_timestamp.timestamp_millis())
                 {
-                    if starting_timestamp.timestamp_millis() > *t
-                        || *t > ending_timestamp.timestamp_millis()
-                    {
-                        log::debug!("Version: {version} skipped, due to commit timestamp");
-                        continue;
-                    }
+                    log::debug!("Version: {version} skipped, due to commit timestamp");
+                    continue;
                 }
             }
 
@@ -352,7 +348,7 @@ impl CdfLoadBuilder {
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true).await?;
+        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
@@ -510,7 +506,7 @@ pub(crate) mod tests {
 
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
-    use crate::{DeltaOps, DeltaTable, TableProperty};
+    use crate::{DeltaTable, TableProperty};
     use std::path::Path;
     use url::Url;
 
@@ -520,9 +516,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
@@ -573,9 +569,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
             .build(&ctx.state(), None)
@@ -623,9 +619,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
@@ -678,9 +674,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(4)
             .with_ending_version(1)
             .build(&ctx.state(), None)
@@ -701,9 +697,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(5)
             .build(&ctx.state(), None)
             .await;
@@ -723,9 +719,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(5)
             .with_allow_out_of_range()
             .build(&ctx.state(), None)
@@ -750,9 +746,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await;
@@ -773,9 +769,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .with_allow_out_of_range()
             .build(&ctx.state(), None)
@@ -799,9 +795,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/simple_table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await;
@@ -822,9 +818,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await?;
@@ -865,7 +861,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_use_remove_actions_for_deletions() -> TestResult {
         let delta_schema = TestSchemas::simple();
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
@@ -900,13 +896,13 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let table = DeltaOps(table)
+        let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
@@ -914,8 +910,9 @@ pub(crate) mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let cdf_scan = DeltaOps(table.clone())
-            .load_cdf()
+        let cdf_scan = table
+            .clone()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await

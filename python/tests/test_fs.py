@@ -84,7 +84,7 @@ def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
 def test_read_simple_table_from_remote(s3_localstack):
-    table_path = "s3://deltars/simple"
+    table_path = "s3://deltars/simple/"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_table().equals(pa.table({"id": [5, 7, 9]}))
 
@@ -96,8 +96,7 @@ def test_read_simple_table_from_remote(s3_localstack):
         "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
     ]
 
-    assert dt.files() == expected_files
-    assert dt.file_uris() == [table_path + "/" + path for path in expected_files]
+    assert dt.file_uris() == [table_path + path for path in expected_files]
 
 
 @pytest.mark.pyarrow

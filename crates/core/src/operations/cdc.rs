@@ -2,9 +2,9 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
+use crate::DeltaResult;
 use crate::kernel::EagerSnapshot;
 use crate::table::config::TablePropertiesExt as _;
-use crate::DeltaResult;
 
 use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
@@ -85,11 +85,6 @@ pub(crate) fn should_write_cdc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
-    use crate::kernel::{Action, PrimitiveType};
-    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-    use crate::operations::DeltaOps;
-    use crate::{DeltaTable, TableProperty};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::datatypes::{DataType, Field};
     use arrow_array::RecordBatch;
@@ -98,11 +93,16 @@ mod tests {
     use datafusion::datasource::{MemTable, TableProvider};
     use delta_kernel::table_features::TableFeature;
 
+    use super::*;
+    use crate::kernel::{Action, PrimitiveType};
+    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
+    use crate::{DeltaTable, TableProperty};
+
     /// A simple test which validates primitive writer version 1 tables should
     /// not write Change Data Files
     #[tokio::test]
     async fn test_should_write_cdc_basic_table() {
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -124,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_write_cdc_table_with_configuration() {
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -152,7 +152,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_no_writer_feature() {
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 7).as_kernel())];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -182,7 +182,7 @@ mod tests {
             .append_writer_features(vec![TableFeature::ChangeDataFeed])
             .as_kernel();
         let actions = vec![Action::Protocol(protocol)];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",

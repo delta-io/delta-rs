@@ -25,10 +25,10 @@ use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{
-    lit, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
 };
-use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
 
@@ -40,23 +40,23 @@ use uuid::Uuid;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
+use super::Operation;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
-use super::Operation;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
-use crate::delta_datafusion::physical::{find_metric_node, get_metric, MetricObserverExec};
+use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    create_session, find_files, register_store, session_state_from_session, DataFusionMixins,
-    DeltaScanConfigBuilder, DeltaTableProvider,
+    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, create_session, find_files,
+    register_store, session_state_from_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{resolve_snapshot, Action, Add, EagerSnapshot, Remove};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot};
 use crate::logstore::LogStoreRef;
-use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
-use crate::operations::write::WriterStatsConfig;
 use crate::operations::CustomExecuteHandler;
+use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -176,7 +176,8 @@ impl std::future::IntoFuture for DeleteBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
@@ -243,18 +244,18 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
-            if metric_observer.id.eq(SOURCE_COUNT_ID) {
-                return Ok(Some(MetricObserverExec::try_new(
-                    SOURCE_COUNT_ID.into(),
-                    physical_inputs,
-                    |batch, metrics| {
-                        MetricBuilder::new(metrics)
-                            .global_counter(SOURCE_COUNT_METRIC)
-                            .add(batch.num_rows());
-                    },
-                )?));
-            }
+        if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
+            && metric_observer.id.eq(SOURCE_COUNT_ID)
+        {
+            return Ok(Some(MetricObserverExec::try_new(
+                SOURCE_COUNT_ID.into(),
+                physical_inputs,
+                |batch, metrics| {
+                    MetricBuilder::new(metrics)
+                        .global_counter(SOURCE_COUNT_METRIC)
+                        .add(batch.num_rows());
+                },
+            )?));
         }
         Ok(None)
     }
@@ -370,7 +371,7 @@ async fn execute_non_empty_expr(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_uri()))]
+#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
@@ -469,17 +470,16 @@ async fn execute(
 
 #[cfg(test)]
 mod tests {
+    use crate::DeltaTable;
+    use crate::TableProperty;
     use crate::kernel::DataType as DeltaDataType;
     use crate::operations::collect_sendable_stream;
-    use crate::operations::DeltaOps;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::datafusion::write_batch;
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
-    use crate::DeltaTable;
-    use crate::TableProperty;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -499,7 +499,7 @@ mod tests {
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions.unwrap_or_default())
@@ -516,7 +516,7 @@ mod tests {
         // append some data
         let table = write_batch(table, batch).await;
         // delete
-        let _err = DeltaOps(table)
+        let _err = table
             .delete()
             .await
             .expect_err("Remove action is included when Delta table is append-only. Should error");
@@ -543,7 +543,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 1);
 
-        let (table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let (table, metrics) = table.delete().await.unwrap();
         let state = table.snapshot().unwrap();
 
         assert_eq!(state.version(), 2);
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(metrics.num_copied_rows, 0);
 
         // Deletes with no changes to state must not commit
-        let (table, metrics) = DeltaOps(table).delete().await.unwrap();
+        let (table, metrics) = table.delete().await.unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 0);
@@ -596,7 +596,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -621,7 +621,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(state.version(), 2);
         assert_eq!(state.log_data().num_files(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .delete()
             .with_predicate(col("value").eq(lit(1)))
             .await
@@ -690,12 +690,15 @@ mod tests {
             )
             .unwrap();
 
-            DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
+            DeltaTable::new_in_memory()
+                .write(vec![batch])
+                .await
+                .unwrap()
         }
 
         // Validate behaviour of greater than
         let table = prepare_table().await;
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .delete()
             .with_predicate(col("value").gt(lit(2)))
             .await
@@ -716,7 +719,7 @@ mod tests {
 
         // Validate behaviour of less than
         let table = prepare_table().await;
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .delete()
             .with_predicate(col("value").lt(lit(2)))
             .await
@@ -737,7 +740,7 @@ mod tests {
 
         // Validate behaviour of less plus not null
         let table = prepare_table().await;
-        let (table, _) = DeltaOps(table)
+        let (table, _) = table
             .delete()
             .with_predicate(col("value").lt(lit(2)).or(col("value").is_null()))
             .await
@@ -778,7 +781,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -787,7 +790,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 2);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .delete()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .await
@@ -837,7 +840,7 @@ mod tests {
         .unwrap();
 
         // write some data
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -847,7 +850,7 @@ mod tests {
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 3);
 
-        let (table, metrics) = DeltaOps(table)
+        let (table, metrics) = table
             .delete()
             .with_predicate(
                 col("modified")
@@ -911,9 +914,9 @@ mod tests {
         ];
         let batches = vec![RecordBatch::try_new(schema.clone(), data).unwrap()];
 
-        let table = DeltaOps::new_in_memory().write(batches).await.unwrap();
+        let table = DeltaTable::new_in_memory().write(batches).await.unwrap();
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .delete()
             .with_predicate("props['a'] = '2021-02-02'")
             .await
@@ -938,7 +941,7 @@ mod tests {
 
         let table = setup_table(None).await;
 
-        let res = DeltaOps(table)
+        let res = table
             .delete()
             .with_predicate(col("value").eq(cast(
                 random() * lit(20.0),
@@ -950,7 +953,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_cdc_enabled() {
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -974,13 +977,13 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
         )
         .unwrap();
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .delete()
             .with_predicate(col("value").eq(lit(2)))
             .await
@@ -988,8 +991,8 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
@@ -1020,7 +1023,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_cdc_enabled_partitioned() {
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "year",
@@ -1058,13 +1061,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, _metrics) = table
             .delete()
             .with_predicate(col("value").eq(lit(2)))
             .await
@@ -1072,8 +1075,8 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let table = DeltaOps(table)
-            .load_cdf()
+        let table = table
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await

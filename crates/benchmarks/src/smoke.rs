@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use deltalake_core::arrow;
 use deltalake_core::datafusion::prelude::SessionContext;
 use deltalake_core::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaOps, DeltaResult, DeltaTableError};
+use deltalake_core::{arrow, DeltaResult, DeltaTable, DeltaTableError};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -35,7 +34,7 @@ pub async fn run_smoke_once(table_url: &Url, params: &SmokeParams) -> DeltaResul
         ],
     )?;
 
-    let table = DeltaOps::try_from_uri(table_url.clone())
+    let table = DeltaTable::try_from_url(table_url.clone())
         .await?
         .write(vec![batch])
         .with_save_mode(SaveMode::Overwrite)

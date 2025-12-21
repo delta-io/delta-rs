@@ -3,7 +3,7 @@ use std::sync::Arc;
 use deltalake::{
     datafusion::prelude::SessionContext,
     delta_datafusion::{
-        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionConfig, DeltaTableProvider,
+        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
     },
 };
 use pyo3::prelude::*;
@@ -25,8 +25,8 @@ pub(crate) struct PyQueryBuilder {
 impl PyQueryBuilder {
     #[new]
     pub fn new() -> Self {
-        let config = DeltaSessionConfig::default().into();
-        let ctx = SessionContext::new_with_config(config);
+        let delta_ctx = DeltaSessionContext::new();
+        let ctx = delta_ctx.into_inner();
 
         PyQueryBuilder { ctx }
     }
@@ -63,7 +63,7 @@ impl PyQueryBuilder {
     /// instances, it may result unexpected memory consumption for queries which return large data
     /// sets.
     pub fn execute(&self, py: Python, sql: &str) -> PyResult<PyRecordBatchReader> {
-        let stream = py.allow_threads(|| {
+        let stream = py.detach(|| {
             rt().block_on(async {
                 let df = self.ctx.sql(sql).await?;
                 df.execute_stream().await

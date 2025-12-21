@@ -5,9 +5,8 @@ use chrono::DateTime;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::commit_uri_from_version;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{ensure_table_uri, DeltaOps, DeltaTable};
+use deltalake_core::{DeltaTable, ensure_table_uri};
 use futures::TryStreamExt;
-use itertools::Itertools;
 use rand::Rng;
 use std::error::Error;
 use std::fs;
@@ -33,7 +32,7 @@ async fn setup_test(table_uri: &str) -> Result<Context, Box<dyn Error>> {
             true,
         ),
     ];
-    let table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+    let table = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
         .await
         .unwrap()
         .create()
@@ -42,21 +41,21 @@ async fn setup_test(table_uri: &str) -> Result<Context, Box<dyn Error>> {
 
     let batch = get_record_batch();
     thread::sleep(Duration::from_secs(1));
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
         .unwrap();
 
     thread::sleep(Duration::from_secs(1));
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await
         .unwrap();
 
     thread::sleep(Duration::from_secs(1));
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
@@ -97,23 +96,20 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
 
     let context = setup_test(table_uri).await?;
     let table = context.table;
-    let result = DeltaOps(table).restore().with_version_to_restore(1).await?;
+    let result = table.restore().with_version_to_restore(1).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
     assert_eq!(result.0.snapshot()?.version(), 4);
 
-    let mut table = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+    let mut table = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
         .await
         .unwrap();
-    table.0.load_version(1).await?;
-    let curr_files = table.0.snapshot()?.file_paths_iter().collect_vec();
-    let result_files = result.0.snapshot()?.file_paths_iter().collect_vec();
+    table.load_version(1).await?;
+    let curr_files = table.get_files_by_partitions(&[]).await?;
+    let result_files = result.0.get_files_by_partitions(&[]).await?;
     assert_eq!(curr_files, result_files);
 
-    let result = DeltaOps(result.0)
-        .restore()
-        .with_version_to_restore(0)
-        .await?;
+    let result = result.0.restore().with_version_to_restore(0).await?;
     assert_eq!(result.0.snapshot().unwrap().log_data().num_files(), 0);
     Ok(())
 }
@@ -134,10 +130,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let timestamp = meta.last_modified.timestamp_millis();
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
 
-    let result = DeltaOps(table)
-        .restore()
-        .with_datetime_to_restore(datetime)
-        .await?;
+    let result = table.restore().with_datetime_to_restore(datetime).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
     assert_eq!(result.0.snapshot()?.version(), 4);
@@ -155,7 +148,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();
 
     // datetime and version both set
-    let result = DeltaOps(table)
+    let result = table
         .restore()
         .with_version_to_restore(1)
         .with_datetime_to_restore(datetime)
@@ -163,7 +156,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     assert!(result.is_err());
 
     // version too large
-    let ops = DeltaOps::try_from_uri(ensure_table_uri(table_uri).unwrap())
+    let ops = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
         .await
         .unwrap();
     let result = ops.restore().with_version_to_restore(5).await;
@@ -193,10 +186,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
         fs::remove_file(p).unwrap();
     }
 
-    let result = DeltaOps(context.table)
-        .restore()
-        .with_version_to_restore(1)
-        .await;
+    let result = context.table.restore().with_version_to_restore(1).await;
     assert!(result.is_err());
     Ok(())
 }
@@ -223,7 +213,8 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
         fs::remove_file(p).unwrap();
     }
 
-    let result = DeltaOps(context.table)
+    let result = context
+        .table
         .restore()
         .with_ignore_missing_files(true)
         .with_version_to_restore(1)
@@ -240,7 +231,7 @@ async fn test_restore_transaction_conflict() -> Result<(), Box<dyn Error>> {
     let mut table = context.table;
     table.load_version(2).await?;
 
-    let result = DeltaOps(table).restore().with_version_to_restore(1).await;
+    let result = table.restore().with_version_to_restore(1).await;
     assert!(result.is_err());
     Ok(())
 }

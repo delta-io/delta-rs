@@ -5,7 +5,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    kernel::transaction::TransactionError, logstore::ObjectStoreRef, DeltaResult,
+    DeltaResult, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use url::Url;
@@ -21,10 +21,7 @@ pub fn default_s3_logstore(
     Arc::new(S3LogStore::new(
         store,
         root_store,
-        LogStoreConfig {
-            location: location.clone(),
-            options: options.clone(),
-        },
+        LogStoreConfig::new(location, options.clone()),
     ))
 }
 

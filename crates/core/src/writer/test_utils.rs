@@ -8,10 +8,9 @@ use arrow_select::take::take;
 use url::Url;
 
 use crate::kernel::{
-    new_metadata, DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType,
+    DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType, new_metadata,
 };
 use crate::operations::create::CreateBuilder;
-use crate::operations::DeltaOps;
 use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -285,7 +284,7 @@ pub async fn setup_table_with_configuration(
     value: Option<impl Into<String>>,
 ) -> DeltaTable {
     let table_schema = get_delta_schema();
-    DeltaOps::new_in_memory()
+    DeltaTable::new_in_memory()
         .create()
         .with_columns(table_schema.fields().cloned())
         .with_configuration_property(key, value)
@@ -297,7 +296,7 @@ pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
     let table_uri = Url::from_directory_path(table_path).unwrap();
-    DeltaTableBuilder::from_uri(table_uri)
+    DeltaTableBuilder::from_url(table_uri)
         .unwrap()
         .build()
         .unwrap()
@@ -317,9 +316,8 @@ pub async fn create_initialized_table(table_path: &str, partition_cols: &[String
 
 #[cfg(feature = "datafusion")]
 pub mod datafusion {
-    use crate::operations::DeltaOps;
-    use crate::writer::SaveMode;
     use crate::DeltaTable;
+    use crate::writer::SaveMode;
     use arrow_array::RecordBatch;
     use datafusion::prelude::SessionContext;
     use std::sync::Arc;
@@ -353,7 +351,7 @@ pub mod datafusion {
     }
 
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
-        DeltaOps(table)
+        table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await

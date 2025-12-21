@@ -2,10 +2,10 @@
 //!
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    new_null_array, Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray,
-    OffsetSizeTrait, RecordBatch, RecordBatchOptions, StructArray,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray, OffsetSizeTrait, RecordBatch,
+    RecordBatchOptions, StructArray, new_null_array,
 };
-use arrow_cast::{cast_with_options, CastOptions};
+use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef as ArrowSchemaRef};
 use std::sync::Arc;
 
@@ -224,8 +224,8 @@ mod tests {
 
     use arrow::array::types::Int32Type;
     use arrow::array::{
-        new_empty_array, new_null_array, Array, ArrayData, ArrayRef, AsArray, Int32Array,
-        ListArray, PrimitiveArray, RecordBatch, StringArray, StructArray,
+        Array, ArrayData, ArrayRef, AsArray, Int32Array, ListArray, PrimitiveArray, RecordBatch,
+        StringArray, StructArray, new_empty_array, new_null_array,
     };
     use arrow::buffer::{Buffer, NullBuffer};
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
@@ -264,21 +264,15 @@ mod tests {
     fn test_merge_delta_schema_with_meta() {
         let mut left_meta = HashMap::new();
         left_meta.insert("a".to_string(), "a1".to_string());
-        let left_schema = DeltaStructType::try_new(vec![DeltaStructField::new(
-            "f",
-            DeltaDataType::STRING,
-            false,
-        )
-        .with_metadata(left_meta)])
+        let left_schema = DeltaStructType::try_new(vec![
+            DeltaStructField::new("f", DeltaDataType::STRING, false).with_metadata(left_meta),
+        ])
         .unwrap();
         let mut right_meta = HashMap::new();
         right_meta.insert("b".to_string(), "b2".to_string());
-        let right_schema = DeltaStructType::try_new(vec![DeltaStructField::new(
-            "f",
-            DeltaDataType::STRING,
-            true,
-        )
-        .with_metadata(right_meta)])
+        let right_schema = DeltaStructType::try_new(vec![
+            DeltaStructField::new("f", DeltaDataType::STRING, true).with_metadata(right_meta),
+        ])
         .unwrap();
 
         let result = merge_delta_struct(&left_schema, &right_schema).unwrap();

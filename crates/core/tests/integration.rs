@@ -1,8 +1,6 @@
 use deltalake_test::read::read_table_paths;
 use deltalake_test::utils::*;
 use deltalake_test::{test_concurrent_writes, test_read_tables};
-use futures::TryStreamExt as _;
-use object_store::path::Path;
 use serial_test::serial;
 
 #[allow(dead_code)]
@@ -32,50 +30,4 @@ async fn test_concurrency_local() -> TestResult {
     test_concurrent_writes(&context).await?;
 
     Ok(())
-}
-
-#[tokio::test]
-async fn test_action_reconciliation() {
-    let path = "./tests/data/action_reconciliation";
-    let mut table = fs_common::create_table(path, None).await;
-
-    // Add a file.
-    let a = fs_common::add(3 * 60 * 1000);
-    assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
-    assert_eq!(
-        table
-            .snapshot()
-            .unwrap()
-            .file_paths_iter()
-            .collect::<Vec<_>>(),
-        vec![Path::from(a.path.clone())]
-    );
-
-    // Remove added file.
-    let r = deltalake_core::kernel::Remove {
-        path: a.path.clone(),
-        deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
-        data_change: false,
-        extended_file_metadata: None,
-        partition_values: None,
-        size: None,
-        tags: None,
-        deletion_vector: None,
-        base_row_id: None,
-        default_row_commit_version: None,
-    };
-
-    assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
-    assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
-    assert_eq!(
-        table
-            .snapshot()
-            .unwrap()
-            .all_tombstones(&table.log_store())
-            .map_ok(|r| r.path().to_string())
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap(),
-        vec![a.path.clone()]
-    );
 }

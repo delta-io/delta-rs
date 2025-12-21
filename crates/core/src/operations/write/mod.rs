@@ -19,7 +19,7 @@
 //! let schema = Arc::new(arrow::datatypes::Schema::new(vec![id_field]));
 //! let ids = arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5]);
 //! let batch = RecordBatch::try_new(schema, vec![Arc::new(ids)])?;
-//! let ops = DeltaOps::try_from_uri("../path/to/empty/dir").await?;
+//! let ops = DeltaOps::try_from_url("../path/to/empty/dir").await?;
 //! let table = ops.write(vec![batch]).await?;
 //! ````
 
@@ -34,16 +34,16 @@ use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState};
-use datafusion::logical_expr::{cast, lit, try_cast, Expr, Extension, LogicalPlan};
+use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use schema_evolution::try_cast_schema;
 use serde::{Deserialize, Serialize};
-use tracing::log::*;
 use tracing::Instrument;
+use url::Url;
 
 pub use self::configs::WriterStatsConfig;
 use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
@@ -52,22 +52,22 @@ use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
+use crate::delta_datafusion::{DataFusionMixins, session_state_from_session};
 use crate::delta_datafusion::{create_session, register_store};
-use crate::delta_datafusion::{session_state_from_session, DataFusionMixins};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    new_metadata, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType,
-    StructTypeExt,
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
+    new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::DeltaTable;
 
 pub mod configs;
 pub(crate) mod execution;
@@ -81,14 +81,11 @@ pub(crate) enum WriteError {
     #[error("No data source supplied to write command.")]
     MissingData,
 
-    #[error("Failed to execute write task: {source}")]
-    WriteTask { source: tokio::task::JoinError },
-
     #[error("A table already exists at: {0}")]
-    AlreadyExists(String),
+    AlreadyExists(Url),
 
     #[error(
-        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}",
+        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}"
     )]
     PartitionColumnMismatch {
         expected: Vec<String>,
@@ -120,7 +117,9 @@ impl FromStr for SchemaMode {
         match s.to_ascii_lowercase().as_str() {
             "overwrite" => Ok(SchemaMode::Overwrite),
             "merge" => Ok(SchemaMode::Merge),
-            _ => Err(DeltaTableError::Generic(format!("Invalid schema write mode provided: {s}, only these are supported: ['overwrite', 'merge']"))),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid schema write mode provided: {s}, only these are supported: ['overwrite', 'merge']"
+            ))),
         }
     }
 }
@@ -241,13 +240,6 @@ impl WriteBuilder {
     /// Logical execution plan that produces the data to be written to the delta table
     pub fn with_input_execution_plan(mut self, plan: Arc<LogicalPlan>) -> Self {
         self.input = Some(plan);
-        self
-    }
-
-    /// A session state accompanying a given input plan, containing e.g. registered object stores
-    #[deprecated(since = "0.29.0", note = "Use `with_session_state` instead")]
-    pub fn with_input_session_state(mut self, state: SessionState) -> Self {
-        self.session = Some(Arc::new(state));
         self
     }
 
@@ -386,7 +378,7 @@ impl WriteBuilder {
                 }
                 match self.mode {
                     SaveMode::ErrorIfExists => {
-                        Err(WriteError::AlreadyExists(self.log_store.root_uri()).into())
+                        Err(WriteError::AlreadyExists(self.log_store.root_url().clone()).into())
                     }
                     _ => Ok(vec![]),
                 }
@@ -421,7 +413,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-        let table_uri = this.log_store.root_uri();
+        let table_uri = this.log_store.root_url().clone();
         let mode = this.mode;
 
         Box::pin(
@@ -450,17 +442,16 @@ impl std::future::IntoFuture for WriteBuilder {
                 let mut missing_gen_col = None;
                 let mut source =
                     DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
-                if let Some(snapshot) = &this.snapshot {
-                    if able_to_gc(snapshot)? {
-                        let generated_col_expressions =
-                            snapshot.schema().get_generated_columns()?;
-                        // Add missing generated columns to source_df
-                        let (source_with_gc, missing_generated_columns) =
-                            add_missing_generated_columns(source, &generated_col_expressions)?;
-                        source = source_with_gc;
-                        missing_gen_col = Some(missing_generated_columns);
-                        generated_col_exp = Some(generated_col_expressions);
-                    }
+                if let Some(snapshot) = &this.snapshot
+                    && able_to_gc(snapshot)?
+                {
+                    let generated_col_expressions = snapshot.schema().get_generated_columns()?;
+                    // Add missing generated columns to source_df
+                    let (source_with_gc, missing_generated_columns) =
+                        add_missing_generated_columns(source, &generated_col_expressions)?;
+                    source = source_with_gc;
+                    missing_gen_col = Some(missing_generated_columns);
+                    generated_col_exp = Some(generated_col_expressions);
                 }
 
                 let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
@@ -533,15 +524,15 @@ impl std::future::IntoFuture for WriteBuilder {
                     source = source.select(schema_evolution_projection)?;
                 }
 
-                if let Some(generated_columns_exp) = generated_col_exp {
-                    if let Some(missing_generated_col) = missing_gen_col {
-                        source = add_generated_columns(
-                            source,
-                            &generated_columns_exp,
-                            &missing_generated_col,
-                            state,
-                        )?;
-                    }
+                if let Some(generated_columns_exp) = generated_col_exp
+                    && let Some(missing_generated_col) = missing_gen_col
+                {
+                    source = add_generated_columns(
+                        source,
+                        &generated_columns_exp,
+                        &missing_generated_col,
+                        state,
+                    )?;
                 }
 
                 let source = LogicalPlan::Extension(Extension {
@@ -753,11 +744,12 @@ impl std::future::IntoFuture for WriteBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TableProperty;
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
     use crate::logstore::get_actions;
+    use crate::operations::collect_sendable_stream;
     use crate::operations::load_cdf::collect_batches;
-    use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::protocol::SaveMode;
     use crate::test_utils::{TestResult, TestSchemas};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted, write_batch};
@@ -765,14 +757,13 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use crate::TableProperty;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use itertools::Itertools;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     async fn get_write_metrics(table: DeltaTable) -> WriteMetrics {
         let mut commit_info: Vec<crate::kernel::CommitInfo> =
@@ -803,7 +794,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         // Overwrite
-        let _err = DeltaOps(table)
+        let _err = table
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
             .await
@@ -815,7 +806,7 @@ mod tests {
         let table_schema = get_delta_schema();
         let batch = get_record_batch(None, false);
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .await
@@ -824,7 +815,7 @@ mod tests {
 
         // write some data
         let metadata = HashMap::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
-        let mut table = DeltaOps(table)
+        let mut table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
@@ -857,7 +848,7 @@ mod tests {
         // append some data
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
-        let mut table = DeltaOps(table)
+        let mut table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
@@ -886,7 +877,7 @@ mod tests {
         // overwrite table
         let metadata: HashMap<String, Value> =
             HashMap::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
-        let mut table = DeltaOps(table)
+        let mut table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Overwrite)
             .with_commit_properties(CommitProperties::default().with_metadata(metadata.clone()))
@@ -929,7 +920,10 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![Some(0), None]))],
         )
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 2);
         assert_common_write_metrics(write_metrics);
@@ -951,7 +945,7 @@ mod tests {
         .unwrap();
 
         // Test cast options
-        let table = DeltaOps::from(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_cast_safety(true)
             .await
@@ -975,7 +969,7 @@ mod tests {
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
-        let res = DeltaOps::from(table).write(vec![batch]).await;
+        let res = table.write(vec![batch]).await;
         assert!(res.is_err());
 
         // Validate the datetime -> string behavior
@@ -992,7 +986,10 @@ mod tests {
             )]))],
         )
         .unwrap();
-        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
 
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_eq!(write_metrics.num_added_rows, 1);
@@ -1011,7 +1008,7 @@ mod tests {
         )
         .unwrap();
 
-        let _res = DeltaOps::from(table).write(vec![batch]).await.unwrap();
+        let _res = table.write(vec![batch]).await.unwrap();
         let expected = [
             "+--------------------------+",
             "| value                    |",
@@ -1027,7 +1024,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_nonexistent() {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
@@ -1041,7 +1038,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_partitioned() {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified"])
@@ -1053,7 +1050,7 @@ mod tests {
         assert_eq!(write_metrics.num_added_files, 2);
         assert_common_write_metrics(write_metrics);
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_partition_columns(["modified", "id"])
@@ -1070,7 +1067,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_schema() {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
@@ -1114,7 +1111,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut table = DeltaOps(table)
+        let mut table = table
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
@@ -1145,7 +1142,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_schema_with_partitions() {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_partition_columns(vec!["id", "value"])
             .with_save_mode(SaveMode::ErrorIfExists)
@@ -1189,7 +1186,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Merge)
@@ -1217,7 +1214,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_schema() {
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
@@ -1259,7 +1256,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
             .with_schema_mode(SchemaMode::Overwrite)
@@ -1271,7 +1268,7 @@ mod tests {
     async fn test_overwrite_check() {
         // If you do not pass a schema mode, we want to check the schema
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::ErrorIfExists)
             .await
@@ -1303,7 +1300,7 @@ mod tests {
         let new_batch =
             RecordBatch::try_new(Arc::new(new_schema), vec![Arc::new(inserted_by)]).unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Append)
             .await;
@@ -1324,7 +1321,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_columns(schema.fields().cloned())
@@ -1332,7 +1329,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let table = DeltaOps(table).write(vec![batch.clone()]).await.unwrap();
+        let table = table.write(vec![batch.clone()]).await.unwrap();
         assert_eq!(table.version(), Some(1));
         let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
         assert_common_write_metrics(write_metrics);
@@ -1348,7 +1345,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_save_mode(SaveMode::ErrorIfExists)
             .with_columns(schema.fields().cloned())
@@ -1356,7 +1353,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let table = DeltaOps(table).write(vec![batch.clone()]).await;
+        let table = table.write(vec![batch.clone()]).await;
         assert!(table.is_err());
     }
 
@@ -1365,14 +1362,14 @@ mod tests {
         let table_schema = get_delta_schema_with_nested_struct();
         let batch = get_record_batch_with_nested_struct();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
@@ -1409,7 +1406,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
             .unwrap();
 
-        let ops = DeltaOps::try_from_uri(
+        let ops = DeltaTable::try_from_url(
             ensure_table_uri(tmp_path.as_os_str().to_str().unwrap()).unwrap(),
         )
         .await
@@ -1425,7 +1422,7 @@ mod tests {
 
         let table_uri = url::Url::from_directory_path(&tmp_path).unwrap();
         let table = crate::open_table(table_uri).await.unwrap();
-        let (_table, stream) = DeltaOps(table).load().await.unwrap();
+        let (_table, stream) = table.scan_table().await.unwrap();
         let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
 
         let expected = vec![
@@ -1458,7 +1455,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -1478,7 +1475,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch_add])
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("C")))
@@ -1520,7 +1517,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(SaveMode::Append)
             .await
@@ -1545,7 +1542,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch_fail])
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("C")))
@@ -1563,7 +1560,7 @@ mod tests {
 
         let batch = get_record_batch(None, false);
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_partition_columns(["id", "value"])
             .with_save_mode(SaveMode::Append)
@@ -1587,7 +1584,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch_add])
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("id").eq(lit("A")))
@@ -1618,7 +1615,7 @@ mod tests {
     #[tokio::test]
     async fn test_dont_write_cdc_with_overwrite() -> TestResult {
         let delta_schema = TestSchemas::simple();
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
@@ -1653,7 +1650,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
@@ -1662,7 +1659,7 @@ mod tests {
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
 
-        let table = DeltaOps(table)
+        let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
@@ -1691,7 +1688,7 @@ mod tests {
     #[tokio::test]
     async fn test_dont_write_cdc_with_overwrite_predicate_partitioned() -> TestResult {
         let delta_schema = TestSchemas::simple();
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
@@ -1726,7 +1723,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
@@ -1735,7 +1732,7 @@ mod tests {
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
 
-        let table = DeltaOps(table)
+        let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .with_replace_where("id='3'")
@@ -1765,7 +1762,7 @@ mod tests {
     #[tokio::test]
     async fn test_dont_write_cdc_with_overwrite_predicate_unpartitioned() -> TestResult {
         let delta_schema = TestSchemas::simple();
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
@@ -1800,13 +1797,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let table = DeltaOps(table)
+        let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .with_replace_where("value=3")
@@ -1815,8 +1812,9 @@ mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let cdf_scan = DeltaOps(table.clone())
-            .load_cdf()
+        let cdf_scan = table
+            .clone()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
@@ -1872,11 +1870,11 @@ mod tests {
         async fn test_schema_overwrite_on_append() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
             let batch = get_record_batch(None, false);
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = DeltaOps(table)
+            let writer = table
                 .write(vec![batch])
                 .with_schema_mode(SchemaMode::Overwrite)
                 .with_save_mode(SaveMode::Append);
@@ -1890,14 +1888,12 @@ mod tests {
         async fn test_savemode_overwrite_on_append_table() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
             let batch = get_record_batch(None, false);
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_configuration_property(TableProperty::AppendOnly, Some("true".to_string()))
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = DeltaOps(table)
-                .write(vec![batch])
-                .with_save_mode(SaveMode::Overwrite);
+            let writer = table.write(vec![batch]).with_save_mode(SaveMode::Overwrite);
 
             let check = writer.check_preconditions().await;
             assert!(check.is_err());
@@ -1907,11 +1903,11 @@ mod tests {
         #[tokio::test]
         async fn test_empty_set_of_batches() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = DeltaOps(table).write(vec![]);
+            let writer = table.write(vec![]);
 
             match writer.check_preconditions().await {
                 Ok(_) => panic!("Expected check_preconditions to fail!"),
@@ -1925,11 +1921,11 @@ mod tests {
         async fn test_errorifexists() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
             let batch = get_record_batch(None, false);
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = DeltaOps(table)
+            let writer = table
                 .write(vec![batch])
                 .with_save_mode(SaveMode::ErrorIfExists);
 
@@ -1944,7 +1940,7 @@ mod tests {
         #[tokio::test]
         async fn test_allow_empty_batches_with_input_plan() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
@@ -1969,7 +1965,7 @@ mod tests {
         #[tokio::test]
         async fn test_no_snapshot_create_actions() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
@@ -1990,7 +1986,7 @@ mod tests {
         #[tokio::test]
         async fn test_no_snapshot_err_no_batches_check() -> DeltaResult<()> {
             let table_schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
@@ -2033,7 +2029,7 @@ mod tests {
         )?;
 
         // Create initial table
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![initial_batch])
             .with_save_mode(SaveMode::Overwrite)
             .await?;
@@ -2079,7 +2075,7 @@ mod tests {
         )?;
 
         // Overwrite with schema_mode=None (default) - should preserve nullability
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![new_batch])
             .with_save_mode(SaveMode::Overwrite)
             // schema_mode is None by default
@@ -2139,7 +2135,7 @@ mod tests {
         )?;
 
         // Create initial table
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![initial_batch])
             .with_save_mode(SaveMode::Overwrite)
             .await?;
@@ -2180,7 +2176,7 @@ mod tests {
         )?;
 
         // This should succeed - data is valid even though schema differs
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![valid_batch])
             .with_save_mode(SaveMode::Overwrite)
             // schema_mode is None by default
@@ -2243,7 +2239,8 @@ mod tests {
         )?;
 
         // This should fail because id is non-nullable in the table schema
-        let result = DeltaOps(table.clone())
+        let result = table
+            .clone()
             .write(vec![invalid_batch])
             .with_save_mode(SaveMode::Overwrite)
             .await;
@@ -2269,7 +2266,8 @@ mod tests {
             ],
         )?;
 
-        let result2 = DeltaOps(table.clone())
+        let result2 = table
+            .clone()
             .write(vec![invalid_batch_2])
             .with_save_mode(SaveMode::Overwrite)
             .await;
@@ -2332,7 +2330,7 @@ mod tests {
             ],
         )?;
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![initial_batch])
             .with_save_mode(SaveMode::Overwrite)
             .await?;
@@ -2365,7 +2363,7 @@ mod tests {
         )?;
 
         // Use replaceWhere to selectively overwrite
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![replacement_batch])
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where("id = 2 OR id = 4")
@@ -2395,7 +2393,7 @@ mod tests {
             ],
         )?;
 
-        let result = DeltaOps(table)
+        let result = table
             .write(vec![invalid_batch])
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where("id = 1 OR id = 3")

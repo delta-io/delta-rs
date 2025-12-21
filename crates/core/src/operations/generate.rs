@@ -78,9 +78,9 @@ use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
-use crate::logstore::object_store::PutPayload;
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
+use crate::logstore::object_store::PutPayload;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -122,7 +122,8 @@ impl std::future::IntoFuture for GenerateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let snapshot = resolve_snapshot(this.log_store(), this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(this.log_store(), this.snapshot.clone(), true, None).await?;
             let mut payloads = HashMap::new();
             let manifest_part = PathPart::parse("manifest").expect("This is not possible");
 
@@ -185,9 +186,9 @@ mod tests {
 
     use futures::StreamExt;
 
+    use crate::DeltaTable;
     use crate::kernel::schema::{DataType, PrimitiveType};
     use crate::kernel::{Action, Add};
-    use crate::DeltaOps;
 
     #[tokio::test]
     async fn test_generate() -> DeltaResult<()> {
@@ -195,7 +196,7 @@ mod tests {
             path: "some-files.parquet".into(),
             ..Default::default()
         })];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_actions(actions)
@@ -216,7 +217,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix");
+        assert!(
+            found,
+            "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix"
+        );
         Ok(())
     }
 
@@ -228,7 +232,7 @@ mod tests {
             partition_values: HashMap::from([("locale".to_string(), Some("us".to_string()))]),
             ..Default::default()
         })];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_column(
@@ -261,7 +265,10 @@ mod tests {
                 "The 'root' manifest file is not expected in a partitioned table!"
             );
         }
-        assert!(found, "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix");
+        assert!(
+            found,
+            "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix"
+        );
         Ok(())
     }
 }

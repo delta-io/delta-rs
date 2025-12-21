@@ -19,30 +19,10 @@ use delta_kernel::schema::{
 };
 use delta_kernel::snapshot::Snapshot;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
-use delta_kernel::{DeltaResult, ExpressionEvaluator, ExpressionRef};
+use delta_kernel::{DeltaResult, ExpressionEvaluator};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
-
-/// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
-/// and (2) a vector of transforms (one transform per scan file) that must be applied to the data read
-/// from those files.
-pub(crate) struct ScanMetadataArrow {
-    /// Record batch with one row per file to scan
-    pub scan_files: RecordBatch,
-
-    /// Row-level transformations to apply to data read from files.
-    ///
-    /// Each entry in this vector corresponds to a row in the `scan_files` data. The entry is an
-    /// expression that must be applied to convert the file's data into the logical schema
-    /// expected by the scan:
-    ///
-    /// - `Some(expr)`: Apply this expression to transform the data to match [`Scan::schema()`].
-    /// - `None`: No transformation is needed; the data is already in the correct logical form.
-    ///
-    /// Note: This vector can be indexed by row number.
-    scan_file_transforms: Vec<Option<ExpressionRef>>,
-}
 
 /// Internal extension traits to the Kernel Snapshot.
 ///
@@ -278,10 +258,10 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
 
         // Check if the number of columns is set and if the added columns exceed the limit
         // In the constructor we assert this will always be None if column_names are specified
-        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns {
-            if self.added_columns >= n_cols {
-                return None;
-            }
+        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns
+            && self.added_columns >= n_cols
+        {
+            return None;
         }
 
         self.path.push(field.name.clone());
@@ -386,20 +366,13 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
     )
 }
 
-pub(crate) fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
+pub(crate) fn rb_from_scan_meta(metadata: ScanMetadata) -> DeltaResult<RecordBatch> {
     let (underlying_data, selection_vector) = metadata.scan_files.into_parts();
-    let scan_file_transforms = metadata
-        .scan_file_transforms
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, v)| selection_vector[i].then_some(v))
-        .collect();
     let batch = ArrowEngineData::try_from_engine_data(underlying_data)?.into();
-    let scan_files = filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
-    Ok(ScanMetadataArrow {
-        scan_files,
-        scan_file_transforms,
-    })
+    Ok(filter_record_batch(
+        &batch,
+        &BooleanArray::from(selection_vector),
+    )?)
 }
 
 /// Internal extension trait for expression evaluators.
@@ -455,6 +428,7 @@ mod tests {
 
     use super::*;
 
+    use delta_kernel::EvaluationHandler;
     use delta_kernel::arrow::array::Int32Array;
     use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use delta_kernel::arrow::record_batch::RecordBatch;
@@ -462,7 +436,6 @@ mod tests {
     use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
     use delta_kernel::expressions::*;
     use delta_kernel::schema::{ArrayType, DataType};
-    use delta_kernel::EvaluationHandler;
     use pretty_assertions::assert_eq;
 
     #[test]

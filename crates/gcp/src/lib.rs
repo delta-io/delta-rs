@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use deltalake_core::logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use deltalake_core::logstore::object_store::ObjectStoreScheme;
-use deltalake_core::logstore::{default_logstore, logstore_factories, LogStore, LogStoreFactory};
+use deltalake_core::logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use deltalake_core::logstore::{LogStore, LogStoreFactory, default_logstore, logstore_factories};
 use deltalake_core::logstore::{
-    object_store_factories, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    ObjectStoreFactory, ObjectStoreRef, StorageConfig, object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::client::SpawnedReqwestConnector;

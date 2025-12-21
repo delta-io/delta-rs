@@ -8,11 +8,11 @@ compile_error!(
 );
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, object_store::RetryConfig, LogStore, LogStoreFactory,
-    StorageConfig,
+    LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories,
+    object_store::RetryConfig,
 };
-use reqwest::header::{HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use reqwest::Url;
+use reqwest::header::{AUTHORIZATION, HeaderValue, InvalidHeaderValue};
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
@@ -30,13 +30,13 @@ use crate::models::{
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
-    ensure_table_uri, DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder,
-    DeltaTableError, ObjectStoreError, Path,
+    DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError,
+    ObjectStoreError, Path, ensure_table_uri,
 };
 
 use crate::client::retry::*;
 use deltalake_core::logstore::{
-    config::str_is_truthy, object_store_factories, ObjectStoreFactory, ObjectStoreRef,
+    ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
 pub mod client;
 pub mod credential;
@@ -449,15 +449,13 @@ impl UnityCatalogBuilder {
     pub fn from_env() -> Self {
         let mut builder = Self::builder().build();
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("UNITY_") || key.starts_with("DATABRICKS_") {
-                    tracing::debug!("Found relevant env: {key}");
-                    if let Ok(config_key) =
-                        UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        tracing::debug!("Trying: {key} with {value}");
-                        builder = builder.try_with_option(config_key, value).unwrap();
-                    }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && (key.starts_with("UNITY_") || key.starts_with("DATABRICKS_"))
+            {
+                tracing::debug!("Found relevant env: {key}");
+                if let Ok(config_key) = UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase()) {
+                    tracing::debug!("Trying: {key} with {value}");
+                    builder = builder.try_with_option(config_key, value).unwrap();
                 }
             }
         }
@@ -860,7 +858,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         // TODO(roeap): we should not have to go through the table here.
         // ideally we just create the right storage ...
         let table_url = ensure_table_uri(&table_path)?;
-        let mut builder = DeltaTableBuilder::from_uri(table_url)?;
+        let mut builder = DeltaTableBuilder::from_url(table_url)?;
 
         if let Some(runtime) = &config.runtime {
             builder = builder.with_io_runtime(runtime.clone());
@@ -936,10 +934,10 @@ impl std::fmt::Debug for UnityCatalog {
 
 #[cfg(test)]
 mod tests {
+    use crate::UnityCatalogBuilder;
     use crate::client::ClientOptions;
     use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
     use crate::models::*;
-    use crate::UnityCatalogBuilder;
     use deltalake_core::DataCatalog;
     use httpmock::prelude::*;
     use std::collections::HashMap;
@@ -1060,8 +1058,10 @@ mod tests {
 
     #[test]
     fn test_env_with_storage_options_override() {
-        std::env::set_var("DATABRICKS_HOST", "https://env.databricks.com");
-        std::env::set_var("DATABRICKS_TOKEN", "env_token");
+        unsafe {
+            std::env::set_var("DATABRICKS_HOST", "https://env.databricks.com");
+            std::env::set_var("DATABRICKS_TOKEN", "env_token");
+        }
 
         let mut storage_options = HashMap::new();
         storage_options.insert(
@@ -1079,8 +1079,10 @@ mod tests {
         );
         assert_eq!(builder.bearer_token, Some("env_token".to_string()));
 
-        std::env::remove_var("DATABRICKS_HOST");
-        std::env::remove_var("DATABRICKS_TOKEN");
+        unsafe {
+            std::env::remove_var("DATABRICKS_HOST");
+            std::env::remove_var("DATABRICKS_TOKEN");
+        }
     }
 
     #[test]
@@ -1176,13 +1178,14 @@ mod tests {
             let result = UnityCatalogBuilder::get_uc_location_and_token(uri, None).await;
             assert!(result.is_err(), "Expected error for URI: {}", uri);
 
-            if let Err(e) = result {
-                if uri.starts_with("uc://") && uri.len() > 5 {
-                    assert!(matches!(
-                        e,
-                        crate::UnityCatalogError::InvalidTableURI { .. }
-                    ));
-                }
+            if let Err(e) = result
+                && uri.starts_with("uc://")
+                && uri.len() > 5
+            {
+                assert!(matches!(
+                    e,
+                    crate::UnityCatalogError::InvalidTableURI { .. }
+                ));
             }
         }
     }

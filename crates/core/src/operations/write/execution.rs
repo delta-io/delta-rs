@@ -5,11 +5,11 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::{provider_as_source, MemTable};
-use datafusion::execution::context::SessionContext;
+use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::logical_expr::{col, lit, when, Expr, LogicalPlanBuilder};
-use datafusion::physical_plan::{execute_stream_partitioned, ExecutionPlan};
+use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::{Expr, LogicalPlanBuilder, col, lit, when};
+use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::StreamExt;
@@ -20,19 +20,19 @@ use tracing::log::*;
 use uuid::Uuid;
 
 use super::writer::{DeltaWriter, WriterConfig};
+use crate::DeltaTableError;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    find_files, session_state_from_session, DataFusionMixins, DeltaDataChecker,
-    DeltaScanConfigBuilder, DeltaTableProvider,
+    DataFusionMixins, DeltaDataChecker, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
+    session_state_from_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
-use crate::operations::cdc::{should_write_cdc, CDC_COLUMN_NAME};
+use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
-use crate::table::config::TablePropertiesExt as _;
 use crate::table::Constraint as DeltaConstraint;
-use crate::DeltaTableError;
+use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
@@ -278,7 +278,9 @@ pub(crate) async fn write_execution_plan_v2(
     let mut checker = if let Some(snapshot) = snapshot {
         DeltaDataChecker::new(snapshot)
     } else {
-        debug!("Using plan schema to derive generated columns, since no snapshot was provided. Implies first write.");
+        debug!(
+            "Using plan schema to derive generated columns, since no snapshot was provided. Implies first write."
+        );
         let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
         DeltaDataChecker::new_with_generated_columns(
             delta_schema.get_generated_columns().unwrap_or_default(),
@@ -369,7 +371,7 @@ pub(crate) async fn write_execution_plan_v2(
         };
 
         let actions = adds.into_iter().map(Action::Add).collect::<Vec<_>>();
-        return Ok((actions, metrics));
+        Ok((actions, metrics))
     } else {
         // CDC branch: create two writer tasks (normal + cdf) and drive partition streams concurrently
         let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
@@ -561,6 +563,6 @@ pub(crate) async fn write_execution_plan_v2(
             write_time_ms,
         };
 
-        return Ok((actions, metrics));
+        Ok((actions, metrics))
     }
 }

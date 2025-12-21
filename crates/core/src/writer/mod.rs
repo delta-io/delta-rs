@@ -5,13 +5,12 @@ use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
 use serde_json::Value;
-use tracing::log::*;
 
+use crate::DeltaTable;
 use crate::errors::DeltaTableError;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add};
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
-use crate::DeltaTable;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
@@ -33,7 +32,9 @@ pub(crate) enum DeltaWriterError {
     MissingPartitionColumn(String),
 
     /// The Arrow RecordBatch schema does not match the expected schema.
-    #[error("Arrow RecordBatch schema does not match: RecordBatch schema: {record_batch_schema}, {expected_schema}")]
+    #[error(
+        "Arrow RecordBatch schema does not match: RecordBatch schema: {record_batch_schema}, {expected_schema}"
+    )]
     SchemaMismatch {
         /// The record batch schema.
         record_batch_schema: SchemaRef,
@@ -189,7 +190,7 @@ mod tests {
     use delta_kernel::schema::DataType;
 
     use super::*;
-    use crate::{DeltaOps, DeltaResult};
+    use crate::DeltaResult;
     use pretty_assertions::assert_ne;
 
     /// This test doesn't have a great way to _validate_ that logs are not cleaned up as part of
@@ -202,7 +203,7 @@ mod tests {
     /// [flush_and_commit] but that's an API change we isn't desirable at the moment
     #[tokio::test]
     async fn test_flush_and_commit() -> DeltaResult<()> {
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_table_name("my_table")
             .with_column(
