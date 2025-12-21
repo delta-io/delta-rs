@@ -124,6 +124,31 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
         Expr::Not(expr) => Ok(Expression::Predicate(Box::new(Predicate::Not(Box::new(
             Predicate::BooleanExpression(to_delta_expression(expr.as_ref())?),
         ))))),
+        Expr::Between(between) => {
+            let expr = to_delta_expression(&between.expr)?;
+            let (high_op, low_op) = if between.negated {
+                (BinaryPredicateOp::LessThan, BinaryPredicateOp::GreaterThan)
+            } else {
+                (BinaryPredicateOp::GreaterThan, BinaryPredicateOp::LessThan)
+            };
+            Ok(Expression::Predicate(Box::new(Predicate::Junction(
+                JunctionPredicate {
+                    op: JunctionPredicateOp::And,
+                    preds: vec![
+                        Predicate::Binary(BinaryPredicate {
+                            left: Box::new(expr.clone()),
+                            op: low_op,
+                            right: Box::new(to_delta_expression(&between.low)?),
+                        }),
+                        Predicate::Binary(BinaryPredicate {
+                            left: Box::new(expr),
+                            op: high_op,
+                            right: Box::new(to_delta_expression(&between.high)?),
+                        }),
+                    ],
+                },
+            ))))
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {:?}",
             expr
