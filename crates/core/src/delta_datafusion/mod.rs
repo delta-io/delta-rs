@@ -224,7 +224,7 @@ fn _arrow_schema(
 ) -> ArrowSchemaRef {
     let fields = schema
         .fields()
-        .into_iter()
+        .iter()
         .filter(|f| !partition_columns.contains(&f.name().to_string()))
         .cloned()
         .chain(
@@ -235,7 +235,7 @@ fn _arrow_schema(
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
-                        // // https://github.com/apache/arrow-datafusion/pull/5545
+                        // https://github.com/apache/arrow-datafusion/pull/5545
                         ArrowDataType::Utf8
                         | ArrowDataType::LargeUtf8
                         | ArrowDataType::Binary
@@ -780,14 +780,14 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = if cmd.options.is_empty() {
+        let table = if cmd.options.is_empty() {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table(table_url).await?
         } else {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(Arc::new(provider))
+        Ok(Arc::new(table))
     }
 }
 
@@ -1605,9 +1605,10 @@ mod tests {
             .unwrap();
 
         let datafusion = SessionContext::new();
-        let table = Arc::new(table);
 
-        datafusion.register_table("snapshot", table).unwrap();
+        datafusion
+            .register_table("snapshot", Arc::new(table))
+            .unwrap();
 
         let df = datafusion
             .sql("select * from snapshot where id > 10000 and id < 20000")

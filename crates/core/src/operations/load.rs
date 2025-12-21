@@ -115,11 +115,13 @@ impl std::future::IntoFuture for LoadBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::delta_datafusion::create_session;
     use crate::operations::collect_sendable_stream;
     use crate::writer::test_utils::{TestResult, get_record_batch};
     use crate::{DeltaTable, DeltaTableBuilder};
     use datafusion::assert_batches_sorted_eq;
     use std::path::Path;
+    use std::sync::Arc;
     use url::Url;
 
     #[tokio::test]
@@ -157,7 +159,16 @@ mod tests {
             .write(vec![batch.clone()])
             .await?;
 
-        let (_table, stream) = table.scan_table().await?;
+        let session = create_session().into_inner();
+        session.runtime_env().register_object_store(
+            &url::Url::parse("memory:///")?,
+            table.log_store().object_store(None),
+        );
+
+        let (_table, stream) = table
+            .scan_table()
+            .with_session_state(Arc::new(session.state()))
+            .await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![
@@ -190,7 +201,17 @@ mod tests {
             .write(vec![batch.clone()])
             .await?;
 
-        let (_table, stream) = table.scan_table().with_columns(["id", "value"]).await?;
+        let session = create_session().into_inner();
+        session.runtime_env().register_object_store(
+            &url::Url::parse("memory:///")?,
+            table.log_store().object_store(None),
+        );
+
+        let (_table, stream) = table
+            .scan_table()
+            .with_columns(["id", "value"])
+            .with_session_state(Arc::new(session.state()))
+            .await?;
         let data = collect_sendable_stream(stream).await?;
 
         let expected = vec![
