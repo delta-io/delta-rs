@@ -42,7 +42,7 @@ use serde_json::Deserializer;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
-use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, kernel_to_arrow};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
@@ -257,7 +257,7 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let stream = scan
             .scan_metadata(engine)
-            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
+            .map(|d| Ok(rb_from_scan_meta(d?)?));
 
         ScanRowOutStream::new(self.inner.clone(), stream).boxed()
     }
@@ -278,7 +278,7 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let stream = scan
             .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
-            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
+            .map(|d| Ok(rb_from_scan_meta(d?)?));
 
         ScanRowOutStream::new(self.inner.clone(), stream).boxed()
     }
@@ -472,8 +472,16 @@ pub(crate) async fn resolve_snapshot(
     log_store: &dyn LogStore,
     maybe_snapshot: Option<EagerSnapshot>,
     require_files: bool,
+    version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
     if let Some(snapshot) = maybe_snapshot {
+        if let Some(version) = version
+            && snapshot.version() as Version != version
+        {
+            return Err(DeltaTableError::Generic(
+                "Provided snapshot version does not match the requested version".to_string(),
+            ));
+        }
         if require_files {
             snapshot.with_files(log_store).await
         } else {
@@ -482,7 +490,7 @@ pub(crate) async fn resolve_snapshot(
     } else {
         let mut config = DeltaTableConfig::default();
         config.require_files = require_files;
-        EagerSnapshot::try_new(log_store, config, None).await
+        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
     }
 }
 

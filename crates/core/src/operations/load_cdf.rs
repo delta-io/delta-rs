@@ -348,7 +348,7 @@ impl CdfLoadBuilder {
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true).await?;
+        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;

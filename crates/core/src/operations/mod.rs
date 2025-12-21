@@ -86,8 +86,8 @@ impl DeltaTable {
         let mut table = DeltaTableBuilder::from_url(uri)?.build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
-            Ok(_) => Ok(table.into()),
-            Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
+            Ok(_) => Ok(table),
+            Err(DeltaTableError::NotATable(_)) => Ok(table),
             Err(err) => Err(err),
         }
     }
@@ -102,8 +102,8 @@ impl DeltaTable {
             .build()?;
         // We allow for uninitialized locations, since we may want to create the table
         match table.load().await {
-            Ok(_) => Ok(table.into()),
-            Err(DeltaTableError::NotATable(_)) => Ok(table.into()),
+            Ok(_) => Ok(table),
+            Err(DeltaTableError::NotATable(_)) => Ok(table),
             Err(err) => Err(err),
         }
     }

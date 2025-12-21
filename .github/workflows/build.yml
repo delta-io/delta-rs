@@ -32,6 +32,9 @@ jobs:
           # if we ever get rid of all the clippy warnings, we can remove this line
           rustflags: ""
 
+      - name: load DAT
+        run: make setup-dat
+
       - name: Rustfmt Check
         uses: actions-rust-lang/rustfmt@v1
 
