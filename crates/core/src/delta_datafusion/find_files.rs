@@ -13,6 +13,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use itertools::Itertools;
+use percent_encoding::percent_decode_str;
 use tracing::*;
 
 use crate::delta_datafusion::{
@@ -195,7 +196,9 @@ fn join_batches_with_add_actions(
                 "{path_column} cannot be null"
             )))?;
 
-            match actions.remove(path) {
+            let path = percent_decode_str(&path).decode_utf8_lossy();
+
+            match actions.remove(path.as_ref()) {
                 Some(action) => files.push(action),
                 None => {
                     return Err(DeltaTableError::Generic(
