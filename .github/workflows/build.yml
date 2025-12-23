@@ -122,6 +122,15 @@ jobs:
           # if we ever get rid of all the clippy warnings, we can remove this line
           rustflags: ""
 
+      - name: Claim disk space
+        run: |
+          sudo rm -rf /opt/microsoft                #   783M
+          sudo rm -rf /usr/local/julia*             #  1008M
+          sudo rm -rf /usr/local/share/chromium     #   613M
+          sudo rm -rf /usr/local/share/powershell   #  1244M
+          sudo rm -rf /usr/share/swift              #  3207M
+          sudo df -TBG /
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
