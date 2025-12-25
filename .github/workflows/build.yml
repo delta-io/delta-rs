@@ -51,14 +51,18 @@ jobs:
       targets: ${{ steps.matrix.outputs.os }}
 
     steps:
+      # - name: Define test matrix
+      #   id: matrix
+      #   run: |
+      #     if [ "${{ github.event_name }}" = "pull_request" ]; then
+      #       echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+      #     else
+      #       echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
+      #     fi
       - name: Define test matrix
         id: matrix
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-          else
-            echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
-          fi
+          echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
 
   build:
     needs: test-matrix
@@ -123,6 +127,8 @@ jobs:
           rustflags: ""
 
       - name: Claim disk space
+        if: matrix.os != 'macos-latest'
+        shell: bash
         run: |
           sudo rm -rf /opt/microsoft                #   783M
           sudo rm -rf /usr/local/julia*             #  1008M
@@ -130,6 +136,12 @@ jobs:
           sudo rm -rf /usr/local/share/powershell   #  1244M
           sudo rm -rf /usr/share/swift              #  3207M
           sudo df -TBG /
+
+      - name: Set up Python 3.13
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.13
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
