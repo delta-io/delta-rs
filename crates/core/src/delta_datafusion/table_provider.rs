@@ -44,8 +44,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use futures::StreamExt as _;
-use itertools::Itertools;
+use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -499,10 +498,10 @@ impl<'a> DeltaScanBuilder<'a> {
                 if logical_filter.is_none() && self.limit.is_none() {
                     let files = self
                         .snapshot
-                        .log_data()
-                        .iter()
-                        .map(|f| f.add_action())
-                        .collect_vec();
+                        .file_views(&self.log_store, None)
+                        .map_ok(|f| f.add_action())
+                        .try_collect::<Vec<_>>()
+                        .await?;
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
                 } else {
@@ -524,10 +523,10 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     let file_actions: Vec<_> = self
                         .snapshot
-                        .log_data()
-                        .iter()
-                        .map(|f| f.add_action())
-                        .collect();
+                        .file_views(&self.log_store, None)
+                        .map_ok(|f| f.add_action())
+                        .try_collect::<Vec<_>>()
+                        .await?;
 
                     for (action, keep) in
                         file_actions.into_iter().zip(files_to_prune.iter().cloned())
