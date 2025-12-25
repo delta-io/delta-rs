@@ -5,10 +5,12 @@ use datafusion::execution::TaskContext;
 use delta_kernel::{Engine, EvaluationHandler, JsonHandler, ParquetHandler, StorageHandler};
 use tokio::runtime::Handle;
 
+pub use self::expressions::*;
 use self::file_formats::DataFusionFileFormatHandler;
 use self::storage::DataFusionStorageHandler;
 use crate::kernel::ARROW_HANDLER;
 
+mod expressions;
 mod file_formats;
 mod storage;
 

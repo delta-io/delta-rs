@@ -38,6 +38,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use schema_evolution::try_cast_schema;
@@ -653,9 +654,10 @@ impl std::future::IntoFuture for WriteBuilder {
                             }
                             _ => {
                                 let remove_actions = snapshot
-                                    .log_data()
-                                    .into_iter()
-                                    .map(|p| p.remove_action(true).into());
+                                    .file_views(&this.log_store, None)
+                                    .map_ok(|p| p.remove_action(true).into())
+                                    .try_collect::<Vec<_>>()
+                                    .await?;
                                 actions.extend(remove_actions);
                             }
                         };
