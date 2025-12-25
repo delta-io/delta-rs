@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use delta_kernel::schema::MetadataValue;
+use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use uuid::Uuid;
@@ -365,9 +366,11 @@ impl std::future::IntoFuture for CreateBuilder {
                         table.load().await?;
                         let remove_actions = table
                             .snapshot()?
-                            .log_data()
-                            .into_iter()
-                            .map(|p| p.remove_action(true).into());
+                            .snapshot()
+                            .file_views(&table.log_store(), None)
+                            .map_ok(|p| p.remove_action(true).into())
+                            .try_collect::<Vec<_>>()
+                            .await?;
                         actions.extend(remove_actions);
                         Some(table.snapshot()?)
                     }

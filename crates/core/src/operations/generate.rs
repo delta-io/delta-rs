@@ -70,6 +70,7 @@
 //!             └── part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet
 //! ```
 use bytes::{BufMut, BytesMut};
+use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -127,13 +128,9 @@ impl std::future::IntoFuture for GenerateBuilder {
             let mut payloads = HashMap::new();
             let manifest_part = PathPart::parse("manifest").expect("This is not possible");
 
-            for add in this
-                .snapshot
-                .clone()
-                .expect("A GenerateBuilder with no snapshot is not a valid state!")
-                .log_data()
-                .into_iter()
-            {
+            let mut file_stream = snapshot.file_views(&this.log_store, None);
+            while let Some(add) = file_stream.next().await {
+                let add = add?;
                 let path = add.object_store_path();
                 // The output_path is more or less the tree structure as the original file, just
                 // inside the _symlink_format_manifest directory. This makes it easier to avoid
@@ -174,7 +171,7 @@ impl std::future::IntoFuture for GenerateBuilder {
             }
             Ok(DeltaTable::new_with_state(
                 this.log_store().clone(),
-                DeltaTableState::new(snapshot),
+                DeltaTableState::new(snapshot.clone()),
             ))
         })
     }

@@ -283,6 +283,34 @@ impl Snapshot {
         ScanRowOutStream::new(self.inner.clone(), stream).boxed()
     }
 
+    /// Stream the active files in the snapshot
+    ///
+    /// This function returns a stream of [`LogicalFileView`] objects,
+    /// which represent the active files in the snapshot.
+    ///
+    /// ## Parameters
+    ///
+    /// * `log_store` - A reference to a [`LogStore`] implementation.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of [`LogicalFileView`] objects.
+    pub fn file_views(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        self.files(log_store, predicate)
+            .map_ok(|batch| {
+                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                })
+            })
+            .try_flatten()
+            .boxed()
+    }
+
     /// Get the commit infos in the snapshot
     ///
     /// ## Parameters
@@ -638,11 +666,8 @@ impl EagerSnapshot {
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
         if !self.snapshot.load_config().require_files {
-            return Box::pin(once(ready(Err(DeltaTableError::NotInitializedWithFiles(
-                "file_views".into(),
-            )))));
+            return self.snapshot.file_views(log_store, predicate);
         }
-
         self.snapshot
             .files_from(
                 log_store,

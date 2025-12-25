@@ -19,6 +19,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use futures::StreamExt;
+use futures::TryStreamExt;
 use futures::future::BoxFuture;
 use object_store::ObjectStore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
@@ -143,8 +144,11 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-        let file_stream = snapshot.log_data().into_iter().map(|f| f.add_action());
-        for active in file_stream {
+        let mut file_stream = snapshot
+            .file_views(&log_store, None)
+            .map_ok(|f| f.add_action());
+        while let Some(active) = file_stream.next().await {
+            let active = active?;
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
