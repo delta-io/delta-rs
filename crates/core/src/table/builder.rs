@@ -522,7 +522,7 @@ mod tests {
     fn test_windows_uri() {
         let map_cases = &[
             // extra slashes are removed
-            ("c:/", "file:///C:"),
+            ("c://", "file:///C:/"),
         ];
 
         for (case, expected) in map_cases {
