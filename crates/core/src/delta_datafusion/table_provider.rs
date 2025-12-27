@@ -43,7 +43,9 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
+use delta_kernel::Version;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use futures::future::BoxFuture;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -56,12 +58,15 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot};
+use crate::logstore::LogStore;
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTable, DeltaTableError, logstore::LogStoreRef};
+
+pub(crate) mod next;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -696,6 +701,66 @@ impl<'a> DeltaScanBuilder<'a> {
             logical_schema,
             metrics,
         })
+    }
+}
+
+/// Builder to create datafusion TableProvider for a Delta table
+#[derive(Debug)]
+pub struct TableProviderBuilder {
+    log_store: Arc<dyn LogStore>,
+    snapshot: Option<EagerSnapshot>,
+    file_column: Option<String>,
+    table_version: Option<Version>,
+}
+
+impl TableProviderBuilder {
+    fn new(log_store: Arc<dyn LogStore>, snapshot: Option<EagerSnapshot>) -> Self {
+        Self {
+            log_store,
+            snapshot,
+            file_column: None,
+            table_version: None,
+        }
+    }
+
+    /// Specify the version of the table to provide
+    pub fn with_table_version(mut self, version: impl Into<Option<Version>>) -> Self {
+        self.table_version = version.into();
+        self
+    }
+
+    pub fn with_file_column(mut self, file_column: impl ToString) -> Self {
+        self.file_column = Some(file_column.to_string());
+        self
+    }
+}
+
+impl std::future::IntoFuture for TableProviderBuilder {
+    type Output = Result<Arc<dyn TableProvider>>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot, false, this.table_version).await?;
+            Ok(Arc::new(snapshot) as Arc<dyn TableProvider>)
+        })
+    }
+}
+
+impl DeltaTable {
+    /// Get a table provider for the table referenced by this DeltaTable.
+    ///
+    /// See [`TableProviderBuilder`] for options when building the provider.
+    pub fn table_provider(&self) -> TableProviderBuilder {
+        TableProviderBuilder::new(
+            self.log_store(),
+            self.snapshot()
+                .ok()
+                .map(|snapshot| snapshot.snapshot().clone()),
+        )
     }
 }
 

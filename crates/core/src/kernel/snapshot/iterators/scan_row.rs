@@ -13,8 +13,8 @@ use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::expressions::UnaryExpressionOp;
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
+use delta_kernel::schema::{DataType, SchemaRef as KernelSchemaRef};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator};
@@ -94,7 +94,19 @@ pub(crate) fn scan_row_in_eval(
     )?)
 }
 
-fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<RecordBatch> {
+pub(crate) fn parse_stats_column(
+    sn: &KernelSnapshot,
+    batch: &RecordBatch,
+) -> DeltaResult<RecordBatch> {
+    let stats_schema = sn.stats_schema()?;
+    parse_stats_column_with_schema(sn, batch, stats_schema)
+}
+
+pub(crate) fn parse_stats_column_with_schema(
+    sn: &KernelSnapshot,
+    batch: &RecordBatch,
+    stats_schema: KernelSchemaRef,
+) -> DeltaResult<RecordBatch> {
     let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
         return Err(DeltaTableError::SchemaMismatch {
             msg: "stats column not found".to_string(),
@@ -105,7 +117,6 @@ fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<R
     let mut columns = batch.columns().to_vec();
     let mut fields = batch.schema().fields().to_vec();
 
-    let stats_schema = sn.stats_schema()?;
     let stats_batch = batch.project(&[stats_idx])?;
     let stats_data = Box::new(ArrowEngineData::new(stats_batch));
 

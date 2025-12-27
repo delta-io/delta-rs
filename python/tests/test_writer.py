@@ -542,7 +542,11 @@ def test_roundtrip_null_partition(
         ChunkedArray(
             Array(
                 ["a", "a", "a", "a", None],
-                type=ArrowField("utf8_with_nulls", DataType.string(), nullable=True),
+                type=ArrowField(
+                    "utf8_with_nulls",
+                    DataType.dictionary(DataType.uint16(), DataType.string()),
+                    nullable=True,
+                ),
             )
         ),
     )

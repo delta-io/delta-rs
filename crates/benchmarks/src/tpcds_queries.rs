@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use deltalake_core::datafusion::prelude::{ParquetReadOptions, SessionContext};
-use deltalake_core::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
 use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake_core::kernel::{StructField, StructType};
 use deltalake_core::{DeltaResult, DeltaTable};
@@ -80,10 +79,8 @@ pub async fn register_tpcds_tables(
         let table = table.write(batches).await?;
 
         let snapshot = table.snapshot()?.snapshot().clone();
-        let config = DeltaScanConfigBuilder::new().build(&snapshot)?;
-        let provider = DeltaTableProvider::try_new(snapshot, table.log_store(), config)?;
 
-        ctx.register_table(*table_name, Arc::new(provider))?;
+        ctx.register_table(*table_name, Arc::new(snapshot))?;
     }
 
     Ok(ctx)

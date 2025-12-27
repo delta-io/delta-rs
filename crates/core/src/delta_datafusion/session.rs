@@ -19,6 +19,20 @@ pub fn create_session() -> DeltaSessionContext {
     DeltaSessionContext::default()
 }
 
+#[cfg(test)]
+pub fn create_test_session() -> DeltaSessionContext {
+    use std::sync::Arc;
+
+    use object_store::memory::InMemory;
+
+    let session = DeltaSessionContext::default();
+    session.inner.runtime_env().register_object_store(
+        &url::Url::parse("memory:///").unwrap(),
+        Arc::new(InMemory::new()),
+    );
+    session
+}
+
 // Given a `Session` reference, get the concrete `SessionState` reference
 // Note: this may stop working in future versions,
 #[deprecated(

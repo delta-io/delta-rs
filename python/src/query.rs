@@ -1,11 +1,6 @@
 use std::sync::Arc;
 
-use deltalake::{
-    datafusion::prelude::SessionContext,
-    delta_datafusion::{
-        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
-    },
-};
+use deltalake::{datafusion::prelude::SessionContext, delta_datafusion::DeltaSessionContext};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
 
@@ -38,22 +33,9 @@ impl PyQueryBuilder {
     /// another table of the same name is not registered over it.
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
         let snapshot = delta_table.cloned_state()?;
-        let log_store = delta_table.log_store()?;
-
-        let scan_config = DeltaScanConfigBuilder::default()
-            .with_schema(snapshot.input_schema())
-            .build(&snapshot)
-            .map_err(PythonError::from)?;
-
-        let provider = Arc::new(
-            DeltaTableProvider::try_new(snapshot, log_store, scan_config)
-                .map_err(PythonError::from)?,
-        );
-
         self.ctx
-            .register_table(table_name, provider)
+            .register_table(table_name, Arc::new(snapshot))
             .map_err(PythonError::from)?;
-
         Ok(())
     }
 

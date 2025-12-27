@@ -780,14 +780,14 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = if cmd.options.is_empty() {
+        let table = if cmd.options.is_empty() {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table(table_url).await?
         } else {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(Arc::new(provider))
+        Ok(table.table_provider().await?)
     }
 }
 

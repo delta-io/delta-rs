@@ -8,11 +8,12 @@ use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
 use crate::DeltaTable;
+use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
 use crate::delta_datafusion::{DataFusionMixins as _, create_session};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStoreExt, LogStoreRef};
 use crate::table::state::DeltaTableState;
 
 #[derive(Clone)]
@@ -96,18 +97,28 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            let session = this
-                .session
-                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
+            let session = if let Some(session) = this.session {
+                session
+            } else {
+                let session = Arc::new(create_session().into_inner().state());
+                let url = this.log_store.log_root_url();
+                let store_url = url.as_object_store_url();
+                if session.runtime_env().object_store(&store_url).is_err() {
+                    session
+                        .runtime_env()
+                        .register_object_store(&url, this.log_store.root_object_store(None));
+                }
+                session
+            };
 
-            let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
-            let scan_plan = table
+            let scan_plan = snapshot
                 .scan(session.as_ref(), projection.as_ref(), &[], None)
                 .await?;
 
             let plan = CoalescePartitionsExec::new(scan_plan);
             let stream = plan.execute(0, session.task_ctx())?;
 
+            let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             Ok((table, stream))
         })
     }
