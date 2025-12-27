@@ -196,7 +196,7 @@ fn join_batches_with_add_actions(
                 "{path_column} cannot be null"
             )))?;
 
-            let path = percent_decode_str(&path).decode_utf8_lossy();
+            let path = percent_decode_str(path).decode_utf8_lossy();
 
             match actions.remove(path.as_ref()) {
                 Some(action) => files.push(action),
