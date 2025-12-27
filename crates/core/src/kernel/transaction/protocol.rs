@@ -220,7 +220,7 @@ impl ProtocolChecker {
 pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
     reader_features.insert(TableFeature::TimestampWithoutTimezone);
-    // reader_features.insert(TableFeature::ColumnMapping);
+    reader_features.insert(TableFeature::ColumnMapping);
 
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
