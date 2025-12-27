@@ -210,7 +210,7 @@ impl LogicalFileView {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_NUM_RECORDS))
             .and_then(|col| col.as_primitive_opt::<Int64Type>())
-            .map(|a| a.value(self.index) as usize)
+            .and_then(|a| a.is_valid(self.index).then(|| a.value(self.index) as usize))
     }
 
     /// Returns null counts for all columns in this file as structured data.
