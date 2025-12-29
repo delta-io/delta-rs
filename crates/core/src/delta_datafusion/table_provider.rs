@@ -43,8 +43,8 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::{StreamExt as _, TryStreamExt as _};
+use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -56,10 +56,10 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove};
-use crate::operations::write::WriterStatsConfig;
+use crate::kernel::{Action, Add, EagerSnapshot};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::protocol::{DeltaOperation, SaveMode};
+use crate::table::config::TablePropertiesExt;
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTable, DeltaTableError, logstore::LogStoreRef};
 
@@ -150,20 +150,23 @@ impl DataSink for DeltaDataSink {
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
         let target_schema = self.snapshot.input_schema();
+        let table_props = self.snapshot.table_configuration().table_properties();
 
         let mut stream = self.create_converted_stream(data, target_schema.clone());
         let partition_columns = self.snapshot.metadata().partition_columns();
         let object_store = self.log_store.object_store(None);
         let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
-        let stats_config = WriterStatsConfig::new(DataSkippingNumIndexedCols::AllColumns, None);
         let config = WriterConfig::new(
             self.snapshot.read_schema(),
             partition_columns.clone(),
             None,
+            Some(table_props.target_file_size().get() as usize),
             None,
-            None,
-            stats_config.num_indexed_cols,
-            stats_config.stats_columns,
+            table_props.num_indexed_cols(),
+            table_props
+                .data_skipping_stats_columns
+                .as_ref()
+                .map(|c| c.iter().map(|c| c.to_string()).collect_vec()),
         );
 
         let mut writer = DeltaWriter::new(object_store, config);
@@ -180,35 +183,24 @@ impl DataSink for DeltaDataSink {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         }
 
-        let add_actions = writer
+        let mut actions = writer
             .close()
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .into_iter()
+            .map(Action::Add)
+            .collect_vec();
 
-        let mut actions = if self.save_mode == SaveMode::Overwrite {
-            let current_files = self.snapshot.log_data().into_iter().map(|f| f.add_action());
-            current_files
-                .into_iter()
-                .map(|add| {
-                    Action::Remove(Remove {
-                        path: add.path,
-                        deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
-                        data_change: true,
-                        extended_file_metadata: Some(true),
-                        partition_values: Some(add.partition_values),
-                        size: Some(add.size),
-                        tags: add.tags,
-                        base_row_id: None,
-                        default_row_commit_version: None,
-                        deletion_vector: None,
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
+        if self.save_mode == SaveMode::Overwrite {
+            actions.extend(
+                self.snapshot
+                    .file_views(&self.log_store, None)
+                    .map_ok(|f| Action::Remove(f.remove_action(true)))
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            );
         };
-
-        actions.extend(add_actions.into_iter().map(Action::Add));
 
         let operation = DeltaOperation::Write {
             mode: self.save_mode,
