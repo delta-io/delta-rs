@@ -654,8 +654,8 @@ impl std::future::IntoFuture for WriteBuilder {
                                     source_logical_plan =
                                         LogicalPlanBuilder::from(source_logical_plan)
                                             .with_column(
-                                                "insert",
-                                                lit("insert").alias(CDC_COLUMN_NAME),
+                                                CDC_COLUMN_NAME,
+                                                lit("insert"),
                                                 false,
                                             )?
                                             .union(cdf_logical_plan)?
