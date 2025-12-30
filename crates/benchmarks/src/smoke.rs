@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use deltalake_core::datafusion::prelude::SessionContext;
-use deltalake_core::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{arrow, DeltaResult, DeltaTable, DeltaTableError};
 use url::Url;
@@ -40,12 +39,8 @@ pub async fn run_smoke_once(table_url: &Url, params: &SmokeParams) -> DeltaResul
         .with_save_mode(SaveMode::Overwrite)
         .await?;
 
-    let snapshot = table.snapshot()?.snapshot().clone();
-    let config = DeltaScanConfigBuilder::new().build(&snapshot)?;
-    let provider = DeltaTableProvider::try_new(snapshot, table.log_store(), config)?;
-
     let ctx = SessionContext::new();
-    ctx.register_table("smoke", Arc::new(provider))?;
+    ctx.register_table("smoke", table.table_provider().await?)?;
 
     let df = ctx.sql("SELECT id, value FROM smoke ORDER BY id").await?;
     let batches = df.collect().await?;

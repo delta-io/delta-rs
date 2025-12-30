@@ -89,6 +89,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 
     /// Spawn task that will be aborted if this builder (or the stream
     /// built from it) are dropped
+    #[allow(unused)]
     pub fn spawn<F>(&mut self, task: F)
     where
         F: Future<Output = DeltaResult<()>>,

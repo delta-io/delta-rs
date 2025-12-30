@@ -1842,7 +1842,6 @@ impl RawDeltaTable {
         // tokio runtime handle?
         let handle = rt().handle();
         let name = CString::new("datafusion_table_provider").unwrap();
-
         let table = self.with_table(|t| Ok(t.clone()))?;
 
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);

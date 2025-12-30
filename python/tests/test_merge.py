@@ -92,7 +92,7 @@ def test_merge_when_matched_delete_with_predicate(
         {
             "id": Array(
                 ["5", "4"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "weight": Array(
                 [1, 2],
@@ -108,7 +108,7 @@ def test_merge_when_matched_delete_with_predicate(
             ),
             "customer": Array(
                 ["Adam", "Patrick"],
-                ArrowField("customer", type=DataType.string(), nullable=True),
+                ArrowField("customer", type=DataType.string_view(), nullable=True),
             ),
         },
     )
@@ -167,7 +167,7 @@ def test_merge_when_matched_update_wo_predicate(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -233,7 +233,7 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -245,7 +245,7 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
             ),
             "customer": Array(
                 ["john", "doe"],
-                ArrowField("customer", type=DataType.string(), nullable=True),
+                ArrowField("customer", type=DataType.string_view(), nullable=True),
             ),
         },
     )
@@ -310,7 +310,7 @@ def test_merge_when_matched_update_wo_predicate_and_insert_with_schema_evolution
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -322,7 +322,7 @@ def test_merge_when_matched_update_wo_predicate_and_insert_with_schema_evolution
             ),
             "customer": Array(
                 ["john", "doe"],
-                ArrowField("customer", type=DataType.string(), nullable=True),
+                ArrowField("customer", type=DataType.string_view(), nullable=True),
             ),
         },
     )
@@ -388,7 +388,7 @@ def test_merge_when_matched_update_all_wo_predicate(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -462,7 +462,7 @@ def test_merge_when_matched_update_all_with_exclude(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -535,7 +535,7 @@ def test_merge_when_matched_update_with_predicate(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -607,7 +607,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
         {
             "id": Array(
                 ["4", "6"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -684,7 +684,7 @@ def test_merge_when_not_matched_insert_with_predicate(
         {
             "id": Array(
                 ["6", "10"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -761,7 +761,7 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
         {
             "id": Array(
                 ["6", "10"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -773,7 +773,7 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
             ),
             "customer": Array(
                 ["john", "doe"],
-                ArrowField("customer", type=DataType.string(), nullable=True),
+                ArrowField("customer", type=DataType.string_view(), nullable=True),
             ),
             "deleted": Array(
                 [False, False],
@@ -849,7 +849,7 @@ def test_merge_when_not_matched_insert_all_with_predicate(
         {
             "id": Array(
                 ["6", "10"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -921,7 +921,7 @@ def test_merge_when_not_matched_insert_all_with_exclude(
         {
             "id": Array(
                 ["6", "9"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -990,7 +990,7 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
         {
             "id": Array(
                 ["6", "9"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1006,7 +1006,7 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
             ),
             "customer": Array(
                 ["john", "doe"],
-                ArrowField("customer", type=DataType.string(), nullable=True),
+                ArrowField("customer", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -1069,7 +1069,7 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
         {
             "1id": Array(
                 ["6", "10"],
-                ArrowField("1id", type=DataType.string(), nullable=True),
+                ArrowField("1id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1141,7 +1141,7 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
         {
             "id": Array(
                 ["6", "7"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1215,7 +1215,7 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
         {
             "id": Array(
                 ["6", "7"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1290,7 +1290,7 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
         {
             "id": Array(
                 ["6", "7"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1360,7 +1360,7 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "weight": Array(
                 [1.5, 1.6],
@@ -1422,7 +1422,7 @@ def test_merge_multiple_when_matched_update_with_predicate(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1498,7 +1498,7 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
         {
             "id": Array(
                 ["4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1572,7 +1572,7 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
         {
             "id": Array(
                 ["6", "9"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -1658,7 +1658,7 @@ def test_merge_multiple_when_matched_delete_with_predicate(
         {
             "id": Array(
                 ["5", "4"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "weight": Array(
                 [1, 2],
@@ -1674,7 +1674,7 @@ def test_merge_multiple_when_matched_delete_with_predicate(
             ),
             "customer": Array(
                 ["Adam", "Patrick"],
-                ArrowField("customer", type=DataType.string(), nullable=True),
+                ArrowField("customer", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -1737,7 +1737,7 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
         {
             "id": Array(
                 ["6", "7"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [10, 100],
@@ -2112,7 +2112,7 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
         {
             "id": Array(
                 [str(x) for x in range(nrows)],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "partition": Array(
                 list(range(nrows)),
@@ -2133,7 +2133,7 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
         {
             "id": Array(
                 ["3", "4"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "partition": Array(
                 [3, 4],
