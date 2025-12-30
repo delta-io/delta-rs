@@ -43,9 +43,12 @@ use datafusion::common::{
 };
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::TableType;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
+use datafusion::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfigBuilder, FileSinkConfig, ParquetSource,
+};
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_expr::planner::logical2physical;
@@ -75,6 +78,7 @@ use object_store::ObjectMeta;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
+pub(crate) use self::data_sink::DeltaDataSink;
 use crate::DeltaTableError;
 use crate::delta_datafusion::engine::{
     AsObjectStoreUrl as _, DataFusionEngine, predicate_to_df, to_datafusion_scalar,
@@ -88,6 +92,7 @@ use crate::delta_datafusion::table_provider::next::scan_meta::DeltaScanMetaExec;
 use crate::delta_datafusion::{DataFusionMixins as _, DeltaScanConfig};
 use crate::kernel::{EagerSnapshot, Scan, Snapshot};
 
+mod data_sink;
 mod predicate;
 mod replay;
 mod scan;
@@ -311,6 +316,53 @@ impl TableProvider for DeltaScan {
             filter,
             self.snapshot.table_configuration(),
         ))
+    }
+
+    /// Insert the data into the delta table
+    /// Insert operation is only supported for Append and Overwrite
+    /// Return the execution plan
+    async fn insert_into(
+        &self,
+        _state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if insert_op == InsertOp::Replace {
+            return plan_err!("Insert operation '{insert_op}' is not supported.");
+        }
+
+        let table_root = self.snapshot.snapshot().table_configuration().table_root();
+
+        let parsed_url = ListingTableUrl::parse(table_root)?;
+        let keep_partition_by_columns = self
+            .snapshot
+            .table_configuration()
+            .is_feature_enabled(&TableFeature::MaterializePartitionColumns);
+
+        // TODO: adopt output schema to adhere to table configuration
+        // * handle partition columns (e.g. physical types / dict encoding)
+        // * handle column mapping
+        let output_schema = self.snapshot.snapshot().arrow_schema();
+
+        let config = FileSinkConfig {
+            original_url: table_root.to_string(),
+            object_store_url: table_root.as_object_store_url(),
+            table_paths: vec![parsed_url],
+            output_schema,
+            table_partition_cols: vec![],
+            insert_op,
+            keep_partition_by_columns,
+            file_extension: "parquet".to_string(),
+            file_group: FileGroup::default(),
+        };
+
+        let data_sink = DeltaDataSink::new(self.snapshot.clone(), config);
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            None,
+        )))
     }
 }
 
