@@ -79,9 +79,14 @@ impl PyMergeBuilder {
             ctx.read_table(table_provider).unwrap()
         };
 
-        let mut cmd = MergeBuilder::new(log_store, Some(snapshot), predicate, source_df)
-            .with_safe_cast(safe_cast)
-            .with_streaming(streamed_exec);
+        let mut cmd = MergeBuilder::new(
+            log_store,
+            Some(snapshot),
+            predicate,
+            source_df.into_unoptimized_plan(),
+        )
+        .with_safe_cast(safe_cast)
+        .with_streaming(streamed_exec);
 
         if let Some(src_alias) = &source_alias {
             cmd = cmd.with_source_alias(src_alias);

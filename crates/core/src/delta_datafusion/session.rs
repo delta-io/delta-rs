@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
 use datafusion::{
-    catalog::Session,
-    common::{Result as DataFusionResult, exec_datafusion_err},
-    execution::{
-        SessionState, SessionStateBuilder,
-        disk_manager::DiskManagerBuilder,
-        memory_pool::FairSpillPool,
-        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
-    },
-    prelude::{SessionConfig, SessionContext},
+    execution::{SessionState, SessionStateBuilder},
+    prelude::SessionContext,
     sql::planner::ParserOptions,
 };
+use datafusion_catalog::Session;
+use datafusion_common::{Result as DataFusionResult, exec_datafusion_err};
+use datafusion_execution::config::SessionConfig;
+use datafusion_execution::disk_manager::DiskManagerBuilder;
+use datafusion_execution::memory_pool::FairSpillPool;
+use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 
 use crate::delta_datafusion::planner::DeltaPlanner;
 

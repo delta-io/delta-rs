@@ -4,13 +4,11 @@ use std::vec;
 use arrow::compute::concat_batches;
 use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::{MemTable, provider_as_source};
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, LogicalPlanBuilder, col, lit, when};
-use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
-use datafusion::prelude::DataFrame;
+use datafusion_catalog::default_table_source::provider_as_source;
+use datafusion_catalog::{MemTable, Session, TableProvider};
+use datafusion_execution::SendableRecordBatchStream;
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, col, lit, when};
+use datafusion_physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::StreamExt;
 use object_store::prefix::PrefixStore;
@@ -22,9 +20,9 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
+use crate::delta_datafusion::logical::LogicalPlanBuilderExt;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaDataChecker, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    session_state_from_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
@@ -56,7 +54,7 @@ pub(crate) struct WriteExecutionPlanMetrics {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
     snapshot: Option<&EagerSnapshot>,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -103,7 +101,7 @@ pub(crate) async fn write_execution_plan_cdc(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
     snapshot: Option<&EagerSnapshot>,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -133,7 +131,7 @@ pub(crate) async fn write_execution_plan(
 pub(crate) async fn execute_non_empty_expr(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     partition_columns: Vec<String>,
     expression: &Expr,
     rewrite: &[Add],
@@ -141,7 +139,7 @@ pub(crate) async fn execute_non_empty_expr(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
     let mut actions: Vec<Action> = Vec::new();
@@ -161,7 +159,7 @@ pub(crate) async fn execute_non_empty_expr(
     let source =
         Arc::new(LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?);
 
-    let cdf_df = if !partition_scan {
+    let cdf_logical_plan = if !partition_scan {
         // Apply the negation of the filter and rewrite files
         let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
         let filter = LogicalPlanBuilder::from(source.clone())
@@ -188,11 +186,11 @@ pub(crate) async fn execute_non_empty_expr(
         // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
         // based on the remove actions if a partition got deleted
         if should_write_cdc(snapshot)? {
-            let state = session_state_from_session(session)?;
-            let df = DataFrame::new(state.clone(), source.as_ref().clone());
             Some(
-                df.filter(expression.clone())?
-                    .with_column(CDC_COLUMN_NAME, lit("delete"))?,
+                LogicalPlanBuilder::from(source.clone())
+                    .filter(expression.clone())?
+                    .with_column(CDC_COLUMN_NAME, lit("delete"), false)?
+                    .build()?,
             )
         } else {
             None
@@ -201,7 +199,7 @@ pub(crate) async fn execute_non_empty_expr(
         None
     };
 
-    Ok((actions, cdf_df))
+    Ok((actions, cdf_logical_plan))
 }
 
 // This should only be called with a valid predicate
@@ -210,22 +208,22 @@ pub(crate) async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
     snapshot: &EagerSnapshot,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     partition_columns: Vec<String>,
     writer_properties: Option<WriterProperties>,
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     let candidates = find_files(
         snapshot,
         log_store.clone(),
-        session,
+        session.as_ref(),
         Some(predicate.clone()),
     )
     .await?;
 
-    let (mut actions, cdf_df) = execute_non_empty_expr(
+    let (mut actions, cdf_logical_plan) = execute_non_empty_expr(
         snapshot,
         log_store,
         session,
@@ -255,13 +253,13 @@ pub(crate) async fn prepare_predicate_actions(
             default_row_commit_version: action.default_row_commit_version,
         }))
     }
-    Ok((actions, cdf_df))
+    Ok((actions, cdf_logical_plan))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
     snapshot: Option<&EagerSnapshot>,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
@@ -452,8 +450,8 @@ pub(crate) async fn write_execution_plan_v2(
             let txn = tx_normal.clone();
             let txc = tx_cdf.clone();
             let checker_clone = checker_stream.clone();
-            let session_ctx = SessionContext::new();
             let cdf_schema_clone = cdf_schema.clone();
+            let session_clone = session.clone();
 
             let h = tokio::task::spawn(async move {
                 while let Some(maybe_batch) = partition_stream.next().await {
@@ -464,26 +462,43 @@ pub(crate) async fn write_execution_plan_v2(
                         batch.schema(),
                         vec![vec![batch.clone()]],
                     )?);
-                    let batch_df = session_ctx.read_table(table_provider).unwrap();
+                    let logical_plan = LogicalPlanBuilder::scan(
+                        UNNAMED_TABLE,
+                        provider_as_source(table_provider),
+                        None,
+                    )?
+                    .build()?;
 
-                    let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
-                        vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
-                        true,
-                    ))?;
+                    let normal_logical_plan = LogicalPlanBuilder::from(logical_plan.clone())
+                        .filter(col(CDC_COLUMN_NAME).in_list(
+                            vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
+                            true,
+                        ))?
+                        .build()?;
 
-                    let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
-                        vec![
-                            lit("delete"),
-                            lit("insert"),
-                            lit("update_preimage"),
-                            lit("update_postimage"),
-                        ],
-                        false,
-                    ))?;
+                    let cdf_logical_plan = LogicalPlanBuilder::from(logical_plan)
+                        .filter(col(CDC_COLUMN_NAME).in_list(
+                            vec![
+                                lit("delete"),
+                                lit("insert"),
+                                lit("update_preimage"),
+                                lit("update_postimage"),
+                            ],
+                            false,
+                        ))?
+                        .build()?;
+
+                    let normal_logical_batches = datafusion_physical_plan::collect(
+                        session_clone
+                            .create_physical_plan(&normal_logical_plan)
+                            .await?,
+                        session_clone.task_ctx(),
+                    )
+                    .await?;
 
                     // Concatenate with the CDF_schema, since we need to keep the _change_type col
                     let mut normal_batch =
-                        concat_batches(&cdf_schema_clone, &normal_df.collect().await?)?;
+                        concat_batches(&cdf_schema_clone, &normal_logical_batches)?;
                     checker_clone.check_batch(&normal_batch).await?;
 
                     // Drop the CDC_COLUMN ("_change_type")
@@ -498,7 +513,14 @@ pub(crate) async fn write_execution_plan_v2(
                         "idx of _change_type col not found. This shouldn't have happened.",
                     ))?);
 
-                    let cdf_batch = concat_batches(&cdf_schema_clone, &cdf_df.collect().await?)?;
+                    let cdf_batches = datafusion_physical_plan::collect(
+                        session_clone
+                            .create_physical_plan(&cdf_logical_plan)
+                            .await?,
+                        session_clone.task_ctx(),
+                    )
+                    .await?;
+                    let cdf_batch = concat_batches(&cdf_schema_clone, &cdf_batches)?;
                     checker_clone.check_batch(&cdf_batch).await?;
 
                     // send to writers channels

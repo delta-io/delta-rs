@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_schema::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
-use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{Column, ToDFSchema};
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::Expr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{Column, ToDFSchema};
+use datafusion_expr::Expr;
+use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::errors::DeltaResult;
@@ -248,8 +248,8 @@ impl PruningStatistics for DeltaTableState {
 mod tests {
     use std::collections::HashMap;
 
-    use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
+    use datafusion_expr::{col, lit};
 
     use super::*;
     use crate::delta_datafusion::{DataFusionMixins, files_matching_predicate};

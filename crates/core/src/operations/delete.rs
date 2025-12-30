@@ -18,19 +18,16 @@
 //! ````
 
 use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::common::ScalarValue;
-use datafusion::dataframe::DataFrame;
-use datafusion::datasource::provider_as_source;
-use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
-};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::Expr;
+use datafusion_catalog::Session;
+use datafusion_catalog::default_table_source::provider_as_source;
+use datafusion_common::Result as DataFusionResult;
+use datafusion_common::ScalarValue;
+use datafusion_expr::Expr;
+use datafusion_expr::{Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::metrics::MetricBuilder;
 
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -44,11 +41,11 @@ use super::Operation;
 use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt, MetricObserver};
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, create_session, find_files,
-    register_store, session_state_from_session,
+    register_store,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
@@ -204,7 +201,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot,
-                session.as_ref(),
+                session,
                 this.writer_properties,
                 this.commit_properties,
                 operation_id,
@@ -265,7 +262,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 async fn execute_non_empty_expr(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     expression: &Expr,
     rewrite: &[Add],
     metrics: &mut DeleteMetrics,
@@ -317,7 +314,7 @@ async fn execute_non_empty_expr(
 
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
-            session,
+            session.clone(),
             filter.clone(),
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
@@ -345,17 +342,17 @@ async fn execute_non_empty_expr(
     if let Ok(true) = should_write_cdc(snapshot) {
         // Create CDC scan
         let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
-        let state = session_state_from_session(session)?;
-        let cdc_filter = DataFrame::new(state.clone(), source)
+        let cdc_filter_plan = LogicalPlanBuilder::from(source)
             .filter(expression.clone())?
-            .with_column("_change_type", change_type_lit)?
-            .create_physical_plan()
-            .await?;
+            .with_column("_change_type", change_type_lit, false)?
+            .build()?;
+
+        let cdc_execution_plan = session.create_physical_plan(&cdc_filter_plan).await?;
 
         let cdc_actions = write_execution_plan_cdc(
             Some(snapshot),
             session,
-            cdc_filter,
+            cdc_execution_plan,
             table_partition_cols.clone(),
             log_store.object_store(Some(operation_id)),
             Some(snapshot.table_properties().target_file_size().get() as usize),
@@ -376,7 +373,7 @@ async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    session: &dyn Session,
+    session: Arc<dyn Session>,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     operation_id: Uuid,
@@ -390,7 +387,13 @@ async fn execute(
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), session, predicate.clone()).await?;
+    let candidates = find_files(
+        &snapshot,
+        log_store.clone(),
+        session.as_ref(),
+        predicate.clone(),
+    )
+    .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(lit(true));
@@ -489,9 +492,9 @@ mod tests {
     use arrow_buffer::NullBuffer;
     use arrow_schema::DataType;
     use arrow_schema::Fields;
-    use datafusion::assert_batches_sorted_eq;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
+    use datafusion_common::assert_batches_sorted_eq;
+    use datafusion_physical_plan::ExecutionPlan;
     use delta_kernel::schema::PrimitiveType;
     use serde_json::json;
     use std::sync::Arc;

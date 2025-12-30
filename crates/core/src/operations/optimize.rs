@@ -27,8 +27,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use datafusion::catalog::Session;
 use datafusion::execution::context::SessionState;
+use datafusion_catalog::Session;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -603,9 +603,9 @@ impl MergePlan {
         context: Arc<zorder::ZOrderExecContext>,
         table_provider: DeltaTableProvider,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::common::Column;
-        use datafusion::logical_expr::expr::ScalarFunction;
-        use datafusion::logical_expr::{Expr, ScalarUDF};
+        use datafusion_common::Column;
+        use datafusion_expr::expr::ScalarFunction;
+        use datafusion_expr::{Expr, ScalarUDF};
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
@@ -1120,12 +1120,12 @@ pub(super) mod zorder {
         use super::*;
         use url::Url;
 
-        use ::datafusion::common::DataFusionError;
-        use ::datafusion::logical_expr::{
+        use ::datafusion::prelude::SessionContext;
+        use ::datafusion_common::DataFusionError;
+        use ::datafusion_expr::{
             ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
             Volatility,
         };
-        use ::datafusion::prelude::SessionContext;
         use arrow_schema::DataType;
         use itertools::Itertools;
         use std::any::Any;
@@ -1182,7 +1182,7 @@ pub(super) mod zorder {
             fn invoke_with_args(
                 &self,
                 args: ScalarFunctionArgs,
-            ) -> ::datafusion::common::Result<ColumnarValue> {
+            ) -> ::datafusion_common::Result<ColumnarValue> {
                 zorder_key_datafusion(&args.args)
             }
         }

@@ -8,33 +8,8 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::catalog::TableProvider;
-use datafusion::catalog::memory::DataSourceExec;
-use datafusion::common::pruning::PruningStatistics;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result, Statistics, ToDFSchema};
-use datafusion::config::{ConfigOptions, TableParquetOptions};
-use datafusion::datasource::TableType;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
-};
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::sink::{DataSink, DataSinkExec};
-use datafusion::error::DataFusionError;
-use datafusion::execution::context::ExecutionProps;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::dml::InsertOp;
-use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::utils::split_conjunction;
-use datafusion::logical_expr::{BinaryExpr, LogicalPlan, Operator};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
-use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
-    stream::RecordBatchStreamAdapter,
-};
 use datafusion::{
     catalog::Session,
     common::{HashMap, HashSet},
@@ -42,6 +17,32 @@ use datafusion::{
     logical_expr::{TableProviderFilterPushDown, utils::conjunction},
     prelude::Expr,
     scalar::ScalarValue,
+};
+use datafusion_catalog::TableProvider;
+use datafusion_catalog::memory::DataSourceExec;
+use datafusion_common::DataFusionError;
+use datafusion_common::config::{ConfigOptions, TableParquetOptions};
+use datafusion_common::pruning::PruningStatistics;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, DFSchema, Result, Statistics, ToDFSchema};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::{
+    FileScanConfigBuilder, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::utils::split_conjunction;
+use datafusion_expr::{BinaryExpr, LogicalPlan, Operator, TableType};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+    stream::RecordBatchStreamAdapter,
 };
 use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools;
@@ -148,7 +149,7 @@ impl DataSink for DeltaDataSink {
         &self,
         data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
-    ) -> datafusion::common::Result<u64> {
+    ) -> datafusion_common::Result<u64> {
         let target_schema = self.snapshot.input_schema();
         let table_props = self.snapshot.table_configuration().table_properties();
 
@@ -1185,11 +1186,11 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use chrono::{TimeZone, Utc};
-    use datafusion::common::ScalarValue;
-    use datafusion::datasource::MemTable;
-    use datafusion::datasource::listing::PartitionedFile;
     use datafusion::execution::context::SessionState;
-    use datafusion::logical_expr::dml::InsertOp;
+    use datafusion_catalog::MemTable;
+    use datafusion_common::ScalarValue;
+    use datafusion_datasource::PartitionedFile;
+    use datafusion_expr::dml::InsertOp;
     use object_store::path::Path;
     use std::sync::Arc;
 

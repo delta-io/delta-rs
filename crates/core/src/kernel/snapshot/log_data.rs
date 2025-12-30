@@ -110,13 +110,13 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::{Arc, LazyLock};
 
-    use ::datafusion::common::Column;
-    use ::datafusion::common::DataFusionError;
-    use ::datafusion::common::scalar::ScalarValue;
-    use ::datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
-    use ::datafusion::physical_plan::Accumulator;
+    use ::datafusion_common::Column;
+    use ::datafusion_common::DataFusionError;
+    use ::datafusion_common::scalar::ScalarValue;
+    use ::datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
+    use ::datafusion_physical_optimizer::pruning::PruningStatistics;
+    use ::datafusion_physical_plan::Accumulator;
     use arrow::compute::concat;
     use arrow_arith::aggregate::sum;
     use arrow_array::{Array, RecordBatch, StringArray, StructArray};

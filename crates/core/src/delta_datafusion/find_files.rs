@@ -4,18 +4,22 @@ use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
-use datafusion::catalog::Session;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::{Expr, Volatility, col};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion_catalog::MemTable;
+use datafusion_catalog::Session;
+use datafusion_catalog::{TableProvider, default_table_source::provider_as_source};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_execution::TaskContext;
+use datafusion_expr::LogicalPlanBuilder;
+use datafusion_expr::UNNAMED_TABLE;
+use datafusion_expr::{Expr, Volatility, col};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::limit::LocalLimitExec;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use tracing::*;
 
+use crate::delta_datafusion::logical::LogicalPlanBuilderExt;
 use crate::delta_datafusion::{
     DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN, df_logical_schema, get_path_column,
 };
@@ -63,7 +67,7 @@ pub(crate) async fn find_files(
             expr_properties.result?;
 
             if expr_properties.partition_only {
-                let candidates = scan_memory_table(snapshot, predicate).await?;
+                let candidates = scan_memory_table(snapshot, predicate, session).await?;
                 let result = FindFiles {
                     candidates,
                     partition_scan: true,
@@ -109,7 +113,7 @@ struct FindFilesExprProperties {
 impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
+    fn f_down(&mut self, expr: &Self::Node) -> datafusion_common::Result<TreeNodeRecursion> {
         // TODO: We can likely relax the volatility to STABLE. Would require further
         // research to confirm the same value is generated during the scan and
         // rewrite phases.
@@ -272,7 +276,7 @@ async fn find_files_scan(
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
     let task_ctx = Arc::new(TaskContext::from(session));
-    let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
+    let path_batches = datafusion_physical_plan::collect(limit, task_ctx).await?;
 
     let result = join_batches_with_add_actions(
         path_batches,
@@ -285,7 +289,11 @@ async fn find_files_scan(
     Ok(result)
 }
 
-async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
+async fn scan_memory_table(
+    snapshot: &EagerSnapshot,
+    predicate: &Expr,
+    session: &dyn Session,
+) -> DeltaResult<Vec<Add>> {
     let actions = snapshot
         .log_data()
         .iter()
@@ -322,14 +330,17 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
 
     let schema = Arc::new(ArrowSchema::new(fields));
     let batch = RecordBatch::try_new(schema, arrays)?;
-    let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table_provider: Arc<dyn TableProvider> =
+        Arc::new(MemTable::try_new(batch.schema(), vec![vec![batch]])?);
 
-    let ctx = SessionContext::new();
-    let mut df = ctx.read_table(Arc::new(mem_table))?;
-    df = df
-        .filter(predicate.to_owned())?
-        .select(vec![col(PATH_COLUMN)])?;
-    let batches = df.collect().await?;
+    let logical_plan =
+        LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(table_provider), None)?
+            .filter(predicate.to_owned())?
+            .select_exprs(vec![col(PATH_COLUMN)])?
+            .build()?;
+
+    let execution_plan = session.create_physical_plan(&logical_plan).await?;
+    let batches = datafusion_physical_plan::collect(execution_plan, session.task_ctx()).await?;
 
     let map = actions
         .into_iter()

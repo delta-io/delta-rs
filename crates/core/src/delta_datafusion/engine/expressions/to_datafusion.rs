@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::common::scalar::ScalarStructBuilder;
-use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
-use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion::functions::expr_fn::named_struct;
-use datafusion::logical_expr::expr::ScalarFunction;
-use datafusion::logical_expr::{BinaryExpr, Expr, Operator, col, lit};
+use datafusion_common::scalar::ScalarStructBuilder;
+use datafusion_common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::{BinaryExpr, Expr, Operator, col, lit};
+use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_functions::expr_fn::named_struct;
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -210,7 +210,7 @@ fn struct_to_df(fields: &[Arc<Expression>], output_type: &DataType) -> DFResult<
 mod tests {
     use std::ops::Not;
 
-    use datafusion::logical_expr::{col, lit};
+    use datafusion_expr::{col, lit};
     use delta_kernel::expressions::ColumnName;
     use delta_kernel::expressions::{ArrayData, BinaryExpression, MapData, Scalar, StructData};
     use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};

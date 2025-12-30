@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use chrono::TimeZone;
-use datafusion::common::ScalarValue;
-use datafusion::datasource::listing::PartitionedFile;
+use datafusion_common::ScalarValue;
+use datafusion_datasource::PartitionedFile;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 use serde_json::Value;

@@ -1,5 +1,5 @@
-use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue};
-use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
+use datafusion_common::{DataFusionError, Result as DFResult, ScalarValue};
+use datafusion_expr::{BinaryExpr, Expr, Operator};
 use delta_kernel::Error as DeltaKernelError;
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, DecimalData,
@@ -290,7 +290,7 @@ fn to_junction_op(op: Operator) -> JunctionPredicateOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::logical_expr::{col, lit};
+    use datafusion_expr::{col, lit};
     use delta_kernel::expressions::{BinaryExpressionOp, JunctionPredicateOp, Scalar};
 
     fn assert_junction_expr(

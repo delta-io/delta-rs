@@ -31,12 +31,12 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow_schema::Schema;
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Column, DFSchema, Result, ScalarValue};
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
-use datafusion::prelude::DataFrame;
+use datafusion_catalog::{MemTable, default_table_source::provider_as_source};
+use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_expr::{
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
+};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
@@ -56,7 +56,7 @@ use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt, MetricObserver};
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
 use crate::delta_datafusion::{DataFusionMixins, session_state_from_session};
 use crate::delta_datafusion::{create_session, register_store};
@@ -314,13 +314,16 @@ impl WriteBuilder {
 
     /// Execution plan that produces the data to be written to the delta table
     pub fn with_input_batches(mut self, batches: impl IntoIterator<Item = RecordBatch>) -> Self {
-        let ctx = SessionContext::new();
         let batches: Vec<RecordBatch> = batches.into_iter().collect();
         if !batches.is_empty() {
             let table_provider: Arc<dyn TableProvider> =
                 Arc::new(MemTable::try_new(batches[0].schema(), vec![batches]).unwrap());
-            let df = ctx.read_table(table_provider).unwrap();
-            self.input = Some(Arc::new(df.logical_plan().clone()));
+            let logical_plan =
+                LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(table_provider), None)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+            self.input = Some(Arc::new(logical_plan));
         }
         self
     }
@@ -436,26 +439,30 @@ impl std::future::IntoFuture for WriteBuilder {
                     .session
                     .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
                 register_store(this.log_store.clone(), session.runtime_env().as_ref());
-                let state = session_state_from_session(session.as_ref())?;
+                let cloned_session = session.clone();
+                let state = session_state_from_session(cloned_session.as_ref())?;
 
                 let mut schema_drift = false;
                 let mut generated_col_exp = None;
                 let mut missing_gen_col = None;
-                let mut source =
-                    DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
+                let mut source_logical_plan = this.input.unwrap().as_ref().clone();
                 if let Some(snapshot) = &this.snapshot
                     && able_to_gc(snapshot)?
                 {
                     let generated_col_expressions = snapshot.schema().get_generated_columns()?;
                     // Add missing generated columns to source_df
                     let (source_with_gc, missing_generated_columns) =
-                        add_missing_generated_columns(source, &generated_col_expressions)?;
-                    source = source_with_gc;
+                        add_missing_generated_columns(
+                            source_logical_plan,
+                            &generated_col_expressions,
+                        )?;
+                    source_logical_plan = source_with_gc;
                     missing_gen_col = Some(missing_generated_columns);
                     generated_col_exp = Some(generated_col_expressions);
                 }
 
-                let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
+                let source_schema: Arc<Schema> =
+                    Arc::new(source_logical_plan.schema().as_arrow().clone());
 
                 // Schema merging code should be aware of columns that can be generated during write
                 // so they might be empty in the batch, but the will exist in the input_schema()
@@ -522,31 +529,31 @@ impl std::future::IntoFuture for WriteBuilder {
                             );
                         }
                     }
-                    source = source.select(schema_evolution_projection)?;
+                    source_logical_plan = LogicalPlanBuilder::from(source_logical_plan)
+                        .select_exprs(schema_evolution_projection)?
+                        .build()?;
                 }
 
                 if let Some(generated_columns_exp) = generated_col_exp
                     && let Some(missing_generated_col) = missing_gen_col
                 {
-                    source = add_generated_columns(
-                        source,
+                    source_logical_plan = add_generated_columns(
+                        source_logical_plan,
                         &generated_columns_exp,
                         &missing_generated_col,
                         state,
                     )?;
                 }
 
-                let source = LogicalPlan::Extension(Extension {
+                let mut source_logical_plan = LogicalPlan::Extension(Extension {
                     node: Arc::new(MetricObserver {
                         id: "write_source_count".into(),
-                        input: source.logical_plan().clone(),
+                        input: source_logical_plan.clone(),
                         enable_pushdown: false,
                     }),
                 });
 
-                let mut source = DataFrame::new(state.clone(), source);
-
-                let schema = Arc::new(source.schema().as_arrow().clone());
+                let schema = Arc::new(source_logical_plan.schema().as_arrow().clone());
 
                 // Maybe create schema action based on schema_mode
                 if let Some(snapshot) = &this.snapshot {
@@ -628,24 +635,31 @@ impl std::future::IntoFuture for WriteBuilder {
 
                         match &predicate {
                             Some(pred) => {
-                                let (predicate_actions, cdf_df) = prepare_predicate_actions(
-                                    pred.clone(),
-                                    this.log_store.clone(),
-                                    snapshot,
-                                    session.as_ref(),
-                                    partition_columns.clone(),
-                                    this.writer_properties.clone(),
-                                    deletion_timestamp,
-                                    writer_stats_config.clone(),
-                                    operation_id,
-                                )
-                                .await?;
+                                let (predicate_actions, cdf_logical_plan) =
+                                    prepare_predicate_actions(
+                                        pred.clone(),
+                                        this.log_store.clone(),
+                                        snapshot,
+                                        session.clone(),
+                                        partition_columns.clone(),
+                                        this.writer_properties.clone(),
+                                        deletion_timestamp,
+                                        writer_stats_config.clone(),
+                                        operation_id,
+                                    )
+                                    .await?;
 
-                                if let Some(cdf_df) = cdf_df {
+                                if let Some(cdf_logical_plan) = cdf_logical_plan {
                                     contains_cdc = true;
-                                    source = source
-                                        .with_column(CDC_COLUMN_NAME, lit("insert"))?
-                                        .union(cdf_df)?;
+                                    source_logical_plan =
+                                        LogicalPlanBuilder::from(source_logical_plan)
+                                            .with_column(
+                                                "insert",
+                                                lit("insert").alias(CDC_COLUMN_NAME),
+                                                false,
+                                            )?
+                                            .union(cdf_logical_plan)?
+                                            .build()?;
                                 }
 
                                 if !predicate_actions.is_empty() {
@@ -668,12 +682,12 @@ impl std::future::IntoFuture for WriteBuilder {
                         .count();
                 }
 
-                let source_plan = source.clone().create_physical_plan().await?;
+                let source_plan = session.create_physical_plan(&source_logical_plan).await?;
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
-                    session.as_ref(),
+                    session,
                     source_plan.clone(),
                     partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),
@@ -761,8 +775,9 @@ mod tests {
     };
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
-    use datafusion::prelude::*;
-    use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
+    use datafusion_expr::col;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use itertools::Itertools;
     use serde_json::{Value, json};

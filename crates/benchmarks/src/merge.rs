@@ -372,7 +372,7 @@ fn apply_update_projection(builder: UpdateBuilder) -> UpdateBuilder {
 pub fn merge_upsert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
     table
         .merge(
-            source,
+            source.into_unoptimized_plan(),
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
         )
         .with_source_alias("source")
@@ -384,7 +384,7 @@ pub fn merge_upsert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder
 pub fn merge_insert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
     table
         .merge(
-            source,
+            source.into_unoptimized_plan(),
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
         )
         .with_source_alias("source")
@@ -398,7 +398,7 @@ fn merge_multiple_insert(
 ) -> Result<MergeBuilder, DeltaTableError> {
     table
         .merge(
-            source,
+            source.into_unoptimized_plan(),
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
         )
         .with_source_alias("source")
@@ -412,7 +412,7 @@ fn merge_multiple_insert(
 pub fn merge_delete(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
     table
         .merge(
-            source,
+            source.into_unoptimized_plan(),
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
         )
         .with_source_alias("source")

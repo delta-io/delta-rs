@@ -11,7 +11,7 @@
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
 //! let (table, metrics) = DeltaOps(table)
-//!     .merge(source, col("target.id").eq(col("source.id")))
+//!     .merge(source.into_unoptimized_plan(), col("target.id").eq(col("source.id")))
 //!     .with_source_alias("source")
 //!     .with_target_alias("target")
 //!     .when_matched_update(|update| {
@@ -35,29 +35,23 @@ use std::time::Instant;
 
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference, plan_err};
-use datafusion::datasource::provider_as_source;
-use datafusion::error::Result as DataFusionResult;
+use datafusion::execution::session_state::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::logical_expr::build_join_schema;
-use datafusion::logical_expr::execution_props::ExecutionProps;
-use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::{
-    Expr, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
-};
-use datafusion::logical_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
-};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::{
-    execution::context::SessionState,
-    physical_plan::ExecutionPlan,
-    prelude::{DataFrame, SessionContext, cast},
+use datafusion::prelude::SessionContext;
+use datafusion_catalog::{Session, default_table_source::provider_as_source};
+use datafusion_common::Result as DataFusionResult;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference, plan_err};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::{
+    Expr, Extension, JoinType, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    UserDefinedLogicalNode, col, conditional_expressions::CaseBuilder, lit, when,
 };
+use datafusion_expr::{build_join_schema, cast};
+use datafusion_physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
@@ -72,6 +66,7 @@ use self::barrier::{MergeBarrier, MergeBarrierExec};
 use super::datafusion_utils::{Expression, into_expr, maybe_into_expr};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
+use crate::delta_datafusion::logical::LogicalPlanBuilderExt;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::planner::DeltaPlanner;
@@ -135,8 +130,8 @@ pub struct MergeBuilder {
     target_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
     snapshot: Option<EagerSnapshot>,
-    /// The source data
-    source: DataFrame,
+    /// The source plan
+    source: LogicalPlan,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
     streaming: bool,
     /// Enable merge schema evolution
@@ -170,7 +165,7 @@ impl MergeBuilder {
         log_store: LogStoreRef,
         snapshot: Option<EagerSnapshot>,
         predicate: E,
-        source: DataFrame,
+        source: LogicalPlan,
     ) -> Self {
         let predicate = predicate.into();
         Self {
@@ -206,7 +201,7 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("target.id").eq(col("source.id")))
+    ///     .merge(source.into_unoptimized_plan(), col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
     ///     .when_matched_update(|update| {
@@ -244,7 +239,7 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("target.id").eq(col("source.id")))
+    ///     .merge(source.into_unoptimized_plan(), col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
     ///     .when_matched_delete(|delete| {
@@ -277,7 +272,7 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("target.id").eq(col("source.id")))
+    ///     .merge(source.into_unoptimized_plan(), col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
     ///     .when_not_matched_insert(|insert| {
@@ -312,7 +307,7 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("target.id").eq(col("source.id")))
+    ///     .merge(source.into_unoptimized_plan(), col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
     ///     .when_not_matched_by_source_update(|update| {
@@ -344,7 +339,7 @@ impl MergeBuilder {
     /// ```rust ignore
     /// let table = open_table("../path/to/table")?;
     /// let (table, metrics) = DeltaOps(table)
-    ///     .merge(source, col("target.id").eq(col("source.id")))
+    ///     .merge(source.into_unoptimized_plan(), col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
     ///     .when_not_matched_by_source_delete(|delete| {
@@ -736,7 +731,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
 #[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
     predicate: Expression,
-    mut source: DataFrame,
+    mut source: LogicalPlan,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     state: SessionState,
@@ -810,18 +805,13 @@ async fn execute(
         generated_col_exp = Some(generated_col_expressions);
         missing_generated_col = Some(missing_generated_columns);
     }
-    // This is only done to provide the source columns with a correct table reference. Just renaming the columns does not work
-    let source = LogicalPlanBuilder::scan(
-        source_name.clone(),
-        provider_as_source(source.into_view()),
-        None,
-    )?
-    .build()?;
 
     let source = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: SOURCE_COUNT_ID.into(),
-            input: source,
+            input: LogicalPlanBuilder::from(source)
+                .alias(source_name.clone())?
+                .build()?,
             enable_pushdown: false,
         }),
     });
@@ -842,7 +832,8 @@ async fn execute(
     let target =
         LogicalPlanBuilder::scan(target_name.clone(), target_provider.clone(), None)?.build()?;
 
-    let source_schema = source.schema();
+    let source_clone = source.clone();
+    let source_schema = source_clone.schema();
     let target_schema = target.schema();
 
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
@@ -913,8 +904,9 @@ async fn execute(
         None => LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?,
     };
 
-    let source = DataFrame::new(state.clone(), source.clone());
-    let source = source.with_column(SOURCE_COLUMN, lit(true))?;
+    let source = LogicalPlanBuilder::from(source)
+        .with_column(SOURCE_COLUMN, lit(true), false)?
+        .build()?;
 
     // Not match operations imply a full scan of the target table is required
     let enable_pushdown =
@@ -926,10 +918,19 @@ async fn execute(
             enable_pushdown,
         }),
     });
-    let target = DataFrame::new(state.clone(), target);
-    let target = target.with_column(TARGET_COLUMN, lit(true))?;
 
-    let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
+    let target = LogicalPlanBuilder::from(target)
+        .with_column(TARGET_COLUMN, lit(true), false)?
+        .build()?;
+
+    let join = LogicalPlanBuilder::from(source)
+        .join(
+            target,
+            JoinType::Full,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            Some(predicate.clone()),
+        )?
+        .build()?;
     let join_schema_df = join.schema().to_owned();
 
     let match_operations: Vec<MergeOperation> = match_operations
@@ -1098,7 +1099,9 @@ async fn execute(
 
     let case = CaseBuilder::new(None, when_expr, then_expr, None).end()?;
 
-    let projection = join.with_column(OPERATION_COLUMN, case)?;
+    let projection = LogicalPlanBuilder::from(join)
+        .with_column(OPERATION_COLUMN, case.alias(OPERATION_COLUMN), false)?
+        .build()?;
 
     let mut new_columns = vec![];
 
@@ -1289,7 +1292,7 @@ async fn execute(
     ));
 
     let new_columns = {
-        let plan = projection.into_unoptimized_plan();
+        let plan = projection.clone();
         let mut fields: Vec<Expr> = plan
             .schema()
             .columns()
@@ -1322,11 +1325,8 @@ async fn execute(
         }),
     });
 
-    let operation_count = DataFrame::new(state.clone(), operation_count);
-
     let mut projected = if should_cdc {
-        operation_count
-            .clone()
+        LogicalPlanBuilder::from(operation_count)
             .with_column(
                 CDC_COLUMN_NAME,
                 when(col(TARGET_DELETE_COLUMN).is_null(), lit("delete")) // nulls are equal to True
@@ -1335,6 +1335,7 @@ async fn execute(
                     .when(col(TARGET_INSERT_COLUMN).is_null(), lit("insert"))
                     .when(col(TARGET_UPDATE_COLUMN).is_null(), lit("update"))
                     .end()?,
+                false,
             )?
             .drop_columns(&["__delta_rs_path"])? // WEIRD bug caused by interaction with unnest_columns, has to be dropped otherwise throws schema error
             .with_column(
@@ -1351,8 +1352,9 @@ async fn execute(
                     ))),
                 )
                 .end()?,
+                false,
             )?
-            .unnest_columns(&["__delta_rs_update_expanded"])?
+            .unnest_column("__delta_rs_update_expanded")?
             .with_column(
                 CDC_COLUMN_NAME,
                 when(
@@ -1360,14 +1362,16 @@ async fn execute(
                     col("__delta_rs_update_expanded"),
                 )
                 .otherwise(col(CDC_COLUMN_NAME))?,
+                false,
             )?
             .drop_columns(&["__delta_rs_update_expanded"])?
-            .select(write_projection_with_cdf)?
+            .select_exprs(write_projection_with_cdf)?
     } else {
-        operation_count
+        LogicalPlanBuilder::from(operation_count)
             .filter(col(DELETE_COLUMN).is_false())?
-            .select(write_projection)?
-    };
+            .select_exprs(write_projection)?
+    }
+    .build()?;
 
     if let Some(generated_col_expressions) = generated_col_exp
         && let Some(missing_generated_columns) = missing_generated_col
@@ -1380,8 +1384,7 @@ async fn execute(
         )?;
     }
 
-    let merge_final = &projected.into_unoptimized_plan();
-    let write = state.create_physical_plan(merge_final).await?;
+    let write = state.create_physical_plan(&projected).await?;
 
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
     let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
@@ -1402,7 +1405,7 @@ async fn execute(
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
-        &state,
+        Arc::new(state) as Arc<dyn Session>,
         write,
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)),
@@ -1596,8 +1599,10 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::DeltaResult;
     use crate::DeltaTable;
     use crate::TableProperty;
+    use crate::delta_datafusion::logical::LogicalPlanBuilderExt;
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
@@ -1610,14 +1615,16 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
-    use datafusion::assert_batches_sorted_eq;
-    use datafusion::common::Column;
-    use datafusion::common::TableReference;
-    use datafusion::logical_expr::Expr;
-    use datafusion::logical_expr::col;
-    use datafusion::logical_expr::expr::Placeholder;
-    use datafusion::logical_expr::lit;
     use datafusion::prelude::*;
+    use datafusion_common::Column;
+    use datafusion_common::TableReference;
+    use datafusion_common::assert_batches_sorted_eq;
+    use datafusion_expr::Expr;
+    use datafusion_expr::LogicalPlan;
+    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_expr::col;
+    use datafusion_expr::expr::Placeholder;
+    use datafusion_expr::lit;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
     use itertools::Itertools;
@@ -1651,7 +1658,10 @@ mod tests {
         let table = write_data(table, &schema).await;
         // merge
         let _err = table
-            .merge(merge_source(schema), col("target.id").eq(col("source.id")))
+            .merge(
+                merge_source(schema).logical_plan().clone(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| delete)
@@ -1734,7 +1744,7 @@ mod tests {
         ctx.read_batch(batch).unwrap()
     }
 
-    async fn setup() -> (DeltaTable, DataFrame) {
+    async fn setup() -> (DeltaTable, LogicalPlan) {
         let schema = get_arrow_schema(&None);
         let table = setup_table(None).await;
 
@@ -1742,7 +1752,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
-        (table, merge_source(schema))
+        (table, merge_source(schema).into_unoptimized_plan())
     }
 
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
@@ -1897,7 +1907,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (merged_table, _) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             // merge_schema is false by default
@@ -1955,7 +1968,10 @@ mod tests {
 
         let (after_table, metrics) = table
             .clone()
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2064,7 +2080,10 @@ mod tests {
 
         let (table, _) = table
             .clone()
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2173,7 +2192,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _) = table_with_struct
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2247,7 +2269,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2310,7 +2335,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2382,7 +2410,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2455,7 +2486,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -2550,17 +2584,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_no_alias() {
+    async fn test_merge_no_alias() -> DeltaResult<()> {
         // Validate merge can be used without specifying an alias
         let (table, source) = setup().await;
 
-        let source = source
-            .with_column_renamed("id", "source_id")
-            .unwrap()
-            .with_column_renamed("value", "source_value")
-            .unwrap()
-            .with_column_renamed("modified", "source_modified")
-            .unwrap();
+        let source = LogicalPlanBuilder::from(source)
+            .with_column_renamed(Column::from("id"), "source_id")?
+            .with_column_renamed(Column::from("value"), "source_value")?
+            .with_column_renamed(Column::from("modified"), "source_modified")?
+            .build()?;
 
         let (table, metrics) = table
             .merge(source, "id = source_id")
@@ -2568,38 +2600,34 @@ mod tests {
                 update
                     .update("value", "source_value")
                     .update("modified", "source_modified")
-            })
-            .unwrap()
+            })?
             .when_not_matched_by_source_update(|update| {
                 update.predicate("value = 1").update("value", "value + 1")
-            })
-            .unwrap()
+            })?
             .when_not_matched_insert(|insert| {
                 insert
                     .set("id", "source_id")
                     .set("value", "source_value")
                     .set("modified", "source_modified")
-            })
-            .unwrap()
-            .await
-            .unwrap();
+            })?
+            .await?;
 
         assert_merge(table, metrics).await;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_merge_with_alias_mix() {
+    async fn test_merge_with_alias_mix() -> DeltaResult<()> {
         // Validate merge can be used with an alias and unambiguous column references
         // I.E users should be able to specify an alias and still reference columns without using that alias when there is no ambiguity
         let (table, source) = setup().await;
 
-        let source = source
-            .with_column_renamed("id", "source_id")
-            .unwrap()
-            .with_column_renamed("value", "source_value")
-            .unwrap()
-            .with_column_renamed("modified", "source_modified")
-            .unwrap();
+        let source = LogicalPlanBuilder::from(source)
+            .with_column_renamed(Column::from("id"), "source_id")?
+            .with_column_renamed(Column::from("value"), "source_value")?
+            .with_column_renamed(Column::from("value"), "source_value")?
+            .with_column_renamed(Column::from("modified"), "source_modified")?
+            .build()?;
 
         let (table, metrics) = table
             .merge(source, "id = source_id")
@@ -2608,29 +2636,26 @@ mod tests {
                 update
                     .update("value", "source_value")
                     .update("modified", "source_modified")
-            })
-            .unwrap()
+            })?
             .when_not_matched_by_source_update(|update| {
                 update
                     .predicate("value = 1")
                     .update("value", "target.value + 1")
-            })
-            .unwrap()
+            })?
             .when_not_matched_insert(|insert| {
                 insert
                     .set("id", "source_id")
                     .set("target.value", "source_value")
                     .set("modified", "source_modified")
-            })
-            .unwrap()
-            .await
-            .unwrap();
+            })?
+            .await?;
 
         assert_merge(table, metrics).await;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_merge_failures() {
+    async fn test_merge_failures() -> DeltaResult<()> {
         // Validate target columns cannot be from the source
         let (table, source) = setup().await;
         let res = table
@@ -2641,8 +2666,7 @@ mod tests {
                 update
                     .update("source.value", "source.value")
                     .update("modified", "source.modified")
-            })
-            .unwrap()
+            })?
             .await;
         assert!(res.is_err());
 
@@ -2656,10 +2680,10 @@ mod tests {
                 update
                     .update("target.value", "source.value")
                     .update("modified", "source.modified")
-            })
-            .unwrap()
+            })?
             .await;
-        assert!(res.is_err())
+        assert!(res.is_err());
+        Ok(())
     }
 
     #[tokio::test]
@@ -2690,7 +2714,7 @@ mod tests {
 
         let (table, metrics) = table
             .merge(
-                source,
+                source.into_unoptimized_plan(),
                 col("target.id")
                     .eq(col("source.id"))
                     .and(col("target.modified").eq(lit("2021-02-02"))),
@@ -2782,7 +2806,7 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
         let (table, _metrics) = table
             .merge(
-                source,
+                source.into_unoptimized_plan(),
                 col("target.id")
                     .eq(col("source.id"))
                     .and(col("target.modified").eq(lit("2021-02-02"))),
@@ -2844,7 +2868,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_update(|update| {
@@ -2923,7 +2950,7 @@ mod tests {
 
         let (table, metrics) = table
             .merge(
-                source,
+                source.into_unoptimized_plan(),
                 col("target.id")
                     .eq(col("source.id"))
                     .and(col("target.id").in_list(
@@ -3031,7 +3058,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_delete(|delete| delete)
@@ -3100,7 +3130,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_delete(|delete| delete.predicate(col("source.value").lt_eq(lit(10))))
@@ -3168,7 +3201,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| delete)
@@ -3231,7 +3267,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| {
@@ -3300,7 +3339,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -3364,7 +3406,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| {
@@ -3431,7 +3476,7 @@ mod tests {
 
         let (table, metrics) = table
             .merge(
-                source,
+                source.into_unoptimized_plan(),
                 col("target.id")
                     .eq(col("source.id"))
                     .and(col("target.modified").eq(lit("2021-02-02"))),
@@ -3518,7 +3563,7 @@ mod tests {
 
         let (table, metrics) = table
             .merge(
-                source,
+                source.into_unoptimized_plan(),
                 col("target.id")
                     .eq(col("source.id"))
                     .and(col("target.modified").eq(lit("2021-02-02"))),
@@ -3627,7 +3672,7 @@ mod tests {
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
         let (table, _metrics) = table
-            .merge(source, "target.Id = source.Id")
+            .merge(source.into_unoptimized_plan(), "target.Id = source.Id")
             .with_source_alias("source")
             .with_target_alias("target")
             .when_not_matched_insert(|insert| {
@@ -3940,7 +3985,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _metrics) = table
-            .merge(source, "target.id = source.id and target.cost is null")
+            .merge(
+                source.into_unoptimized_plan(),
+                "target.id = source.id and target.cost is null",
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_update(|insert| {
@@ -4055,7 +4103,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _metrics) = table
-            .merge(source, "target.id = source.id and target.id >= 'C'")
+            .merge(
+                source.into_unoptimized_plan(),
+                "target.id = source.id and target.id >= 'C'",
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_update(|insert| {
@@ -4165,7 +4216,10 @@ mod tests {
         let source = ctx.read_batch(batch).unwrap();
 
         let (table, _metrics) = table
-            .merge(source, "target.id = source.id and target.cost is null")
+            .merge(
+                source.into_unoptimized_plan(),
+                "target.id = source.id and target.cost is null",
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_update(|insert| {
@@ -4263,7 +4317,10 @@ mod tests {
         let source = merge_source(schema);
 
         let (table, metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_matched_update(|update| {
@@ -4364,7 +4421,10 @@ mod tests {
         let source = source.with_column("inserted_by", lit("new_value")).unwrap();
 
         let (table, _) = table
-            .merge(source.clone(), col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
@@ -4476,7 +4536,10 @@ mod tests {
         let source = merge_source(schema);
 
         let (table, _metrics) = table
-            .merge(source, col("target.id").eq(col("source.id")))
+            .merge(
+                source.into_unoptimized_plan(),
+                col("target.id").eq(col("source.id")),
+            )
             .with_source_alias("source")
             .with_target_alias("target")
             .when_not_matched_by_source_delete(|delete| {

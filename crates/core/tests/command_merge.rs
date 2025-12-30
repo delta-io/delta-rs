@@ -3,10 +3,10 @@ mod fs_common;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
-use datafusion::common::Column;
 use datafusion::dataframe::DataFrame;
-use datafusion::logical_expr::{Expr, col, lit};
-use datafusion::prelude::SessionContext;
+use datafusion::execution::context::SessionContext;
+use datafusion_common::Column;
+use datafusion_expr::{Expr, col, lit};
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::merge::MergeMetrics;
@@ -120,7 +120,7 @@ async fn merge(
     predicate: Expr,
 ) -> DeltaResult<(DeltaTable, MergeMetrics)> {
     table
-        .merge(df, predicate)
+        .merge(df.into_unoptimized_plan(), predicate)
         .with_source_alias("source")
         .with_target_alias("target")
         .when_matched_update(|update| {

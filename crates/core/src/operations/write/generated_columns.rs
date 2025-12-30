@@ -1,8 +1,7 @@
-use crate::kernel::EagerSnapshot;
-use datafusion::common::ScalarValue;
-use datafusion::logical_expr::{ExprSchemable, col, when};
-use datafusion::prelude::lit;
-use datafusion::{execution::SessionState, prelude::DataFrame};
+use crate::{delta_datafusion::logical::LogicalPlanBuilderExt, kernel::EagerSnapshot};
+use datafusion::execution::SessionState;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
 
@@ -23,17 +22,16 @@ pub fn able_to_gc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
     Ok(true)
 }
 
-/// Add generated column expressions to a dataframe
+/// Add generated column expressions to a Logical Plan
 pub fn add_missing_generated_columns(
-    mut df: DataFrame,
+    mut logical_plan: LogicalPlan,
     generated_cols: &Vec<GeneratedColumn>,
-) -> DeltaResult<(DataFrame, Vec<String>)> {
+) -> DeltaResult<(LogicalPlan, Vec<String>)> {
     let mut missing_cols = vec![];
     for generated_col in generated_cols {
         let col_name = generated_col.get_name();
 
-        if df
-            .clone()
+        if logical_plan
             .schema()
             .field_with_unqualified_name(col_name)
             .is_err()
@@ -44,20 +42,22 @@ pub fn add_missing_generated_columns(
             // all the merge is projected.
             // Other generated columns that were provided upon the start we only validate during write
             missing_cols.push(col_name.to_string());
-            df = df.clone().with_column(col_name, lit(ScalarValue::Null))?;
+            logical_plan = LogicalPlanBuilder::from(logical_plan)
+                .with_column(col_name, lit(ScalarValue::Null), false)?
+                .build()?;
         }
     }
-    Ok((df, missing_cols))
+    Ok((logical_plan, missing_cols))
 }
 
 /// Add generated column expressions to a dataframe
 pub fn add_generated_columns(
-    mut df: DataFrame,
+    mut logical_plan: LogicalPlan,
     generated_cols: &Vec<GeneratedColumn>,
     generated_cols_missing_in_source: &[String],
     state: &SessionState,
-) -> DeltaResult<DataFrame> {
-    debug!("Generating columns in dataframe");
+) -> DeltaResult<LogicalPlan> {
+    debug!("Generating columns in logical plan");
     for generated_col in generated_cols {
         // We only validate columns that were missing from the start. We don't update
         // update generated columns that were provided during runtime
@@ -67,16 +67,22 @@ pub fn add_generated_columns(
 
         let generation_expr = state.create_logical_expr(
             generated_col.get_generation_expression(),
-            df.clone().schema(),
+            logical_plan.schema(),
         )?;
         let col_name = generated_col.get_name();
 
-        df = df.clone().with_column(
-            generated_col.get_name(),
-            when(col(col_name).is_null(), generation_expr)
-                .otherwise(col(col_name))?
-                .cast_to(&((&generated_col.data_type).try_into_arrow()?), df.schema())?,
-        )?
+        logical_plan = LogicalPlanBuilder::from(logical_plan.clone())
+            .with_column(
+                col_name,
+                when(col(col_name).is_null(), generation_expr)
+                    .otherwise(col(col_name))?
+                    .cast_to(
+                        &((&generated_col.data_type).try_into_arrow()?),
+                        logical_plan.schema(),
+                    )?,
+                false,
+            )?
+            .build()?;
     }
-    Ok(df)
+    Ok(logical_plan)
 }

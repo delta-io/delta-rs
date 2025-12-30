@@ -717,7 +717,7 @@ mod tests {
             use crate::protocol::SaveMode;
             use crate::writer::test_utils::datafusion::get_data_sorted;
             use crate::writer::test_utils::get_arrow_schema;
-            use datafusion::assert_batches_sorted_eq;
+            use datafusion_common::assert_batches_sorted_eq;
 
             let tmp_dir = tempfile::tempdir().unwrap();
             let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
