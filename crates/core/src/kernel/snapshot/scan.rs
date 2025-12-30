@@ -70,7 +70,7 @@ impl ScanBuilder {
 
 #[derive(Debug)]
 pub struct Scan {
-    inner: Arc<KernelScan>,
+    pub(crate) inner: Arc<KernelScan>,
 }
 
 impl From<KernelScan> for Scan {

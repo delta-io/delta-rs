@@ -43,25 +43,32 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
+use delta_kernel::Version;
+use futures::future::BoxFuture;
 use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::delta_datafusion::engine::AsObjectStoreUrl;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
     DataFusionMixins as _, LogDataHandler, get_null_of_arrow_type, register_store,
     to_correct_scalar_value,
 };
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::transaction::{CommitBuilder, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot};
+use crate::kernel::{Action, Add, EagerSnapshot, Snapshot};
+use crate::logstore::LogStore;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::config::TablePropertiesExt;
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTable, DeltaTableError, logstore::LogStoreRef};
+
+pub(crate) mod next;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -355,6 +362,35 @@ pub struct DeltaScanConfig {
     pub enable_parquet_pushdown: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
+}
+
+impl DeltaScanConfig {
+    /// Create a new default `DeltaScanConfig`
+    pub fn new() -> Self {
+        Self {
+            file_column_name: None,
+            wrap_partition_values: true,
+            enable_parquet_pushdown: true,
+            schema: None,
+        }
+    }
+
+    pub fn with_file_column_name<S: ToString>(mut self, name: S) -> Self {
+        self.file_column_name = Some(name.to_string());
+        self
+    }
+
+    /// Whether to wrap partition values in a dictionary encoding
+    pub fn with_wrap_partition_values(mut self, wrap: bool) -> Self {
+        self.wrap_partition_values = wrap;
+        self
+    }
+
+    /// Allow pushdown of the scan filter
+    pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
+        self.enable_parquet_pushdown = pushdown;
+        self
+    }
 }
 
 pub(crate) struct DeltaScanBuilder<'a> {
@@ -688,6 +724,133 @@ impl<'a> DeltaScanBuilder<'a> {
             logical_schema,
             metrics,
         })
+    }
+}
+
+/// Builder for a datafusion [TableProvider] for a Delta table
+///
+/// A table provider can be built by providing either a log store, a Snapshot,
+/// or an eager snapshot. If some Snapshot is provided, that will be used directly,
+/// and no IO will be performed when building the provider.
+#[derive(Debug)]
+pub struct TableProviderBuilder {
+    log_store: Option<Arc<dyn LogStore>>,
+    snapshot: Option<SnapshotWrapper>,
+    file_column: Option<String>,
+    table_version: Option<Version>,
+}
+
+impl Default for TableProviderBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TableProviderBuilder {
+    fn new() -> Self {
+        Self {
+            log_store: None,
+            snapshot: None,
+            file_column: None,
+            table_version: None,
+        }
+    }
+
+    /// Provide the log store to use for the table provider
+    pub fn with_log_store(mut self, log_store: impl Into<Arc<dyn LogStore>>) -> Self {
+        self.log_store = Some(log_store.into());
+        self
+    }
+
+    /// Provide an eager snapshot to use for the table provider
+    pub fn with_eager_snapshot(mut self, snapshot: impl Into<Arc<EagerSnapshot>>) -> Self {
+        self.snapshot = Some(SnapshotWrapper::EagerSnapshot(snapshot.into()));
+        self
+    }
+
+    /// Provide a snapshot to use for the table provider
+    pub fn with_snapshot(mut self, snapshot: impl Into<Arc<Snapshot>>) -> Self {
+        self.snapshot = Some(SnapshotWrapper::Snapshot(snapshot.into()));
+        self
+    }
+
+    /// Specify the version of the table to provide
+    pub fn with_table_version(mut self, version: impl Into<Option<Version>>) -> Self {
+        self.table_version = version.into();
+        self
+    }
+
+    /// Specify the name of the file column to include in the scan
+    ///
+    /// If specified, this will append a column to the table,
+    /// containing the source file path for each record.
+    pub fn with_file_column(mut self, file_column: impl ToString) -> Self {
+        self.file_column = Some(file_column.to_string());
+        self
+    }
+}
+
+impl std::future::IntoFuture for TableProviderBuilder {
+    type Output = Result<Arc<dyn TableProvider>>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            let mut config = DeltaScanConfig::new();
+            if let Some(file_column) = this.file_column {
+                config = config.with_file_column_name(file_column);
+            }
+
+            let snapshot = match this.snapshot {
+                Some(wrapper) => wrapper,
+                None => {
+                    if let Some(log_store) = this.log_store.as_ref() {
+                        SnapshotWrapper::Snapshot(
+                            Snapshot::try_new(
+                                log_store,
+                                Default::default(),
+                                this.table_version.map(|v| v as i64),
+                            )
+                            .await?
+                            .into(),
+                        )
+                    } else {
+                        return Err(DataFusionError::Plan(
+                        "Either a log store or a snapshot must be provided to build a Delta TableProvider".to_string(),
+                    ));
+                    }
+                }
+            };
+
+            Ok(Arc::new(next::DeltaScan::new(snapshot, config)?) as Arc<dyn TableProvider>)
+        })
+    }
+}
+
+impl DeltaTable {
+    /// Get a table provider for the table referenced by this DeltaTable.
+    ///
+    /// See [`TableProviderBuilder`] for options when building the provider.
+    pub fn table_provider(&self) -> TableProviderBuilder {
+        let mut builder = TableProviderBuilder::new();
+        if let Ok(state) = self.snapshot() {
+            builder = builder.with_eager_snapshot(state.snapshot().clone());
+        } else {
+            builder = builder.with_log_store(self.log_store());
+        }
+        builder
+    }
+
+    pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
+        let url = self.log_store().root_url().as_object_store_url();
+        if session.runtime_env().object_store(&url).is_err() {
+            session
+                .runtime_env()
+                .register_object_store(url.as_ref(), self.log_store().object_store(None));
+        }
+        Ok(())
     }
 }
 
