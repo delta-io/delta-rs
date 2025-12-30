@@ -752,7 +752,9 @@ mod tests {
         assert_eq!(Some(6), table.version());
 
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
+        table.update_datafsuion_session(&ctx.state()).unwrap();
+        ctx.register_table("test", table.table_provider().await.unwrap())
+            .unwrap();
         let _batches = ctx
             .sql("SELECT * FROM test")
             .await

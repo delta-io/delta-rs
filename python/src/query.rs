@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
 use deltalake::{
     datafusion::prelude::SessionContext,
-    delta_datafusion::{
-        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
-    },
+    delta_datafusion::{engine::AsObjectStoreUrl as _, DeltaSessionContext},
 };
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
@@ -36,23 +32,29 @@ impl PyQueryBuilder {
     ///
     /// Once called, the provided `delta_table` will be referenceable in SQL queries so long as
     /// another table of the same name is not registered over it.
-    pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
-        let snapshot = delta_table.cloned_state()?;
-        let log_store = delta_table.log_store()?;
-
-        let scan_config = DeltaScanConfigBuilder::default()
-            .with_schema(snapshot.input_schema())
-            .build(&snapshot)
-            .map_err(PythonError::from)?;
-
-        let provider = Arc::new(
-            DeltaTableProvider::try_new(snapshot, log_store, scan_config)
-                .map_err(PythonError::from)?,
-        );
-
+    pub fn register(
+        &self,
+        py: Python,
+        table_name: &str,
+        delta_table: &RawDeltaTable,
+    ) -> PyResult<()> {
+        let fut = delta_table.with_table(|t| Ok(t.table_provider()))?;
+        let provider = py.detach(|| {
+            rt().block_on(async { fut.await })
+                .map_err(PythonError::from)
+        })?;
         self.ctx
             .register_table(table_name, provider)
             .map_err(PythonError::from)?;
+
+        let store_url =
+            delta_table.with_table(|t| Ok(t.log_store().root_url().as_object_store_url()))?;
+        if self.ctx.runtime_env().object_store(&store_url).is_err() {
+            let table_store = delta_table.with_table(|t| Ok(t.log_store().object_store(None)))?;
+            self.ctx
+                .runtime_env()
+                .register_object_store(store_url.as_ref(), table_store);
+        }
 
         Ok(())
     }

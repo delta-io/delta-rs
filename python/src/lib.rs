@@ -1835,12 +1835,13 @@ impl RawDeltaTable {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        // tokio runtime handle?
-        let handle = None;
+        let handle = rt().handle().clone();
         let name = CString::new("datafusion_table_provider").unwrap();
 
         let table = self.with_table(|t| Ok(Arc::new(t.clone())))?;
-        let provider = FFI_TableProvider::new(table, false, handle);
+        let provider =
+            rt().block_on(async { table.table_provider().await.map_err(PythonError::from) })?;
+        let provider = FFI_TableProvider::new(provider, false, handle.into());
 
         PyCapsule::new(py, provider, Some(name.clone()))
     }

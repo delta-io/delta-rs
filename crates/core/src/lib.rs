@@ -66,7 +66,7 @@
 //!   let table = deltalake_core::open_table(table_url)
 //!       .await
 //!       .unwrap();
-//!   ctx.register_table("demo", Arc::new(table)).unwrap();
+//!   ctx.register_table("demo", table.table_provider().await.unwrap()).unwrap();
 //!
 //!   let batches = ctx
 //!       .sql("SELECT * FROM demo").await.unwrap()

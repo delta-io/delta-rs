@@ -7,8 +7,8 @@ use tokio::runtime::Handle;
 
 pub(crate) use self::expressions::*;
 use self::file_formats::DataFusionFileFormatHandler;
+pub use self::storage::AsObjectStoreUrl;
 use self::storage::DataFusionStorageHandler;
-pub(crate) use self::storage::*;
 use crate::kernel::ARROW_HANDLER;
 
 mod expressions;
