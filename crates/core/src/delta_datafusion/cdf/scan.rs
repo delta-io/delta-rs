@@ -2,15 +2,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Column, DFSchema, Result as DataFusionResult};
-use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::GlobalLimitExec;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::{Column, DFSchema, Result as DataFusionResult};
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::{
+    ExecutionPlan, filter::FilterExec, limit::GlobalLimitExec, projection::ProjectionExec,
+};
 
 use crate::{
     DeltaResult, DeltaTableError, delta_datafusion::DataFusionMixins,

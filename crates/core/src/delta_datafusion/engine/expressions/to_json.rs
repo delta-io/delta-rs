@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::{any::Any, sync::LazyLock};
 
 use arrow::datatypes::DataType;
-use datafusion::common::Result;
-use datafusion::error::DataFusionError;
-use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion::logical_expr::{
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, scalar_doc_sections::DOC_SECTION_STRUCT,
 };

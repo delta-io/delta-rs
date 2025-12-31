@@ -4,7 +4,7 @@
 //! which consumes a [`DeltaTable`] and exposes methods to attain builders for
 //! several high level operations. The specific builder structs allow fine-tuning
 //! the operations' behaviors and will return an updated table potentially in conjunction
-//! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
+//! with a [data stream][datafusion_physical_plan::SendableRecordBatchStream],
 //! if the operation returns data as well.
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,9 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 #[cfg(feature = "datafusion")]
-pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
+use datafusion_expr::LogicalPlan;
+#[cfg(feature = "datafusion")]
+pub use datafusion_physical_plan::common::collect as collect_sendable_stream;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use url::Url;
 use uuid::Uuid;
@@ -214,11 +216,7 @@ impl DeltaTable {
 
     /// Update data from Delta table
     #[must_use]
-    pub fn merge<E: Into<Expression>>(
-        self,
-        source: datafusion::prelude::DataFrame,
-        predicate: E,
-    ) -> MergeBuilder {
+    pub fn merge<E: Into<Expression>>(self, source: LogicalPlan, predicate: E) -> MergeBuilder {
         MergeBuilder::new(
             self.log_store(),
             self.state.clone().map(|s| s.snapshot),
@@ -452,11 +450,7 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     #[deprecated(note = "Use [`DeltaTable::merge`] instead")]
-    pub fn merge<E: Into<Expression>>(
-        self,
-        source: datafusion::prelude::DataFrame,
-        predicate: E,
-    ) -> MergeBuilder {
+    pub fn merge<E: Into<Expression>>(self, source: LogicalPlan, predicate: E) -> MergeBuilder {
         MergeBuilder::new(
             self.0.log_store,
             self.0.state.map(|s| s.snapshot),
@@ -594,8 +588,8 @@ pub(crate) fn get_target_file_size(
 
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
-    use datafusion::logical_expr::Expr;
     use datafusion::{catalog::Session, common::DFSchema};
+    use datafusion_expr::Expr;
 
     use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
 

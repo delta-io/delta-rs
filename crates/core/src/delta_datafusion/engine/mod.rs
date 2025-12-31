@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
+use datafusion_catalog::Session;
 use delta_kernel::{Engine, EvaluationHandler, JsonHandler, ParquetHandler, StorageHandler};
 use tokio::runtime::Handle;
 

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
-use datafusion::execution::TaskContext;
-use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
+use datafusion_execution::TaskContext;
+use datafusion_execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };

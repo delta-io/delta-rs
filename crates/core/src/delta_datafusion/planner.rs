@@ -25,13 +25,12 @@
 use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
-use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion::physical_planner::PhysicalPlanner;
 use datafusion::{
     execution::{context::QueryPlanner, session_state::SessionState},
-    physical_plan::ExecutionPlan,
-    physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner},
+    physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
 };
+use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
+use datafusion_physical_plan::ExecutionPlan;
 
 use crate::delta_datafusion::DataFusionResult;
 use crate::operations::delete::DeleteMetricExtensionPlanner;

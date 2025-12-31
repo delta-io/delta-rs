@@ -2,53 +2,56 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
-use crate::DeltaResult;
 use crate::kernel::EagerSnapshot;
 use crate::table::config::TablePropertiesExt as _;
+use crate::{DeltaResult, delta_datafusion::logical::LogicalPlanBuilderExt};
 
-use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
 
 /// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
 /// associated with commits
 pub(crate) struct CDCTracker {
-    pre_dataframe: DataFrame,
-    post_dataframe: DataFrame,
+    pre_plan: LogicalPlan,
+    post_plan: LogicalPlan,
 }
 
 impl CDCTracker {
     ///  construct
-    pub(crate) fn new(pre_dataframe: DataFrame, post_dataframe: DataFrame) -> Self {
+    pub(crate) fn new(pre_plan: LogicalPlan, post_plan: LogicalPlan) -> Self {
         Self {
-            pre_dataframe,
-            post_dataframe,
+            pre_plan,
+            post_plan,
         }
     }
 
-    pub(crate) fn collect(self) -> DeltaResult<DataFrame> {
+    pub(crate) fn collect(self) -> DeltaResult<LogicalPlan> {
         // Collect _all_ the batches for consideration
-        let pre_df = self.pre_dataframe;
-        let post_df = self.post_dataframe;
+        let pre_plan = self.pre_plan;
+        let post_plan = self.post_plan;
 
         // There is certainly a better way to do this other than stupidly cloning data for diffing
         // purposes, but this is the quickest and easiest way to "diff" the two sets of batches
-        let preimage = pre_df.clone().except(post_df.clone())?;
-        let postimage = post_df.except(pre_df)?;
+        let preimage = LogicalPlanBuilder::except(pre_plan.clone(), post_plan.clone(), true)?;
+        let postimage = LogicalPlanBuilder::except(post_plan, pre_plan, true)?;
 
-        let preimage = preimage.with_column(
-            "_change_type",
+        let preimage = LogicalPlanBuilder::from(preimage).with_column(
+            CDC_COLUMN_NAME,
             lit(ScalarValue::Utf8(Some("update_preimage".to_string()))),
+            false,
         )?;
 
-        let postimage = postimage.with_column(
-            "_change_type",
+        let postimage = LogicalPlanBuilder::from(postimage).with_column(
+            CDC_COLUMN_NAME,
             lit(ScalarValue::Utf8(Some("update_postimage".to_string()))),
+            false,
         )?;
 
-        let final_df = preimage.union(postimage)?;
-        Ok(final_df)
+        let final_logical_plan = preimage.union(postimage.build()?)?.build()?;
+        Ok(final_logical_plan)
     }
 }
 
@@ -90,7 +93,7 @@ mod tests {
     use arrow_array::RecordBatch;
     use arrow_schema::Schema;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::datasource::{MemTable, TableProvider};
+    use datafusion_catalog::{MemTable, TableProvider};
     use delta_kernel::table_features::TableFeature;
 
     use super::*;
@@ -205,7 +208,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sanity_check() {
+    async fn test_sanity_check() -> DeltaResult<()> {
         let ctx = SessionContext::new();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
@@ -231,27 +234,25 @@ mod tests {
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
         let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let tracker = CDCTracker::new(source_df, updated_df);
+        let tracker = CDCTracker::new(
+            source_df.into_unoptimized_plan(),
+            updated_df.into_unoptimized_plan(),
+        );
 
-        match tracker.collect() {
-            Ok(df) => {
-                let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(batches);
-                assert_eq!(batches.len(), 2);
-                assert_batches_sorted_eq! {[
-                "+-------+------------------+",
-                "| value | _change_type     |",
-                "+-------+------------------+",
-                "| 2     | update_preimage  |",
-                "| 12    | update_postimage |",
-                "+-------+------------------+",
-                    ], &batches }
-            }
-            Err(err) => {
-                println!("err: {err:#?}");
-                panic!("Should have never reached this assertion");
-            }
-        }
+        let plan = tracker.collect()?;
+        let physical_plan = ctx.state().create_physical_plan(&plan).await?;
+        let batches = datafusion_physical_plan::collect(physical_plan, ctx.task_ctx()).await?;
+        let _ = arrow::util::pretty::print_batches(&batches);
+        assert_eq!(batches.len(), 2);
+        assert_batches_sorted_eq! {[
+        "+-------+------------------+",
+        "| value | _change_type     |",
+        "+-------+------------------+",
+        "| 2     | update_preimage  |",
+        "| 12    | update_postimage |",
+        "+-------+------------------+",
+            ], &batches }
+        Ok(())
     }
 
     #[tokio::test]
@@ -331,7 +332,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sanity_check_with_struct() {
+    async fn test_sanity_check_with_struct() -> DeltaResult<()> {
         let ctx = SessionContext::new();
         let nested_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, true),
@@ -397,26 +398,25 @@ mod tests {
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
         let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let tracker = CDCTracker::new(source_df, updated_df);
+        let tracker = CDCTracker::new(
+            source_df.into_unoptimized_plan(),
+            updated_df.into_unoptimized_plan(),
+        );
 
-        match tracker.collect() {
-            Ok(df) => {
-                let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(batches);
-                assert_eq!(batches.len(), 2);
-                assert_batches_sorted_eq! {[
-                "+-------+--------------------------+------------------+",
-                "| value | nested                   | _change_type     |",
-                "+-------+--------------------------+------------------+",
-                "| 12    | {id: 2, lat: 2, long: 2} | update_postimage |",
-                "| 2     | {id: 2, lat: 2, long: 2} | update_preimage  |",
-                "+-------+--------------------------+------------------+",
-                ], &batches }
-            }
-            Err(err) => {
-                println!("err: {err:#?}");
-                panic!("Should have never reached this assertion");
-            }
-        }
+        let plan = tracker.collect()?;
+
+        let physical_plan = ctx.state().create_physical_plan(&plan).await?;
+        let batches = datafusion_physical_plan::collect(physical_plan, ctx.task_ctx()).await?;
+        let _ = arrow::util::pretty::print_batches(&batches);
+        assert_eq!(batches.len(), 2);
+        assert_batches_sorted_eq! {[
+        "+-------+--------------------------+------------------+",
+        "| value | nested                   | _change_type     |",
+        "+-------+--------------------------+------------------+",
+        "| 12    | {id: 2, lat: 2, long: 2} | update_postimage |",
+        "| 2     | {id: 2, lat: 2, long: 2} | update_preimage  |",
+        "+-------+--------------------------+------------------+",
+        ], &batches }
+        Ok(())
     }
 }

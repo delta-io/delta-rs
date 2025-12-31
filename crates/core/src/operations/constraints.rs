@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use datafusion::catalog::Session;
-use datafusion::common::ToDFSchema;
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion_catalog::Session;
+use datafusion_common::ToDFSchema;
+use datafusion_execution::SendableRecordBatchStream;
+use datafusion_physical_plan::ExecutionPlan;
 use delta_kernel::table_features::TableFeature;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -284,7 +284,7 @@ mod tests {
 
     use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
-    use datafusion::logical_expr::{col, lit};
+    use datafusion_expr::{col, lit};
     use std::collections::HashMap;
 
     use crate::table::config::TablePropertiesExt as _;

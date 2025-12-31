@@ -52,7 +52,7 @@ use std::sync::{Arc, LazyLock};
 
 use bytes::Bytes;
 #[cfg(feature = "datafusion")]
-use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,

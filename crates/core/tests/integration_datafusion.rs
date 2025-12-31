@@ -10,17 +10,18 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
-use datafusion::assert_batches_sorted_eq;
-use datafusion::common::ScalarValue::*;
-use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{DataFusionError, Result};
-use datafusion::datasource::TableProvider;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::Expr;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor, visit_execution_plan};
-use datafusion::physical_plan::{common::collect, metrics::Label};
+use datafusion::execution::context::SessionContext;
+use datafusion_catalog::TableProvider;
+use datafusion_common::ScalarValue::*;
+use datafusion_common::assert_batches_sorted_eq;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_expr::Expr;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanVisitor, visit_execution_plan};
+use datafusion_physical_plan::{common::collect, metrics::Label};
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
@@ -50,16 +51,17 @@ pub fn context_with_delta_table_factory() -> SessionContext {
 mod local {
     use super::*;
     use TableProviderFilterPushDown::{Exact, Inexact};
-    use datafusion::catalog::Session;
-    use datafusion::common::assert_contains;
-    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::{
+    use datafusion_catalog::Session;
+    use datafusion_catalog::default_table_source::provider_as_source;
+    use datafusion_common::assert_contains;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_datasource::source::DataSourceExec;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::{
         LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan, lit,
     };
-    use datafusion::physical_plan::displayable;
-    use datafusion::prelude::SessionConfig;
-    use datafusion::{common::stats::Precision, datasource::provider_as_source};
+    use datafusion_physical_plan::displayable;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use deltalake_core::delta_datafusion::create_session;
     use deltalake_core::{
@@ -1648,8 +1650,8 @@ mod date_partitions {
 mod insert_into_tests {
     use super::*;
     use arrow_array::{Int64Array, PrimitiveArray, StringArray, types};
-    use datafusion::datasource::MemTable;
-    use datafusion::logical_expr::dml::InsertOp;
+    use datafusion_catalog::MemTable;
+    use datafusion_expr::dml::InsertOp;
     use deltalake_core::operations::create::CreateBuilder;
     use std::sync::Arc;
 
@@ -1832,7 +1834,7 @@ mod insert_into_tests {
             .insert_into(&ctx.state(), initial_plan, InsertOp::Append)
             .await?;
         let initial_results =
-            datafusion::physical_plan::collect(initial_result_plan, ctx.task_ctx()).await?;
+            datafusion_physical_plan::collect(initial_result_plan, ctx.task_ctx()).await?;
         assert_eq!(initial_results.len(), 1);
         let initial_batch = &initial_results[0];
         assert_eq!(initial_batch.num_rows(), 1);
@@ -1858,7 +1860,7 @@ mod insert_into_tests {
             .insert_into(&ctx.state(), append_plan, InsertOp::Append)
             .await?;
 
-        let results = datafusion::physical_plan::collect(result_plan, ctx.task_ctx()).await?;
+        let results = datafusion_physical_plan::collect(result_plan, ctx.task_ctx()).await?;
         assert_eq!(results.len(), 1);
         let batch = &results[0];
         assert_eq!(batch.num_rows(), 1);
@@ -1981,7 +1983,7 @@ mod insert_into_tests {
             .insert_into(&ctx.state(), plan2, InsertOp::Overwrite)
             .await?;
 
-        let results = datafusion::physical_plan::collect(result_plan, ctx.task_ctx()).await?;
+        let results = datafusion_physical_plan::collect(result_plan, ctx.task_ctx()).await?;
         assert_eq!(results.len(), 1);
         let batch = &results[0];
         assert_eq!(batch.num_rows(), 1);
@@ -2159,7 +2161,7 @@ mod insert_into_tests {
         );
 
         if let Some(stats) = final_table.statistics()
-            && let datafusion::common::stats::Precision::Exact(num_rows) = stats.num_rows
+            && let datafusion_common::stats::Precision::Exact(num_rows) = stats.num_rows
         {
             assert_eq!(
                 num_rows, 4,

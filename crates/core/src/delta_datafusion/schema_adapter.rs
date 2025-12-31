@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::kernel::schema::cast_record_batch;
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
-use datafusion::common::{ColumnStatistics, Result, not_impl_err};
-use datafusion::datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
+use datafusion_common::{ColumnStatistics, Result, not_impl_err};
+use datafusion_datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
 
 /// A Schema Adapter Factory which provides casting record batches from parquet to meet
 /// delta lake conventions.

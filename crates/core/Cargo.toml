@@ -36,6 +36,16 @@ object_store = { workspace = true }
 
 # datafusion
 datafusion = { workspace = true, optional = true }
+datafusion-catalog = { workspace = true, optional = true }
+datafusion-common = { workspace = true, optional = true }
+datafusion-datasource = { workspace = true, optional = true }
+datafusion-execution = { workspace = true, optional = true }
+datafusion-expr = { workspace = true, optional = true }
+datafusion-functions = { workspace = true, optional = true }
+datafusion-functions-nested = { workspace = true, optional = true }
+datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-physical-optimizer = { workspace = true, optional = true }
+datafusion-physical-plan = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 
 # serde
@@ -103,7 +113,20 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
-datafusion = ["dep:datafusion", "datafusion-proto"]
+datafusion = [
+    "dep:datafusion",
+    "dep:datafusion-catalog",
+    "dep:datafusion-common",
+    "dep:datafusion-datasource",
+    "dep:datafusion-execution",
+    "dep:datafusion-expr",
+    "dep:datafusion-functions",
+    "dep:datafusion-functions-nested",
+    "dep:datafusion-physical-expr",
+    "dep:datafusion-physical-optimizer", 
+    "dep:datafusion-physical-plan",
+    "dep:datafusion-proto",
+]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]

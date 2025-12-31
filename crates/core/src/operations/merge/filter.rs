@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
-use datafusion::catalog::Session;
-use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{ScalarValue, TableReference};
 use datafusion::functions_aggregate::expr_fn::{max, min};
-use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion_catalog::Session;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{ScalarValue, TableReference};
+use datafusion_expr::expr::{InList, Placeholder};
+use datafusion_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
+use datafusion_physical_plan::ExecutionPlan;
 use either::{Left, Right};
 use futures::TryStreamExt as _;
 use itertools::Itertools;
@@ -424,17 +424,12 @@ mod tests {
 
     use arrow::record_batch::RecordBatch;
 
-    use datafusion::datasource::provider_as_source;
-
-    use datafusion::common::Column;
-    use datafusion::common::ScalarValue;
-    use datafusion::common::TableReference;
-    use datafusion::logical_expr::col;
     use datafusion::prelude::*;
-
-    use datafusion::logical_expr::Expr;
-    use datafusion::logical_expr::LogicalPlanBuilder;
-    use datafusion::logical_expr::Operator;
+    use datafusion_catalog::default_table_source::provider_as_source;
+    use datafusion_common::Column;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::TableReference;
+    use datafusion_expr::{Expr, LogicalPlanBuilder, Operator, col};
 
     use std::sync::Arc;
 

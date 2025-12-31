@@ -25,22 +25,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use datafusion::error::Result as DataFusionResult;
-use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
-};
 use datafusion::{
-    catalog::Session,
-    common::{Column, ScalarValue},
-};
-use datafusion::{
-    dataframe::DataFrame,
-    datasource::provider_as_source,
     execution::context::SessionState,
     execution::session_state::SessionStateBuilder,
-    physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
 };
+use datafusion_catalog::{Session, default_table_source::provider_as_source};
+use datafusion_common::Result as DataFusionResult;
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::{
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
+};
+use datafusion_physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -53,11 +49,11 @@ use super::{
     CustomExecuteHandler, Operation,
     write::execution::{write_execution_plan, write_execution_plan_cdc},
 };
-use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::{delta_datafusion::logical::LogicalPlanBuilderExt, logstore::LogStoreRef};
 use crate::{
     delta_datafusion::{
         DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaTableProvider, create_session,
@@ -255,7 +251,7 @@ async fn execute(
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    session: SessionState,
+    session: Arc<dyn Session>,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
@@ -275,7 +271,8 @@ async fn execute(
     // NOTE: The optimize_projections rule is being temporarily disabled because it errors with
     // our schemas for Lists due to issues discussed
     // [here](https://github.com/delta-io/delta-rs/pull/2886#issuecomment-2481550560>
-    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = session
+    let session_state = session_state_from_session(session.as_ref())?;
+    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = session_state
         .optimizers()
         .iter()
         .filter(|rule| {
@@ -286,7 +283,7 @@ async fn execute(
 
     let update_planner = DeltaPlanner::new();
 
-    let session = SessionStateBuilder::from(session)
+    let session_state = SessionStateBuilder::from(session_state.clone())
         .with_optimizer_rules(rules)
         .with_query_planner(update_planner)
         .build();
@@ -301,7 +298,9 @@ async fn execute(
     let predicate = match predicate {
         Some(predicate) => match predicate {
             Expression::DataFusion(expr) => Some(expr),
-            Expression::String(s) => Some(snapshot.parse_predicate_expression(s, &session)?),
+            Expression::String(s) => {
+                Some(snapshot.parse_predicate_expression(s, session.as_ref())?)
+            }
         },
         None => None,
     };
@@ -311,7 +310,7 @@ async fn execute(
         .map(|(key, expr)| match expr {
             Expression::DataFusion(e) => Ok((key.name, e)),
             Expression::String(s) => snapshot
-                .parse_predicate_expression(s, &session)
+                .parse_predicate_expression(s, session.as_ref())
                 .map(|e| (key.name, e)),
         })
         .collect::<Result<HashMap<String, Expr>, _>>()?;
@@ -320,7 +319,13 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
+    let candidates = find_files(
+        &snapshot,
+        log_store.clone(),
+        session.as_ref(),
+        predicate.clone(),
+    )
+    .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -344,8 +349,6 @@ async fn execute(
     let target_provider = provider_as_source(target_provider);
     let plan = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
 
-    let df = DataFrame::new(session.clone(), plan);
-
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT satisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
@@ -353,20 +356,19 @@ async fn execute(
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
 
-    let df_with_update_col = df
-        .clone()
-        .with_column(UPDATE_PREDICATE_COLNAME, predicate_null)?;
+    let plan_with_update_col = LogicalPlanBuilder::from(plan.clone())
+        .with_column(UPDATE_PREDICATE_COLNAME, predicate_null, false)?
+        .build()?;
 
     let plan_with_metrics = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: UPDATE_COUNT_ID.into(),
-            input: df_with_update_col.into_unoptimized_plan(),
+            input: plan_with_update_col,
             enable_pushdown: false,
         }),
     });
-    let df_with_predicate_and_metrics = DataFrame::new(session.clone(), plan_with_metrics);
 
-    let expressions: Vec<Expr> = df_with_predicate_and_metrics
+    let expressions: Vec<Expr> = plan_with_metrics
         .schema()
         .fields()
         .into_iter()
@@ -385,10 +387,11 @@ async fn execute(
 
     //let updated_df = df_with_predicate_and_metrics.clone();
     // Disabling the select allows the coerce test to pass, still not sure why
-    let updated_df = df_with_predicate_and_metrics
-        .select(expressions.clone())?
-        .drop_columns(&[UPDATE_PREDICATE_COLNAME])?;
-    let physical_plan = updated_df.clone().create_physical_plan().await?;
+    let updated_plan = LogicalPlanBuilder::from(plan_with_metrics)
+        .select_exprs(expressions.clone())?
+        .drop_columns(&[UPDATE_PREDICATE_COLNAME])?
+        .build()?;
+    let physical_plan = session_state.create_physical_plan(&updated_plan).await?;
     let writer_stats_config = WriterStatsConfig::new(
         snapshot.table_properties().num_indexed_cols(),
         snapshot
@@ -398,11 +401,11 @@ async fn execute(
             .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
     );
 
-    let tracker = CDCTracker::new(df, updated_df);
+    let tracker = CDCTracker::new(plan, updated_plan);
 
     let add_actions = write_execution_plan(
         Some(&snapshot),
-        &session,
+        session.clone(),
         physical_plan.clone(),
         table_partition_cols.clone(),
         log_store.object_store(Some(operation_id)).clone(),
@@ -461,11 +464,12 @@ async fn execute(
 
     if let Ok(true) = should_write_cdc(&snapshot) {
         match tracker.collect() {
-            Ok(df) => {
+            Ok(plan) => {
+                let physical_plan = session.create_physical_plan(&plan).await?;
                 let cdc_actions = write_execution_plan_cdc(
                     Some(&snapshot),
-                    &session,
-                    df.create_physical_plan().await?,
+                    session.clone(),
+                    physical_plan,
                     table_partition_cols,
                     log_store.object_store(Some(operation_id)),
                     Some(snapshot.table_properties().target_file_size().get() as usize),
@@ -515,14 +519,13 @@ impl std::future::IntoFuture for UpdateBuilder {
                 .session
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
-            let state = session_state_from_session(session.as_ref())?;
 
             let (snapshot, metrics) = execute(
                 this.predicate,
                 this.updates,
                 this.log_store.clone(),
                 snapshot,
-                state.clone(),
+                session,
                 this.writer_properties,
                 this.commit_properties,
                 this.safe_cast,

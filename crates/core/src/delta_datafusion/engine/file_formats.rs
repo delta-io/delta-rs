@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::{DashMap, mapref::one::Ref};
-use datafusion::execution::{
+use datafusion_execution::{
     TaskContext,
     object_store::{ObjectStoreRegistry, ObjectStoreUrl},
 };

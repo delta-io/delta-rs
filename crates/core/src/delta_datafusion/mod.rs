@@ -34,21 +34,21 @@ use arrow_schema::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
-use datafusion::catalog::{Session, TableProviderFactory};
-use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{
+use datafusion::execution::context::SessionContext;
+use datafusion_catalog::{MemTable, TableProvider};
+use datafusion_catalog::{Session, TableProviderFactory};
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
-use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
-use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::TaskContext;
-use datafusion::execution::context::SessionContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_expr::logical_plan::CreateExternalTable;
-use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion_datasource::file_scan_config::wrap_partition_type_in_dict;
+use datafusion_execution::TaskContext;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{Expr, Extension, LogicalPlan};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -779,7 +779,7 @@ impl TableProviderFactory for DeltaTableFactory {
         &self,
         _ctx: &dyn Session,
         cmd: &CreateExternalTable,
-    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
         let provider = if cmd.options.is_empty() {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table(table_url).await?
@@ -845,14 +845,16 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow_array::cast::AsArray;
     use bytes::Bytes;
-    use datafusion::assert_batches_sorted_eq;
-    use datafusion::config::TableParquetOptions;
-    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::lit;
-    use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
-    use datafusion::prelude::{SessionConfig, col};
+    use datafusion::datasource::physical_plan::ParquetSource;
+    use datafusion_common::assert_batches_sorted_eq;
+    use datafusion_common::config::TableParquetOptions;
+    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::source::DataSourceExec;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::col;
+    use datafusion_expr::lit;
+    use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};

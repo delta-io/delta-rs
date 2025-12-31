@@ -16,18 +16,19 @@ use std::time::SystemTime;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
-use datafusion::catalog::Session;
-use datafusion::common::ScalarValue;
-use datafusion::common::config::TableParquetOptions;
-use datafusion::datasource::memory::DataSourceExec;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
-};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_expr::{PhysicalExpr, expressions};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::prelude::SessionContext;
+use datafusion_catalog::Session;
+use datafusion_catalog::memory::DataSourceExec;
+use datafusion_common::ScalarValue;
+use datafusion_common::config::TableParquetOptions;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::union::UnionExec;
 use tracing::log;
 
 use crate::DeltaTableError;
@@ -499,8 +500,8 @@ pub(crate) mod tests {
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::Schema;
     use chrono::NaiveDateTime;
-    use datafusion::common::assert_batches_sorted_eq;
     use datafusion::prelude::SessionContext;
+    use datafusion_common::assert_batches_sorted_eq;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 

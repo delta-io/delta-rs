@@ -58,7 +58,7 @@ async fn read_null_partitions_from_checkpoint() {
 #[cfg(feature = "datafusion")]
 #[tokio::test]
 async fn load_from_delta_8_0_table_with_special_partition() {
-    use datafusion::physical_plan::SendableRecordBatchStream;
+    use datafusion_physical_plan::SendableRecordBatchStream;
     use deltalake_core::DeltaTable;
     use futures::{StreamExt, future};
 
