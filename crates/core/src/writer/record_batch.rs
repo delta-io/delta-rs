@@ -159,6 +159,50 @@ impl RecordBatchWriter {
         })
     }
 
+    /// Creates a [`RecordBatchWriter`] to write data to an [`AppendableDeltaTable`].
+    ///
+    /// This is optimized for append-only writes where file statistics are not needed
+    /// during table loading.
+    ///
+    /// [`AppendableDeltaTable`]: crate::table::AppendableDeltaTable
+    pub fn for_appendable(
+        table: &crate::table::AppendableDeltaTable,
+    ) -> Result<Self, DeltaTableError> {
+        let metadata = table.metadata();
+        let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
+        let arrow_schema_ref = Arc::new(arrow_schema);
+        let partition_columns = metadata.partition_columns().clone();
+
+        let writer_properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let configuration = metadata.configuration().clone();
+
+        Ok(Self {
+            storage: table.object_store(),
+            arrow_schema_ref: arrow_schema_ref.clone(),
+            original_schema_ref: arrow_schema_ref.clone(),
+            writer_properties,
+            partition_columns,
+            should_evolve: false,
+            arrow_writers: HashMap::new(),
+            num_indexed_cols: configuration
+                .get("delta.dataSkippingNumIndexedCols")
+                .and_then(|v| {
+                    v.parse::<u64>()
+                        .ok()
+                        .map(DataSkippingNumIndexedCols::NumColumns)
+                })
+                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
+                    DEFAULT_NUM_INDEX_COLS,
+                )),
+            stats_columns: configuration
+                .get("delta.dataSkippingStatsColumns")
+                .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            commit_properties: None,
+        })
+    }
+
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
