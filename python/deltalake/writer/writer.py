@@ -115,7 +115,7 @@ def write_deltalake(
         return
 
     if isinstance(data, Sequence):
-        data = RecordBatchReader.from_batches(data[0], data)  # type: ignore
+        data = RecordBatchReader.from_batches(data[0].schema, data)
     else:
         data = RecordBatchReader.from_arrow(data)
 
