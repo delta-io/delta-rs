@@ -51,18 +51,14 @@ jobs:
       targets: ${{ steps.matrix.outputs.os }}
 
     steps:
-      # - name: Define test matrix
-      #   id: matrix
-      #   run: |
-      #     if [ "${{ github.event_name }}" = "pull_request" ]; then
-      #       echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-      #     else
-      #       echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
-      #     fi
       - name: Define test matrix
         id: matrix
         run: |
-          echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     needs: test-matrix
