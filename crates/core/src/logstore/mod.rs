@@ -103,7 +103,7 @@ trait LogStoreFactoryExt {
     /// ## Parameters
     ///
     /// - `root_store`: and instance of [`ObjectStoreRef`] with no prefix o.a. applied.
-    ///   I.e. pointing to the root of the onject store.
+    ///   I.e. pointing to the root of the object store.
     /// - `location`: The location of the delta table (where the `_delta_log` directory is).
     /// - `options`: The options for the log store.
     fn with_options_internal(
