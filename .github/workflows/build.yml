@@ -88,6 +88,12 @@ jobs:
           cache: true
           # if we ever get rid of all the clippy warnings, we can remove this line
           rustflags: ""
+      
+      - name: Set up Python 3.13
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.13
 
       - name: Default build
         run: cargo build --profile=ci --package deltalake
@@ -127,14 +133,14 @@ jobs:
           rustflags: ""
 
       - name: Claim disk space
-        if: matrix.os != 'macos-latest'
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
-          sudo rm -rf /opt/microsoft                #   783M
-          sudo rm -rf /usr/local/julia*             #  1008M
-          sudo rm -rf /usr/local/share/chromium     #   613M
-          sudo rm -rf /usr/local/share/powershell   #  1244M
-          sudo rm -rf /usr/share/swift              #  3207M
+          sudo rm -rf /opt/microsoft || true                #   783M
+          sudo rm -rf /usr/local/julia* || true             #  1008M
+          sudo rm -rf /usr/local/share/chromium || true     #   613M
+          sudo rm -rf /usr/local/share/powershell || true   #  1244M
+          sudo rm -rf /usr/share/swift || true              #  3207M
           sudo df -TBG /
 
       - name: Set up Python 3.13
