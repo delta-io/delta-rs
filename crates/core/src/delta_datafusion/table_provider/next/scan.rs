@@ -31,6 +31,10 @@ use crate::delta_datafusion::table_provider::next::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
+/// Execution plan for scanning a Delta table.
+///
+/// This plan wraps another execution plan that reads the raw data from data files,
+/// and applies per-file transformations and selection vectors to yield the logical data.
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
     scan_plan: Arc<KernelScanPlan>,
@@ -38,7 +42,7 @@ pub struct DeltaScanExec {
     input: Arc<dyn ExecutionPlan>,
     /// Transforms to be applied to data eminating from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
-    /// Deletion vectors for the table
+    /// Selection vectors to be applied to data read from individual files
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,

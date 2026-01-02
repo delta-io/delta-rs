@@ -134,7 +134,7 @@ impl<S> ScanFileStream<S> {
             dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>)>::new(100),
             engine,
             table_root: scan.table_root().clone(),
-            kernel_scan: scan.inner.clone(),
+            kernel_scan: scan.inner().clone(),
             stream,
         }
     }

@@ -33,9 +33,6 @@ use crate::delta_datafusion::table_provider::next::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
-// TODO:
-// - implement limit/fetch pushdown
-
 /// Execution plan for scanning a Delta table based only on file metadata.
 ///
 /// For certain queries (e.g. `COUNT(*)`) we may be able to satisfy the query

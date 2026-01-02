@@ -38,7 +38,8 @@ use dashmap::DashMap;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::stats::Precision;
 use datafusion::common::{
-    ColumnStatistics, DataFusionError, HashMap, HashSet, Result, Statistics, plan_err,
+    ColumnStatistics, DataFusionError, HashMap, HashSet, Result, Statistics, plan_datafusion_err,
+    plan_err,
 };
 use datafusion::datasource::TableType;
 use datafusion::datasource::listing::PartitionedFile;
@@ -90,6 +91,7 @@ mod scan_meta;
 pub type ScanMetadataStream =
     Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 
+/// Default column name for the file id column we add to files read from disk.
 const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -305,18 +307,6 @@ impl TableProvider for DeltaScan {
             self.snapshot.table_configuration(),
         ))
     }
-
-    /// Insert the data into the delta table
-    /// Insert operation is only supported for Append and Overwrite
-    /// Return the execution plan
-    async fn insert_into(
-        &self,
-        _state: &dyn Session,
-        input: Arc<dyn ExecutionPlan>,
-        insert_op: InsertOp,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        todo!("implement insert into")
-    }
 }
 
 /// Internal representation of a scan plan based on Kernel's Scan abstraction
@@ -374,9 +364,9 @@ impl KernelScanPlan {
                 .read_schema()
                 .column_with_name(col)
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    plan_datafusion_err!(
                         "Column '{col}' referenced in filter but not found in schema"
-                    ))
+                    )
                 })?;
             projection.push(idx);
         }
@@ -427,11 +417,11 @@ impl KernelScanPlan {
     ///
     /// It may still be impossible to perform a metadata-only scan if the
     /// file statistics are not sufficient to satisfy the query.
-    pub fn is_metadata_only(&self) -> bool {
+    fn is_metadata_only(&self) -> bool {
         self.scan.physical_schema().fields().len() == 0
     }
 
-    pub fn table_configuration(&self) -> &TableConfiguration {
+    fn table_configuration(&self) -> &TableConfiguration {
         self.scan.snapshot().table_configuration()
     }
 }
@@ -692,14 +682,6 @@ mod tests {
                 .clone_inner()
                 .sum_by_name("bytes_scanned");
             self.total_bytes_scanned = pq_metrics.map(|v| v.as_usize());
-
-            // if let Some(parquet_source) = scan_config
-            //     .file_source
-            //     .as_any()
-            //     .downcast_ref::<ParquetSource>()
-            // {
-            //     parquet_source
-            // }
 
             Ok(true)
         }
