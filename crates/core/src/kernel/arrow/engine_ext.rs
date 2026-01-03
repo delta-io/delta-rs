@@ -18,6 +18,7 @@ use delta_kernel::schema::{
     StructType,
 };
 use delta_kernel::snapshot::Snapshot;
+use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use delta_kernel::{DeltaResult, ExpressionEvaluator};
 
@@ -40,35 +41,6 @@ pub(crate) trait SnapshotExt {
     /// This is an extended version of the raw schema that includes additional
     /// computations by delta-rs. Specifically the `stats_parsed` and
     /// `partitionValues_parsed` fields are added.
-    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef>;
-}
-
-impl SnapshotExt for Snapshot {
-    fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let partition_columns = self.table_configuration().metadata().partition_columns();
-        let column_mapping_mode = self.table_configuration().column_mapping_mode();
-        let physical_schema = StructType::try_new(
-            self.schema()
-                .fields()
-                .filter(|field| !partition_columns.contains(field.name()))
-                .map(|field| field.make_physical(column_mapping_mode)),
-        )?;
-        Ok(Arc::new(stats_schema(
-            &physical_schema,
-            self.table_properties(),
-        )))
-    }
-
-    fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
-        Ok(partitions_schema(
-            self.schema().as_ref(),
-            self.table_configuration().metadata().partition_columns(),
-        )?
-        .map(Arc::new))
-    }
-
-    /// Arrow schema for a parsed (including stats_parsed and partitionValues_parsed)
-    /// scan row (file data).
     fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
         let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
         let stats_idx = SCAN_ROW_ARROW_SCHEMA.index_of("stats").unwrap();
@@ -92,6 +64,40 @@ impl SnapshotExt for Snapshot {
 
         let schema = Arc::new(ArrowSchema::new(fields));
         Ok(schema)
+    }
+}
+
+impl SnapshotExt for TableConfiguration {
+    fn stats_schema(&self) -> DeltaResult<SchemaRef> {
+        let partition_columns = self.metadata().partition_columns();
+        let column_mapping_mode = self.column_mapping_mode();
+        let physical_schema = StructType::try_new(
+            self.schema()
+                .fields()
+                .filter(|field| !partition_columns.contains(field.name()))
+                .map(|field| field.make_physical(column_mapping_mode)),
+        )?;
+        Ok(Arc::new(stats_schema(
+            &physical_schema,
+            self.table_properties(),
+        )))
+    }
+
+    fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
+        Ok(
+            partitions_schema(self.schema().as_ref(), self.metadata().partition_columns())?
+                .map(Arc::new),
+        )
+    }
+}
+
+impl SnapshotExt for Snapshot {
+    fn stats_schema(&self) -> DeltaResult<SchemaRef> {
+        self.table_configuration().stats_schema()
+    }
+
+    fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
+        self.table_configuration().partitions_schema()
     }
 }
 
