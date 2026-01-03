@@ -562,7 +562,7 @@ impl UnityCatalogBuilder {
                                 "READ_WRITE failed: {}. READ failed: {}",
                                 rw_error.message, read_error.message
                             ),
-                        });
+                        })
                     }
                 }
             }
@@ -713,11 +713,7 @@ impl UnityCatalog {
         let status = resp.status();
         let body = resp.text().await?;
         serde_json::from_str(&body).map_err(|e| {
-            tracing::error!(
-                "Failed to parse list_schemas response (status {}): {}",
-                status,
-                body
-            );
+            tracing::error!("Failed to parse list_schemas response (status {}): {}", status, body);
             UnityCatalogError::Generic {
                 source: Box::new(e),
             }
