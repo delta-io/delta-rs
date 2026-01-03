@@ -102,11 +102,11 @@ pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
-pub use self::table::DeltaTable;
 pub use self::table::builder::{
     DeltaTableBuilder, DeltaTableConfig, DeltaVersion, ensure_table_uri,
 };
 pub use self::table::config::TableProperty;
+pub use self::table::{AppendableDeltaTable, DeltaTable};
 pub use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, path::Path};
 pub use operations::DeltaOps;
 
