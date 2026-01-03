@@ -31,8 +31,8 @@ use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictio
 use arrow_cast::display::array_value_to_string;
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
-    SchemaRef as ArrowSchemaRef, TimeUnit,
+    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
+    TimeUnit,
 };
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
@@ -310,47 +310,6 @@ pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
     env.register_object_store(url, store.object_store(None));
-}
-
-/// The logical schema for a Deltatable is different from the protocol level schema since partition
-/// columns must appear at the end of the schema. This is to align with how partition are handled
-/// at the physical level
-pub(crate) fn df_logical_schema(
-    snapshot: &EagerSnapshot,
-    file_column_name: &Option<String>,
-    schema: Option<ArrowSchemaRef>,
-) -> DeltaResult<SchemaRef> {
-    let input_schema = match schema {
-        Some(schema) => schema,
-        None => snapshot.input_schema(),
-    };
-    let table_partition_cols = snapshot.metadata().partition_columns();
-
-    let mut fields: Vec<Arc<Field>> = input_schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect();
-
-    for partition_col in table_partition_cols.iter() {
-        fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .unwrap()
-                .to_owned(),
-        ));
-    }
-
-    if let Some(file_column_name) = file_column_name {
-        fields.push(Arc::new(Field::new(
-            file_column_name,
-            ArrowDataType::Utf8,
-            true,
-        )));
-    }
-
-    Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {

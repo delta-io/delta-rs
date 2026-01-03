@@ -9,6 +9,8 @@ use delta_kernel::expressions::{
 use delta_kernel::schema::{DataType, DecimalType, PrimitiveType};
 use itertools::Itertools;
 
+use crate::kernel::scalars::ScalarExt;
+
 pub(crate) fn to_df_err(e: DeltaKernelError) -> DataFusionError {
     DataFusionError::External(Box::new(e))
 }
@@ -162,7 +164,7 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
     }
 }
 
-fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
+pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
     match scalar {
         ScalarValue::Boolean(maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::Boolean(*value)),
@@ -229,6 +231,9 @@ fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
                 DecimalType::try_new(*precision, *scale as u8).map_err(to_df_err)?,
             )))),
         },
+        ScalarValue::Struct(data) => Ok(Scalar::from_array(data.as_ref(), 0).ok_or_else(|| {
+            DataFusionError::NotImplemented("Struct scalar conversion failed".to_string())
+        })?),
         ScalarValue::Dictionary(_, value) => datafusion_scalar_to_scalar(value.as_ref()),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported scalar value: {:?}",
