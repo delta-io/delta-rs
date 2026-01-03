@@ -1,18 +1,21 @@
 use std::sync::Arc;
 
 use datafusion::common::scalar::ScalarStructBuilder;
-use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue, not_impl_err};
+use datafusion::common::{
+    DataFusionError, Result as DFResult, ScalarValue, internal_datafusion_err, not_impl_err,
+};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
 use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator, col, lit};
+use datafusion::prelude::coalesce;
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, Expression,
     JunctionPredicate, JunctionPredicateOp, Scalar, UnaryExpression, UnaryExpressionOp,
-    UnaryPredicate, UnaryPredicateOp,
+    UnaryPredicate, UnaryPredicateOp, VariadicExpressionOp,
 };
 use delta_kernel::schema::DataType;
 use itertools::Itertools;
@@ -28,19 +31,28 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
         Expression::Literal(scalar) => to_datafusion_scalar(scalar).map(lit),
         Expression::Column(name) => {
             let mut name_iter = name.iter();
-            let base_name = name_iter.next().ok_or_else(|| {
-                DataFusionError::Internal("Expected at least one column name".into())
-            })?;
+            let base_name = name_iter
+                .next()
+                .ok_or_else(|| internal_datafusion_err!("Expected at least one column name"))?;
             Ok(name_iter.fold(col(base_name), |acc, n| acc.field(n)))
         }
         Expression::Predicate(expr) => predicate_to_df(expr, output_type),
         Expression::Struct(fields) => struct_to_df(fields, output_type),
         Expression::Binary(expr) => binary_to_df(expr, output_type),
         Expression::Unary(expr) => unary_to_df(expr, output_type),
+        Expression::Variadic(expr) => {
+            let exprs: Vec<_> = expr
+                .exprs
+                .iter()
+                .map(|e| to_datafusion_expr(e, output_type))
+                .try_collect()?;
+            match expr.op {
+                VariadicExpressionOp::Coalesce => Ok(coalesce(exprs)),
+            }
+        }
         Expression::Opaque(_) => not_impl_err!("Opaque expressions are not yet supported"),
         Expression::Unknown(_) => not_impl_err!("Unknown expressions are not yet supported"),
         Expression::Transform(_) => not_impl_err!("Transform expressions are not yet supported"),
-        Expression::Variadic(_) => not_impl_err!("Variadic expressions are not yet supported"),
     }
 }
 

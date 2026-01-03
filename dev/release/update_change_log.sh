@@ -7,7 +7,7 @@
 # delta-rs/.github_changelog_generator
 #
 # Usage:
-# GITHUB_API_TOKEN=<TOKEN> ./update_change_log.sh
+# GH_TOKEN=<TOKEN> ./update_change_log.sh
 #
 # Please edit the resulting change log to remove remaining irrelevant changes
 # and to put interesting changes (features, bugfixes) above all the minor 
@@ -15,9 +15,9 @@
 
 set -e
 
-LANGUAGE="rust"
-SINCE_VERSION=${SINCE_VERSION:-"0.18.1"}
-FUTURE_RELEASE=${FUTURE_RELEASE:-"0.18.3"}
+LANGUAGE=${LANGUAGE:-"rust"}
+SINCE_VERSION=${SINCE_VERSION:-"0.30.0"}
+FUTURE_RELEASE=${FUTURE_RELEASE:-"0.31.0"}
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
@@ -25,7 +25,7 @@ if [ "$LANGUAGE" == "rust" ]; then
 elif [ "$LANGUAGE" == "python" ]; then
 	EXCLUDED_LANGUAGES_REGEX=".*rust.*"
 else
-  echo "Language $LANGUAGE is invalid. Should be one of Python and Rust."
+  echo "Language $LANGUAGE is invalid. Should be one of 'python' or 'rust'"
 fi
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +41,7 @@ sed -i.bak '1d' "${HISTORICAL_PATH}"
 
 # use exclude-tags-regex to filter out tags used in the wrong language
 pushd "${SOURCE_TOP_DIR}"
-docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" \
+docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GH_TOKEN" \
     -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user delta-io \
     --project delta-rs \
