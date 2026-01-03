@@ -813,6 +813,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
     use datafusion::prelude::{SessionConfig, col};
+    use datafusion_datasource::file::FileSource as _;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
@@ -1693,7 +1694,7 @@ mod tests {
                 .downcast_ref::<ParquetSource>()
             {
                 self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.predicate().cloned();
+                self.predicate = parquet_source.filter();
             }
 
             Ok(true)

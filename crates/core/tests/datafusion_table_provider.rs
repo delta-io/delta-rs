@@ -94,8 +94,7 @@ async fn test_all_primitive_types() -> TestResult<()> {
     ];
     assert_batches_sorted_eq!(&expected, &batches);
 
-    // While we are passing a filter, the table provider does not yet push down
-    // the filter to the parquet scan, so we expect the same result as above.
+    // Also test with a predicate
     let pred = col("float64").gt(lit(2.0_f64));
     let plan = provider
         .scan(&session.state(), Some(&vec![1, 3, 6]), &[pred], None)
@@ -105,9 +104,6 @@ async fn test_all_primitive_types() -> TestResult<()> {
         "+-------+-------+---------+",
         "| int64 | int16 | float64 |",
         "+-------+-------+---------+",
-        "| 0     | 0     | 0.0     |",
-        "| 1     | 1     | 1.0     |",
-        "| 2     | 2     | 2.0     |",
         "| 3     | 3     | 3.0     |",
         "| 4     | 4     | 4.0     |",
         "+-------+-------+---------+",

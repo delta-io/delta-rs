@@ -41,12 +41,14 @@ use datafusion::common::{
     ColumnStatistics, DataFusionError, HashMap, HashSet, Result, Statistics, plan_datafusion_err,
     plan_err,
 };
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::TableType;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::physical_expr::planner::logical2physical;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion::physical_plan::union::UnionExec;
@@ -54,7 +56,7 @@ use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     catalog::{Session, TableProvider},
-    logical_expr::{LogicalPlan, dml::InsertOp},
+    logical_expr::LogicalPlan,
     physical_plan::ExecutionPlan,
 };
 use datafusion_datasource::compute_all_files_statistics;
@@ -62,7 +64,9 @@ use datafusion_datasource::file_groups::FileGroup;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::StructData;
 use delta_kernel::scan::ScanMetadata;
+use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::TableFeature;
 use delta_kernel::{Engine, Expression};
 use futures::future::ready;
 use futures::{Stream, TryStreamExt as _};
@@ -73,7 +77,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::DeltaTableError;
 use crate::delta_datafusion::engine::{
-    AsObjectStoreUrl as _, DataFusionEngine, to_datafusion_scalar, to_delta_predicate,
+    AsObjectStoreUrl as _, DataFusionEngine, predicate_to_df, to_datafusion_scalar,
+    to_delta_predicate,
 };
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
 use crate::delta_datafusion::table_provider::next::predicate::can_pushdown_filters;
@@ -371,8 +376,6 @@ impl KernelScanPlan {
             projection.push(idx);
         }
 
-        drop(columns_referenced);
-
         let kernel_scan_schema =
             Arc::new((&snapshot.read_schema().project(&projection)?).try_into_kernel()?);
 
@@ -478,14 +481,37 @@ async fn get_data_scan_plan(
     let physical_schema: SchemaRef =
         Arc::new(scan_plan.scan.physical_schema().as_ref().try_into_arrow()?);
 
+    // TODO(roeap); not sure exactly how row tracking is implemented in kernel right now
+    // so leaving predicate as None for now until we are sure this is safe to do.
+    let table_config = scan_plan.table_configuration();
+    let predicate = if table_config.is_feature_enabled(&TableFeature::RowTracking) {
+        None
+    } else {
+        scan_plan.scan.physical_predicate().and_then(|expr| {
+            // TODO(roeap): we should do some more advanced analysis here to see if we
+            // can rewrite the predicate to only include non-partition columns.
+            // Most likely we need to analyze the expression list passed to scan on
+            // TableProvider since these are not yet concatenated.
+            let no_part = expr.references().iter().all(|col| {
+                !table_config
+                    .metadata()
+                    .partition_columns()
+                    .contains(&col.to_string())
+            });
+            no_part
+                .then(|| predicate_to_df(expr.as_ref(), &KernelDataType::BOOLEAN).ok())
+                .flatten()
+        })
+    };
+
     let file_id_column = file_id_field.name().clone();
     let pq_plan = get_read_plan(
+        session,
         files_by_store,
         &physical_schema,
-        session,
         limit,
-        file_id_field,
-        &metrics,
+        &file_id_field,
+        predicate.as_ref(),
     )
     .await?;
 
@@ -579,44 +605,52 @@ async fn replay_files(
 
 type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
 async fn get_read_plan(
+    state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
     physical_schema: &SchemaRef,
-    state: &dyn Session,
     limit: Option<usize>,
-    file_id_field: FieldRef,
-    _metrics: &ExecutionPlanMetricsSet,
+    file_id_field: &FieldRef,
+    predicate: Option<&Expr>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // TODO: update parquet source.
-    let source = ParquetSource::default();
-
     let mut plans = Vec::new();
 
+    let pq_options = TableParquetOptions {
+        global: state.config().options().execution.parquet.clone(),
+        ..Default::default()
+    };
+
     for (store_url, files) in files_by_store.into_iter() {
-        // state.ensure_object_store(store_url.as_ref()).await?;
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            state.runtime_env().object_store(&store_url)?,
+            state.runtime_env().cache_manager.get_file_metadata_cache(),
+        ));
+        let mut file_source =
+            ParquetSource::new(pq_options.clone()).with_parquet_file_reader_factory(reader_factory);
 
-        let store = state.runtime_env().object_store(&store_url)?;
-        let _reader_factory = source
-            .parquet_file_reader_factory()
-            .cloned()
-            .unwrap_or_else(|| Arc::new(DefaultParquetFileReaderFactory::new(store)));
+        // TODO(roeap); we might be able to also push selection vectors into the read plan
+        // by creating parquet access plans. However we need to make sure this does not
+        // interfere with other delta features like row ids.
+        let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
+        if !has_selection_vectors && let Some(pred) = predicate {
+            let physical = logical2physical(pred, physical_schema.as_ref());
+            file_source = file_source
+                .with_predicate(physical)
+                .with_pushdown_filters(true);
+        }
 
-        // let file_group = compute_parquet_access_plans(&reader_factory, files, &metrics).await?;
         let file_group: FileGroup = files.into_iter().map(|file| file.0).collect();
         let (file_groups, statistics) =
             compute_all_files_statistics(vec![file_group], physical_schema.clone(), true, false)?;
-        // TODO: convert passed predicate to an expression in terms of physical columns
-        // and add it to the FileScanConfig
-        // let file_source =
-        //     source.with_schema_adapter_factory(Arc::new(NestedSchemaAdapterFactory))?;
-        let file_source = Arc::new(source.clone());
-        let config = FileScanConfigBuilder::new(store_url, physical_schema.clone(), file_source)
-            .with_file_groups(file_groups)
-            .with_statistics(statistics)
-            .with_table_partition_cols(vec![file_id_field.as_ref().clone()])
-            .with_limit(limit)
-            .build();
-        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
-        plans.push(plan);
+
+        let config =
+            FileScanConfigBuilder::new(store_url, physical_schema.clone(), Arc::new(file_source))
+                .with_file_groups(file_groups)
+                .with_statistics(statistics)
+                .with_table_partition_cols(vec![file_id_field.as_ref().clone()])
+                .with_limit(limit)
+                .build();
+
+        plans.push(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>);
     }
 
     Ok(match plans.len() {
@@ -628,10 +662,16 @@ async fn get_read_plan(
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_schema::Fields;
     use datafusion::{
         datasource::{physical_plan::FileScanConfig, source::DataSource},
-        physical_plan::{ExecutionPlanVisitor, collect_partitioned, visit_execution_plan},
+        physical_plan::{ExecutionPlanVisitor, collect, collect_partitioned, visit_execution_plan},
+        prelude::{col, lit},
     };
+    use object_store::{ObjectStore as _, memory::InMemory};
+    use parquet::arrow::ArrowWriter;
+    use url::Url;
 
     use crate::{
         assert_batches_sorted_eq,
@@ -750,6 +790,431 @@ mod tests {
             "+----+", "| id |", "+----+", "| 5  |", "| 7  |", "| 9  |", "+----+",
         ];
 
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_plan() -> TestResult {
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        let data = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_data.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values.push(ScalarValue::Utf8(Some(
+            "memory:///test_data.parquet".to_string(),
+        )));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema,
+            None,
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+-----------------------------+",
+            "| id | value | __delta_rs_file_id__        |",
+            "+----+-------+-----------------------------+",
+            "| 1  | a     | memory:///test_data.parquet |",
+            "| 2  | b     | memory:///test_data.parquet |",
+            "| 3  | c     | memory:///test_data.parquet |",
+            "+----+-------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        // respect limits
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema,
+            Some(1),
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+-----------------------------+",
+            "| id | value | __delta_rs_file_id__        |",
+            "+----+-------+-----------------------------+",
+            "| 1  | a     | memory:///test_data.parquet |",
+            "+----+-------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        // extended schema with missing column
+        let arrow_schema_extended = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, true),
+            Field::new("value2", DataType::Utf8, true),
+        ]));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema_extended,
+            Some(1),
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+--------+-----------------------------+",
+            "| id | value | value2 | __delta_rs_file_id__        |",
+            "+----+-------+--------+-----------------------------+",
+            "| 1  | a     |        | memory:///test_data.parquet |",
+            "+----+-------+--------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        // extended schema with missing column and different data types
+        let arrow_schema_extended = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8View, true),
+            Field::new("value2", DataType::Utf8View, true),
+        ]));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &arrow_schema_extended,
+            Some(1),
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+--------+-----------------------------+",
+            "| id | value | value2 | __delta_rs_file_id__        |",
+            "+----+-------+--------+-----------------------------+",
+            "| 1  | a     |        | memory:///test_data.parquet |",
+            "+----+-------+--------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+        assert!(matches!(
+            batches[0].column(1).data_type(),
+            DataType::Utf8View
+        ));
+        assert!(matches!(
+            batches[0].column(2).data_type(),
+            DataType::Utf8View
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_plan_nested() -> TestResult {
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let nested_fields: Fields = vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]
+        .into();
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("nested", DataType::Struct(nested_fields.clone()), true),
+        ]));
+        let data = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StructArray::try_new(
+                    nested_fields,
+                    vec![
+                        Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+                        Arc::new(StringArray::from(vec![Some("aa"), Some("bb"), Some("cc")])),
+                    ],
+                    None,
+                )?),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_data.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values.push(ScalarValue::Utf8(Some(
+            "memory:///test_data.parquet".to_string(),
+        )));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema,
+            None,
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+---------------+-----------------------------+",
+            "| id | nested        | __delta_rs_file_id__        |",
+            "+----+---------------+-----------------------------+",
+            "| 1  | {a: a, b: aa} | memory:///test_data.parquet |",
+            "| 2  | {a: b, b: bb} | memory:///test_data.parquet |",
+            "| 3  | {a: c, b: cc} | memory:///test_data.parquet |",
+            "+----+---------------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        let nested_fields_extended: Fields = vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]
+        .into();
+        let arrow_schema_extended = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "nested",
+                DataType::Struct(nested_fields_extended.clone()),
+                true,
+            ),
+        ]));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema_extended,
+            None,
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+--------------------+-----------------------------+",
+            "| id | nested             | __delta_rs_file_id__        |",
+            "+----+--------------------+-----------------------------+",
+            "| 1  | {a: a, b: aa, c: } | memory:///test_data.parquet |",
+            "| 2  | {a: b, b: bb, c: } | memory:///test_data.parquet |",
+            "| 3  | {a: c, b: cc, c: } | memory:///test_data.parquet |",
+            "+----+--------------------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_plan_multiple_stores() -> TestResult {
+        let store_1 = Arc::new(InMemory::new());
+        let store_url_1 = Url::parse("first:///")?;
+        let store_2 = Arc::new(InMemory::new());
+        let store_url_2 = Url::parse("second:///")?;
+
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url_1, store_1.clone());
+        session
+            .runtime_env()
+            .register_object_store(&store_url_2, store_2.clone());
+
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+
+        let data_1 = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec![Some("a")])),
+            ],
+        )?;
+        let data_2 = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![2])),
+                Arc::new(StringArray::from(vec![Some("b")])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data_1)?;
+        arrow_writer.close()?;
+        let path = Path::from("test_data.parquet");
+        store_1.put(&path, buffer.into()).await?;
+        let mut file_1: PartitionedFile = store_1.head(&path).await?.into();
+        file_1.partition_values.push(ScalarValue::Utf8(Some(
+            "first:///test_data.parquet".to_string(),
+        )));
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data_2)?;
+        arrow_writer.close()?;
+        let path = Path::from("test_data.parquet");
+        store_2.put(&path, buffer.into()).await?;
+        let mut file_2: PartitionedFile = store_2.head(&path).await?.into();
+        file_2.partition_values.push(ScalarValue::Utf8(Some(
+            "second:///test_data.parquet".to_string(),
+        )));
+
+        let files_by_store = vec![
+            (
+                store_url_1.as_object_store_url(),
+                vec![(file_1, None::<Vec<bool>>)],
+            ),
+            (
+                store_url_2.as_object_store_url(),
+                vec![(file_2, None::<Vec<bool>>)],
+            ),
+        ];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema,
+            None,
+            &file_id_field,
+            None,
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+-----------------------------+",
+            "| id | value | __delta_rs_file_id__        |",
+            "+----+-------+-----------------------------+",
+            "| 1  | a     | first:///test_data.parquet  |",
+            "| 2  | b     | second:///test_data.parquet |",
+            "+----+-------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_plan_predicate() -> TestResult {
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        let data = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_data.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values.push(ScalarValue::Utf8(Some(
+            "memory:///test_data.parquet".to_string(),
+        )));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("id").eq(lit(2i32));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+-----------------------------+",
+            "| id | value | __delta_rs_file_id__        |",
+            "+----+-------+-----------------------------+",
+            "| 2  | b     | memory:///test_data.parquet |",
+            "+----+-------+-----------------------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())

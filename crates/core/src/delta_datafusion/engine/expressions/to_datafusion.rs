@@ -160,7 +160,7 @@ fn binary_pred_to_df(bin: &BinaryPredicate, output_type: &DataType) -> DFResult<
     })
 }
 
-fn predicate_to_df(predicate: &Predicate, output_type: &DataType) -> DFResult<Expr> {
+pub(crate) fn predicate_to_df(predicate: &Predicate, output_type: &DataType) -> DFResult<Expr> {
     match predicate {
         Predicate::BooleanExpression(expr) => to_datafusion_expr(expr, output_type),
         Predicate::Not(expr) => Ok(!(predicate_to_df(expr, output_type)?)),
