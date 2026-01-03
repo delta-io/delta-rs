@@ -40,6 +40,7 @@ parquet = { version = "57" }
 
 # datafusion
 datafusion = "51.0"
+datafusion-datasource = "51.0"
 datafusion-ffi = "51.0"
 datafusion-proto = "51.0"
 

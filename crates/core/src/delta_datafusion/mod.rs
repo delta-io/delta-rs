@@ -74,6 +74,7 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
+pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
