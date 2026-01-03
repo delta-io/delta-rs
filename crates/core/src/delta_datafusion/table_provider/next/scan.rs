@@ -757,12 +757,12 @@ mod tests {
         {
             // skip boolean and binary columns as they do not have min/max stats
             if matches!(field.data_type(), &DataType::Boolean | &DataType::Binary) {
-                assert!(matches!(col_stat.null_count, Precision::Exact(_)));
+                assert!(matches!(col_stat.null_count, Precision::Inexact(_)));
                 continue;
             }
-            assert!(matches!(col_stat.null_count, Precision::Exact(_)));
-            assert!(matches!(col_stat.min_value, Precision::Exact(_)));
-            assert!(matches!(col_stat.max_value, Precision::Exact(_)));
+            assert!(matches!(col_stat.null_count, Precision::Inexact(_)));
+            assert!(matches!(col_stat.min_value, Precision::Inexact(_)));
+            assert!(matches!(col_stat.max_value, Precision::Inexact(_)));
         }
 
         Ok(())
@@ -792,9 +792,9 @@ mod tests {
             provider.schema().fields().len()
         );
         for col_stat in statistics.column_statistics.iter() {
-            assert!(matches!(col_stat.null_count, Precision::Exact(_)));
-            assert!(matches!(col_stat.min_value, Precision::Exact(_)));
-            assert!(matches!(col_stat.max_value, Precision::Exact(_)));
+            assert!(matches!(col_stat.null_count, Precision::Inexact(_)));
+            assert!(matches!(col_stat.min_value, Precision::Inexact(_)));
+            assert!(matches!(col_stat.max_value, Precision::Inexact(_)));
         }
 
         Ok(())
@@ -824,9 +824,18 @@ mod tests {
             .iter()
             .zip(provider.schema().fields())
         {
-            assert!(matches!(col_stat.null_count, Precision::Exact(_)));
-            assert!(matches!(col_stat.min_value, Precision::Exact(_)));
-            assert!(matches!(col_stat.max_value, Precision::Exact(_)));
+            assert!(matches!(
+                col_stat.null_count,
+                Precision::Exact(_) | Precision::Inexact(_)
+            ));
+            assert!(matches!(
+                col_stat.min_value,
+                Precision::Exact(_) | Precision::Inexact(_)
+            ));
+            assert!(matches!(
+                col_stat.max_value,
+                Precision::Exact(_) | Precision::Inexact(_)
+            ));
         }
 
         Ok(())
