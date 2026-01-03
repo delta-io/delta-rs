@@ -6,6 +6,8 @@ use url::Url;
 
 pub use self::factories::*;
 #[cfg(test)]
+use crate::DeltaTable;
+#[cfg(test)]
 use crate::kernel::LogicalFileView;
 #[cfg(test)]
 use crate::logstore::LogStoreRef;
@@ -16,6 +18,13 @@ use crate::{DeltaResult, DeltaTableBuilder};
 use futures::TryStreamExt;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
+
+#[cfg(test)]
+pub(crate) fn open_fs_path(path: &str) -> DeltaTable {
+    let url =
+        url::Url::from_directory_path(std::path::Path::new(path).canonicalize().unwrap()).unwrap();
+    DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+}
 
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
 #[cfg(test)]

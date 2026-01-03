@@ -74,6 +74,7 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
+pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -812,6 +813,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
     use datafusion::prelude::{SessionConfig, col};
+    use datafusion_datasource::file::FileSource as _;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
@@ -1692,7 +1694,7 @@ mod tests {
                 .downcast_ref::<ParquetSource>()
             {
                 self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.predicate().cloned();
+                self.predicate = parquet_source.filter();
             }
 
             Ok(true)

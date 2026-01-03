@@ -88,6 +88,11 @@ impl From<Arc<KernelScan>> for Scan {
 }
 
 impl Scan {
+    /// Get a shared reference to the inner [`KernelScan`].
+    pub(crate) fn inner(&self) -> &Arc<KernelScan> {
+        &self.inner
+    }
+
     /// The table's root URL. Any relative paths returned from `scan_data` (or in a callback from
     /// [`ScanMetadata::visit_scan_files`]) must be resolved against this root to get the actual path to
     /// the file.
