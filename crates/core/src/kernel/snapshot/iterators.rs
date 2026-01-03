@@ -16,6 +16,8 @@ use object_store::ObjectMeta;
 use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
+#[cfg(feature = "datafusion")]
+pub(crate) use self::scan_row::parse_stats_column_with_schema;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
@@ -111,6 +113,16 @@ impl LogicalFileView {
         )
         .unwrap();
         percent_decode_str(raw).decode_utf8_lossy()
+    }
+
+    /// Returns the raw file path as stored in the log, without URL decoding.
+    pub(crate) fn path_raw(&self) -> &str {
+        get_string_value(
+            self.files
+                .column(*FIELD_INDICES.get(FIELD_NAME_PATH).unwrap()),
+            self.index,
+        )
+        .unwrap()
     }
 
     /// An object store [`Path`] to the file.
