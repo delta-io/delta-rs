@@ -89,7 +89,9 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
           command: publish
+          container: off
           args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          manylinux: "2_17"
 
   release-pypi-manylinux-228-aarch64:
     needs: validate-release-tag
@@ -109,6 +111,7 @@ jobs:
         with:
           target: aarch64-unknown-linux-gnu
           command: publish
+          container: off
           args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
           manylinux: "2_28"
 
@@ -123,7 +126,7 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Publish manylinux to pypi x86_64 (with sdist)
+      - name: Publish musl to pypi x86_64 (with sdist)
         uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
