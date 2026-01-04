@@ -46,7 +46,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           command: build
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          args:  -m python/Cargo.toml --no-sdist --profile python-release
 
   release-pypi-windows:
     #needs: validate-release-tag
@@ -70,7 +70,7 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
           command: build
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          args:  -m python/Cargo.toml --no-sdist --profile python-release
 
   release-pypi-manylinux-x86-64:
     #needs: validate-release-tag
@@ -91,7 +91,7 @@ jobs:
           target: x86_64-unknown-linux-gnu
           command: build
           container: off
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          args:  -m python/Cargo.toml --no-sdist --profile python-release
           manylinux: "2_17"
 
   release-pypi-manylinux-228-aarch64:
@@ -113,7 +113,7 @@ jobs:
           target: aarch64-unknown-linux-gnu
           command: build
           container: off
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          args:  -m python/Cargo.toml --no-sdist --profile python-release
           manylinux: "2_28"
 
   release-pypi-musl-x86-64:
@@ -134,7 +134,7 @@ jobs:
         with:
           target: x86_64-unknown-linux-musl
           command: build
-          args: --skip-existing -m python/Cargo.toml --zig --profile python-release
+          args:  -m python/Cargo.toml --zig --profile python-release
 
   # release-docs:
   #   needs:
