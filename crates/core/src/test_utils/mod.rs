@@ -2,6 +2,8 @@ mod factories;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
+#[cfg(test)]
+use datafusion::prelude::SessionContext;
 use url::Url;
 
 pub use self::factories::*;
@@ -24,6 +26,53 @@ pub(crate) fn open_fs_path(path: &str) -> DeltaTable {
     let url =
         url::Url::from_directory_path(std::path::Path::new(path).canonicalize().unwrap()).unwrap();
     DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+}
+
+#[cfg(test)]
+pub(crate) async fn open_in_memory(path: &str) -> (DeltaTable, SessionContext) {
+    use std::sync::Arc;
+
+    use futures::StreamExt as _;
+    use object_store::{ObjectStore, memory::InMemory};
+
+    use crate::delta_datafusion::create_session;
+
+    let path = std::path::Path::new(path).canonicalize().unwrap();
+
+    let source_store = object_store::local::LocalFileSystem::new_with_prefix(path).unwrap();
+    let root_storage = Arc::new(InMemory::new());
+
+    let mut source_stream = source_store.list(None);
+    while let Some(entry) = source_stream.next().await {
+        let entry = entry.unwrap();
+        let data = source_store
+            .get(&entry.location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        root_storage
+            .put(&entry.location, data.into())
+            .await
+            .unwrap();
+    }
+
+    let root_url = url::Url::parse("memory:///").unwrap();
+    let session = create_session().into_inner();
+    session
+        .runtime_env()
+        .register_object_store(&root_url, root_storage.clone());
+
+    (
+        DeltaTableBuilder::from_url(root_url.clone())
+            .unwrap()
+            .with_storage_backend(root_storage, root_url)
+            .load()
+            .await
+            .unwrap(),
+        session,
+    )
 }
 
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
