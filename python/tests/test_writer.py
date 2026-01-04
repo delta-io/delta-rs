@@ -532,10 +532,13 @@ def test_roundtrip_partitioned(
         assert add_path.count("/") == 1
 
 
+@pytest.mark.pyarrow
 def test_roundtrip_null_partition(
     tmp_path: pathlib.Path,
     sample_table: Table,
 ):
+    import pyarrow as pa
+
     sample_table = sample_table.add_column(
         4,
         "utf8_with_nulls",
@@ -561,7 +564,7 @@ def test_roundtrip_null_partition(
         .execute("select * from tbl order by price asc")
         .read_all()
     )
-    assert table == sample_table
+    assert pa.table(table).to_pydict() == pa.table(sample_table).to_pydict()
 
 
 def test_roundtrip_multi_partitioned(
@@ -822,7 +825,7 @@ def get_log_path(table: DeltaTable) -> str:
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 
-def get_add_actions(table: DeltaTable) -> list[str]:
+def get_add_actions(table: DeltaTable) -> list[dict]:
     log_path = get_log_path(table)
 
     actions = []
@@ -1307,9 +1310,12 @@ def test_replace_where_overwrite_partitioned(
     )
 
 
+@pytest.mark.pyarrow
 def test_partition_overwrite_with_new_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: Table
 ):
+    import pyarrow as pa
+
     write_deltalake(
         tmp_path,
         sample_data_for_partitioning,
@@ -1359,7 +1365,7 @@ def test_partition_overwrite_with_new_partition(
         .execute("select p1,p2,val from tbl order by p1 asc, p2 asc")
         .read_all()
     )
-    assert result == expected_data
+    assert pa.table(result).to_pydict() == pa.table(expected_data).to_pydict()
 
 
 def test_partition_overwrite_with_non_partitioned_data(

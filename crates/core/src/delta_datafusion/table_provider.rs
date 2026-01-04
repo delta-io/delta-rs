@@ -856,60 +856,6 @@ impl DeltaTable {
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
 // the unwraps in the schema method are a dead giveaway ..
-#[async_trait::async_trait]
-impl TableProvider for DeltaTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> Arc<Schema> {
-        self.snapshot().unwrap().snapshot().read_schema()
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    fn get_table_definition(&self) -> Option<&str> {
-        None
-    }
-
-    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
-        None
-    }
-
-    async fn scan(
-        &self,
-        session: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store(), session.runtime_env().as_ref());
-        let filter_expr = conjunction(filters.iter().cloned());
-
-        let scan = DeltaScanBuilder::new(self.snapshot()?.snapshot(), self.log_store(), session)
-            .with_projection(projection)
-            .with_limit(limit)
-            .with_filter(filter_expr)
-            .build()
-            .await?;
-
-        Ok(Arc::new(scan))
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        filter: &[&Expr],
-    ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot()?.metadata().partition_columns().as_slice();
-        Ok(get_pushdown_filters(filter, partition_cols))
-    }
-
-    fn statistics(&self) -> Option<Statistics> {
-        self.snapshot().ok()?.datafusion_table_statistics()
-    }
-}
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]

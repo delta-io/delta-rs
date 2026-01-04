@@ -107,7 +107,7 @@ impl StorageHandler for DataFusionStorageHandler {
     }
 }
 
-pub(crate) trait AsObjectStoreUrl {
+pub trait AsObjectStoreUrl {
     fn as_object_store_url(&self) -> ObjectStoreUrl;
 }
 
