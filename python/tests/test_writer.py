@@ -2591,3 +2591,67 @@ def test_url_encoding(tmp_path):
     )
 
     write_deltalake(tmp_path, batch_2, mode="overwrite", predicate="id = '1 2'")
+
+
+@pytest.mark.pyarrow
+def test_writing_with_generator(tmp_path):
+    """
+    Validate that a generator can be passed for a write_deltalake
+    <https://github.com/delta-io/delta-rs/issues/3961>
+    """
+    from collections.abc import Sequence
+
+    table = Table.from_pydict(
+        {
+            "id": Array(["1 2", "2 3", "3 5", "44", "55"], DataType.string()),
+            "price": Array(list(range(5)), DataType.int64()),
+        },
+        schema=ArrowSchema(
+            fields=[
+                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+
+    class WrapGeneratorAsSequence(Sequence):
+        """Wrap a generator as a Sequence supporting only iteration and `wrapped_object[0]`"""
+
+        def __init__(self, batches):
+            self._batches = batches
+            self._current_index = 0
+            try:
+                self._current_value = next(batches)
+                self.done = False
+            except StopIteration:
+                self.done = True
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.done:
+                raise StopIteration
+            value = self._current_value
+            try:
+                self._current_value = next(self._batches)
+                self._current_index += 1
+            except StopIteration:
+                self.done = True
+            return value
+
+        def __getitem__(self, index):
+            if index != self._current_index:
+                raise NotImplementedError(
+                    "Indexing on anything but the current index is not supported"
+                )
+            # return this instead to patch the misused `RecordBatchReader.from_batches(data[0],data)`  call
+            # return self._current_value.schema
+            return self._current_value
+
+        def __len__(self):
+            raise NotImplementedError("Indexing not supported")
+            # return len(self._batches)
+
+    my_sequence = WrapGeneratorAsSequence(iter(table.to_batches()))
+    write_deltalake(tmp_path, my_sequence)
