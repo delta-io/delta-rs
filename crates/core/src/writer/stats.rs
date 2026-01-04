@@ -196,7 +196,7 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                        Some(AggregatedStats::from((s, column_descr.logical_type_ref())))
                     }
                 })
             })
@@ -249,7 +249,7 @@ enum StatsScalar {
 impl StatsScalar {
     fn try_from_stats(
         stats: &Statistics,
-        logical_type: &Option<LogicalType>,
+        logical_type: Option<&LogicalType>,
         use_min: bool,
     ) -> Result<Self, DeltaWriterError> {
         macro_rules! get_stat {
@@ -296,7 +296,7 @@ impl StatsScalar {
                 };
                 let timestamp = timestamp.ok_or(DeltaWriterError::StatsParsingFailed {
                     debug_value: v.to_string(),
-                    logical_type: logical_type.clone(),
+                    logical_type: logical_type.cloned(),
                 })?;
                 Ok(Self::Timestamp(timestamp.naive_utc()))
             }
@@ -330,7 +330,7 @@ impl StatsScalar {
                     }
                     _ => Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{bytes:?}"),
-                        logical_type: logical_type.clone(),
+                        logical_type: logical_type.cloned(),
                     }),
                 }
             }
@@ -392,7 +392,7 @@ impl StatsScalar {
             }
             (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
                 debug_value: format!("{stats:?}"),
-                logical_type: logical_type.clone(),
+                logical_type: logical_type.cloned(),
             }),
         }
     }
@@ -453,8 +453,8 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
-    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
         let null_count = stats.null_count_opt().unwrap_or_default();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
@@ -843,7 +843,7 @@ mod tests {
         ];
 
         for (stats, logical_type, expected) in cases {
-            let scalar = StatsScalar::try_from_stats(stats, logical_type, true).unwrap();
+            let scalar = StatsScalar::try_from_stats(stats, logical_type.as_ref(), true).unwrap();
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }

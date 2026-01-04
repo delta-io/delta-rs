@@ -96,8 +96,13 @@ pub enum UnityCatalogError {
     MissingCredential,
 
     /// Temporary Credentials Fetch Failure
-    #[error("Unable to get temporary credentials from Unity Catalog.")]
-    TemporaryCredentialsFetchFailure,
+    #[error("Unable to get temporary credentials from Unity Catalog: {error_code}: {message}")]
+    TemporaryCredentialsFetchFailure {
+        /// Error code from Unity Catalog
+        error_code: String,
+        /// Error message from Unity Catalog
+        message: String,
+    },
 
     #[error("Azure CLI error: {message}")]
     AzureCli {
@@ -541,7 +546,7 @@ impl UnityCatalogBuilder {
             TableTempCredentialsResponse::Success(temp_creds) => temp_creds
                 .get_credentials()
                 .ok_or_else(|| UnityCatalogError::MissingCredential)?,
-            TableTempCredentialsResponse::Error(_error) => {
+            TableTempCredentialsResponse::Error(rw_error) => {
                 // If that fails attempt to get just read permissions.
                 match unity_catalog
                     .get_temp_table_credentials(catalog_id, database_name, table_name)
@@ -550,7 +555,15 @@ impl UnityCatalogBuilder {
                     TableTempCredentialsResponse::Success(temp_creds) => temp_creds
                         .get_credentials()
                         .ok_or_else(|| UnityCatalogError::MissingCredential)?,
-                    _ => return Err(UnityCatalogError::TemporaryCredentialsFetchFailure),
+                    TableTempCredentialsResponse::Error(read_error) => {
+                        return Err(UnityCatalogError::TemporaryCredentialsFetchFailure {
+                            error_code: read_error.error_code,
+                            message: format!(
+                                "READ_WRITE failed: {}. READ failed: {}",
+                                rw_error.message, read_error.message
+                            ),
+                        });
+                    }
                 }
             }
         };
@@ -697,7 +710,18 @@ impl UnityCatalog {
             .query(&[("catalog_name", catalog_name.as_ref())])
             .send()
             .await?;
-        Ok(resp.json().await?)
+        let status = resp.status();
+        let body = resp.text().await?;
+        serde_json::from_str(&body).map_err(|e| {
+            tracing::error!(
+                "Failed to parse list_schemas response (status {}): {}",
+                status,
+                body
+            );
+            UnityCatalogError::Generic {
+                source: Box::new(e),
+            }
+        })
     }
 
     /// Gets the specified schema within the metastore.#

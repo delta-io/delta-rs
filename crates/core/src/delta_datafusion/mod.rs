@@ -31,8 +31,8 @@ use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictio
 use arrow_cast::display::array_value_to_string;
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
-    SchemaRef as ArrowSchemaRef, TimeUnit,
+    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
+    TimeUnit,
 };
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
@@ -74,6 +74,7 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
+pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -310,47 +311,6 @@ pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
     env.register_object_store(url, store.object_store(None));
-}
-
-/// The logical schema for a Deltatable is different from the protocol level schema since partition
-/// columns must appear at the end of the schema. This is to align with how partition are handled
-/// at the physical level
-pub(crate) fn df_logical_schema(
-    snapshot: &EagerSnapshot,
-    file_column_name: &Option<String>,
-    schema: Option<ArrowSchemaRef>,
-) -> DeltaResult<SchemaRef> {
-    let input_schema = match schema {
-        Some(schema) => schema,
-        None => snapshot.input_schema(),
-    };
-    let table_partition_cols = snapshot.metadata().partition_columns();
-
-    let mut fields: Vec<Arc<Field>> = input_schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect();
-
-    for partition_col in table_partition_cols.iter() {
-        fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .unwrap()
-                .to_owned(),
-        ));
-    }
-
-    if let Some(file_column_name) = file_column_name {
-        fields.push(Arc::new(Field::new(
-            file_column_name,
-            ArrowDataType::Utf8,
-            true,
-        )));
-    }
-
-    Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
@@ -853,6 +813,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
     use datafusion::prelude::{SessionConfig, col};
+    use datafusion_datasource::file::FileSource as _;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
@@ -1733,7 +1694,7 @@ mod tests {
                 .downcast_ref::<ParquetSource>()
             {
                 self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.predicate().cloned();
+                self.predicate = parquet_source.filter();
             }
 
             Ok(true)

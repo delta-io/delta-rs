@@ -5,9 +5,10 @@ use datafusion::execution::TaskContext;
 use delta_kernel::{Engine, EvaluationHandler, JsonHandler, ParquetHandler, StorageHandler};
 use tokio::runtime::Handle;
 
-pub use self::expressions::*;
+pub(crate) use self::expressions::*;
 use self::file_formats::DataFusionFileFormatHandler;
 use self::storage::DataFusionStorageHandler;
+pub(crate) use self::storage::*;
 use crate::kernel::ARROW_HANDLER;
 
 mod expressions;
@@ -24,6 +25,10 @@ pub struct DataFusionEngine {
 impl DataFusionEngine {
     pub fn new_from_session(session: &dyn Session) -> Arc<Self> {
         Self::new(session.task_ctx(), Handle::current()).into()
+    }
+
+    pub fn new_from_context(ctx: Arc<TaskContext>) -> Arc<Self> {
+        Self::new(ctx, Handle::current()).into()
     }
 
     pub fn new(ctx: Arc<TaskContext>, handle: Handle) -> Self {

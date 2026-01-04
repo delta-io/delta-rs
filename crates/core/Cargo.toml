@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.30.0"
+version = "0.30.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -36,6 +36,7 @@ object_store = { workspace = true }
 
 # datafusion
 datafusion = { workspace = true, optional = true }
+datafusion-datasource = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 
 # serde
@@ -103,7 +104,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
-datafusion = ["dep:datafusion", "datafusion-proto"]
+datafusion = ["dep:datafusion", "datafusion-datasource", "datafusion-proto"]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]

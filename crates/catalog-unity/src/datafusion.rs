@@ -188,13 +188,21 @@ impl UnitySchemaProvider {
             .await
         {
             Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
-            Ok(TableTempCredentialsResponse::Error(_err)) => match self
+            Ok(TableTempCredentialsResponse::Error(rw_error)) => match self
                 .client
                 .get_temp_table_credentials(catalog, schema, table)
                 .await?
             {
                 TableTempCredentialsResponse::Success(temp_creds) => Ok(temp_creds),
-                _ => Err(UnityCatalogError::TemporaryCredentialsFetchFailure),
+                TableTempCredentialsResponse::Error(read_error) => {
+                    Err(UnityCatalogError::TemporaryCredentialsFetchFailure {
+                        error_code: read_error.error_code,
+                        message: format!(
+                            "READ_WRITE failed: {}. READ failed: {}",
+                            rw_error.message, read_error.message
+                        ),
+                    })
+                }
             },
             Err(err) => Err(err),
         }

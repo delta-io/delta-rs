@@ -9,6 +9,8 @@ use delta_kernel::expressions::{
 use delta_kernel::schema::{DataType, DecimalType, PrimitiveType};
 use itertools::Itertools;
 
+use crate::kernel::scalars::ScalarExt;
+
 pub(crate) fn to_df_err(e: DeltaKernelError) -> DataFusionError {
     DataFusionError::External(Box::new(e))
 }
@@ -121,33 +123,39 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
                 expr: Box::new(to_delta_expression(expr.as_ref())?),
             },
         )))),
+        Expr::IsNotNull(expr) => Ok(Expression::Predicate(Box::new(Predicate::Not(Box::new(
+            Predicate::Unary(UnaryPredicate {
+                op: UnaryPredicateOp::IsNull,
+                expr: Box::new(to_delta_expression(expr.as_ref())?),
+            }),
+        ))))),
         Expr::Not(expr) => Ok(Expression::Predicate(Box::new(Predicate::Not(Box::new(
             Predicate::BooleanExpression(to_delta_expression(expr.as_ref())?),
         ))))),
         Expr::Between(between) => {
             let expr = to_delta_expression(&between.expr)?;
-            let (high_op, low_op) = if between.negated {
-                (BinaryPredicateOp::LessThan, BinaryPredicateOp::GreaterThan)
+            let expression = Predicate::Junction(JunctionPredicate {
+                op: JunctionPredicateOp::Or,
+                preds: vec![
+                    Predicate::Binary(BinaryPredicate {
+                        left: Box::new(expr.clone()),
+                        op: BinaryPredicateOp::LessThan,
+                        right: Box::new(to_delta_expression(&between.low)?),
+                    }),
+                    Predicate::Binary(BinaryPredicate {
+                        left: Box::new(expr),
+                        op: BinaryPredicateOp::GreaterThan,
+                        right: Box::new(to_delta_expression(&between.high)?),
+                    }),
+                ],
+            });
+            if between.negated {
+                Ok(Expression::Predicate(Box::new(expression)))
             } else {
-                (BinaryPredicateOp::GreaterThan, BinaryPredicateOp::LessThan)
-            };
-            Ok(Expression::Predicate(Box::new(Predicate::Junction(
-                JunctionPredicate {
-                    op: JunctionPredicateOp::And,
-                    preds: vec![
-                        Predicate::Binary(BinaryPredicate {
-                            left: Box::new(expr.clone()),
-                            op: low_op,
-                            right: Box::new(to_delta_expression(&between.low)?),
-                        }),
-                        Predicate::Binary(BinaryPredicate {
-                            left: Box::new(expr),
-                            op: high_op,
-                            right: Box::new(to_delta_expression(&between.high)?),
-                        }),
-                    ],
-                },
-            ))))
+                Ok(Expression::Predicate(Box::new(Predicate::Not(Box::new(
+                    expression,
+                )))))
+            }
         }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {:?}",
@@ -156,7 +164,7 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
     }
 }
 
-fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
+pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
     match scalar {
         ScalarValue::Boolean(maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::Boolean(*value)),
@@ -223,6 +231,9 @@ fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
                 DecimalType::try_new(*precision, *scale as u8).map_err(to_df_err)?,
             )))),
         },
+        ScalarValue::Struct(data) => Ok(Scalar::from_array(data.as_ref(), 0).ok_or_else(|| {
+            DataFusionError::NotImplemented("Struct scalar conversion failed".to_string())
+        })?),
         ScalarValue::Dictionary(_, value) => datafusion_scalar_to_scalar(value.as_ref()),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported scalar value: {:?}",
@@ -579,6 +590,160 @@ mod tests {
                 }
                 _ => panic!("Expected Null literal, got {:?}", delta_expr),
             }
+        }
+    }
+
+    #[test]
+    fn test_between_expressions() {
+        // Test BETWEEN (not negated) - should be equivalent to: NOT (x < low OR x > high)
+        let expr = col("x").between(lit(10), lit(20));
+        let delta_expr = to_delta_expression(&expr).unwrap();
+
+        match delta_expr {
+            Expression::Predicate(predicate) => match predicate.as_ref() {
+                Predicate::Not(not_pred) => match not_pred.as_ref() {
+                    Predicate::Junction(junction) => {
+                        assert_eq!(junction.op, JunctionPredicateOp::Or);
+                        assert_eq!(junction.preds.len(), 2);
+
+                        // First predicate should be x < 10
+                        match &junction.preds[0] {
+                            Predicate::Binary(binary) => {
+                                assert_eq!(binary.op, BinaryPredicateOp::LessThan);
+                                match binary.left.as_ref() {
+                                    Expression::Column(name) => assert_eq!(name.to_string(), "x"),
+                                    _ => panic!("Expected Column expression in left operand"),
+                                }
+                                match binary.right.as_ref() {
+                                    Expression::Literal(Scalar::Integer(value)) => {
+                                        assert_eq!(*value, 10)
+                                    }
+                                    _ => panic!("Expected Integer literal in right operand"),
+                                }
+                            }
+                            _ => panic!("Expected Binary predicate for first condition"),
+                        }
+
+                        // Second predicate should be x > 20
+                        match &junction.preds[1] {
+                            Predicate::Binary(binary) => {
+                                assert_eq!(binary.op, BinaryPredicateOp::GreaterThan);
+                                match binary.left.as_ref() {
+                                    Expression::Column(name) => assert_eq!(name.to_string(), "x"),
+                                    _ => panic!("Expected Column expression in left operand"),
+                                }
+                                match binary.right.as_ref() {
+                                    Expression::Literal(Scalar::Integer(value)) => {
+                                        assert_eq!(*value, 20)
+                                    }
+                                    _ => panic!("Expected Integer literal in right operand"),
+                                }
+                            }
+                            _ => panic!("Expected Binary predicate for second condition"),
+                        }
+                    }
+                    _ => panic!("Expected Junction predicate inside NOT"),
+                },
+                _ => panic!("Expected NOT predicate for BETWEEN, got {:?}", predicate),
+            },
+            _ => panic!("Expected Predicate expression, got {:?}", delta_expr),
+        }
+    }
+
+    #[test]
+    fn test_not_between_expressions() {
+        // Test NOT BETWEEN (negated) - should be equivalent to: x < low OR x > high
+        let expr = col("y").not_between(lit(5), lit(15));
+        let delta_expr = to_delta_expression(&expr).unwrap();
+
+        match delta_expr {
+            Expression::Predicate(predicate) => match predicate.as_ref() {
+                Predicate::Junction(junction) => {
+                    assert_eq!(junction.op, JunctionPredicateOp::Or);
+                    assert_eq!(junction.preds.len(), 2);
+
+                    // First predicate should be y < 5
+                    match &junction.preds[0] {
+                        Predicate::Binary(binary) => {
+                            assert_eq!(binary.op, BinaryPredicateOp::LessThan);
+                            match binary.left.as_ref() {
+                                Expression::Column(name) => assert_eq!(name.to_string(), "y"),
+                                _ => panic!("Expected Column expression in left operand"),
+                            }
+                            match binary.right.as_ref() {
+                                Expression::Literal(Scalar::Integer(value)) => {
+                                    assert_eq!(*value, 5)
+                                }
+                                _ => panic!("Expected Integer literal in right operand"),
+                            }
+                        }
+                        _ => panic!("Expected Binary predicate for first condition"),
+                    }
+
+                    // Second predicate should be y > 15
+                    match &junction.preds[1] {
+                        Predicate::Binary(binary) => {
+                            assert_eq!(binary.op, BinaryPredicateOp::GreaterThan);
+                            match binary.left.as_ref() {
+                                Expression::Column(name) => assert_eq!(name.to_string(), "y"),
+                                _ => panic!("Expected Column expression in left operand"),
+                            }
+                            match binary.right.as_ref() {
+                                Expression::Literal(Scalar::Integer(value)) => {
+                                    assert_eq!(*value, 15)
+                                }
+                                _ => panic!("Expected Integer literal in right operand"),
+                            }
+                        }
+                        _ => panic!("Expected Binary predicate for second condition"),
+                    }
+                }
+                _ => panic!(
+                    "Expected Junction predicate for NOT BETWEEN, got {:?}",
+                    predicate
+                ),
+            },
+            _ => panic!("Expected Predicate expression, got {:?}", delta_expr),
+        }
+    }
+
+    #[test]
+    fn test_between_with_expressions() {
+        // Test BETWEEN with expressions as bounds: col("a") + 1 BETWEEN col("low") AND col("high")
+        let expr = (col("a") + lit(1)).between(col("low"), col("high"));
+        let delta_expr = to_delta_expression(&expr).unwrap();
+
+        match delta_expr {
+            Expression::Predicate(predicate) => match predicate.as_ref() {
+                Predicate::Not(not_pred) => match not_pred.as_ref() {
+                    Predicate::Junction(junction) => {
+                        assert_eq!(junction.op, JunctionPredicateOp::Or);
+                        assert_eq!(junction.preds.len(), 2);
+
+                        // Verify the expression being tested is (a + 1)
+                        for pred in &junction.preds {
+                            match pred {
+                                Predicate::Binary(binary) => match binary.left.as_ref() {
+                                    Expression::Binary(bin_expr) => {
+                                        assert_eq!(bin_expr.op, BinaryExpressionOp::Plus);
+                                        match bin_expr.left.as_ref() {
+                                            Expression::Column(name) => {
+                                                assert_eq!(name.to_string(), "a")
+                                            }
+                                            _ => panic!("Expected Column 'a' in binary expression"),
+                                        }
+                                    }
+                                    _ => panic!("Expected Binary expression for (a + 1)"),
+                                },
+                                _ => panic!("Expected Binary predicate"),
+                            }
+                        }
+                    }
+                    _ => panic!("Expected Junction predicate inside NOT"),
+                },
+                _ => panic!("Expected NOT predicate for BETWEEN"),
+            },
+            _ => panic!("Expected Predicate expression"),
         }
     }
 }
