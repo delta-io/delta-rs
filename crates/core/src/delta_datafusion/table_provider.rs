@@ -347,30 +347,52 @@ impl DeltaScanConfigBuilder {
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
+            schema_force_view_types: false,
         })
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Include additional metadata columns during a [`DeltaScan`]
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
-    /// Wrap partition values in a dictionary encoding
+    /// Wrap partition values in a dictionary encoding, defaults to true
     pub wrap_partition_values: bool,
-    /// Allow pushdown of the scan filter
+    /// Allow pushdown of the scan filter, defaults to true
     pub enable_parquet_pushdown: bool,
+    /// If true, parquet reader will read columns of `Utf8`/`Utf8Large`
+    /// with Utf8View, and `Binary`/`BinaryLarge` with `BinaryView`
+    pub schema_force_view_types: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
 }
 
+impl Default for DeltaScanConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeltaScanConfig {
-    /// Create a new default `DeltaScanConfig`
+    /// Create a new default [`DeltaScanConfig`]
     pub fn new() -> Self {
         Self {
             file_column_name: None,
             wrap_partition_values: true,
             enable_parquet_pushdown: true,
+            schema_force_view_types: true,
+            schema: None,
+        }
+    }
+
+    pub fn new_from_session(session: &dyn Session) -> Self {
+        let config_options = session.config().options();
+        Self {
+            file_column_name: None,
+            wrap_partition_values: true,
+            enable_parquet_pushdown: config_options.execution.parquet.pushdown_filters,
+            schema_force_view_types: config_options.execution.parquet.schema_force_view_types,
             schema: None,
         }
     }
@@ -389,6 +411,16 @@ impl DeltaScanConfig {
     /// Allow pushdown of the scan filter
     pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
         self.enable_parquet_pushdown = pushdown;
+        self
+    }
+
+    /// Use the provided [SchemaRef] for the [DeltaScan]
+    ///
+    /// This schema will be used when reading data from the underlying files.
+    /// The column names must match those in the table schema, but can have
+    /// different (yet compatible) types - e.g. string view types can be used
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
         self
     }
 }

@@ -1,3 +1,9 @@
+//! File metadata replay and statistics extraction.
+//!
+//! This module processes Delta Kernel's scan metadata stream, extracting file information,
+//! loading deletion vectors, and computing statistics for query planning. It bridges the
+//! gap between kernel-level file metadata and DataFusion's execution requirements.
+
 use std::{
     collections::HashSet,
     pin::Pin,
@@ -49,7 +55,10 @@ impl ReplayStats {
     }
 }
 
-/// Extract column names referenced in the physical predicate
+/// Extracts column names referenced in the scan's physical predicate.
+///
+/// Returns a set of column names that are actually used in predicates, which helps
+/// optimize statistics parsing to only process relevant columns.
 fn extract_predicate_columns(scan: &KernelScan) -> Option<HashSet<String>> {
     scan.physical_predicate().map(|predicate| {
         predicate
@@ -110,7 +119,15 @@ fn create_minimal_stats_schema(
 }
 
 pin_project! {
-    /// Stream to read scan file contexts from a scan metadata stream.
+    /// Stream that processes kernel scan metadata into file contexts with statistics.
+    ///
+    /// This stream consumes [`ScanMetadata`] from Delta Kernel's scan and produces
+    /// [`ScanFileContext`] entries enriched with:
+    ///
+    /// - **File statistics**: Row counts, min/max values, null counts
+    /// - **Deletion vectors**: Asynchronously loaded and cached
+    /// - **Partition values**: Extracted from file metadata
+    /// - **Transforms**: Column mapping expressions for physical-to-logical translation
     pub(crate) struct ScanFileStream<S> {
         pub(crate) metrics: ReplayStats,
 
@@ -232,6 +249,24 @@ where
     }
 }
 
+/// Extracts DataFusion statistics from parsed file metadata.
+///
+/// Converts Delta Kernel's file statistics into DataFusion's [`Statistics`] format,
+/// which is used for query optimization and predicate pushdown. This function implements
+/// an important optimization: it only extracts statistics for columns that appear in
+/// predicates, avoiding expensive parsing for unused columns.
+///
+/// # Arguments
+///
+/// * `scan` - The kernel scan containing schema and predicate information
+/// * `parsed_stats` - RecordBatch containing parsed statistics for all files
+/// * `predicate_columns` - Optional set of columns referenced in predicates
+///
+/// # Returns
+///
+/// A map from file URL to tuple of:
+/// - [`Statistics`]: DataFusion statistics for query optimization
+/// - [`StructData`]: Partition values to be materialized in the output
 fn extract_file_statistics(
     scan: &KernelScan,
     parsed_stats: RecordBatch,
@@ -334,6 +369,21 @@ fn extract_struct(scalar: Option<Scalar>) -> Option<StructData> {
     }
 }
 
+/// Enriched metadata for a single data file in a table scan.
+///
+/// Contains all information needed by DataFusion to read and process a Parquet file
+/// as part of a Delta table scan. This includes the file location, size, statistics,
+/// and any transformations required by the Delta protocol.
+///
+/// # Fields
+///
+/// - [`file_url`](Self::file_url): Complete URL for reading the file from object storage
+/// - [`size`](Self::size): File size in bytes for I/O planning
+/// - [`transform`](Self::transform): Expression to apply partition values and column mapping
+/// - [`stats`](Self::stats): File-level statistics for predicate pushdown and pruning
+/// - [`partitions`](Self::partitions): Partition column values to materialize
+///
+/// These contexts are created during the scan replay phase and consumed by execution plans.
 #[derive(Debug)]
 pub(crate) struct ScanFileContext {
     /// Fully qualified URL of the file.

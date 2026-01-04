@@ -121,12 +121,12 @@ async fn test_multi_partitioned() -> TestResult<()> {
     let plan = provider.scan(&session.state(), None, &[], None).await?;
     let batches: Vec<_> = collect_plan(plan, &session).await?;
     let expected = vec![
-        "+--------+--------+------------+------------+",
-        "| number | letter | date       | data       |",
-        "+--------+--------+------------+------------+",
-        "| 6      | /%20%f | 1970-01-01 | 68656c6c6f |",
-        "| 7      | b      | 1970-01-01 | f09f9888   |",
-        "+--------+--------+------------+------------+",
+        "+--------+------------+------------+--------+",
+        "| letter | date       | data       | number |",
+        "+--------+------------+------------+--------+",
+        "| /%20%f | 1970-01-01 | 68656c6c6f | 6      |",
+        "| b      | 1970-01-01 | f09f9888   | 7      |",
+        "+--------+------------+------------+--------+",
     ];
     assert_batches_sorted_eq!(&expected, &batches);
 
@@ -136,11 +136,11 @@ async fn test_multi_partitioned() -> TestResult<()> {
     let plan = provider.scan(&session.state(), None, &[pred], None).await?;
     let batches: Vec<_> = collect_plan(plan, &session).await?;
     let expected = vec![
-        "+--------+--------+------------+----------+",
-        "| number | letter | date       | data     |",
-        "+--------+--------+------------+----------+",
-        "| 7      | b      | 1970-01-01 | f09f9888 |",
-        "+--------+--------+------------+----------+",
+        "+--------+------------+----------+--------+",
+        "| letter | date       | data     | number |",
+        "+--------+------------+----------+--------+",
+        "| b      | 1970-01-01 | f09f9888 | 7      |",
+        "+--------+------------+----------+--------+",
     ];
     assert_batches_sorted_eq!(&expected, &batches);
 
@@ -148,11 +148,11 @@ async fn test_multi_partitioned() -> TestResult<()> {
     let plan = provider.scan(&session.state(), None, &[pred], None).await?;
     let batches: Vec<_> = collect_plan(plan, &session).await?;
     let expected = vec![
-        "+--------+--------+------------+------------+",
-        "| number | letter | date       | data       |",
-        "+--------+--------+------------+------------+",
-        "| 6      | /%20%f | 1970-01-01 | 68656c6c6f |",
-        "+--------+--------+------------+------------+",
+        "+--------+------------+------------+--------+",
+        "| letter | date       | data       | number |",
+        "+--------+------------+------------+--------+",
+        "| /%20%f | 1970-01-01 | 68656c6c6f | 6      |",
+        "+--------+------------+------------+--------+",
     ];
     assert_batches_sorted_eq!(&expected, &batches);
 
@@ -161,7 +161,7 @@ async fn test_multi_partitioned() -> TestResult<()> {
     // in a predicate but not part of the end result in the passed projection.
     let pred = col("letter").eq(lit("/%20%f"));
     let plan = provider
-        .scan(&session.state(), Some(&vec![0]), &[pred], None)
+        .scan(&session.state(), Some(&vec![3]), &[pred], None)
         .await?;
     let batches: Vec<_> = collect_plan(plan, &session).await?;
     let expected = vec![
