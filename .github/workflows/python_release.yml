@@ -11,7 +11,7 @@ defaults:
 jobs:
   validate-release-tag:
     name: Validate git tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v5
       - name: compare git tag with cargo metadata
@@ -74,7 +74,7 @@ jobs:
   release-pypi-manylinux-x86-64:
     needs: validate-release-tag
     name: PyPI release manylinux-2_17 x86_64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -94,7 +94,7 @@ jobs:
   release-pypi-manylinux-228-aarch64:
     needs: validate-release-tag
     name: PyPI release manylinux-2_28 aarch64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
 
@@ -115,7 +115,7 @@ jobs:
   release-pypi-musl-x86-64:
     needs: validate-release-tag
     name: PyPI release musl-2_17 x86_64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -144,7 +144,7 @@ jobs:
       ]
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Trigger the docs release event
         uses: peter-evans/repository-dispatch@v2
