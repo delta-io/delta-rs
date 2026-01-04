@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-catalog-unity"
-version = "0.14.0"
+version = "0.14.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
