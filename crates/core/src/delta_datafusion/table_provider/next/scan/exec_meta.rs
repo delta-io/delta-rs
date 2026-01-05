@@ -1,3 +1,8 @@
+//! Metadata-only table scans for optimization.
+//!
+//! This module implements [`DeltaScanMetaExec`], which answers queries using only file
+//! metadata and statistics, avoiding the cost of reading actual Parquet data files.
+
 use std::any::Any;
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -7,7 +12,7 @@ use std::task::{Context, Poll};
 use arrow::array::RecordBatch;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{SchemaRef, UInt16Type};
-use arrow_array::{BooleanArray, DictionaryArray, RecordBatchOptions, StringArray};
+use arrow_array::{BooleanArray, DictionaryArray, RecordBatchOptions};
 use arrow_schema::{FieldRef, Fields, Schema};
 use dashmap::DashMap;
 use datafusion::common::HashMap;
@@ -26,17 +31,33 @@ use datafusion::physical_plan::{
 use delta_kernel::schema::{Schema as KernelSchema, SchemaRef as KernelSchemaRef};
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::Stream;
-use itertools::Itertools;
+use itertools::{Itertools as _, repeat_n};
 
-use crate::cast_record_batch;
 use crate::delta_datafusion::table_provider::next::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
-/// Execution plan for scanning a Delta table based only on file metadata.
+/// Optimized execution plan that uses only file metadata to answer queries.
 ///
-/// For certain queries (e.g. `COUNT(*)`) we may be able to satisfy the query
-/// using only file metadata without reading any actual data files.
+/// This plan avoids reading Parquet data files by synthesizing results from file-level
+/// metadata and statistics. It's automatically selected when possible for queries like:
+///
+/// - `SELECT COUNT(*) FROM table` - Uses row counts from file statistics
+/// - `SELECT COUNT(*) FROM table WHERE partition_col = 'value'` - Counts matching files
+/// - Queries projecting only partition columns with row count aggregates
+///
+/// # Benefits
+///
+/// - **Performance**: Orders of magnitude faster than reading data files
+/// - **Cost**: Reduces I/O and compute for cloud storage scenarios
+/// - **Scalability**: Handles large tables efficiently
+///
+/// # Limitations
+///
+/// Only works when:
+/// - Query requires no actual column data (COUNT(*) or partition columns only)
+/// - File statistics contain accurate row counts
+/// - No deletion vectors affect the results (or they are accounted for)
 #[derive(Clone, Debug)]
 pub(crate) struct DeltaScanMetaExec {
     scan_plan: Arc<KernelScanPlan>,
@@ -217,13 +238,17 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 }
 
-/// Stream of RecordBatches produced by scanning a Delta table.
+/// Stream that generates RecordBatches from file metadata without reading data files.
 ///
-/// The data returned by this stream represents the logical data caontained in the table.
-/// This means all transformations according to the Delta protocol are applied. This includes:
-/// - partition values
-/// - column mapping to the logical schema
-/// - deletion vectors
+/// Synthesizes logical table rows by:
+///
+/// 1. Creating empty batches with row counts from file statistics
+/// 2. Applying deletion vectors to adjust row counts
+/// 3. Evaluating partition value expressions to materialize columns
+/// 4. Casting results to the expected logical schema
+///
+/// Each file is processed independently, producing a batch with the appropriate
+/// number of rows but no actual column data (unless partition columns are requested).
 struct DeltaScanMetaStream {
     scan_plan: Arc<KernelScanPlan>,
     /// Input stream yielding raw data read from data files.
@@ -266,7 +291,7 @@ impl DeltaScanMetaStream {
             batch
         };
 
-        let batch = if let Some(transform) = self.transforms.get(&file_id) {
+        let result = if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     EMPTY_KERNEL_SCHEMA.clone(),
@@ -282,21 +307,16 @@ impl DeltaScanMetaStream {
             batch
         };
 
-        // TODO: all casting should be done in the expression evaluator
-        let result = cast_record_batch(&batch, self.scan_plan.result_schema.clone(), true, true)?;
-
         if let Some(file_id_field) = &self.file_id_field {
-            let file_id_array =
-                StringArray::from_iter_values(std::iter::repeat_n(file_id, result.num_rows()));
-            let file_id_array: DictionaryArray<UInt16Type> = file_id_array.into_iter().collect();
-            let mut columns = result.columns().to_vec();
-            columns.push(Arc::new(file_id_array));
-            let mut fields = result.schema().fields().to_vec();
-            fields.push(file_id_field.clone());
-            let schema = Arc::new(arrow::datatypes::Schema::new(fields));
-            Ok(RecordBatch::try_new(schema, columns)?)
+            let file_id_array: DictionaryArray<UInt16Type> =
+                repeat_n(file_id.as_str(), result.num_rows()).collect();
+            super::finalize_transformed_batch(
+                result,
+                &self.scan_plan,
+                Some((Arc::new(file_id_array), file_id_field.clone())),
+            )
         } else {
-            Ok(result)
+            super::finalize_transformed_batch(result, &self.scan_plan, None)
         }
     }
 }

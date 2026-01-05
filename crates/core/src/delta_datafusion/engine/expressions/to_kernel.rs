@@ -1,44 +1,19 @@
-use datafusion::common::{DataFusionError, Result as DFResult, ScalarValue};
+use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
-use delta_kernel::Error as DeltaKernelError;
 use delta_kernel::expressions::{
-    BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, DecimalData,
-    Expression, JunctionPredicate, JunctionPredicateOp, Predicate, Scalar, UnaryPredicate,
-    UnaryPredicateOp,
+    BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, ColumnName,
+    DecimalData, Expression, JunctionPredicate, JunctionPredicateOp, Predicate, Scalar,
+    UnaryPredicate, UnaryPredicateOp,
 };
 use delta_kernel::schema::{DataType, DecimalType, PrimitiveType};
-use itertools::Itertools;
 
 use crate::kernel::scalars::ScalarExt;
-
-pub(crate) fn to_df_err(e: DeltaKernelError) -> DataFusionError {
-    DataFusionError::External(Box::new(e))
-}
-
-/// Converts a slice of DataFusion expressions into a single Delta predicate.
-///
-/// Returns `true` for empty filters, converts single filters directly,
-/// and combines multiple filters with AND logic.
-pub(crate) fn to_delta_predicate(filters: &[Expr]) -> DFResult<Predicate> {
-    if filters.is_empty() {
-        return Ok(Predicate::BooleanExpression(Expression::Literal(
-            Scalar::Boolean(true),
-        )));
-    };
-    if filters.len() == 1 {
-        return to_predicate(&filters[0]);
-    }
-    Ok(Predicate::Junction(JunctionPredicate {
-        op: JunctionPredicateOp::And,
-        preds: filters.iter().map(to_predicate).try_collect()?,
-    }))
-}
 
 /// Converts a DataFusion expression to a Delta predicate.
 ///
 /// If the expression converts to a Delta predicate, returns it directly.
 /// Otherwise, wraps the expression as a boolean expression predicate.
-pub(crate) fn to_predicate(expr: &Expr) -> DFResult<Predicate> {
+pub(crate) fn to_predicate(expr: &Expr) -> Result<Predicate> {
     match to_delta_expression(expr)? {
         Expression::Predicate(pred) => Ok(pred.as_ref().clone()),
         expr => Ok(Predicate::BooleanExpression(expr)),
@@ -46,14 +21,11 @@ pub(crate) fn to_predicate(expr: &Expr) -> DFResult<Predicate> {
 }
 
 /// Converts a DataFusion expression to a Delta kernel expression.
-pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
+pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
     match expr {
-        Expr::Column(column) => Ok(Expression::Column(
-            column
-                .name
-                .parse()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        )),
+        Expr::Column(column) => Ok(Expression::Column(ColumnName::from_naive_str_split(
+            &column.name,
+        ))),
         Expr::Literal(scalar, _meta) => {
             Ok(Expression::Literal(datafusion_scalar_to_scalar(scalar)?))
         }
@@ -157,14 +129,39 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> DFResult<Expression> {
                 )))))
             }
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported expression: {:?}",
-            expr
-        ))),
+        Expr::ScalarFunction(scalar_fn) => {
+            if scalar_fn.name() == "get_field" {
+                if scalar_fn.args.len() != 2 {
+                    return plan_err!(
+                        "get_field function requires exactly 2 arguments, got {}",
+                        scalar_fn.args.len()
+                    );
+                }
+
+                let field_name = match &scalar_fn.args[1] {
+                    Expr::Literal(name, _) => name.to_string(),
+                    other => other.schema_name().to_string(),
+                };
+
+                match to_delta_expression(&scalar_fn.args[0])? {
+                    Expression::Column(ref col_name) => {
+                        return Ok(Expression::Column(
+                            col_name.join(&ColumnName::from_naive_str_split(field_name)),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            plan_err!(
+                "Scalar function not supported in Delta Kernel expressions: {:?}",
+                scalar_fn
+            )
+        }
+        _ => plan_err!("Cannot convert to kernel expression: {:?}", expr),
     }
 }
 
-pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scalar> {
+pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar> {
     match scalar {
         ScalarValue::Boolean(maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::Boolean(*value)),
@@ -223,53 +220,45 @@ pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> DFResult<Scal
             Some(value) => Ok(Scalar::Decimal(
                 DecimalData::try_new(
                     *value,
-                    DecimalType::try_new(*precision, *scale as u8).map_err(to_df_err)?,
+                    DecimalType::try_new(*precision, *scale as u8)
+                        .map_err(|e| plan_datafusion_err!("{e}"))?,
                 )
-                .map_err(to_df_err)?,
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
             )),
             None => Ok(Scalar::Null(DataType::Primitive(PrimitiveType::Decimal(
-                DecimalType::try_new(*precision, *scale as u8).map_err(to_df_err)?,
+                DecimalType::try_new(*precision, *scale as u8)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             )))),
         },
-        ScalarValue::Struct(data) => Ok(Scalar::from_array(data.as_ref(), 0).ok_or_else(|| {
-            DataFusionError::NotImplemented("Struct scalar conversion failed".to_string())
-        })?),
+        ScalarValue::Struct(data) => Ok(Scalar::from_array(data.as_ref(), 0)
+            .ok_or_else(|| plan_datafusion_err!("Struct to kernel scalar conversion failed."))?),
         ScalarValue::Dictionary(_, value) => datafusion_scalar_to_scalar(value.as_ref()),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported scalar value: {:?}",
-            scalar
-        ))),
+        _ => plan_err!("Cannot convert to kernel scalar value: {:?}", scalar),
     }
 }
 
-fn to_binary_predicate_op(op: Operator) -> DFResult<BinaryPredicateOp> {
+fn to_binary_predicate_op(op: Operator) -> Result<BinaryPredicateOp> {
     match op {
         Operator::Eq => Ok(BinaryPredicateOp::Equal),
         Operator::Lt => Ok(BinaryPredicateOp::LessThan),
         Operator::Gt => Ok(BinaryPredicateOp::GreaterThan),
         Operator::IsDistinctFrom => Ok(BinaryPredicateOp::Distinct),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {:?}",
-            op
-        ))),
+        _ => plan_err!("Operator not supported in Delta Kernel: {:?}", op),
     }
 }
 
-fn to_binary_op(op: Operator) -> DFResult<BinaryExpressionOp> {
+fn to_binary_op(op: Operator) -> Result<BinaryExpressionOp> {
     match op {
         Operator::Plus => Ok(BinaryExpressionOp::Plus),
         Operator::Minus => Ok(BinaryExpressionOp::Minus),
         Operator::Multiply => Ok(BinaryExpressionOp::Multiply),
         Operator::Divide => Ok(BinaryExpressionOp::Divide),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {:?}",
-            op
-        ))),
+        _ => plan_err!("Operator not supported in Delta Kernel: {:?}", op),
     }
 }
 
 /// Helper function to flatten nested AND/OR expressions into a single junction expression
-fn flatten_junction_expr(expr: &Expr, target_op: Operator) -> DFResult<Vec<Predicate>> {
+fn flatten_junction_expr(expr: &Expr, target_op: Operator) -> Result<Vec<Predicate>> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { op, left, right }) if *op == target_op => {
             let mut left_exprs = flatten_junction_expr(left.as_ref(), target_op)?;
@@ -295,7 +284,10 @@ fn to_junction_op(op: Operator) -> JunctionPredicateOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::{
+        functions::core::expr_ext::FieldAccessor,
+        logical_expr::{col, lit},
+    };
     use delta_kernel::expressions::{BinaryExpressionOp, JunctionPredicateOp, Scalar};
 
     fn assert_junction_expr(
@@ -326,6 +318,42 @@ mod tests {
     fn test_simple_or() {
         let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
         assert_junction_expr(&expr, JunctionPredicateOp::Or, 2);
+    }
+
+    #[test]
+    fn test_field_access() {
+        let expr = col("a").field("b");
+        assert_eq!(
+            to_delta_expression(&expr).unwrap(),
+            Expression::Column(ColumnName::from_naive_str_split("a.b"))
+        );
+        let expr = col("a").field("b").field("c");
+        assert_eq!(
+            to_delta_expression(&expr).unwrap(),
+            Expression::Column(ColumnName::from_naive_str_split("a.b.c"))
+        );
+
+        let expr = col("a").field("b").field("c").eq(lit(10));
+        let delta_expr = to_delta_expression(&expr).unwrap();
+        match delta_expr {
+            Expression::Predicate(predicate) => match predicate.as_ref() {
+                Predicate::Binary(binary) => {
+                    assert_eq!(binary.op, BinaryPredicateOp::Equal);
+                    match binary.left.as_ref() {
+                        Expression::Column(name) => {
+                            assert_eq!(name.to_string(), "a.b.c")
+                        }
+                        _ => panic!("Expected Column expression in left operand"),
+                    }
+                    match *binary.right.as_ref() {
+                        Expression::Literal(Scalar::Integer(value)) => assert_eq!(value, 10),
+                        _ => panic!("Expected Integer literal in right operand"),
+                    }
+                }
+                _ => panic!("Expected Binary predicate, got {:?}", predicate),
+            },
+            _ => panic!("Expected Binary expression, got {:?}", delta_expr),
+        }
     }
 
     #[test]
