@@ -25,7 +25,7 @@ deltalake-core = { version = "0.30.0", path = "../core" }
 deltalake-aws = { version = "0.13.0", path = "../aws", optional = true }
 deltalake-azure = { version = "0.13.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.14.0", path = "../gcp", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json", "http2"] }
 reqwest-retry = "0.7"
 reqwest-middleware = { version = "0.4.0", features = ["json"] }
 rand = "0.9"
