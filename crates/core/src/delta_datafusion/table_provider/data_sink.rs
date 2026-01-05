@@ -48,7 +48,7 @@ pub struct DeltaDataSink {
 /// needed to perform an insert/append/overwrite operation, including
 /// transaction log access, snapshot state, and session configuration.
 impl DeltaDataSink {
-    /// Create a new `DeltaDataSink`
+    /// Create a new [`DeltaDataSink`]
     pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot, save_mode: SaveMode) -> Self {
         Self {
             log_store,
