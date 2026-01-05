@@ -74,7 +74,7 @@ jobs:
 
   release-pypi-manylinux-x86-64:
     #needs: validate-release-tag
-    name: PyPI release on Linux (x86_64-manylinux-2_17)
+    name: PyPI release on Linux (x86_64-manylinux-2014)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -92,11 +92,11 @@ jobs:
           command: build
           container: off
           args:  -m python/Cargo.toml --zig --profile python-release
-          manylinux: "2_17"
+          manylinux: "2014"
 
   release-pypi-manylinux-228-aarch64:
     #needs: validate-release-tag
-    name: PyPI release on Linux (aarch64-manylinux-2_28)
+    name: PyPI release on Linux (aarch64-manylinux-2014)
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
@@ -105,7 +105,7 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Publish manylinux to pypi aarch64 manylinux-2_28 (without sdist)
+      - name: Publish manylinux to pypi aarch64 (without sdist)
         uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
@@ -114,7 +114,7 @@ jobs:
           command: build
           container: off
           args:  -m python/Cargo.toml --zig --profile python-release
-          manylinux: "2_28"
+          manylinux: "2014"
 
   release-pypi-musl-x86-64:
     #needs: validate-release-tag
