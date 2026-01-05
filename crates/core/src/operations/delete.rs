@@ -20,7 +20,6 @@
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::ScalarValue;
-use datafusion::dataframe::DataFrame;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
@@ -30,7 +29,7 @@ use datafusion::logical_expr::{
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::Expr;
+use datafusion::prelude::{Expr, col};
 
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -48,13 +47,14 @@ use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, create_session, find_files,
-    register_store, session_state_from_session,
+    register_store,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::operations::CustomExecuteHandler;
+use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::protocol::DeltaOperation;
@@ -343,14 +343,14 @@ async fn execute_non_empty_expr(
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
     if let Ok(true) = should_write_cdc(snapshot) {
-        // Create CDC scan
-        let change_type_lit = lit(ScalarValue::Utf8(Some("delete".to_string())));
-        let state = session_state_from_session(session)?;
-        let cdc_filter = DataFrame::new(state.clone(), source)
+        let mut projection: Vec<_> = source.schema().iter().map(|(_, f)| col(f.name())).collect();
+        projection.push(lit(ScalarValue::Utf8(Some("delete".to_string()))).alias(CDC_COLUMN_NAME));
+
+        let cdc_filter = LogicalPlanBuilder::new(source.clone())
             .filter(expression.clone())?
-            .with_column("_change_type", change_type_lit)?
-            .create_physical_plan()
-            .await?;
+            .project(projection)?
+            .build()?;
+        let cdc_filter = session.create_physical_plan(&cdc_filter).await?;
 
         let cdc_actions = write_execution_plan_cdc(
             Some(snapshot),

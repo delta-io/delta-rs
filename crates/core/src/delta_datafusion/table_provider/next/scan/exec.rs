@@ -1,3 +1,8 @@
+//! Physical execution for Delta table scans.
+//!
+//! This module implements [`DeltaScanExec`], the core execution plan that reads Parquet files
+//! and applies Delta Lake protocol transformations to produce logical table data.
+
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -5,7 +10,7 @@ use std::task::{Context, Poll};
 
 use arrow::array::{ArrayAccessor, AsArray, RecordBatch, StringArray};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{Schema, SchemaRef, UInt16Type};
+use arrow::datatypes::{SchemaRef, UInt16Type};
 use arrow_array::BooleanArray;
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
@@ -26,15 +31,26 @@ use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
-use crate::cast_record_batch;
-use crate::delta_datafusion::table_provider::next::KernelScanPlan;
+use super::plan::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
-/// Execution plan for scanning a Delta table.
+/// Physical execution plan for scanning Delta tables.
 ///
-/// This plan wraps another execution plan that reads the raw data from data files,
-/// and applies per-file transformations and selection vectors to yield the logical data.
+/// Wraps a Parquet reader execution plan and applies Delta Lake protocol transformations
+/// to produce the logical table data. This includes:
+///
+/// - **Column mapping**: Translates physical column names to logical names
+/// - **Partition values**: Materializes partition column values from file paths
+/// - **Deletion vectors**: Filters out deleted rows using per-file selection vectors
+/// - **Schema evolution**: Handles missing columns and type coercion
+///
+/// # Data Flow
+///
+/// 1. Inner [`input`](Self::input) plan reads raw Parquet data
+/// 2. Per-file [`transforms`](Self::transforms) convert physical to logical schema
+/// 3. [`selection_vectors`](Self::selection_vectors) filter deleted rows
+/// 4. Result is cast to [`result_schema`](KernelScanPlan::result_schema)
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
     scan_plan: Arc<KernelScanPlan>,
@@ -70,7 +86,7 @@ impl DisplayAs for DeltaScanExec {
 }
 
 impl DeltaScanExec {
-    pub(super) fn new(
+    pub(crate) fn new(
         scan_plan: Arc<KernelScanPlan>,
         input: Arc<dyn ExecutionPlan>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
@@ -278,13 +294,18 @@ impl ExecutionPlan for DeltaScanExec {
     }
 }
 
-/// Stream of RecordBatches produced by scanning a Delta table.
+/// Stream that produces logical RecordBatches from a Delta table scan.
 ///
-/// The data returned by this stream represents the logical data caontained in the table.
-/// This means all transformations according to the Delta protocol are applied. This includes:
-/// - partition values
-/// - column mapping to the logical schema
-/// - deletion vectors
+/// Consumes raw Parquet data from the input stream and applies Delta Lake transformations
+/// per-file to yield logical table data. Handles:
+///
+/// - Deletion vectors: Filters rows marked as deleted
+/// - Column transforms: Applies partition value injection and column mapping
+/// - Schema projection: Projects to requested columns only
+/// - Type casting: Ensures output matches expected logical schema
+///
+/// Each batch is processed independently, with transformations looked up by file ID
+/// from the batch's partition values.
 struct DeltaScanStream {
     scan_plan: Arc<KernelScanPlan>,
     /// Kernel data type for the data after transformations
@@ -337,7 +358,7 @@ impl DeltaScanStream {
         let file_id_field = batch.schema_ref().field(file_id_idx).clone();
         let file_id_col = batch.remove_column(file_id_idx);
 
-        let batch = if let Some(transform) = self.transforms.get(&file_id) {
+        let result = if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     self.scan_plan.scan.physical_schema().clone(),
@@ -353,24 +374,14 @@ impl DeltaScanStream {
             batch
         };
 
-        let result = if let Some(projection) = self.scan_plan.result_projection.as_ref() {
-            batch.project(projection)?
-        } else {
-            batch
-        };
-
-        // TODO: all casting should be done in the expression evaluator
-        let result = cast_record_batch(&result, self.scan_plan.result_schema.clone(), true, true)?;
-
         if self.return_file_ids {
-            let mut columns = result.columns().to_vec();
-            columns.push(file_id_col);
-            let mut fields = result.schema().fields().to_vec();
-            fields.push(Arc::new(file_id_field));
-            let schema = Arc::new(Schema::new(fields));
-            Ok(RecordBatch::try_new(schema, columns)?)
+            super::finalize_transformed_batch(
+                result,
+                &self.scan_plan,
+                Some((file_id_col, Arc::new(file_id_field))),
+            )
         } else {
-            Ok(result)
+            super::finalize_transformed_batch(result, &self.scan_plan, None)
         }
     }
 }
@@ -431,7 +442,7 @@ mod tests {
     use arrow_array::Array;
     use datafusion::{
         common::stats::Precision,
-        physical_plan::collect_partitioned,
+        physical_plan::{collect, collect_partitioned},
         prelude::{col, lit},
     };
 
@@ -441,6 +452,31 @@ mod tests {
         delta_datafusion::session::create_session,
         test_utils::{TestResult, open_fs_path},
     };
+
+    #[tokio::test]
+    async fn test_scan_nested() -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/nested_types/delta");
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+
+        let batches = collect(scan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-----------------------------+-----------------+--------------------------+",
+            "| pk | struct                      | array           | map                      |",
+            "+----+-----------------------------+-----------------+--------------------------+",
+            "| 0  | {float64: 0.0, bool: true}  | [0]             | {}                       |",
+            "| 1  | {float64: 1.0, bool: false} | [0, 1]          | {0: 0}                   |",
+            "| 2  | {float64: 2.0, bool: true}  | [0, 1, 2]       | {0: 0, 1: 1}             |",
+            "| 3  | {float64: 3.0, bool: false} | [0, 1, 2, 3]    | {0: 0, 1: 1, 2: 2}       |",
+            "| 4  | {float64: 4.0, bool: true}  | [0, 1, 2, 3, 4] | {0: 0, 1: 1, 2: 2, 3: 3} |",
+            "+----+-----------------------------+-----------------+--------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_scan_with_file_id() -> TestResult {
@@ -756,7 +792,10 @@ mod tests {
             .zip(provider.schema().fields())
         {
             // skip boolean and binary columns as they do not have min/max stats
-            if matches!(field.data_type(), &DataType::Boolean | &DataType::Binary) {
+            if matches!(
+                field.data_type(),
+                &DataType::Boolean | &DataType::Binary | &DataType::BinaryView
+            ) {
                 assert!(matches!(col_stat.null_count, Precision::Inexact(_)));
                 continue;
             }
