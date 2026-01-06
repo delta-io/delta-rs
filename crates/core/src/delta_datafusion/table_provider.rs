@@ -12,7 +12,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result, Statistics, ToDFSchema};
+use datafusion::common::{Column, DFSchemaRef, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
 use datafusion::datasource::physical_plan::{
@@ -21,7 +21,6 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::error::DataFusionError;
-use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -50,6 +49,7 @@ use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use crate::delta_datafusion::engine::AsObjectStoreUrl;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
@@ -517,12 +517,13 @@ impl<'a> DeltaScanBuilder<'a> {
             logical_schema
         };
 
-        let df_schema = logical_schema.clone().to_dfschema()?;
+        let df_schema = Arc::new(logical_schema.clone().to_dfschema()?);
 
         let logical_filter = self
             .filter
             .clone()
-            .map(|expr| simplify_expr(self.session, &df_schema, expr));
+            .map(|expr| simplify_expr(self.session, df_schema.clone(), expr))
+            .transpose()?;
         // only inexact filters should be pushed down to the data source, doing otherwise
         // will make stats inexact and disable datafusion optimizations like AggregateStatistics
         let pushdown_filter = self
@@ -544,7 +545,8 @@ impl<'a> DeltaScanBuilder<'a> {
                     });
                 conjunction(filtered_predicates)
             })
-            .map(|expr| simplify_expr(self.session, &df_schema, expr));
+            .map(|expr| simplify_expr(self.session, df_schema.clone(), expr))
+            .transpose()?;
 
         // Perform Pruning of files to scan
         let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
@@ -876,14 +878,22 @@ impl DeltaTable {
     }
 
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        let url = self.log_store().root_url().as_object_store_url();
-        if session.runtime_env().object_store(&url).is_err() {
-            session
-                .runtime_env()
-                .register_object_store(url.as_ref(), self.log_store().object_store(None));
-        }
-        Ok(())
+        update_datafusion_session(self.log_store().as_ref(), session, None)
     }
+}
+
+pub(crate) fn update_datafusion_session(
+    log_store: &dyn LogStore,
+    session: &dyn Session,
+    operation_id: Option<Uuid>,
+) -> DeltaResult<()> {
+    let url = log_store.root_url().as_object_store_url();
+    if session.runtime_env().object_store(&url).is_err() {
+        session
+            .runtime_env()
+            .register_object_store(url.as_ref(), log_store.root_object_store(operation_id));
+    }
+    Ok(())
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
@@ -1191,14 +1201,14 @@ fn df_logical_schema(
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn simplify_expr(context: &dyn Session, df_schema: &DFSchema, expr: Expr) -> Arc<dyn PhysicalExpr> {
-    // Simplify the expression first
-    let props = ExecutionProps::new();
-    let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
-    let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
-    let simplified = simplifier.simplify(expr).unwrap();
-
-    context.create_physical_expr(simplified, df_schema).unwrap()
+pub(crate) fn simplify_expr(
+    session: &dyn Session,
+    df_schema: DFSchemaRef,
+    expr: Expr,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let context = SimplifyContext::new(&session.execution_props()).with_schema(df_schema.clone());
+    let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
+    session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }
 
 fn get_pushdown_filters(
