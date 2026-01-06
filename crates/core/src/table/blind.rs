@@ -1,17 +1,17 @@
-//! Append-only Delta table implementation
+//! Blind append-only Delta table implementation
 //!
-//! This module provides [`AppendableDeltaTable`], a lightweight table representation
+//! This module provides [BlindDeltaTable], a lightweight table representation
 //! optimized for append-only write operations. Unlike [`DeltaTable`], it skips loading
 //! file statistics during initialization, significantly reducing load time for large tables.
 //!
 //! # Example
 //!
 //! ```ignore
-//! use deltalake_core::AppendableDeltaTable;
+//! use deltalake_core::BlindDeltaTable;
 //! use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 //! use deltalake_core::kernel::Action;
 //!
-//! let mut table = AppendableDeltaTable::try_new("s3://bucket/table").await?;
+//! let mut table = BlindDeltaTable::try_new("s3://bucket/table").await?;
 //! let mut writer = RecordBatchWriter::for_appendable(&table)?;
 //! writer.write(batch).await?;
 //!
@@ -37,9 +37,9 @@ use crate::kernel::{Action, EagerSnapshot, Metadata, Protocol};
 use crate::logstore::{LogStoreRef, ObjectStoreRef, StorageConfig};
 use crate::protocol::{DeltaOperation, SaveMode};
 
-/// A Delta table optimized for append-only write operations.
+/// A Delta table optimized for blind append-only write operations.
 ///
-/// `AppendableDeltaTable` loads only the table metadata (protocol, schema, properties)
+/// `BlindDeltaTable` loads only the table metadata (protocol, schema, properties)
 /// without scanning file statistics. This makes it ideal for:
 ///
 /// - Large tables with many files where stats parsing is expensive
@@ -52,13 +52,13 @@ use crate::protocol::{DeltaOperation, SaveMode};
 /// that would require loading file statistics. This prevents accidental use of
 /// operations like merge or delete that are incompatible with append-only tables.
 #[derive(Debug, Clone)]
-pub struct AppendableDeltaTable {
+pub struct BlindDeltaTable {
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
 }
 
-impl AppendableDeltaTable {
-    /// Create a new [`AppendableDeltaTable`] from a table URI.
+impl BlindDeltaTable {
+    /// Create a new [`BlindDeltaTable`] from a table URI.
     ///
     /// This loads only the table metadata without parsing file statistics.
     ///
@@ -69,13 +69,13 @@ impl AppendableDeltaTable {
     /// # Example
     ///
     /// ```ignore
-    /// let table = AppendableDeltaTable::try_new("s3://bucket/my-table").await?;
+    /// let table = BlindDeltaTable::try_new("s3://bucket/my-table").await?;
     /// ```
     pub async fn try_new(table_uri: impl AsRef<str>) -> DeltaResult<Self> {
         Self::try_new_with_options(table_uri, HashMap::new()).await
     }
 
-    /// Create a new [`AppendableDeltaTable`] with storage options.
+    /// Create a new [`BlindDeltaTable`] with storage options.
     ///
     /// # Arguments
     ///
@@ -92,7 +92,7 @@ impl AppendableDeltaTable {
         Self::try_new_with_log_store(log_store).await
     }
 
-    /// Create a new [`AppendableDeltaTable`] from an existing log store.
+    /// Create a new [`BlindDeltaTable`] from an existing log store.
     ///
     /// # Arguments
     ///
@@ -230,8 +230,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Open as AppendableDeltaTable
-        let appendable = AppendableDeltaTable::try_new(table_path).await.unwrap();
+        // Open as BlindDeltaTable
+        let appendable = BlindDeltaTable::try_new(table_path).await.unwrap();
 
         assert_eq!(appendable.version(), 0);
         assert!(appendable.metadata().name().is_some());
@@ -255,7 +255,7 @@ mod tests {
             .await
             .unwrap();
 
-        let appendable = AppendableDeltaTable::try_new(table_path).await.unwrap();
+        let appendable = BlindDeltaTable::try_new(table_path).await.unwrap();
 
         assert!(appendable.is_append_only());
     }
@@ -283,7 +283,7 @@ mod tests {
             .await
             .unwrap();
 
-        let appendable = AppendableDeltaTable::try_new(table_path).await.unwrap();
+        let appendable = BlindDeltaTable::try_new(table_path).await.unwrap();
         let arrow_schema = appendable.arrow_schema().unwrap();
 
         assert_eq!(arrow_schema.fields().len(), 2);
@@ -314,8 +314,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Open as AppendableDeltaTable
-        let mut appendable = AppendableDeltaTable::try_new(table_path).await.unwrap();
+        // Open as BlindDeltaTable
+        let mut appendable = BlindDeltaTable::try_new(table_path).await.unwrap();
         assert_eq!(appendable.version(), 0);
 
         // Create a RecordBatch
@@ -331,7 +331,7 @@ mod tests {
         .unwrap();
 
         // Write using RecordBatchWriter
-        let mut writer = RecordBatchWriter::for_appendable(&appendable).unwrap();
+        let mut writer = RecordBatchWriter::for_blind_appends(&appendable).unwrap();
         writer.write(batch).await.unwrap();
         let adds = writer.flush().await.unwrap();
 

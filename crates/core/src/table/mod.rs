@@ -28,14 +28,14 @@ use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 // NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
 pub use crate::logstore::PeekCommit;
 
-mod appendable;
+mod blind;
 pub mod builder;
 pub mod config;
 pub mod state;
 
 mod columns;
 
-pub use appendable::AppendableDeltaTable;
+pub use blind::BlindDeltaTable;
 
 // Re-exposing for backwards compatibility
 pub use columns::*;

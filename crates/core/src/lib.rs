@@ -106,7 +106,7 @@ pub use self::table::builder::{
     DeltaTableBuilder, DeltaTableConfig, DeltaVersion, ensure_table_uri,
 };
 pub use self::table::config::TableProperty;
-pub use self::table::{AppendableDeltaTable, DeltaTable};
+pub use self::table::{BlindDeltaTable, DeltaTable};
 pub use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, path::Path};
 pub use operations::DeltaOps;
 

@@ -159,14 +159,14 @@ impl RecordBatchWriter {
         })
     }
 
-    /// Creates a [`RecordBatchWriter`] to write data to an [`AppendableDeltaTable`].
+    /// Creates a [`RecordBatchWriter`] to write data to an [`BlindDeltaTable`].
     ///
     /// This is optimized for append-only writes where file statistics are not needed
     /// during table loading.
     ///
-    /// [`AppendableDeltaTable`]: crate::table::AppendableDeltaTable
-    pub fn for_appendable(
-        table: &crate::table::AppendableDeltaTable,
+    /// [`BlindDeltaTable`]: crate::table::AppendableDeltaTable
+    pub fn for_blind_appends(
+        table: &crate::table::BlindDeltaTable,
     ) -> Result<Self, DeltaTableError> {
         let metadata = table.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
