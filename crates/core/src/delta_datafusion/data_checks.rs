@@ -30,6 +30,7 @@ use pin_project_lite::pin_project;
 use crate::StructTypeExt as _;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::simplify_expr;
+use crate::table::Constraint;
 use crate::table::config::TablePropertiesExt as _;
 
 /// Generate validation predicates based on the table configuration
@@ -77,10 +78,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::CheckConstraints) {
         let constraints = table_configuration.table_properties().get_constraints();
-        for constraint in constraints {
-            let expr = parse_predicate_expression(&df_schema, &constraint.expr, session)?;
-            validations.push(expr);
-        }
+        validations.extend(constraints_to_exprs(session, &df_schema, &constraints)?);
     }
 
     if table_configuration.is_feature_enabled(&TableFeature::GeneratedColumns) {
@@ -99,6 +97,17 @@ pub(crate) fn validation_predicates(
     }
 
     Ok(validations)
+}
+
+pub(crate) fn constraints_to_exprs<'a>(
+    session: &dyn Session,
+    df_schema: &DFSchema,
+    constraints: impl IntoIterator<Item = &'a Constraint>,
+) -> Result<Vec<Expr>> {
+    Ok(constraints
+        .into_iter()
+        .map(|constraint| parse_predicate_expression(df_schema, &constraint.expr, session))
+        .try_collect()?)
 }
 
 /// Execution plan for validating data

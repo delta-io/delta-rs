@@ -75,7 +75,13 @@ pub use self::session::{
     create_session,
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub use cdf::scan::DeltaCdfTableProvider;
+pub(crate) use data_checks::{DataValidationExec, constraints_to_exprs};
 pub(crate) use find_files::*;
+pub use table_provider::{
+    DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
+};
+pub(crate) use table_provider::{DeltaScanBuilder, update_datafusion_session};
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -90,10 +96,6 @@ pub mod planner;
 mod schema_adapter;
 mod session;
 mod table_provider;
-
-pub use cdf::scan::DeltaCdfTableProvider;
-pub(crate) use table_provider::DeltaScanBuilder;
-pub use table_provider::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {

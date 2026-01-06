@@ -877,14 +877,21 @@ impl DeltaTable {
     }
 
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        let url = self.log_store().root_url().as_object_store_url();
-        if session.runtime_env().object_store(&url).is_err() {
-            session
-                .runtime_env()
-                .register_object_store(url.as_ref(), self.log_store().object_store(None));
-        }
-        Ok(())
+        update_datafusion_session(self.log_store().as_ref(), session)
     }
+}
+
+pub(crate) fn update_datafusion_session(
+    log_store: &dyn LogStore,
+    session: &dyn Session,
+) -> DeltaResult<()> {
+    let url = log_store.root_url().as_object_store_url();
+    if session.runtime_env().object_store(&url).is_err() {
+        session
+            .runtime_env()
+            .register_object_store(url.as_ref(), log_store.object_store(None));
+    }
+    Ok(())
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
