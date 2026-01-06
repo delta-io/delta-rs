@@ -22,18 +22,15 @@ use uuid::Uuid;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    DataFusionMixins, DataValidationExec, DeltaDataChecker, DeltaScanConfigBuilder,
-    DeltaTableProvider, find_files, generated_columns_to_exprs, session_state_from_session,
-    validation_predicates,
+    DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
+    generated_columns_to_exprs, session_state_from_session, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
-use crate::table::Constraint as DeltaConstraint;
 use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
