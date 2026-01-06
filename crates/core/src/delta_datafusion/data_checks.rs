@@ -9,7 +9,7 @@ use arrow_schema::{DataType, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, Statistics, exec_err, plan_datafusion_err, plan_err};
 use datafusion::config::ConfigOptions;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{ColumnarValue, Operator};
@@ -30,8 +30,8 @@ use pin_project_lite::pin_project;
 use crate::StructTypeExt as _;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::simplify_expr;
-use crate::table::Constraint;
 use crate::table::config::TablePropertiesExt as _;
+use crate::table::{Constraint, GeneratedColumn};
 
 /// Generate validation predicates based on the table configuration
 ///
@@ -82,18 +82,13 @@ pub(crate) fn validation_predicates(
     }
 
     if table_configuration.is_feature_enabled(&TableFeature::GeneratedColumns) {
-        let generated_columns = table_configuration
+        let generated = table_configuration
             .schema()
             .get_generated_columns()
             .map_err(|e| {
                 plan_datafusion_err!("Failed to read generated columns from schema: {}", e)
             })?;
-        for gen_col in generated_columns {
-            let expr = parse_predicate_expression(&df_schema, &gen_col.generation_expr, session)?;
-            let col_expr = col(&gen_col.name);
-            let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
-            validations.push(validation_expr);
-        }
+        validations.extend(generated_columns_to_exprs(session, &df_schema, &generated)?);
     }
 
     Ok(validations)
@@ -108,6 +103,22 @@ pub(crate) fn constraints_to_exprs<'a>(
         .into_iter()
         .map(|constraint| parse_predicate_expression(df_schema, &constraint.expr, session))
         .try_collect()?)
+}
+
+pub(crate) fn generated_columns_to_exprs<'a>(
+    session: &dyn Session,
+    df_schema: &DFSchema,
+    generated_columns: impl IntoIterator<Item = &'a GeneratedColumn>,
+) -> Result<Vec<Expr>> {
+    generated_columns
+        .into_iter()
+        .map(|gen_col| {
+            let expr = parse_predicate_expression(df_schema, &gen_col.generation_expr, session)?;
+            let col_expr = col(&gen_col.name);
+            let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
+            Ok::<_, DataFusionError>(validation_expr)
+        })
+        .collect()
 }
 
 /// Execution plan for validating data

@@ -76,7 +76,9 @@ pub use self::session::{
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub use cdf::scan::DeltaCdfTableProvider;
-pub(crate) use data_checks::{DataValidationExec, constraints_to_exprs};
+pub(crate) use data_checks::{
+    DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
+};
 pub(crate) use find_files::*;
 pub use table_provider::{
     DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
