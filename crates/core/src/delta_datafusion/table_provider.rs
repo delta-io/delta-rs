@@ -49,6 +49,7 @@ use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use crate::delta_datafusion::engine::AsObjectStoreUrl;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
@@ -877,19 +878,20 @@ impl DeltaTable {
     }
 
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        update_datafusion_session(self.log_store().as_ref(), session)
+        update_datafusion_session(self.log_store().as_ref(), session, None)
     }
 }
 
 pub(crate) fn update_datafusion_session(
     log_store: &dyn LogStore,
     session: &dyn Session,
+    operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
     let url = log_store.root_url().as_object_store_url();
     if session.runtime_env().object_store(&url).is_err() {
         session
             .runtime_env()
-            .register_object_store(url.as_ref(), log_store.object_store(None));
+            .register_object_store(url.as_ref(), log_store.object_store(operation_id));
     }
     Ok(())
 }

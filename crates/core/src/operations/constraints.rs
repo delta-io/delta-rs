@@ -148,7 +148,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let session = this
                 .session
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-            update_datafusion_session(this.log_store.as_ref(), session.as_ref())?;
+            update_datafusion_session(
+                this.log_store.as_ref(),
+                session.as_ref(),
+                Some(operation_id),
+            )?;
 
             let proivider = DeltaScanNext::builder()
                 .with_eager_snapshot(snapshot.clone())
