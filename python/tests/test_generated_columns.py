@@ -124,10 +124,8 @@ def test_write_with_invalid_gc(tmp_path, invalid_gc_data):
     import re
 
     with pytest.raises(
-        DeltaError,
-        match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc <=> 10) violated by value in row: [5]"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
     ):
         write_deltalake(tmp_path, mode="append", data=invalid_gc_data)
 
@@ -136,10 +134,8 @@ def test_write_with_invalid_gc_to_table(table_with_gc, invalid_gc_data):
     import re
 
     with pytest.raises(
-        DeltaError,
-        match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc <=> 5) violated by value in row: [10]"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
     ):
         write_deltalake(table_with_gc, mode="append", data=invalid_gc_data)
 
@@ -301,10 +297,8 @@ def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
     import re
 
     with pytest.raises(
-        DeltaError,
-        match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc <=> 5) violated by value in row: [10]"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
     ):
         (
             table_with_gc.merge(

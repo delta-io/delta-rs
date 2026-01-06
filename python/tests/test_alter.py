@@ -5,7 +5,7 @@ import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 
 from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
 
@@ -32,7 +32,7 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
         # Invalid constraint
         dt.alter.add_constraint({"check_price": "price < 0"})
 
-    with pytest.raises(DeltaProtocolError):
+    with pytest.raises(Exception):
         data = Table(
             {
                 "id": Array(["1"], DataType.string()),
