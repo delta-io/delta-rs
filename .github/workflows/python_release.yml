@@ -3,29 +3,28 @@ name: Release to PyPI and documentation
 on:
   push:
     tags: ["python-v*"]
-  pull_request:
 
 defaults:
   run:
     working-directory: ./python
 
 jobs:
-  # validate-release-tag:
-  #   name: Validate git tag
-  #   runs-on: ubuntu-slim
-  #   steps:
-  #     - uses: actions/checkout@v5
-  #     - name: compare git tag with cargo metadata
-  #       run: |
-  #         PUSHED_TAG=${GITHUB_REF##*/}
-  #         CURR_VER=$( grep version Cargo.toml | head -n 1 | awk '{print $3}' | tr -d '"' )
-  #         if [[ "${PUSHED_TAG}" != "python-v${CURR_VER}" ]]; then
-  #           echo "Cargo metadata has version set to ${CURR_VER}, but got pushed tag ${PUSHED_TAG}."
-  #           exit 1
-  #         fi
+  validate-release-tag:
+    name: Validate git tag
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v5
+      - name: compare git tag with cargo metadata
+        run: |
+          PUSHED_TAG=${GITHUB_REF##*/}
+          CURR_VER=$( grep version Cargo.toml | head -n 1 | awk '{print $3}' | tr -d '"' )
+          if [[ "${PUSHED_TAG}" != "python-v${CURR_VER}" ]]; then
+            echo "Cargo metadata has version set to ${CURR_VER}, but got pushed tag ${PUSHED_TAG}."
+            exit 1
+          fi
 
   release-pypi-mac:
-    #needs: validate-release-tag
+    needs: validate-release-tag
     name: PyPI release on Mac
     strategy:
       fail-fast: false
@@ -49,7 +48,7 @@ jobs:
           args:  -m python/Cargo.toml  --profile python-release
 
   release-pypi-windows:
-    #needs: validate-release-tag
+    needs: validate-release-tag
     name: PyPI release on Windows
     runs-on: windows-latest
     steps:
@@ -73,7 +72,7 @@ jobs:
           args:  -m python/Cargo.toml  --profile python-release
 
   release-pypi-manylinux-x86-64:
-    #needs: validate-release-tag
+    needs: validate-release-tag
     name: PyPI release on Linux (x86_64-manylinux-2014)
     runs-on: ubuntu-24.04
     steps:
@@ -95,7 +94,7 @@ jobs:
           manylinux: "2014"
 
   release-pypi-manylinux-228-aarch64:
-    #needs: validate-release-tag
+    needs: validate-release-tag
     name: PyPI release on Linux (aarch64-manylinux-2014)
     runs-on: ubuntu-24.04-arm
     steps:
@@ -117,7 +116,7 @@ jobs:
           manylinux: "2014"
 
   release-pypi-musl-x86-64:
-    #needs: validate-release-tag
+    needs: validate-release-tag
     name: PyPI release on Linux (x86_64-musl)
     runs-on: ubuntu-24.04
     steps:
@@ -136,25 +135,25 @@ jobs:
           command: build
           args:  -m python/Cargo.toml --zig --profile python-release
 
-  # release-docs:
-  #   needs:
-  #     [
-  #       validate-release-tag,
-  #       release-pypi-manylinux-x86-64,
-  #       release-pypi-manylinux-228-aarch64,
-  #       release-pypi-musl-x86-64,
-  #       release-pypi-mac,
-  #       release-pypi-windows,
-  #     ]
-  #   permissions:
-  #     contents: write
-  #   runs-on: ubuntu-slim
-  #   steps:
-  #     - name: Trigger the docs release event
-  #       uses: peter-evans/repository-dispatch@v2
-  #       with:
-  #         event-type: release-docs
-  #         client-payload: >
-  #           {
-  #             "tag": "${{ github.ref_name }}"
-  #           }
+  release-docs:
+    needs:
+      [
+        validate-release-tag,
+        release-pypi-manylinux-x86-64,
+        release-pypi-manylinux-228-aarch64,
+        release-pypi-musl-x86-64,
+        release-pypi-mac,
+        release-pypi-windows,
+      ]
+    permissions:
+      contents: write
+    runs-on: ubuntu-slim
+    steps:
+      - name: Trigger the docs release event
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          event-type: release-docs
+          client-payload: >
+            {
+              "tag": "${{ github.ref_name }}"
+            }
