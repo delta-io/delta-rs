@@ -18,11 +18,10 @@ use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::ScalarValue;
-use datafusion::common::config::TableParquetOptions;
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
-};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -398,48 +397,62 @@ impl CdfLoadBuilder {
             Self::get_remove_action_type(),
         )?;
 
-        // Create the parquet scans for each associated type of file.
-        let mut parquet_source = ParquetSource::new(TableParquetOptions::new());
+        let cdc_partition_fields: Vec<Arc<Field>> =
+            cdc_partition_cols.into_iter().map(Arc::new).collect();
+        let add_remove_partition_fields: Vec<Arc<Field>> = add_remove_partition_cols
+            .into_iter()
+            .map(Arc::new)
+            .collect();
+
+        let cdc_table_schema = TableSchema::new(Arc::clone(&cdc_file_schema), cdc_partition_fields);
+        let add_table_schema = TableSchema::new(
+            Arc::clone(&add_remove_file_schema),
+            add_remove_partition_fields.clone(),
+        );
+        let remove_table_schema = TableSchema::new(
+            Arc::clone(&add_remove_file_schema),
+            add_remove_partition_fields,
+        );
+
+        let parquet_options = TableParquetOptions {
+            global: session.config().options().execution.parquet.clone(),
+            ..Default::default()
+        };
+
+        let mut cdc_source = ParquetSource::new(cdc_table_schema)
+            .with_table_parquet_options(parquet_options.clone());
+        let mut add_source = ParquetSource::new(add_table_schema)
+            .with_table_parquet_options(parquet_options.clone());
+        let mut remove_source =
+            ParquetSource::new(remove_table_schema).with_table_parquet_options(parquet_options);
+
         if let Some(filters) = filters {
-            parquet_source = parquet_source.with_predicate(Arc::clone(filters));
+            cdc_source = cdc_source.with_predicate(Arc::clone(filters));
+            add_source = add_source.with_predicate(Arc::clone(filters));
+            remove_source = remove_source.with_predicate(Arc::clone(filters));
         }
-        let parquet_source: Arc<dyn FileSource> = Arc::new(parquet_source);
+
         let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(
-                self.log_store.object_store_url(),
-                Arc::clone(&cdc_file_schema),
-                Arc::clone(&parquet_source),
-            )
-            .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
-            .with_table_partition_cols(cdc_partition_cols)
-            .build(),
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(cdc_source))
+                .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
+                .build(),
         );
 
         let add_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(
-                self.log_store.object_store_url(),
-                Arc::clone(&add_remove_file_schema),
-                Arc::clone(&parquet_source),
-            )
-            .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
-            .with_table_partition_cols(add_remove_partition_cols.clone())
-            .build(),
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(add_source))
+                .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
+                .build(),
         );
 
         let remove_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(
-                self.log_store.object_store_url(),
-                Arc::clone(&add_remove_file_schema),
-                parquet_source,
-            )
-            .with_file_groups(
-                remove_file_groups
-                    .into_values()
-                    .map(FileGroup::from)
-                    .collect(),
-            )
-            .with_table_partition_cols(add_remove_partition_cols)
-            .build(),
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(remove_source))
+                .with_file_groups(
+                    remove_file_groups
+                        .into_values()
+                        .map(FileGroup::from)
+                        .collect(),
+                )
+                .build(),
         );
 
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time

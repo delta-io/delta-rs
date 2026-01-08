@@ -293,6 +293,7 @@ mod datafusion {
                 min_value,
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
             })
         }
     }
@@ -309,6 +310,7 @@ mod datafusion {
                 min_value: self.min_value.min(&other.min_value),
                 sum_value: Precision::Absent,
                 distinct_count: self.distinct_count.add(&other.distinct_count),
+                byte_size: Precision::Absent,
             }
         }
     }

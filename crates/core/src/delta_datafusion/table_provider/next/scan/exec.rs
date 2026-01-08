@@ -368,7 +368,6 @@ impl DeltaScanStream {
                 &self.scan_plan.output_schema,
             )));
         }
-
         let (file_id, file_id_idx) = extract_file_id(&batch, &self.file_id_column)?;
 
         let dv_result = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
@@ -812,7 +811,10 @@ mod tests {
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let statistics = scan.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Exact(5));
-        assert_eq!(statistics.total_byte_size, Precision::Exact(3240));
+        assert!(matches!(
+            statistics.total_byte_size,
+            Precision::Exact(3240) | Precision::Inexact(3240)
+        ));
         for col_stat in statistics.column_statistics.iter() {
             assert_eq!(col_stat.null_count, Precision::Absent);
             assert_eq!(col_stat.min_value, Precision::Absent);

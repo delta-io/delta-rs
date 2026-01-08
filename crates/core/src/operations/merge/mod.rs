@@ -1506,13 +1506,14 @@ fn modify_schema(
             Ok(target_field) => {
                 // This case is when there is an added column in an nested datatype
                 let new_field = merge_arrow_field(target_field, source_field, true)?;
-                if &new_field != target_field {
+                if new_field != **target_field {
                     ending_schema.try_merge(&Arc::new(new_field))?;
                 }
             }
             Err(_) => {
                 // This function is called multiple time with different operations so this handle any collisions
-                ending_schema.try_merge(&Arc::new(source_field.to_owned().with_nullable(true)))?;
+                ending_schema
+                    .try_merge(&Arc::new(source_field.as_ref().clone().with_nullable(true)))?;
             }
         }
     }

@@ -1365,7 +1365,7 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 }
 
 #[tokio::test]
-async fn test_schema_adapter_empty_batch() {
+async fn test_schema_evolution_missing_column_returns_nulls() {
     let ctx = SessionContext::new();
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
