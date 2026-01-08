@@ -83,15 +83,17 @@ impl LakeFSClient {
                 Ok((new_url, transaction_branch))
             }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
-            _ => {
-                let error: LakeFSErrorResponse =
-                    response
-                        .json()
-                        .await
-                        .unwrap_or_else(|_| LakeFSErrorResponse {
-                            message: "Unknown error occurred.".to_string(),
-                        });
-                Err(LakeFSOperationError::CreateBranchFailed(error.message).into())
+            status_code => {
+                let body = response.text().await.unwrap_or_default();
+
+                let error = LakeFSErrorResponse {
+                    message: format!(
+                        "Unknown error occurred during branch creation. Response code was {}, body: {}",
+                        status_code, body,
+                    )
+                    .to_string(),
+                };
+                Err(LakeFSOperationError::MergeFailed(error.message).into())
             }
         }
     }
@@ -118,15 +120,17 @@ impl LakeFSClient {
         match response.status() {
             StatusCode::NO_CONTENT => Ok(()),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
-            _ => {
-                let error: LakeFSErrorResponse =
-                    response
-                        .json()
-                        .await
-                        .unwrap_or_else(|_| LakeFSErrorResponse {
-                            message: "Unknown error occurred.".to_string(),
-                        });
-                Err(LakeFSOperationError::DeleteBranchFailed(error.message).into())
+            status_code => {
+                let body = response.text().await.unwrap_or_default();
+
+                let error = LakeFSErrorResponse {
+                    message: format!(
+                        "Unknown error occurred during branch deletion. Response code was {}, body: {}",
+                        status_code, body,
+                    )
+                    .to_string(),
+                };
+                Err(LakeFSOperationError::MergeFailed(error.message).into())
             }
         }
     }
@@ -162,15 +166,17 @@ impl LakeFSClient {
         match response.status() {
             StatusCode::NO_CONTENT | StatusCode::CREATED => Ok(()),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
-            _ => {
-                let error: LakeFSErrorResponse =
-                    response
-                        .json()
-                        .await
-                        .unwrap_or_else(|_| LakeFSErrorResponse {
-                            message: "Unknown error occurred.".to_string(),
-                        });
-                Err(LakeFSOperationError::CommitFailed(error.message).into())
+            status_code => {
+                let body = response.text().await.unwrap_or_default();
+
+                let error = LakeFSErrorResponse {
+                    message: format!(
+                        "Unknown error occurred during branch commit. Response code was {}, body: {}",
+                        status_code, body,
+                    )
+                    .to_string(),
+                };
+                Err(LakeFSOperationError::MergeFailed(error.message).into())
             }
         }
     }
@@ -212,14 +218,16 @@ impl LakeFSClient {
             StatusCode::OK => Ok(()),
             StatusCode::CONFLICT => Err(TransactionError::VersionAlreadyExists(commit_version)),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
-            _ => {
-                let error: LakeFSErrorResponse =
-                    response
-                        .json()
-                        .await
-                        .unwrap_or_else(|_| LakeFSErrorResponse {
-                            message: "Unknown error occurred.".to_string(),
-                        });
+            status_code => {
+                let body = response.text().await.unwrap_or_default();
+
+                let error = LakeFSErrorResponse {
+                    message: format!(
+                        "Unknown error occurred during merge. Response code was {}, body: {}",
+                        status_code, body,
+                    )
+                    .to_string(),
+                };
                 Err(LakeFSOperationError::MergeFailed(error.message).into())
             }
         }
@@ -262,14 +270,16 @@ impl LakeFSClient {
                 Ok(!diff.results.is_empty())
             }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
-            _ => {
-                let error: LakeFSErrorResponse =
-                    response
-                        .json()
-                        .await
-                        .unwrap_or_else(|_| LakeFSErrorResponse {
-                            message: "Unknown error occurred.".to_string(),
-                        });
+            status_code => {
+                let body = response.text().await.unwrap_or_default();
+
+                let error = LakeFSErrorResponse {
+                    message: format!(
+                        "Unknown error occurred during branch diffing. Response code was {}, body: {}",
+                        status_code, body,
+                    )
+                    .to_string(),
+                };
                 Err(LakeFSOperationError::MergeFailed(error.message).into())
             }
         }
