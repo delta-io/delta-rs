@@ -35,6 +35,40 @@ use super::plan::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct DvMaskResult {
+    pub selection: Option<Vec<bool>>,
+    pub should_remove: bool,
+}
+
+pub(crate) fn consume_dv_mask(
+    selection_vector: &mut Vec<bool>,
+    batch_num_rows: usize,
+) -> DvMaskResult {
+    if selection_vector.is_empty() {
+        return DvMaskResult {
+            selection: None,
+            should_remove: true,
+        };
+    }
+
+    if selection_vector.len() >= batch_num_rows {
+        let sv: Vec<bool> = selection_vector.drain(0..batch_num_rows).collect();
+        let is_empty = selection_vector.is_empty();
+        DvMaskResult {
+            selection: Some(sv),
+            should_remove: is_empty,
+        }
+    } else {
+        let mut sv: Vec<bool> = selection_vector.drain(..).collect();
+        sv.resize(batch_num_rows, true);
+        DvMaskResult {
+            selection: Some(sv),
+            should_remove: true,
+        }
+    }
+}
+
 /// Physical execution plan for scanning Delta tables.
 ///
 /// Wraps a Parquet reader execution plan and applies Delta Lake protocol transformations
@@ -329,25 +363,29 @@ impl DeltaScanStream {
     fn batch_project(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
+        if batch.num_rows() == 0 {
+            return Ok(RecordBatch::new_empty(Arc::clone(
+                &self.scan_plan.output_schema,
+            )));
+        }
+
         let (file_id, file_id_idx) = extract_file_id(&batch, &self.file_id_column)?;
 
-        let selection = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
+        let dv_result = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
         {
-            if selection_vector.len() >= batch.num_rows() {
-                let sv: Vec<bool> = selection_vector.drain(0..batch.num_rows()).collect();
-                Some(sv)
-            } else {
-                let remaining = batch.num_rows() - selection_vector.len();
-                let sel_len = selection_vector.len();
-                let mut sv: Vec<bool> = selection_vector.drain(0..sel_len).collect();
-                sv.extend(vec![true; remaining]);
-                Some(sv)
-            }
+            consume_dv_mask(&mut selection_vector, batch.num_rows())
         } else {
-            None
+            DvMaskResult {
+                selection: None,
+                should_remove: false,
+            }
         };
 
-        let mut batch = if let Some(selection) = selection {
+        if dv_result.should_remove {
+            self.selection_vectors.remove(&file_id);
+        }
+
+        let mut batch = if let Some(selection) = dv_result.selection {
             filter_record_batch(&batch, &BooleanArray::from(selection))?
         } else {
             batch
@@ -409,6 +447,12 @@ impl RecordBatchStream for DeltaScanStream {
 }
 
 fn extract_file_id(batch: &RecordBatch, file_id_column: &str) -> Result<(String, usize)> {
+    if batch.num_rows() == 0 {
+        return Err(internal_datafusion_err!(
+            "Cannot extract file_id from empty batch"
+        ));
+    }
+
     let file_id_idx = batch
         .schema_ref()
         .fields()
@@ -878,5 +922,157 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_deletion_vectors() -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/deletion_vectors/delta");
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+
+        let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
+        assert!(downcast.is_some(), "Expected DeltaScanExec for DV test");
+
+        let batches = collect(scan, session.task_ctx()).await?;
+
+        let expected = vec![
+            "+--------+-----+------------+",
+            "| letter | int | date       |",
+            "+--------+-----+------------+",
+            "| b      | 228 | 1978-12-01 |",
+            "+--------+-----+------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_file_id_empty_batch_returns_error() {
+        use arrow::datatypes::{Field, Schema};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "file_id",
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        )]));
+        let empty_batch = RecordBatch::new_empty(schema);
+
+        let result = super::extract_file_id(&empty_batch, "file_id");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot extract file_id from empty batch")
+        );
+    }
+
+    #[test]
+    fn test_dv_short_mask_drain_and_pad() {
+        use super::{DvMaskResult, consume_dv_mask};
+
+        let mut sv = vec![true, false, true];
+        let result = consume_dv_mask(&mut sv, 5);
+
+        assert_eq!(
+            result,
+            DvMaskResult {
+                selection: Some(vec![true, false, true, true, true]),
+                should_remove: true,
+            }
+        );
+        assert!(sv.is_empty());
+    }
+
+    #[test]
+    fn test_dv_mask_exhaustion_across_batches() {
+        use super::{DvMaskResult, consume_dv_mask};
+        use dashmap::DashMap;
+
+        let selection_vectors: DashMap<String, Vec<bool>> = DashMap::new();
+        let file_id = "test_file.parquet".to_string();
+        selection_vectors.insert(file_id.clone(), vec![false, true]);
+
+        let result1 = {
+            let mut sv = selection_vectors.get_mut(&file_id).unwrap();
+            consume_dv_mask(&mut sv, 5)
+        };
+        assert_eq!(
+            result1,
+            DvMaskResult {
+                selection: Some(vec![false, true, true, true, true]),
+                should_remove: true,
+            }
+        );
+        if result1.should_remove {
+            selection_vectors.remove(&file_id);
+        }
+
+        let result2 = if let Some(mut sv) = selection_vectors.get_mut(&file_id) {
+            consume_dv_mask(&mut sv, 5)
+        } else {
+            DvMaskResult {
+                selection: None,
+                should_remove: false,
+            }
+        };
+        assert_eq!(
+            result2,
+            DvMaskResult {
+                selection: None,
+                should_remove: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_dv_normal_mask_drains_exactly() {
+        use super::{DvMaskResult, consume_dv_mask};
+
+        let mut sv = vec![
+            true, false, true, false, true, true, false, true, false, true,
+        ];
+
+        let result1 = consume_dv_mask(&mut sv, 3);
+        assert_eq!(
+            result1,
+            DvMaskResult {
+                selection: Some(vec![true, false, true]),
+                should_remove: false,
+            }
+        );
+        assert_eq!(sv.len(), 7);
+
+        let result2 = consume_dv_mask(&mut sv, 3);
+        assert_eq!(
+            result2,
+            DvMaskResult {
+                selection: Some(vec![false, true, true]),
+                should_remove: false,
+            }
+        );
+        assert_eq!(sv, vec![false, true, false, true]);
+
+        let result3 = consume_dv_mask(&mut sv, 5);
+        assert_eq!(
+            result3,
+            DvMaskResult {
+                selection: Some(vec![false, true, false, true, true]),
+                should_remove: true,
+            }
+        );
+        assert!(sv.is_empty());
+
+        let result4 = consume_dv_mask(&mut sv, 5);
+        assert_eq!(
+            result4,
+            DvMaskResult {
+                selection: None,
+                should_remove: true,
+            }
+        );
     }
 }
