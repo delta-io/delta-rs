@@ -40,17 +40,7 @@ use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 /// Wraps a Parquet reader execution plan and applies Delta Lake protocol transformations
 /// to produce the logical table data. This includes:
 ///
-/// - **Column mapping**: Translates physical column names to logical names
-/// - **Partition values**: Materializes partition column values from file paths
-/// - **Deletion vectors**: Filters out deleted rows using per-file selection vectors
-/// - **Schema evolution**: Handles missing columns and type coercion
-///
-/// # Data Flow
-///
-/// 1. Inner [`input`](Self::input) plan reads raw Parquet data
-/// 2. Per-file [`transforms`](Self::transforms) convert physical to logical schema
-/// 3. [`selection_vectors`](Self::selection_vectors) filter deleted rows
-/// 4. Result is cast to [`result_schema`](KernelScanPlan::result_schema)
+/// Handles column mapping, partition values, deletion vectors, and schema evolution.
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
     scan_plan: Arc<KernelScanPlan>,
@@ -329,9 +319,6 @@ impl DeltaScanStream {
     fn batch_project(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
-        // Handle empty batches gracefully - no rows means nothing to transform.
-        // Some execution pipelines may emit empty batches (e.g., after aggressive filtering),
-        // and we should pass them through rather than failing on missing file_id.
         if batch.num_rows() == 0 {
             return Ok(RecordBatch::new_empty(Arc::clone(
                 &self.scan_plan.output_schema,

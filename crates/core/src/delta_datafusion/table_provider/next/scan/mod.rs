@@ -328,7 +328,6 @@ async fn get_read_plan(
         let (file_groups, mut statistics) =
             compute_all_files_statistics(vec![file_group], physical_schema.clone(), true, false)?;
 
-        // Add unknown stats for file_id column since TableSchema includes it as a partition field
         statistics
             .column_statistics
             .push(ColumnStatistics::new_unknown());

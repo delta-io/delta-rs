@@ -241,12 +241,7 @@ impl DeltaScanConfig {
         table_config: &TableConfiguration,
         base: &Schema,
     ) -> Result<SchemaRef> {
-        // IMPORTANT: This schema is used for Parquet reading and predicate pushdown.
-        // It must NOT apply view-type conversions (Utf8View/BinaryView) because:
-        // 1. Parquet files store Utf8/Binary data, not view types
-        // 2. Predicate pushdown compares against physical Parquet data
-        // 3. View-type conversion happens AFTER reading, in the result schema
-        // See convert_view_types_to_base() for predicate literal conversion.
+        // Use base types for parquet schema; view conversion happens after reading
         let cols = table_config.metadata().partition_columns();
         let table_schema = Arc::new(Schema::new(
             base.fields()
