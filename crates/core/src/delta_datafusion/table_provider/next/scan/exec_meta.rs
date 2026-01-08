@@ -238,17 +238,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 }
 
-/// Stream that generates RecordBatches from file metadata without reading data files.
-///
-/// Synthesizes logical table rows by:
-///
-/// 1. Creating empty batches with row counts from file statistics
-/// 2. Applying deletion vectors to adjust row counts
-/// 3. Evaluating partition value expressions to materialize columns
-/// 4. Casting results to the expected logical schema
-///
-/// Each file is processed independently, producing a batch with the appropriate
-/// number of rows but no actual column data (unless partition columns are requested).
+/// Generates RecordBatches from file metadata without reading data files.
 struct DeltaScanMetaStream {
     scan_plan: Arc<KernelScanPlan>,
     /// Input stream yielding raw data read from data files.

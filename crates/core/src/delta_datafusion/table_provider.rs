@@ -539,12 +539,8 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
-        // DF52's TableSchema outputs columns as: file_schema + partition_columns
-        // Source stats are indexed by TableConfiguration.schema() field order, which may differ
-        // from the scan schema order. We need name-based remapping, not index-based.
+        // Remap stats to TableSchema order: file_schema columns, then partition columns
         let partition_col_names = self.snapshot.metadata().partition_columns();
-
-        // Build name -> ColumnStatistics map from source stats (keyed by TableConfiguration schema order)
         let source_schema = self.snapshot.schema();
         let stats_by_name: HashMap<String, ColumnStatistics> = source_schema
             .fields()
@@ -557,8 +553,6 @@ impl<'a> DeltaScanBuilder<'a> {
             })
             .collect();
 
-        // Build stats in DF52 order: file_schema columns first, then partition_columns
-        // file_schema columns are in file_schema field order (non-partition from logical_schema)
         let file_col_stats: Vec<ColumnStatistics> = file_schema
             .fields()
             .iter()
@@ -570,7 +564,6 @@ impl<'a> DeltaScanBuilder<'a> {
             })
             .collect();
 
-        // Partition columns must be in metadata.partition_columns() order (not schema encounter order)
         let partition_col_stats: Vec<ColumnStatistics> = partition_col_names
             .iter()
             .map(|name| {
@@ -581,7 +574,6 @@ impl<'a> DeltaScanBuilder<'a> {
             })
             .collect();
 
-        // Combine: file columns first, then partition columns
         let mut reordered_stats = file_col_stats;
         reordered_stats.extend(partition_col_stats);
 
@@ -591,7 +583,7 @@ impl<'a> DeltaScanBuilder<'a> {
             column_statistics: reordered_stats,
         };
 
-        // Add unknown stats for file_column if present (it's added as partition field but not in original schema)
+        // file_column has no source stats
         let stats = if config.file_column_name.is_some() {
             let mut col_stats = stats.column_statistics;
             col_stats.push(ColumnStatistics::new_unknown());
