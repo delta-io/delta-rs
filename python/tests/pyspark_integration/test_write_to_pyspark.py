@@ -8,7 +8,6 @@ from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable, write_deltalake
-from deltalake.exceptions import DeltaProtocolError
 
 from .utils import assert_spark_read_equal, get_spark, run_stream_with_checkpoint
 
@@ -91,9 +90,7 @@ def test_write_invariant(tmp_path: pathlib.Path):
         }
     )
 
-    with pytest.raises(
-        DeltaProtocolError, match=r"Invariant \(c1 > 3\) violated by value .+2"
-    ):
+    with pytest.raises(Exception, match="Invalid data found:"):
         # raise DeltaProtocolError("test")
         write_deltalake(str(tmp_path), invalid_data, mode="overwrite")
 

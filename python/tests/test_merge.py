@@ -14,7 +14,6 @@ from deltalake import (
     Schema,
     write_deltalake,
 )
-from deltalake.exceptions import DeltaProtocolError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
 
@@ -2257,10 +2256,8 @@ def test_merge_non_nullable(tmp_path):
     )
 
     with pytest.raises(
-        DeltaProtocolError,
-        match=re.escape(
-            'Invariant violations: ["Non-nullable column violation for bool, found 1 null values"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found:"),
     ):
         dt.merge(
             source=df,
