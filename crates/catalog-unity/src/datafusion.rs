@@ -250,7 +250,7 @@ impl SchemaProvider for UnitySchemaProvider {
                     .with_storage_options(new_storage_opts)
                     .load()
                     .await?;
-                Ok(Some(Arc::new(table)))
+                Ok(Some(table.table_provider().await?))
             }
             GetTableResponse::Error(err) => {
                 error!("failed to fetch table from unity catalog: {}", err.message);
