@@ -175,6 +175,7 @@ fn join_batches_with_add_actions(
     mut actions: HashMap<String, Add>,
     path_column: &str,
     dict_array: bool,
+    decode_paths: bool,
 ) -> DeltaResult<Vec<Add>> {
     // Given RecordBatches that contains `__delta_rs_path` perform a hash join
     // with actions to obtain original add actions
@@ -201,9 +202,13 @@ fn join_batches_with_add_actions(
                 "{path_column} cannot be null"
             )))?;
 
-            let path = percent_decode_str(path).decode_utf8_lossy();
+            let key = if decode_paths {
+                percent_decode_str(path).decode_utf8_lossy()
+            } else {
+                std::borrow::Cow::Borrowed(path)
+            };
 
-            match actions.remove(path.as_ref()) {
+            match actions.remove(key.as_ref()) {
                 Some(action) => files.push(action),
                 None => {
                     return Err(DeltaTableError::Generic(
@@ -284,7 +289,7 @@ async fn find_files_scan(
     let path_batches = datafusion::physical_plan::collect(limit, session.task_ctx()).await?;
 
     let result =
-        join_batches_with_add_actions(path_batches, candidate_map, &file_column_name, true)?;
+        join_batches_with_add_actions(path_batches, candidate_map, &file_column_name, true, false)?;
 
     Span::current().record("matching_files", result.len());
     Ok(result)
@@ -337,7 +342,7 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         .map(|action| (action.path.clone(), action))
         .collect::<HashMap<_, _>>();
 
-    join_batches_with_add_actions(batches, map, PATH_COLUMN, false)
+    join_batches_with_add_actions(batches, map, PATH_COLUMN, false, true)
 }
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
