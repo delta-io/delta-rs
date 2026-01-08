@@ -184,6 +184,10 @@ mod tests {
                 Ok(None)
             }
         }
+
+        fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+            Arc::new(RwLock::new(TestBatchGenerator::new(self.data.clone())))
+        }
     }
 
     #[tokio::test]
