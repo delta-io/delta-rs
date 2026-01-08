@@ -87,7 +87,6 @@ mod find_files;
 pub mod logical;
 pub mod physical;
 pub mod planner;
-mod schema_adapter;
 mod session;
 mod table_provider;
 

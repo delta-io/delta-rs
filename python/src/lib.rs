@@ -13,7 +13,17 @@ mod writer;
 use arrow::pyarrow::PyArrowType;
 use arrow_schema::SchemaRef;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use datafusion_ffi::execution::FFI_TaskContextProvider;
 use datafusion_ffi::table_provider::FFI_TableProvider;
+use deltalake::datafusion::execution::TaskContextProvider;
+
+/// FFI capsule wrapper: `provider` MUST be first field (repr(C) offset 0) for pointer aliasing.
+/// `_ctx` prevents SessionContext drop while capsule is alive (FFI_TaskContextProvider uses Weak).
+#[repr(C)]
+struct FFITableProviderCapsuleData {
+    provider: FFI_TableProvider,
+    _ctx: Arc<SessionContext>,
+}
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -1838,8 +1848,6 @@ impl RawDeltaTable {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        // tokio runtime handle?
-        let handle = None;
         let name = CString::new("datafusion_table_provider").unwrap();
 
         let table = self.with_table(|t| Ok(t.clone()))?;
@@ -1855,9 +1863,17 @@ impl RawDeltaTable {
         let scan =
             Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
                 as Arc<dyn TableProvider>;
-        let provider = FFI_TableProvider::new(scan, false, handle);
 
-        PyCapsule::new(py, provider, Some(name.clone()))
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let ffi_task_ctx = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let provider = FFI_TableProvider::new(scan, false, None, ffi_task_ctx, None);
+
+        let capsule_data = FFITableProviderCapsuleData {
+            provider,
+            _ctx: ctx,
+        };
+        PyCapsule::new(py, capsule_data, Some(name))
     }
 }
 

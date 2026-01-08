@@ -40,8 +40,10 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_datasource::{
-    PartitionedFile, compute_all_files_statistics, file_groups::FileGroup,
-    file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
+    PartitionedFile, TableSchema, compute_all_files_statistics,
+    file_groups::FileGroup,
+    file_scan_config::{FileScanConfigBuilder, wrap_partition_value_in_dict},
+    source::DataSourceExec,
 };
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
@@ -196,7 +198,9 @@ async fn get_data_scan_plan(
         }
         .into();
         partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
-        partitioned_file.partition_values = vec![ScalarValue::Utf8(Some(f.file_url.to_string()))];
+        partitioned_file.partition_values = vec![wrap_partition_value_in_dict(ScalarValue::Utf8(
+            Some(f.file_url.to_string()),
+        ))];
         Ok::<_, DataFusionError>((
             f.file_url.as_object_store_url(),
             (partitioned_file, None::<Vec<bool>>),
@@ -272,6 +276,7 @@ fn update_partition_stats(
                     max_value: value,
                     distinct_count: Precision::Absent,
                     sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             );
         }
@@ -301,31 +306,38 @@ async fn get_read_plan(
             state.runtime_env().object_store(&store_url)?,
             state.runtime_env().cache_manager.get_file_metadata_cache(),
         ));
-        let mut file_source =
-            ParquetSource::new(pq_options.clone()).with_parquet_file_reader_factory(reader_factory);
+
+        let table_schema = TableSchema::new(physical_schema.clone(), vec![file_id_field.clone()]);
+        let mut file_source = ParquetSource::new(table_schema)
+            .with_table_parquet_options(pq_options.clone())
+            .with_parquet_file_reader_factory(reader_factory);
 
         // TODO(roeap); we might be able to also push selection vectors into the read plan
         // by creating parquet access plans. However we need to make sure this does not
         // interfere with other delta features like row ids.
         let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
         if !has_selection_vectors && let Some(pred) = predicate {
-            let physical = logical2physical(pred, physical_schema.as_ref());
+            let pred = convert_view_types_to_base(pred.clone())?;
+            let physical = logical2physical(&pred, physical_schema.as_ref());
             file_source = file_source
                 .with_predicate(physical)
                 .with_pushdown_filters(true);
         }
 
         let file_group: FileGroup = files.into_iter().map(|file| file.0).collect();
-        let (file_groups, statistics) =
+        let (file_groups, mut statistics) =
             compute_all_files_statistics(vec![file_group], physical_schema.clone(), true, false)?;
 
-        let config =
-            FileScanConfigBuilder::new(store_url, physical_schema.clone(), Arc::new(file_source))
-                .with_file_groups(file_groups)
-                .with_statistics(statistics)
-                .with_table_partition_cols(vec![file_id_field.as_ref().clone()])
-                .with_limit(limit)
-                .build();
+        // Add unknown stats for file_id column since TableSchema includes it as a partition field
+        statistics
+            .column_statistics
+            .push(ColumnStatistics::new_unknown());
+
+        let config = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
+            .with_file_groups(file_groups)
+            .with_statistics(statistics)
+            .with_limit(limit)
+            .build();
 
         plans.push(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>);
     }
@@ -388,9 +400,36 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
     .into())
 }
 
+fn convert_view_types_to_base(expr: Expr) -> Result<Expr> {
+    use datafusion::common::tree_node::{Transformed, TreeNode};
+
+    expr.transform(|e| {
+        if let Expr::Literal(scalar, meta) = &e {
+            if let Some(converted) = convert_scalar_view_to_base(scalar) {
+                return Ok(Transformed::yes(Expr::Literal(converted, meta.clone())));
+            }
+        }
+        Ok(Transformed::no(e))
+    })
+    .map(|t| t.data)
+}
+
+fn convert_scalar_view_to_base(scalar: &ScalarValue) -> Option<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8View(v) => Some(ScalarValue::Utf8(v.clone())),
+        ScalarValue::BinaryView(v) => Some(ScalarValue::Binary(v.clone())),
+        ScalarValue::Dictionary(key_type, inner) => {
+            convert_scalar_view_to_base(inner).map(|converted_inner| {
+                ScalarValue::Dictionary(key_type.clone(), Box::new(converted_inner))
+            })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{BinaryArray, Int32Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
         physical_plan::collect,
@@ -437,9 +476,10 @@ mod tests {
         let path = Path::from("test_data.parquet");
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values.push(ScalarValue::Utf8(Some(
-            "memory:///test_data.parquet".to_string(),
-        )));
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_data.parquet".to_string(),
+            ))));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -595,9 +635,10 @@ mod tests {
         let path = Path::from("test_data.parquet");
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values.push(ScalarValue::Utf8(Some(
-            "memory:///test_data.parquet".to_string(),
-        )));
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_data.parquet".to_string(),
+            ))));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -711,9 +752,11 @@ mod tests {
         let path = Path::from("test_data.parquet");
         store_1.put(&path, buffer.into()).await?;
         let mut file_1: PartitionedFile = store_1.head(&path).await?.into();
-        file_1.partition_values.push(ScalarValue::Utf8(Some(
-            "first:///test_data.parquet".to_string(),
-        )));
+        file_1
+            .partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "first:///test_data.parquet".to_string(),
+            ))));
 
         let mut buffer = Vec::new();
         let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
@@ -722,9 +765,11 @@ mod tests {
         let path = Path::from("test_data.parquet");
         store_2.put(&path, buffer.into()).await?;
         let mut file_2: PartitionedFile = store_2.head(&path).await?.into();
-        file_2.partition_values.push(ScalarValue::Utf8(Some(
-            "second:///test_data.parquet".to_string(),
-        )));
+        file_2
+            .partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "second:///test_data.parquet".to_string(),
+            ))));
 
         let files_by_store = vec![
             (
@@ -795,9 +840,10 @@ mod tests {
         let path = Path::from("test_data.parquet");
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values.push(ScalarValue::Utf8(Some(
-            "memory:///test_data.parquet".to_string(),
-        )));
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_data.parquet".to_string(),
+            ))));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -831,5 +877,202 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_view_literal_conversion_in_predicate_pushdown() -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let data = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    Some("bob"),
+                    Some("charlie"),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_view_literal.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_view_literal.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("name").eq(lit(ScalarValue::Utf8View(Some("bob".to_string()))));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &arrow_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        let expected = vec![
+            "+----+------+-------------------------------------+",
+            "| id | name | __delta_rs_file_id__                |",
+            "+----+------+-------------------------------------+",
+            "| 2  | bob  | memory:///test_view_literal.parquet |",
+            "+----+------+-------------------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_binaryview_literal_conversion_in_predicate_pushdown() -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::Binary, true),
+        ]));
+        let data = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"aaa".as_slice()),
+                    Some(b"bbb".as_slice()),
+                    Some(b"ccc".as_slice()),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_binary_view.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_binary_view.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("data").eq(lit(ScalarValue::BinaryView(Some(b"bbb".to_vec()))));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &arrow_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        let id_col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.value(0), 2);
+
+        let data_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(data_col.value(0), b"bbb");
+
+        assert_eq!(batches[0].num_columns(), 3);
+        assert_eq!(batches[0].schema().field(2).name(), FILE_ID_COLUMN_DEFAULT);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_dictionary_wrapped_view_literals() {
+        use super::convert_scalar_view_to_base;
+        use datafusion::scalar::ScalarValue;
+
+        let dict_utf8view = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8View(Some("test".to_string()))),
+        );
+        let converted = convert_scalar_view_to_base(&dict_utf8view);
+        assert!(converted.is_some());
+        let expected = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8(Some("test".to_string()))),
+        );
+        assert_eq!(converted.unwrap(), expected);
+
+        let dict_binaryview = ScalarValue::Dictionary(
+            Box::new(DataType::UInt16),
+            Box::new(ScalarValue::BinaryView(Some(vec![1, 2, 3]))),
+        );
+        let converted = convert_scalar_view_to_base(&dict_binaryview);
+        assert!(converted.is_some());
+        let expected = ScalarValue::Dictionary(
+            Box::new(DataType::UInt16),
+            Box::new(ScalarValue::Binary(Some(vec![1, 2, 3]))),
+        );
+        assert_eq!(converted.unwrap(), expected);
+
+        let dict_utf8 = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8(Some("test".to_string()))),
+        );
+        let converted = convert_scalar_view_to_base(&dict_utf8);
+        assert!(converted.is_none());
     }
 }
