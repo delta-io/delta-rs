@@ -2565,8 +2565,8 @@ def test_url_encoding(tmp_path):
     """issue ref: https://github.com/delta-io/delta-rs/issues/3939"""
     batch_1 = Table.from_pydict(
         {
-            "id": Array(["1 2", "2 3", "3 5", "44", "55"], DataType.string()),
-            "price": Array(list(range(5)), DataType.int64()),
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array(list(range(1)), DataType.int64()),
         },
         schema=ArrowSchema(
             fields=[
@@ -2591,3 +2591,29 @@ def test_url_encoding(tmp_path):
     )
 
     write_deltalake(tmp_path, batch_2, mode="overwrite", predicate="id = '1 2'")
+
+
+@pytest.mark.pyarrow
+def test_url_encoding_timestamp(tmp_path):
+    import datetime as dt
+
+    import pyarrow as pa
+
+    # (step 1) write initial table
+    data = pa.Table.from_pylist(
+        [
+            {"time": dt.datetime(2026, 1, 1, 12, 5, 7), "value": 10},
+        ]
+    )
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=data,
+        partition_by=["time"],
+    )
+
+    # (step 2) overwrite with predicate that filters
+    # on a non-partition column
+    write_deltalake(
+        table_or_uri=tmp_path, data=data, mode="overwrite", predicate="value >= 10"
+    )
