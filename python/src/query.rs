@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use deltalake::{
-    datafusion::prelude::SessionContext,
+    datafusion::{catalog::TableProvider, prelude::SessionContext},
     delta_datafusion::{
-        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
+        DataFusionMixins, DeltaScanConfig, DeltaScanConfigBuilder, DeltaScanNext,
+        DeltaSessionContext, DeltaTableProvider, SnapshotWrapper,
     },
 };
 use pyo3::prelude::*;
@@ -37,18 +38,12 @@ impl PyQueryBuilder {
     /// Once called, the provided `delta_table` will be referenceable in SQL queries so long as
     /// another table of the same name is not registered over it.
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
-        let snapshot = delta_table.cloned_state()?;
-        let log_store = delta_table.log_store()?;
-
-        let scan_config = DeltaScanConfigBuilder::default()
-            .with_schema(snapshot.input_schema())
-            .build(&snapshot)
-            .map_err(PythonError::from)?;
-
-        let provider = Arc::new(
-            DeltaTableProvider::try_new(snapshot, log_store, scan_config)
-                .map_err(PythonError::from)?,
-        );
+        let config = DeltaScanConfig::new();
+        let snapshot_wrapped =
+            SnapshotWrapper::EagerSnapshot(Arc::new(delta_table.cloned_state()?));
+        let provider =
+            Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
+                as Arc<dyn TableProvider>;
 
         self.ctx
             .register_table(table_name, provider)
