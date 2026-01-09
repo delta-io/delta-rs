@@ -41,6 +41,7 @@ parquet = { version = "57" }
 # datafusion 52
 datafusion = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
 datafusion-datasource = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
+datafusion-physical-expr-adapter = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
 datafusion-ffi = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
 datafusion-proto = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
 

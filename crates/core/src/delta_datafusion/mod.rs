@@ -63,7 +63,6 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
-pub(crate) use self::session::session_state_from_session;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
@@ -86,6 +85,7 @@ pub mod cdf;
 mod data_validation;
 pub mod engine;
 pub mod expr;
+pub mod expr_adapter;
 mod find_files;
 pub mod logical;
 pub mod physical;
@@ -93,6 +93,7 @@ pub mod planner;
 mod session;
 mod table_provider;
 
+pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
         match err {
@@ -333,8 +334,10 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
             Ok(ScalarValue::FixedSizeBinary(size.to_owned(), None))
         }
         ArrowDataType::LargeBinary => Ok(ScalarValue::LargeBinary(None)),
+        ArrowDataType::BinaryView => Ok(ScalarValue::BinaryView(None)),
         ArrowDataType::Utf8 => Ok(ScalarValue::Utf8(None)),
         ArrowDataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
+        ArrowDataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
         ArrowDataType::Decimal128(precision, scale) => Ok(ScalarValue::Decimal128(
             None,
             precision.to_owned(),
@@ -368,8 +371,6 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
         | ArrowDataType::RunEndEncoded(_, _)
-        | ArrowDataType::BinaryView
-        | ArrowDataType::Utf8View
         | ArrowDataType::LargeListView(_)
         | ArrowDataType::ListView(_)
         | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
