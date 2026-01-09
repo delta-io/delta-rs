@@ -208,6 +208,10 @@ impl TableProvider for DeltaScan {
         &self,
         filter: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if self.config.schema_force_view_types {
+            // Avoid a separate FilterExec when view types require in-scan filtering.
+            return Ok(vec![TableProviderFilterPushDown::Exact; filter.len()]);
+        }
         Ok(scan::supports_filters_pushdown(
             filter,
             self.snapshot.table_configuration(),

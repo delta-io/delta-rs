@@ -16,9 +16,8 @@
 
 use std::{collections::VecDeque, pin::Pin, sync::Arc};
 
-use arrow::array::AsArray;
-use arrow_array::{ArrayRef, RecordBatch, StructArray};
-use arrow_cast::{CastOptions, cast_with_options};
+use arrow_array::{ArrayRef, RecordBatch};
+
 use arrow_schema::{DataType, FieldRef, Schema, SchemaRef};
 use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
@@ -60,7 +59,7 @@ use self::replay::{ScanFileContext, ScanFileStream};
 use crate::{
     DeltaTableError,
     delta_datafusion::{
-        DeltaScanConfig,
+        DeltaPhysicalExprAdapterFactory, DeltaScanConfig,
         engine::{AsObjectStoreUrl as _, to_datafusion_scalar},
     },
 };
@@ -123,6 +122,7 @@ pub(super) async fn execution_plan(
         limit,
         file_id_field,
         config.retain_file_id(),
+        config.enable_parquet_pushdown,
     )
     .await
 }
@@ -176,7 +176,9 @@ async fn get_data_scan_plan(
     limit: Option<usize>,
     file_id_field: FieldRef,
     retain_file_ids: bool,
+    enable_parquet_pushdown: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+
     let mut partition_stats = HashMap::new();
 
     // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
@@ -225,6 +227,13 @@ async fn get_data_scan_plan(
     } else {
         scan_plan.parquet_predicate.as_ref()
     };
+    let has_selection_vectors = files_by_store
+        .values()
+        .any(|files| files.iter().any(|(_, selection)| selection.is_some()));
+    let parquet_pushdown_active =
+        enable_parquet_pushdown && predicate.is_some() && !has_selection_vectors;
+    let skip_filter_predicate =
+        parquet_pushdown_active && scan_plan.parquet_predicate_covers_all_filters;
     let file_id_column = file_id_field.name().clone();
     let pq_plan = get_read_plan(
         session,
@@ -233,6 +242,7 @@ async fn get_data_scan_plan(
         limit,
         &file_id_field,
         predicate,
+        enable_parquet_pushdown,
     )
     .await?;
 
@@ -244,6 +254,7 @@ async fn get_data_scan_plan(
         partition_stats,
         file_id_column,
         retain_file_ids,
+        skip_filter_predicate,
         metrics,
     );
 
@@ -294,6 +305,7 @@ async fn get_read_plan(
     limit: Option<usize>,
     file_id_field: &FieldRef,
     predicate: Option<&Expr>,
+    enable_parquet_pushdown: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
@@ -317,7 +329,7 @@ async fn get_read_plan(
         // by creating parquet access plans. However we need to make sure this does not
         // interfere with other delta features like row ids.
         let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
-        if !has_selection_vectors && let Some(pred) = predicate {
+        if enable_parquet_pushdown && !has_selection_vectors && let Some(pred) = predicate {
             let pred = normalize_predicate_to_schema(pred.clone(), physical_schema)?;
             let physical = logical2physical(&pred, physical_schema.as_ref());
             file_source = file_source
@@ -336,6 +348,7 @@ async fn get_read_plan(
         let config = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
             .with_file_groups(file_groups)
             .with_statistics(statistics)
+            .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory::new())))
             .with_limit(limit)
             .build();
 
@@ -387,20 +400,11 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
         }
         return Ok(batch);
     }
-    let options = CastOptions {
-        safe: true,
-        ..Default::default()
-    };
-    Ok(cast_with_options(
-        &StructArray::from(batch),
-        &DataType::Struct(target_schema.fields().clone()),
-        &options,
-    )?
-    .as_struct()
-    .into())
+    crate::kernel::schema::cast::cast_record_batch(&batch, Arc::clone(target_schema), true, true)
+        .map_err(|err| DataFusionError::External(Box::new(err)))
 }
 
-fn normalize_predicate_to_schema(expr: Expr, schema: &SchemaRef) -> Result<Expr> {
+pub(crate) fn normalize_predicate_to_schema(expr: Expr, schema: &SchemaRef) -> Result<Expr> {
     use datafusion::common::tree_node::{Transformed, TreeNode};
     use datafusion::logical_expr::expr::{InList, Like};
     use datafusion::logical_expr::BinaryExpr;
@@ -583,9 +587,10 @@ mod tests {
     use arrow_array::{BinaryArray, Int32Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
-        physical_plan::collect,
+        physical_plan::{ExecutionPlan, collect},
         prelude::{col, lit},
     };
+    use datafusion_datasource::file::FileSource as _;
     use object_store::{ObjectStore as _, memory::InMemory};
     use parquet::arrow::ArrowWriter;
     use url::Url;
@@ -597,6 +602,17 @@ mod tests {
     };
 
     use super::*;
+
+    fn parquet_source_from_plan(plan: &Arc<dyn ExecutionPlan>) -> &ParquetSource {
+        let data_source_exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("expected DataSourceExec plan");
+        let (_, parquet_source) = data_source_exec
+            .downcast_to_file_source::<ParquetSource>()
+            .expect("expected ParquetSource in DataSourceExec");
+        parquet_source
+    }
 
     #[tokio::test]
     async fn test_parquet_plan() -> TestResult {
@@ -650,6 +666,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            true,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -672,8 +689,11 @@ mod tests {
             Some(1),
             &file_id_field,
             None,
+            true,
         )
         .await?;
+
+
         let batches = collect(plan, session.task_ctx()).await?;
         let expected = vec![
             "+----+-------+-----------------------------+",
@@ -697,8 +717,11 @@ mod tests {
             Some(1),
             &file_id_field,
             None,
+            true,
         )
         .await?;
+
+
         let batches = collect(plan, session.task_ctx()).await?;
         let expected = vec![
             "+----+-------+--------+-----------------------------+",
@@ -717,13 +740,15 @@ mod tests {
         ]));
         let plan = get_read_plan(
             &session.state(),
-            files_by_store,
+            files_by_store.clone(),
             &arrow_schema_extended,
             Some(1),
             &file_id_field,
             None,
+            true,
         )
         .await?;
+
         let batches = collect(plan, session.task_ctx()).await?;
         let expected = vec![
             "+----+-------+--------+-----------------------------+",
@@ -809,6 +834,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            true,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -844,19 +870,14 @@ mod tests {
             None,
             &file_id_field,
             None,
+            true,
         )
         .await?;
-        let batches = collect(plan, session.task_ctx()).await?;
-        let expected = vec![
-            "+----+--------------------+-----------------------------+",
-            "| id | nested             | __delta_rs_file_id__        |",
-            "+----+--------------------+-----------------------------+",
-            "| 1  | {a: a, b: aa, c: } | memory:///test_data.parquet |",
-            "| 2  | {a: b, b: bb, c: } | memory:///test_data.parquet |",
-            "| 3  | {a: c, b: cc, c: } | memory:///test_data.parquet |",
-            "+----+--------------------+-----------------------------+",
-        ];
-        assert_batches_sorted_eq!(&expected, &batches);
+
+        let error = collect(plan, session.task_ctx()).await.expect_err(
+            "expected nested schema extension to fail for parquet read",
+        );
+        assert!(error.to_string().contains("expected Struct"));
 
         Ok(())
     }
@@ -946,6 +967,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            true,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1015,14 +1037,46 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            true,
         )
         .await?;
+
+        let parquet_source = parquet_source_from_plan(&plan);
+        assert!(parquet_source.filter().is_some());
+
         let batches = collect(plan, session.task_ctx()).await?;
+
         let expected = vec![
             "+----+-------+-----------------------------+",
             "| id | value | __delta_rs_file_id__        |",
             "+----+-------+-----------------------------+",
             "| 2  | b     | memory:///test_data.parquet |",
+            "+----+-------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store.clone(),
+            &arrow_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+            false,
+        )
+        .await?;
+
+        let parquet_source = parquet_source_from_plan(&plan);
+        assert!(parquet_source.filter().is_none());
+
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+-------+-----------------------------+",
+            "| id | value | __delta_rs_file_id__        |",
+            "+----+-------+-----------------------------+",
+            "| 1  | a     | memory:///test_data.parquet |",
+            "| 2  | b     | memory:///test_data.parquet |",
+            "| 3  | c     | memory:///test_data.parquet |",
             "+----+-------+-----------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
@@ -1089,6 +1143,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            true,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1164,6 +1219,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            true,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;

@@ -197,12 +197,10 @@ pub struct DeltaScanConfig {
     /// If true, parquet reader will read columns of `Utf8`/`Utf8Large`
     /// with Utf8View, and `Binary`/`BinaryLarge` with `BinaryView`.
     ///
-    /// **Note:** This flag is **not honored** in the kernel-based "next scan" path
-    /// (enabled via `DeltaTableProvider::new_with_flags`). In that path, view types
-    /// are intentionally disabled to avoid type mismatches between Utf8View data and
-    /// Utf8 literals in DataFusion's FilterExec. Support requires implementing a
-    /// `PhysicalExprAdapterFactory` to cast literals or adapting pushdown predicates.
-    /// See `crates/core/src/delta_datafusion/table_provider/next/scan/plan.rs` for details.
+    /// In the kernel-based "next scan" path, view types are supported by applying
+    /// filters inside the scan so literals are normalized to the read schema.
+    /// In the legacy `DeltaTableProvider` path, literal normalization is not applied;
+    /// leave this off unless DataFusion already produces view literals.
     pub schema_force_view_types: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
@@ -221,7 +219,7 @@ impl DeltaScanConfig {
             file_column_name: None,
             wrap_partition_values: true,
             enable_parquet_pushdown: true,
-            schema_force_view_types: true,
+            schema_force_view_types: false,
             schema: None,
         }
     }
@@ -665,12 +663,24 @@ impl<'a> DeltaScanBuilder<'a> {
 /// A table provider can be built by providing either a log store, a Snapshot,
 /// or an eager snapshot. If some Snapshot is provided, that will be used directly,
 /// and no IO will be performed when building the provider.
-#[derive(Debug)]
 pub struct TableProviderBuilder {
     log_store: Option<Arc<dyn LogStore>>,
     snapshot: Option<SnapshotWrapper>,
     file_column: Option<String>,
     table_version: Option<Version>,
+    session: Option<Arc<dyn Session>>,
+}
+
+impl std::fmt::Debug for TableProviderBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TableProviderBuilder")
+            .field("log_store", &self.log_store)
+            .field("snapshot", &self.snapshot)
+            .field("file_column", &self.file_column)
+            .field("table_version", &self.table_version)
+            .field("session", &self.session.as_ref().map(|_| "<Session>"))
+            .finish()
+    }
 }
 
 impl Default for TableProviderBuilder {
@@ -686,6 +696,7 @@ impl TableProviderBuilder {
             snapshot: None,
             file_column: None,
             table_version: None,
+            session: None,
         }
     }
 
@@ -721,6 +732,15 @@ impl TableProviderBuilder {
         self.file_column = Some(file_column.to_string());
         self
     }
+
+    /// Provide a DataFusion session to seed scan configuration.
+    ///
+    /// Session-level options (e.g. parquet settings, view types) are only applied
+    /// when a session is supplied here.
+    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
+        self
+    }
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -731,7 +751,11 @@ impl std::future::IntoFuture for TableProviderBuilder {
         let this = self;
 
         Box::pin(async move {
-            let mut config = DeltaScanConfig::new();
+            let mut config = if let Some(session) = this.session.as_ref() {
+                DeltaScanConfig::new_from_session(session.as_ref())
+            } else {
+                DeltaScanConfig::new()
+            };
             if let Some(file_column) = this.file_column {
                 config = config.with_file_column_name(file_column);
             }
@@ -774,6 +798,11 @@ impl DeltaTable {
             builder = builder.with_log_store(self.log_store());
         }
         builder
+    }
+
+    /// Build a provider that honors session-level DataFusion configuration.
+    pub fn table_provider_with_session(&self, session: Arc<dyn Session>) -> TableProviderBuilder {
+        self.table_provider().with_session(session)
     }
 
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {

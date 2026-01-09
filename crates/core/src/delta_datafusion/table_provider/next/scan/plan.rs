@@ -30,6 +30,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{Expression, Predicate, PredicateRef};
 use itertools::Itertools;
+use tracing::warn;
 
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression, to_predicate};
@@ -69,6 +70,8 @@ pub(crate) struct KernelScanPlan {
     pub(crate) parquet_read_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
     pub(crate) parquet_predicate: Option<Expr>,
+    pub(crate) parquet_predicate_covers_all_filters: bool,
+    pub(crate) filter_predicate: Option<Expr>,
 }
 
 impl KernelScanPlan {
@@ -78,24 +81,31 @@ impl KernelScanPlan {
         filters: &[Expr],
         config: &DeltaScanConfig,
     ) -> Result<Self> {
-        if config.schema_force_view_types {
-            tracing::debug!(
-                "schema_force_view_types=true is not honored in kernel-based scan path; \
-                 view types disabled to avoid FilterExec type mismatches"
-            );
-        }
-
         let table_config = snapshot.table_configuration();
         let table_schema = config.table_schema(table_config)?;
 
         // At this point we should only have supported predicates, but we decide where
         // when can handle them (kernel scan and/or parquet scan)
-        let (kernel_predicate, parquet_predicate) = process_filters(filters, table_config)?;
+        let (kernel_predicate, parquet_predicate, parquet_predicate_covers_all_filters) =
+            process_filters(filters, table_config)?;
+        let filter_predicate = if config.schema_force_view_types {
+            conjunction(filters.iter().cloned())
+        } else {
+            None
+        };
         let scan_builder = snapshot.scan_builder().with_predicate(kernel_predicate);
 
         let Some(projection) = projection else {
             let scan = Arc::new(scan_builder.build()?);
-            return Self::try_new_with_scan(scan, config, table_schema, None, parquet_predicate);
+            return Self::try_new_with_scan(
+                scan,
+                config,
+                table_schema,
+                None,
+                parquet_predicate,
+                parquet_predicate_covers_all_filters,
+                filter_predicate,
+            );
         };
 
         // The table projection may not include all columns referenced in filters,
@@ -155,6 +165,8 @@ impl KernelScanPlan {
             result_schema,
             result_projection,
             parquet_predicate,
+            parquet_predicate_covers_all_filters,
+            filter_predicate,
         )
     }
 
@@ -164,6 +176,8 @@ impl KernelScanPlan {
         result_schema: SchemaRef,
         result_projection: Option<Vec<usize>>,
         parquet_predicate: Option<Expr>,
+        parquet_predicate_covers_all_filters: bool,
+        filter_predicate: Option<Expr>,
     ) -> Result<Self> {
         let output_schema = if config.retain_file_id() {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
@@ -183,6 +197,8 @@ impl KernelScanPlan {
             result_projection,
             parquet_read_schema,
             parquet_predicate,
+            parquet_predicate_covers_all_filters,
+            filter_predicate,
         })
     }
 
@@ -258,44 +274,136 @@ impl DeltaScanConfig {
         Ok(table_schema)
     }
 
-    fn map_field_for_parquet(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
-        if partition_cols.contains(field.name()) && self.wrap_partition_values {
-            return match field.data_type() {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+    fn map_view_field(&self, field: FieldRef) -> FieldRef {
+        if !self.schema_force_view_types {
+            return field;
+        }
+        let mapped = self.map_view_type(field.data_type());
+        if &mapped == field.data_type() {
+            field
+        } else {
+            field.as_ref().clone().with_data_type(mapped).into()
+        }
+    }
+
+    fn map_view_type(&self, data_type: &DataType) -> DataType {
+        if !self.schema_force_view_types {
+            return data_type.clone();
+        }
+        match data_type {
+            DataType::Utf8 | DataType::LargeUtf8 => DataType::Utf8View,
+            DataType::Binary | DataType::LargeBinary => DataType::BinaryView,
+            DataType::Struct(fields) => DataType::Struct(
+                fields
+                    .iter()
+                    .map(|field| {
+                        let mapped = self.map_view_type(field.data_type());
+                        Arc::new(field.as_ref().clone().with_data_type(mapped))
+                    })
+                    .collect(),
+            ),
+            DataType::List(field) => DataType::List(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.map_view_type(field.data_type())),
+            )),
+            DataType::LargeList(field) => DataType::LargeList(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.map_view_type(field.data_type())),
+            )),
+            DataType::ListView(field) => DataType::ListView(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.map_view_type(field.data_type())),
+            )),
+            DataType::LargeListView(field) => DataType::LargeListView(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.map_view_type(field.data_type())),
+            )),
+            DataType::FixedSizeList(field, size) => DataType::FixedSizeList(
+                Arc::new(
                     field
                         .as_ref()
                         .clone()
-                        .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
-                        .into()
-                }
+                        .with_data_type(self.map_view_type(field.data_type())),
+                ),
+                *size,
+            ),
+            DataType::Map(field, sorted) => DataType::Map(
+                Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(self.map_view_type(field.data_type())),
+                ),
+                *sorted,
+            ),
+            DataType::Dictionary(key, value) => {
+                DataType::Dictionary(key.clone(), Box::new(self.map_view_type(value)))
+            }
+            _ => data_type.clone(),
+        }
+    }
+
+    fn map_field_for_parquet(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
+        let field = self.map_view_field(field);
+        if partition_cols.contains(field.name()) && self.wrap_partition_values {
+            return match field.data_type() {
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
+                    .into(),
+                DataType::Utf8View => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(wrap_partition_type_in_dict(DataType::Utf8))
+                    .into(),
+                DataType::BinaryView => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(wrap_partition_type_in_dict(DataType::Binary))
+                    .into(),
                 _ => field,
             };
         }
-        // NOTE: schema_force_view_types is NOT supported in the kernel-based scan path.
-        // View types (Utf8View/BinaryView) cause filter type mismatches because DataFusion's
-        // FilterExec uses the original filter expression with Utf8 literals, while the scan
-        // output would have Utf8View data. Arrow doesn't auto-coerce between these types.
-        // Supporting view types requires either:
-        // 1. A PhysicalExprAdapterFactory to normalize filter expressions, or
-        // 2. Returning Exact pushdown to prevent FilterExec from being added
-        // For now, both exposed schema and parquet schema use base types for compatibility.
         field
     }
 
     fn map_field(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
+        let field = self.map_view_field(field);
         if partition_cols.contains(field.name()) && self.wrap_partition_values {
             return match field.data_type() {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
-                        .into()
-                }
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
+                    .into(),
+                DataType::Utf8View => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(wrap_partition_type_in_dict(DataType::Utf8))
+                    .into(),
+                DataType::BinaryView => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(wrap_partition_type_in_dict(DataType::Binary))
+                    .into(),
                 _ => field,
             };
         }
-        // NOTE: View types not applied - see map_field_for_parquet comment for rationale.
         field
     }
 }
@@ -322,24 +430,44 @@ pub(crate) fn supports_filters_pushdown(
 fn process_filters(
     filters: &[Expr],
     config: &TableConfiguration,
-) -> Result<(Option<PredicateRef>, Option<Expr>)> {
+) -> Result<(Option<PredicateRef>, Option<Expr>, bool)> {
     let (parquet, kernel): (Vec<_>, Vec<_>) = filters
         .iter()
         .map(|f| process_predicate(f, config))
         .map(|p| (p.parquet_predicate, p.kernel_predicate))
         .unzip();
-    let parquet = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
-        conjunction(
-            parquet
-                .iter()
-                .flatten()
-                .filter_map(|ex| rewrite_expression((*ex).clone(), config).ok()),
-        )
+
+    let parquet_all = parquet.iter().all(|predicate| predicate.is_some());
+    let parquet_predicates: Vec<Expr> = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
+        parquet
+            .iter()
+            .flatten()
+            .filter_map(|ex| match rewrite_expression((*ex).clone(), config) {
+                Ok(expr) => Some(expr),
+                Err(err) => {
+                    warn!(
+                        "Failed to rewrite predicate for column mapping; skipping parquet pushdown: {}",
+                        err
+                    );
+                    None
+                }
+            })
+            .collect()
     } else {
-        conjunction(parquet.iter().flatten().map(|ex| (*ex).clone()))
+        parquet.iter().flatten().map(|ex| (*ex).clone()).collect()
     };
-    let kernel = (!kernel.is_empty()).then(|| Predicate::and_from(kernel.into_iter().flatten()));
-    Ok((kernel.map(Arc::new), parquet))
+
+    let parquet_predicate_covers_all_filters =
+        parquet_all && parquet_predicates.len() == filters.len();
+    let parquet = conjunction(parquet_predicates.into_iter());
+
+    let kernel_predicates: Vec<_> = kernel.into_iter().flatten().collect();
+    let kernel = (!kernel_predicates.is_empty()).then(|| Predicate::and_from(kernel_predicates));
+    Ok((
+        kernel.map(Arc::new),
+        parquet,
+        parquet_predicate_covers_all_filters,
+    ))
 }
 
 struct ProcessedPredicate<'a> {
@@ -482,6 +610,7 @@ mod tests {
         let expected_pq =
             col("col-3877fd94-0973-4941-ac6b-646849a1ff65").eq(lit("Anthony Johnson"));
         assert_eq!(scan_plan.parquet_predicate, Some(expected_pq));
+        assert!(scan_plan.parquet_predicate_covers_all_filters);
 
         let expr = col(r#""Company Very Short""#).eq(lit("BME"));
         let scan_plan = KernelScanPlan::try_new(
@@ -491,6 +620,7 @@ mod tests {
             &DeltaScanConfig::default(),
         )?;
         assert!(scan_plan.parquet_predicate.is_none());
+        assert!(!scan_plan.parquet_predicate_covers_all_filters);
 
         let expr = col(r#""Super Name""#).eq(lit("Timothy Lamb"));
         let scan_plan = KernelScanPlan::try_new(
@@ -500,6 +630,19 @@ mod tests {
             &DeltaScanConfig::default(),
         )?;
         println!("Scan plan: {:?}", scan_plan.parquet_predicate);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_kernel_predicate_is_none() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let expr = col(r#""Company Very Short""#).like(lit("B%"));
+        let config = table.snapshot()?.snapshot().table_configuration();
+        let (kernel, _parquet, _covers_all) = process_filters(&[expr], config)?;
+        assert!(kernel.is_none());
 
         Ok(())
     }
@@ -566,7 +709,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_view_types_unsupported_in_next_scan_path() -> TestResult {
+    async fn test_view_types_honored_in_next_scan_path() -> TestResult {
         use arrow_schema::DataType;
 
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
@@ -584,28 +727,53 @@ mod tests {
 
         let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config)?;
 
-        let has_no_view_type = scan_plan
-            .parquet_read_schema
-            .fields()
-            .iter()
-            .all(|f| !matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView));
+        let has_view_type = scan_plan.parquet_read_schema.fields().iter().any(|f| {
+            matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView)
+        });
         assert!(
-            has_no_view_type,
-            "schema_force_view_types is not supported in the kernel-based scan path; \
-             parquet_read_schema must use base types to avoid filter type mismatches"
+            has_view_type,
+            "schema_force_view_types should apply view types in parquet_read_schema"
         );
 
-        let has_no_view_type_exposed = scan_plan
-            .result_schema
-            .fields()
-            .iter()
-            .all(|f| !matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView));
+        let has_view_type_exposed = scan_plan.result_schema.fields().iter().any(|f| {
+            matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView)
+        });
         assert!(
-            has_no_view_type_exposed,
-            "exposed schema must also use base types for DataFusion FilterExec compatibility"
+            has_view_type_exposed,
+            "schema_force_view_types should apply view types in exposed schema"
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_view_type_mapping_nested_fields() {
+        let config = DeltaScanConfig {
+            schema_force_view_types: true,
+            ..DeltaScanConfig::new()
+        };
+
+        let nested = Arc::new(Field::new(
+            "nested",
+            DataType::Struct(
+                vec![Field::new(
+                    "inner",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                )]
+                .into(),
+            ),
+            true,
+        ));
+        let mapped = config.map_field(nested, &[]);
+        let DataType::Struct(fields) = mapped.data_type() else {
+            panic!("expected struct field");
+        };
+        let inner = fields.iter().find(|f| f.name() == "inner").unwrap();
+        let DataType::List(list_field) = inner.data_type() else {
+            panic!("expected list field");
+        };
+        assert!(matches!(list_field.data_type(), DataType::Utf8View));
     }
 
     #[tokio::test]
