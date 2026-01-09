@@ -25,9 +25,6 @@ use crate::logstore::{
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
-// NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
-pub use crate::logstore::PeekCommit;
-
 pub mod builder;
 pub mod config;
 pub mod state;
