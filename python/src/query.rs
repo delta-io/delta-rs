@@ -3,8 +3,7 @@ use std::sync::Arc;
 use deltalake::{
     datafusion::{catalog::TableProvider, prelude::SessionContext},
     delta_datafusion::{
-        DataFusionMixins, DeltaScanConfig, DeltaScanConfigBuilder, DeltaScanNext,
-        DeltaSessionContext, DeltaTableProvider, SnapshotWrapper,
+        DataFusionMixins, DeltaScanConfig, DeltaScanNext, DeltaSessionContext, SnapshotWrapper,
     },
 };
 use pyo3::prelude::*;
@@ -38,9 +37,9 @@ impl PyQueryBuilder {
     /// Once called, the provided `delta_table` will be referenceable in SQL queries so long as
     /// another table of the same name is not registered over it.
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
-        let config = DeltaScanConfig::new();
-        let snapshot_wrapped =
-            SnapshotWrapper::EagerSnapshot(Arc::new(delta_table.cloned_state()?));
+        let snapshot = delta_table.cloned_state()?;
+        let config = DeltaScanConfig::new().with_wrap_partition_values(false);
+        let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(snapshot));
         let provider =
             Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
                 as Arc<dyn TableProvider>;
