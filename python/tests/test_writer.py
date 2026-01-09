@@ -532,7 +532,6 @@ def test_roundtrip_partitioned(
         assert add_path.count("/") == 1
 
 
-@pytest.mark.xfail
 def test_roundtrip_null_partition(
     tmp_path: pathlib.Path,
     sample_table: Table,
@@ -1310,7 +1309,6 @@ def test_replace_where_overwrite_partitioned(
     )
 
 
-@pytest.mark.xfail
 def test_partition_overwrite_with_new_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: Table
 ):
@@ -1342,7 +1340,7 @@ def test_partition_overwrite_with_new_partition(
         {
             "p1": Array(
                 ["1", "1", "2", "2"],
-                ArrowField("p1", type=DataType.string(), nullable=False),
+                ArrowField("p1", type=DataType.string_view(), nullable=False),
             ),
             "p2": Array(
                 [1, 2, 1, 2],
