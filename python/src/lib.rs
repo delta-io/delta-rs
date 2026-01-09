@@ -23,7 +23,10 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
 use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaCdfTableProvider;
+use deltalake::delta_datafusion::{
+    DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext, SnapshotWrapper,
+};
+
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -1839,8 +1842,20 @@ impl RawDeltaTable {
         let handle = None;
         let name = CString::new("datafusion_table_provider").unwrap();
 
-        let table = self.with_table(|t| Ok(Arc::new(t.clone())))?;
-        let provider = FFI_TableProvider::new(table, false, handle);
+        let table = self.with_table(|t| Ok(t.clone()))?;
+
+        let config = DeltaScanConfig::new();
+        let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(
+            table
+                .snapshot()
+                .map_err(PythonError::from)?
+                .snapshot()
+                .clone(),
+        ));
+        let scan =
+            Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
+                as Arc<dyn TableProvider>;
+        let provider = FFI_TableProvider::new(scan, false, handle);
 
         PyCapsule::new(py, provider, Some(name.clone()))
     }
