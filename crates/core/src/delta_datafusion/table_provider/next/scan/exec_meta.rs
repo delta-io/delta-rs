@@ -15,7 +15,7 @@ use arrow::datatypes::{SchemaRef, UInt16Type};
 use arrow_array::{BooleanArray, DictionaryArray, RecordBatchOptions};
 use arrow_schema::{FieldRef, Fields, Schema};
 use dashmap::DashMap;
-use datafusion::common::HashMap;
+use datafusion::common::{HashMap, internal_datafusion_err};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
@@ -238,7 +238,17 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 }
 
-/// Generates RecordBatches from file metadata without reading data files.
+/// Stream that generates RecordBatches from file metadata without reading data files.
+///
+/// Synthesizes logical table rows by:
+///
+/// 1. Creating empty batches with row counts from file statistics
+/// 2. Applying deletion vectors to adjust row counts
+/// 3. Evaluating partition value expressions to materialize columns
+/// 4. Casting results to the expected logical schema
+///
+/// Each file is processed independently, producing a batch with the appropriate
+/// number of rows but no actual column data (unless partition columns are requested).
 struct DeltaScanMetaStream {
     scan_plan: Arc<KernelScanPlan>,
     /// Input stream yielding raw data read from data files.
@@ -270,12 +280,16 @@ impl DeltaScanMetaStream {
         )?;
 
         let batch = if let Some(selection) = self.selection_vectors.get(&file_id) {
-            let missing = batch.num_rows() - selection.len();
-            let filter = if missing > 0 {
-                BooleanArray::from_iter(selection.iter().chain(std::iter::repeat_n(&true, missing)))
-            } else {
-                BooleanArray::from_iter(selection.iter())
-            };
+            if selection.len() != batch.num_rows() {
+                return Err(internal_datafusion_err!(
+                    "Selection vector length ({}) does not match row count ({}) for file '{}'. \
+                     This indicates a bug in deletion vector processing.",
+                    selection.len(),
+                    batch.num_rows(),
+                    file_id
+                ));
+            }
+            let filter = BooleanArray::from_iter(selection.iter());
             filter_record_batch(&batch, &filter)?
         } else {
             batch
