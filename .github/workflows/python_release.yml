@@ -73,7 +73,7 @@ jobs:
 
   release-pypi-manylinux-x86-64:
     needs: validate-release-tag
-    name: PyPI release on Linux (x86_64-manylinux-2014)
+    name: PyPI release on Linux (x86_64-manylinux-2_17)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -91,11 +91,11 @@ jobs:
           command: build
           container: off
           args:  -m python/Cargo.toml --zig --profile python-release
-          manylinux: "2014"
+          manylinux: "2_17"
 
   release-pypi-manylinux-228-aarch64:
     needs: validate-release-tag
-    name: PyPI release on Linux (aarch64-manylinux-2014)
+    name: PyPI release on Linux (aarch64-manylinux-2_28)
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
@@ -113,7 +113,7 @@ jobs:
           command: build
           container: off
           args:  -m python/Cargo.toml --zig --profile python-release
-          manylinux: "2014"
+          manylinux: "2_28"
 
   release-pypi-musl-x86-64:
     needs: validate-release-tag
