@@ -13,6 +13,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{SchemaRef, UInt16Type};
 use arrow_array::BooleanArray;
 use dashmap::DashMap;
+use datafusion::common::cast::as_boolean_array;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
 use datafusion::common::{
@@ -20,18 +21,20 @@ use datafusion::common::{
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::planner::logical2physical;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
 };
+use datafusion::prelude::Expr;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
-use super::plan::KernelScanPlan;
+use super::{normalize_predicate_to_schema, plan::KernelScanPlan};
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
@@ -92,6 +95,7 @@ pub struct DeltaScanExec {
     properties: PlanProperties,
     /// Denotes if file ids should be returned as part of the output
     retain_file_ids: bool,
+    skip_filter_predicate: bool,
     /// Aggregated partition column statistics
     partition_stats: HashMap<String, ColumnStatistics>,
 }
@@ -118,6 +122,7 @@ impl DeltaScanExec {
         partition_stats: HashMap<String, ColumnStatistics>,
         file_id_column: String,
         retain_file_ids: bool,
+        skip_filter_predicate: bool,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
         let properties = PlanProperties::new(
@@ -135,6 +140,7 @@ impl DeltaScanExec {
             metrics,
             file_id_column,
             retain_file_ids,
+            skip_filter_predicate,
             properties,
         }
     }
@@ -236,6 +242,7 @@ impl ExecutionPlan for DeltaScanExec {
             self.partition_stats.clone(),
             self.file_id_column.clone(),
             self.retain_file_ids,
+            self.skip_filter_predicate,
             self.metrics.clone(),
         )))
     }
@@ -262,6 +269,12 @@ impl ExecutionPlan for DeltaScanExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(DeltaScanStream {
             scan_plan: Arc::clone(&self.scan_plan),
+            filter_predicate: if self.skip_filter_predicate {
+                None
+            } else {
+                self.scan_plan.filter_predicate.clone()
+            },
+            filter_physical: None,
             kernel_type: Arc::clone(self.scan_plan.scan.logical_schema()).into(),
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
@@ -332,6 +345,8 @@ impl ExecutionPlan for DeltaScanExec {
 /// from the batch's partition values.
 struct DeltaScanStream {
     scan_plan: Arc<KernelScanPlan>,
+    filter_predicate: Option<Expr>,
+    filter_physical: Option<Arc<dyn PhysicalExpr>>,
     /// Kernel data type for the data after transformations
     kernel_type: KernelDataType,
     /// Input stream yielding raw data read from data files.
@@ -385,7 +400,7 @@ impl DeltaScanStream {
         let file_id_field = batch.schema_ref().field(file_id_idx).clone();
         let file_id_col = batch.remove_column(file_id_idx);
 
-        let result = if let Some(transform) = self.transforms.get(&file_id) {
+        let mut result = if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     self.scan_plan.scan.physical_schema().clone(),
@@ -400,6 +415,20 @@ impl DeltaScanStream {
         } else {
             batch
         };
+
+        if let Some(filter_expr) = self.filter_predicate.as_ref() {
+            if self.filter_physical.is_none() {
+                let schema = result.schema_ref();
+                let normalized = normalize_predicate_to_schema(filter_expr.clone(), &schema)?;
+                let physical = logical2physical(&normalized, schema.as_ref());
+                self.filter_physical = Some(physical);
+            }
+            if let Some(filter) = self.filter_physical.as_ref() {
+                let selection = filter.evaluate(&result)?.into_array(result.num_rows())?;
+                let selection = as_boolean_array(selection.as_ref())?;
+                result = filter_record_batch(&result, selection)?;
+            }
+        }
 
         if self.return_file_ids {
             super::finalize_transformed_batch(
