@@ -52,8 +52,10 @@ jobs:
           toolchain: stable
           cache: true
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
       - name: Start emulated services
         run: docker compose up -d
@@ -61,11 +63,15 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo llvm-cov --profile=ci \
+          cargo llvm-cov --no-report nextest --profile=ci \
             --package deltalake-${{ matrix.target.name }} \
             --features integration_test \
-            --codecov \
-            --output-path codecov.json
+            --codecov 
+          cargo llvm-cov --doc --profile=ci \
+            --package deltalake-${{ matrix.target.name }} \
+            --features integration_test \
+            --codecov
+          cargo llvm-cov report --doctests --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -127,8 +133,10 @@ jobs:
           toolchain: stable
           cache: true
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
       # Install Java and Hadoop for HDFS integration tests
       - uses: actions/setup-java@v4
@@ -145,11 +153,15 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo llvm-cov --profile=ci \
-            --features integration_test \
+          cargo llvm-cov --no-report nextest --profile=ci \
             --package deltalake-hdfs \
-            --codecov \
-            --output-path codecov.json
+            --features integration_test \
+            --codecov 
+          cargo llvm-cov --doc --profile=ci \
+            --package deltalake-hdfs \
+            --features integration_test \
+            --codecov
+          cargo llvm-cov report --doctests --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -175,8 +187,10 @@ jobs:
           toolchain: stable
           cache: true
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
       - name: Download Lakectl
         run: |
@@ -190,11 +204,15 @@ jobs:
       - name: Run tests
         run: |
           gmake setup-dat
-          cargo llvm-cov --profile=ci \
+          cargo llvm-cov --no-report nextest --profile=ci \
             --package deltalake-lakefs \
             --features integration_test_lakefs \
-            --codecov \
-            --output-path codecov.json
+            --codecov
+          cargo llvm-cov --doc --profile=ci \
+            --package deltalake-lakefs \
+            --features integration_test_lakefs \
+            --codecov
+          cargo llvm-cov report --doctests --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

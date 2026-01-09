@@ -145,22 +145,32 @@ jobs:
         with:
           python-version: 3.13
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
       - name: Run tests
         shell: bash
         run: |
           make setup-dat
-          cargo llvm-cov --features ${{ env.DEFAULT_FEATURES }} \
+          cargo llvm-cov --no-report nextest --features ${{ env.DEFAULT_FEATURES }} \
             --workspace \
             --codecov \
-            --output-path codecov.json \
             --exclude deltalake \
             --exclude deltalake-azure \
             --exclude deltalake-aws \
             --exclude deltalake-hdfs \
             --exclude deltalake-lakefs
+          cargo llvm-cov --no-report --doc --features ${{ env.DEFAULT_FEATURES }} \
+            --workspace \
+            --codecov \
+            --exclude deltalake \
+            --exclude deltalake-azure \
+            --exclude deltalake-aws \
+            --exclude deltalake-hdfs \
+            --exclude deltalake-lakefs
+          cargo llvm-cov report --doctests --codecov --output-path codecov.json
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
