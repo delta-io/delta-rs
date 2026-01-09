@@ -216,16 +216,6 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
-/// The next commit that's available from underlying storage
-///
-#[derive(Debug)]
-pub enum PeekCommit {
-    /// The next commit version and associated actions
-    New(i64, Vec<Action>),
-    /// Provided DeltaVersion is up to date
-    UpToDate,
-}
-
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -307,19 +297,6 @@ pub trait LogStore: Send + Sync + AsAny {
 
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64>;
-
-    /// Get the list of actions for the next commit
-    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
-        let next_version = current_version + 1;
-        let commit_log_bytes = match self.read_commit_entry(next_version).await {
-            Ok(Some(bytes)) => Ok(bytes),
-            Ok(None) => return Ok(PeekCommit::UpToDate),
-            Err(err) => Err(err),
-        }?;
-
-        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes);
-        Ok(PeekCommit::New(next_version, actions?))
-    }
 
     /// Get object store, can pass operation_id for object stores linked to an operation
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
@@ -461,10 +438,6 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64> {
         T::get_latest_version(self, start_version).await
-    }
-
-    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
-        T::peek_next_commit(self, current_version).await
     }
 
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
@@ -973,31 +946,6 @@ pub(crate) mod tests {
                 .await
                 .expect("Failed to identify table")
         );
-    }
-
-    /// <https://github.com/delta-io/delta-rs/issues/3297>:w
-    #[tokio::test]
-    async fn test_peek_with_invalid_json() -> DeltaResult<()> {
-        use crate::logstore::object_store::memory::InMemory;
-        let memory_store = Arc::new(InMemory::new());
-        let log_path = Path::from("delta-table/_delta_log/00000000000000000001.json");
-
-        let log_content = r#"{invalid_json"#;
-
-        memory_store
-            .put(&log_path, log_content.into())
-            .await
-            .expect("Failed to write log file");
-
-        let table_uri = url::Url::parse("memory:///delta-table").unwrap();
-        let table = crate::DeltaTableBuilder::from_url(table_uri.clone())
-            .unwrap()
-            .with_storage_backend(memory_store, table_uri)
-            .build()?;
-
-        let result = table.log_store().peek_next_commit(0).await;
-        assert!(result.is_err());
-        Ok(())
     }
 
     /// Collect list stream
