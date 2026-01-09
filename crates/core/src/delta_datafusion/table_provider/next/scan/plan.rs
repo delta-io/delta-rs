@@ -78,6 +78,13 @@ impl KernelScanPlan {
         filters: &[Expr],
         config: &DeltaScanConfig,
     ) -> Result<Self> {
+        if config.schema_force_view_types {
+            tracing::debug!(
+                "schema_force_view_types=true is not honored in kernel-based scan path; \
+                 view types disabled to avoid FilterExec type mismatches"
+            );
+        }
+
         let table_config = snapshot.table_configuration();
         let table_schema = config.table_schema(table_config)?;
 
@@ -241,7 +248,6 @@ impl DeltaScanConfig {
         table_config: &TableConfiguration,
         base: &Schema,
     ) -> Result<SchemaRef> {
-        // Use base types for parquet schema; view conversion happens after reading
         let cols = table_config.metadata().partition_columns();
         let table_schema = Arc::new(Schema::new(
             base.fields()
@@ -265,14 +271,20 @@ impl DeltaScanConfig {
                 _ => field,
             };
         }
+        // NOTE: schema_force_view_types is NOT supported in the kernel-based scan path.
+        // View types (Utf8View/BinaryView) cause filter type mismatches because DataFusion's
+        // FilterExec uses the original filter expression with Utf8 literals, while the scan
+        // output would have Utf8View data. Arrow doesn't auto-coerce between these types.
+        // Supporting view types requires either:
+        // 1. A PhysicalExprAdapterFactory to normalize filter expressions, or
+        // 2. Returning Exact pushdown to prevent FilterExec from being added
+        // For now, both exposed schema and parquet schema use base types for compatibility.
         field
     }
 
     fn map_field(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
         if partition_cols.contains(field.name()) && self.wrap_partition_values {
             return match field.data_type() {
-                // Only dictionary-encode types that may be large
-                // https://github.com/apache/arrow-datafusion/pull/5545
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
                     field
                         .as_ref()
@@ -283,54 +295,8 @@ impl DeltaScanConfig {
                 _ => field,
             };
         }
-        if !self.schema_force_view_types {
-            return field;
-        }
-        match field.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 if self.schema_force_view_types => field
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::Utf8View)
-                .into(),
-            DataType::Binary | DataType::LargeBinary if self.schema_force_view_types => field
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::BinaryView)
-                .into(),
-            DataType::Struct(fields) => {
-                let new_fields = fields
-                    .iter()
-                    .map(|f| self.map_field(f.clone(), partition_cols))
-                    .collect();
-                field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(DataType::Struct(new_fields))
-                    .into()
-            }
-            DataType::List(inner) => field
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::List(
-                    self.map_field(inner.clone(), partition_cols),
-                ))
-                .into(),
-            DataType::LargeList(inner) => field
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::LargeList(
-                    self.map_field(inner.clone(), partition_cols),
-                ))
-                .into(),
-            DataType::ListView(inner) => field
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::ListView(
-                    self.map_field(inner.clone(), partition_cols),
-                ))
-                .into(),
-            _ => field,
-        }
+        // NOTE: View types not applied - see map_field_for_parquet comment for rationale.
+        field
     }
 }
 
@@ -594,6 +560,76 @@ mod tests {
             .scan(&ctx.state(), None, &[filter.clone()], None)
             .await?;
         let batches = collect(scan, ctx.task_ctx()).await?;
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_view_types_unsupported_in_next_scan_path() -> TestResult {
+        use arrow_schema::DataType;
+
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+
+        let config = DeltaScanConfig {
+            file_column_name: None,
+            wrap_partition_values: true,
+            enable_parquet_pushdown: true,
+            schema_force_view_types: true,
+            schema: None,
+        };
+
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config)?;
+
+        let has_no_view_type = scan_plan
+            .parquet_read_schema
+            .fields()
+            .iter()
+            .all(|f| !matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView));
+        assert!(
+            has_no_view_type,
+            "schema_force_view_types is not supported in the kernel-based scan path; \
+             parquet_read_schema must use base types to avoid filter type mismatches"
+        );
+
+        let has_no_view_type_exposed = scan_plan
+            .result_schema
+            .fields()
+            .iter()
+            .all(|f| !matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView));
+        assert!(
+            has_no_view_type_exposed,
+            "exposed schema must also use base types for DataFusion FilterExec compatibility"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_with_utf8_literal_works_on_string_column() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let provider = table.table_provider().await?;
+        let ctx = create_session().into_inner();
+
+        let filter = col(r#""Super Name""#).eq(lit(ScalarValue::Utf8(Some("Timothy Lamb".to_string()))));
+        let batches = ctx
+            .read_table(provider.clone())?
+            .filter(filter)?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+--------------------+--------------+",
+            "| Company Very Short | Super Name   |",
+            "+--------------------+--------------+",
+            "| BME                | Timothy Lamb |",
+            "+--------------------+--------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())

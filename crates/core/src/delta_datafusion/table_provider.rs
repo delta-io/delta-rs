@@ -195,7 +195,14 @@ pub struct DeltaScanConfig {
     /// Allow pushdown of the scan filter, defaults to true
     pub enable_parquet_pushdown: bool,
     /// If true, parquet reader will read columns of `Utf8`/`Utf8Large`
-    /// with Utf8View, and `Binary`/`BinaryLarge` with `BinaryView`
+    /// with Utf8View, and `Binary`/`BinaryLarge` with `BinaryView`.
+    ///
+    /// **Note:** This flag is **not honored** in the kernel-based "next scan" path
+    /// (enabled via `DeltaTableProvider::new_with_flags`). In that path, view types
+    /// are intentionally disabled to avoid type mismatches between Utf8View data and
+    /// Utf8 literals in DataFusion's FilterExec. Support requires implementing a
+    /// `PhysicalExprAdapterFactory` to cast literals or adapting pushdown predicates.
+    /// See `crates/core/src/delta_datafusion/table_provider/next/scan/plan.rs` for details.
     pub schema_force_view_types: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
