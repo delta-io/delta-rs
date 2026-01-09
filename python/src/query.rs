@@ -8,6 +8,7 @@ use deltalake::{
 };
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
+use url::Url;
 
 use crate::{convert_stream_to_reader, error::PythonError, utils::rt, RawDeltaTable};
 
@@ -38,6 +39,13 @@ impl PyQueryBuilder {
     /// another table of the same name is not registered over it.
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
         let snapshot = delta_table.cloned_state()?;
+        let log_store = delta_table.log_store()?;
+        let object_store_url = log_store.object_store_url();
+        let url: &Url = object_store_url.as_ref();
+
+        self.ctx
+            .register_object_store(url, log_store.object_store(None));
+
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(snapshot));
         let provider =
