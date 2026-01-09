@@ -54,7 +54,7 @@ mod scan;
 const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) enum SnapshotWrapper {
+pub enum SnapshotWrapper {
     Snapshot(Arc<Snapshot>),
     EagerSnapshot(Arc<EagerSnapshot>),
 }
@@ -85,7 +85,8 @@ pub struct DeltaScan {
 }
 
 impl DeltaScan {
-    pub(super) fn new(snapshot: SnapshotWrapper, config: DeltaScanConfig) -> Result<Self> {
+    // create new delta scan
+    pub fn new(snapshot: SnapshotWrapper, config: DeltaScanConfig) -> Result<Self> {
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
         let full_schema = if config.retain_file_id() {
             let mut fields = scan_schema.fields().to_vec();

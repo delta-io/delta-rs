@@ -75,6 +75,7 @@ pub use self::session::{
     create_session,
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub use self::table_provider::next::SnapshotWrapper;
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
