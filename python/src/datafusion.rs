@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow_schema::{Schema as ArrowSchema, SchemaRef};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
+use datafusion::physical_expr::{PhysicalExpr, create_physical_expr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
@@ -17,7 +17,7 @@ use deltalake::datafusion::datasource::TableType;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
 use deltalake::delta_datafusion::DeltaScanNext;
-use deltalake::{datafusion, DeltaResult, DeltaTableError};
+use deltalake::{DeltaResult, DeltaTableError, datafusion};
 use parking_lot::RwLock;
 use tokio::runtime::Handle;
 

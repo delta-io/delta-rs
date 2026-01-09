@@ -7,7 +7,7 @@ use deltalake::{
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
 
-use crate::{convert_stream_to_reader, error::PythonError, utils::rt, RawDeltaTable};
+use crate::{RawDeltaTable, convert_stream_to_reader, error::PythonError, utils::rt};
 
 /// PyQueryBuilder supports the _experimental_ `QueryBuilder` Python interface which allows users
 /// to take advantage of the [Apache DataFusion](https://datafusion.apache.org) engine already
