@@ -265,6 +265,39 @@ class DeltaTable:
 
         return cls(table_uri=table_uri, storage_options=storage_options)
 
+    def shallow_clone(self, target_uri: str | Path | os.PathLike[str]) -> "DeltaTable":
+        """
+        Create a shallow clone of this Delta table at the given target location and
+        return a new `DeltaTable` instance for the cloned table.
+
+        The shallow clone references the same data files as the source table and does
+        not copy data. Only metadata is created at the target table to reference the
+        existing data files.
+
+        Limitations:
+        - Currently, both source and target locations must be `file://` URLs.
+
+        Args:
+            target_uri: Destination URI for the cloned table. Can be a string path,
+                a `pathlib.Path`, or any `os.PathLike`.
+
+        Returns:
+            DeltaTable: a new `DeltaTable` instance pointing at the cloned table located
+            at `target_uri`.
+        """
+        # Normalize target_uri to a string
+        target_str = str(target_uri) if not isinstance(target_uri, str) else target_uri
+
+        # Execute the shallow clone via the Rust bindings; a new RawDeltaTable is returned
+        cloned_raw = self._table.shallow_clone(target_str)
+
+        # Construct DeltaTable directly with the cloned raw table
+        new_dt = DeltaTable.__new__(DeltaTable)
+        new_dt._table = cloned_raw
+        new_dt._storage_options = self._storage_options
+
+        return new_dt
+
     def version(self) -> int:
         """
         Get the version of the DeltaTable.
