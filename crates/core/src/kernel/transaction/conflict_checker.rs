@@ -519,6 +519,21 @@ impl<'a> ConflictChecker<'a> {
     fn check_for_deleted_files_against_current_txn_read_files(
         &self,
     ) -> Result<(), CommitConflictError> {
+        // For blind append writes, do not consider delete-read conflicts, since the
+        // transaction did not logically read any prior files.
+        let is_blind_append = self
+            .txn_info
+            .actions
+            .iter()
+            .find_map(|a| match a {
+                Action::CommitInfo(ci) => ci.is_blind_append,
+                _ => None,
+            })
+            .unwrap_or(false);
+        if is_blind_append {
+            return Ok(());
+        }
+
         // Fail if files have been deleted that the txn read.
         let read_file_path: HashSet<String> = self
             .txn_info
