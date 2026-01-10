@@ -48,6 +48,7 @@ strum = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 regex = { workspace = true }
+reqwest = { version = "0.12", default-features = false }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true, features = ["serde"] }
