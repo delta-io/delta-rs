@@ -44,8 +44,8 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: ${{ matrix.target }}
-          command: build
-          args:  -m python/Cargo.toml  --profile python-release
+          command: publish
+          args: --skip-existing --no-sdist -m python/Cargo.toml --profile python-release
 
   release-pypi-windows:
     needs: validate-release-tag
@@ -68,8 +68,8 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: x86_64-pc-windows-msvc
-          command: build
-          args:  -m python/Cargo.toml  --profile python-release
+          command: publish
+          args: --skip-existing --no-sdist -m python/Cargo.toml  --profile python-release
 
   release-pypi-manylinux-x86-64:
     needs: validate-release-tag
@@ -88,9 +88,9 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: x86_64-unknown-linux-gnu
-          command: build
+          command: publish
           container: off
-          args:  -m python/Cargo.toml --zig --profile python-release
+          args: --skip-existing -m python/Cargo.toml --zig --profile python-release
           manylinux: "2_17"
 
   release-pypi-manylinux-228-aarch64:
@@ -110,9 +110,9 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: aarch64-unknown-linux-gnu
-          command: build
+          command: publish
           container: off
-          args:  -m python/Cargo.toml --zig --profile python-release
+          args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release
           manylinux: "2_28"
 
   release-pypi-musl-x86-64:
@@ -132,8 +132,8 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: x86_64-unknown-linux-musl
-          command: build
-          args:  -m python/Cargo.toml --zig --profile python-release
+          command: publish
+          args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release
 
   release-docs:
     needs:
