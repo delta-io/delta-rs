@@ -100,6 +100,7 @@ rstest = { version = "0.26.1" }
 serial_test = "3"
 tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-test = "0.4.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
