@@ -355,14 +355,13 @@ impl DeltaScanConfig {
         let field = self.map_view_field(field);
         if partition_cols.contains(field.name()) && self.wrap_partition_values {
             return match field.data_type() {
-                DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Binary
-                | DataType::LargeBinary => field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
-                    .into(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
+                        .into()
+                }
                 DataType::Utf8View => field
                     .as_ref()
                     .clone()
@@ -383,14 +382,13 @@ impl DeltaScanConfig {
         let field = self.map_view_field(field);
         if partition_cols.contains(field.name()) && self.wrap_partition_values {
             return match field.data_type() {
-                DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Binary
-                | DataType::LargeBinary => field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
-                    .into(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
+                        .into()
+                }
                 DataType::Utf8View => field
                     .as_ref()
                     .clone()
@@ -727,17 +725,21 @@ mod tests {
 
         let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config)?;
 
-        let has_view_type = scan_plan.parquet_read_schema.fields().iter().any(|f| {
-            matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView)
-        });
+        let has_view_type = scan_plan
+            .parquet_read_schema
+            .fields()
+            .iter()
+            .any(|f| matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView));
         assert!(
             has_view_type,
             "schema_force_view_types should apply view types in parquet_read_schema"
         );
 
-        let has_view_type_exposed = scan_plan.result_schema.fields().iter().any(|f| {
-            matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView)
-        });
+        let has_view_type_exposed = scan_plan
+            .result_schema
+            .fields()
+            .iter()
+            .any(|f| matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView));
         assert!(
             has_view_type_exposed,
             "schema_force_view_types should apply view types in exposed schema"
@@ -784,7 +786,8 @@ mod tests {
         let provider = table.table_provider().await?;
         let ctx = create_session().into_inner();
 
-        let filter = col(r#""Super Name""#).eq(lit(ScalarValue::Utf8(Some("Timothy Lamb".to_string()))));
+        let filter =
+            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8(Some("Timothy Lamb".to_string()))));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter)?

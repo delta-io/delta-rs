@@ -15,9 +15,9 @@ use arrow::datatypes::{SchemaRef, UInt16Type};
 use arrow_array::{BooleanArray, DictionaryArray, RecordBatchOptions};
 use arrow_schema::{FieldRef, Fields, Schema};
 use dashmap::DashMap;
-use datafusion::common::{HashMap, internal_datafusion_err};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
+use datafusion::common::{HashMap, internal_datafusion_err};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{

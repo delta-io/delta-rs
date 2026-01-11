@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{exec_err, Result, ScalarValue};
+use datafusion::common::{Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
