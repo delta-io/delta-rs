@@ -23,7 +23,10 @@ use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
-    common::{ColumnStatistics, DFSchema, HashMap, Result, Statistics, ToDFSchema, plan_err, stats::Precision},
+    common::{
+        ColumnStatistics, DFSchema, HashMap, Result, Statistics, ToDFSchema, plan_err,
+        stats::Precision,
+    },
     config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
@@ -178,7 +181,6 @@ async fn get_data_scan_plan(
     retain_file_ids: bool,
     enable_parquet_pushdown: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-
     let mut partition_stats = HashMap::new();
 
     // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
@@ -329,7 +331,10 @@ async fn get_read_plan(
         // by creating parquet access plans. However we need to make sure this does not
         // interfere with other delta features like row ids.
         let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
-        if enable_parquet_pushdown && !has_selection_vectors && let Some(pred) = predicate {
+        if enable_parquet_pushdown
+            && !has_selection_vectors
+            && let Some(pred) = predicate
+        {
             let pred = normalize_predicate_to_schema(pred.clone(), physical_schema)?;
             let physical = logical2physical(&pred, physical_schema.as_ref());
             file_source = file_source
@@ -406,99 +411,99 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
 
 pub(crate) fn normalize_predicate_to_schema(expr: Expr, schema: &SchemaRef) -> Result<Expr> {
     use datafusion::common::tree_node::{Transformed, TreeNode};
-    use datafusion::logical_expr::expr::{InList, Like};
     use datafusion::logical_expr::BinaryExpr;
+    use datafusion::logical_expr::expr::{InList, Like};
 
     let df_schema = schema.clone().to_dfschema()?;
 
-    expr.transform(|e| {
-        match &e {
-            Expr::BinaryExpr(binary) => {
-                let left_col_type = get_column_type_for_expr(&binary.left, &df_schema);
-                let right_col_type = get_column_type_for_expr(&binary.right, &df_schema);
+    expr.transform(|e| match &e {
+        Expr::BinaryExpr(binary) => {
+            let left_col_type = get_column_type_for_expr(&binary.left, &df_schema);
+            let right_col_type = get_column_type_for_expr(&binary.right, &df_schema);
 
-                let new_left = convert_expr_literal_for_target(&binary.left, &right_col_type);
-                let new_right = convert_expr_literal_for_target(&binary.right, &left_col_type);
+            let new_left = convert_expr_literal_for_target(&binary.left, &right_col_type);
+            let new_right = convert_expr_literal_for_target(&binary.right, &left_col_type);
 
-                if new_left.is_some() || new_right.is_some() {
-                    Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(new_left.unwrap_or_else(|| (*binary.left).clone())),
-                        op: binary.op.clone(),
-                        right: Box::new(new_right.unwrap_or_else(|| (*binary.right).clone())),
+            if new_left.is_some() || new_right.is_some() {
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(new_left.unwrap_or_else(|| (*binary.left).clone())),
+                    op: binary.op.clone(),
+                    right: Box::new(new_right.unwrap_or_else(|| (*binary.right).clone())),
+                })))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        }
+        Expr::InList(in_list) => {
+            if let Some(target_type) = get_column_type_for_expr(&in_list.expr, &df_schema) {
+                let mut changed = false;
+                let new_list: Vec<_> = in_list
+                    .list
+                    .iter()
+                    .map(|item| {
+                        if let Some(converted) =
+                            convert_expr_literal_for_target(item, &Some(target_type.clone()))
+                        {
+                            changed = true;
+                            converted
+                        } else {
+                            item.clone()
+                        }
+                    })
+                    .collect();
+
+                if changed {
+                    Ok(Transformed::yes(Expr::InList(InList {
+                        expr: in_list.expr.clone(),
+                        list: new_list,
+                        negated: in_list.negated,
                     })))
                 } else {
                     Ok(Transformed::no(e))
                 }
+            } else {
+                Ok(Transformed::no(e))
             }
-            Expr::InList(in_list) => {
-                if let Some(target_type) = get_column_type_for_expr(&in_list.expr, &df_schema) {
-                    let mut changed = false;
-                    let new_list: Vec<_> = in_list
-                        .list
-                        .iter()
-                        .map(|item| {
-                            if let Some(converted) = convert_expr_literal_for_target(item, &Some(target_type.clone())) {
-                                changed = true;
-                                converted
-                            } else {
-                                item.clone()
-                            }
-                        })
-                        .collect();
-
-                    if changed {
-                        Ok(Transformed::yes(Expr::InList(InList {
-                            expr: in_list.expr.clone(),
-                            list: new_list,
-                            negated: in_list.negated,
-                        })))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                } else {
-                    Ok(Transformed::no(e))
-                }
-            }
-            Expr::Like(like) => {
-                if let Some(target_type) = get_column_type_for_expr(&like.expr, &df_schema) {
-                    if let Some(new_pattern) =
-                        convert_expr_literal_for_target(&like.pattern, &Some(target_type))
-                    {
-                        Ok(Transformed::yes(Expr::Like(Like {
-                            negated: like.negated,
-                            expr: like.expr.clone(),
-                            pattern: Box::new(new_pattern),
-                            escape_char: like.escape_char,
-                            case_insensitive: like.case_insensitive,
-                        })))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                } else {
-                    Ok(Transformed::no(e))
-                }
-            }
-            Expr::SimilarTo(like) => {
-                if let Some(target_type) = get_column_type_for_expr(&like.expr, &df_schema) {
-                    if let Some(new_pattern) =
-                        convert_expr_literal_for_target(&like.pattern, &Some(target_type))
-                    {
-                        Ok(Transformed::yes(Expr::SimilarTo(Like {
-                            negated: like.negated,
-                            expr: like.expr.clone(),
-                            pattern: Box::new(new_pattern),
-                            escape_char: like.escape_char,
-                            case_insensitive: like.case_insensitive,
-                        })))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                } else {
-                    Ok(Transformed::no(e))
-                }
-            }
-            _ => Ok(Transformed::no(e)),
         }
+        Expr::Like(like) => {
+            if let Some(target_type) = get_column_type_for_expr(&like.expr, &df_schema) {
+                if let Some(new_pattern) =
+                    convert_expr_literal_for_target(&like.pattern, &Some(target_type))
+                {
+                    Ok(Transformed::yes(Expr::Like(Like {
+                        negated: like.negated,
+                        expr: like.expr.clone(),
+                        pattern: Box::new(new_pattern),
+                        escape_char: like.escape_char,
+                        case_insensitive: like.case_insensitive,
+                    })))
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            } else {
+                Ok(Transformed::no(e))
+            }
+        }
+        Expr::SimilarTo(like) => {
+            if let Some(target_type) = get_column_type_for_expr(&like.expr, &df_schema) {
+                if let Some(new_pattern) =
+                    convert_expr_literal_for_target(&like.pattern, &Some(target_type))
+                {
+                    Ok(Transformed::yes(Expr::SimilarTo(Like {
+                        negated: like.negated,
+                        expr: like.expr.clone(),
+                        pattern: Box::new(new_pattern),
+                        escape_char: like.escape_char,
+                        case_insensitive: like.case_insensitive,
+                    })))
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            } else {
+                Ok(Transformed::no(e))
+            }
+        }
+        _ => Ok(Transformed::no(e)),
     })
     .map(|t| t.data)
 }
@@ -520,30 +525,45 @@ fn convert_expr_literal_for_target(expr: &Expr, target_type: &Option<DataType>) 
     }
 }
 
-fn convert_literal_for_column_type(scalar: &ScalarValue, target_type: &DataType) -> Option<ScalarValue> {
+fn convert_literal_for_column_type(
+    scalar: &ScalarValue,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
     match target_type {
         DataType::Utf8View => match scalar {
-            ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) => Some(ScalarValue::Utf8View(v.clone())),
+            ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) => {
+                Some(ScalarValue::Utf8View(v.clone()))
+            }
             _ => None,
         },
         DataType::BinaryView => match scalar {
-            ScalarValue::Binary(v) | ScalarValue::LargeBinary(v) => Some(ScalarValue::BinaryView(v.clone())),
+            ScalarValue::Binary(v) | ScalarValue::LargeBinary(v) => {
+                Some(ScalarValue::BinaryView(v.clone()))
+            }
             _ => None,
         },
         DataType::Utf8 => match scalar {
-            ScalarValue::Utf8View(v) | ScalarValue::LargeUtf8(v) => Some(ScalarValue::Utf8(v.clone())),
+            ScalarValue::Utf8View(v) | ScalarValue::LargeUtf8(v) => {
+                Some(ScalarValue::Utf8(v.clone()))
+            }
             _ => None,
         },
         DataType::LargeUtf8 => match scalar {
-            ScalarValue::Utf8View(v) | ScalarValue::Utf8(v) => Some(ScalarValue::LargeUtf8(v.clone())),
+            ScalarValue::Utf8View(v) | ScalarValue::Utf8(v) => {
+                Some(ScalarValue::LargeUtf8(v.clone()))
+            }
             _ => None,
         },
         DataType::Binary => match scalar {
-            ScalarValue::BinaryView(v) | ScalarValue::LargeBinary(v) => Some(ScalarValue::Binary(v.clone())),
+            ScalarValue::BinaryView(v) | ScalarValue::LargeBinary(v) => {
+                Some(ScalarValue::Binary(v.clone()))
+            }
             _ => None,
         },
         DataType::LargeBinary => match scalar {
-            ScalarValue::BinaryView(v) | ScalarValue::Binary(v) => Some(ScalarValue::LargeBinary(v.clone())),
+            ScalarValue::BinaryView(v) | ScalarValue::Binary(v) => {
+                Some(ScalarValue::LargeBinary(v.clone()))
+            }
             _ => None,
         },
         DataType::Dictionary(_, value_type) => convert_literal_for_column_type(scalar, value_type),
@@ -693,7 +713,6 @@ mod tests {
         )
         .await?;
 
-
         let batches = collect(plan, session.task_ctx()).await?;
         let expected = vec![
             "+----+-------+-----------------------------+",
@@ -720,7 +739,6 @@ mod tests {
             true,
         )
         .await?;
-
 
         let batches = collect(plan, session.task_ctx()).await?;
         let expected = vec![
@@ -874,9 +892,9 @@ mod tests {
         )
         .await?;
 
-        let error = collect(plan, session.task_ctx()).await.expect_err(
-            "expected nested schema extension to fail for parquet read",
-        );
+        let error = collect(plan, session.task_ctx())
+            .await
+            .expect_err("expected nested schema extension to fail for parquet read");
         assert!(error.to_string().contains("expected Struct"));
 
         Ok(())
@@ -1310,9 +1328,7 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "nested",
-                DataType::Struct(
-                    vec![Field::new("inner", DataType::Utf8View, true)].into(),
-                ),
+                DataType::Struct(vec![Field::new("inner", DataType::Utf8View, true)].into()),
                 true,
             ),
         ]));
@@ -1366,7 +1382,8 @@ mod tests {
             Field::new("data_col", DataType::Utf8View, true),
         ]));
 
-        let part_predicate = col("partition_col").eq(lit(ScalarValue::Utf8View(Some("part_value".to_string()))));
+        let part_predicate =
+            col("partition_col").eq(lit(ScalarValue::Utf8View(Some("part_value".to_string()))));
         let normalized = normalize_predicate_to_schema(part_predicate, &mixed_schema).unwrap();
         if let Expr::BinaryExpr(binary) = &normalized {
             if let Expr::Literal(scalar, _) = &*binary.right {
@@ -1382,7 +1399,8 @@ mod tests {
             panic!("Expected BinaryExpr");
         }
 
-        let data_predicate = col("data_col").eq(lit(ScalarValue::Utf8(Some("data_value".to_string()))));
+        let data_predicate =
+            col("data_col").eq(lit(ScalarValue::Utf8(Some("data_value".to_string()))));
         let normalized = normalize_predicate_to_schema(data_predicate, &mixed_schema).unwrap();
         if let Expr::BinaryExpr(binary) = &normalized {
             if let Expr::Literal(scalar, _) = &*binary.right {
@@ -1443,9 +1461,11 @@ mod tests {
         use super::normalize_predicate_to_schema;
         use datafusion::scalar::ScalarValue;
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8View, true),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "name",
+            DataType::Utf8View,
+            true,
+        )]));
 
         let predicate = col("name").in_list(
             vec![
@@ -1575,7 +1595,9 @@ mod tests {
             Field::new("name", DataType::Utf8View, true),
         ]));
 
-        let cast_expr = col("name").cast_to(&DataType::Utf8View, &schema.clone().to_dfschema().unwrap()).unwrap();
+        let cast_expr = col("name")
+            .cast_to(&DataType::Utf8View, &schema.clone().to_dfschema().unwrap())
+            .unwrap();
         let predicate = cast_expr.eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
         let normalized = normalize_predicate_to_schema(predicate, &schema).unwrap();
 
@@ -1632,8 +1654,16 @@ mod tests {
         use datafusion::scalar::ScalarValue;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("col-173b4db9-b5ad-427f-9e75-516aae37fbbb", DataType::Utf8View, true),
-            Field::new("col-3877fd94-0973-4941-ac6b-646849a1ff65", DataType::Utf8View, true),
+            Field::new(
+                "col-173b4db9-b5ad-427f-9e75-516aae37fbbb",
+                DataType::Utf8View,
+                true,
+            ),
+            Field::new(
+                "col-3877fd94-0973-4941-ac6b-646849a1ff65",
+                DataType::Utf8View,
+                true,
+            ),
         ]));
 
         let predicate = col("col-3877fd94-0973-4941-ac6b-646849a1ff65")
@@ -1662,7 +1692,11 @@ mod tests {
         use datafusion::common::ToDFSchema;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("col-173b4db9-b5ad-427f-9e75-516aae37fbbb", DataType::Utf8View, true),
+            Field::new(
+                "col-173b4db9-b5ad-427f-9e75-516aae37fbbb",
+                DataType::Utf8View,
+                true,
+            ),
             Field::new("normal_name", DataType::Utf8View, true),
         ]));
         let df_schema = schema.to_dfschema().unwrap();
@@ -1746,7 +1780,10 @@ mod tests {
         let normalized = normalize_predicate_to_schema(ilike_expr, &schema).unwrap();
 
         if let Expr::Like(like) = &normalized {
-            assert!(like.case_insensitive, "Should preserve case_insensitive flag");
+            assert!(
+                like.case_insensitive,
+                "Should preserve case_insensitive flag"
+            );
             if let Expr::Literal(scalar, _) = &*like.pattern {
                 assert!(
                     matches!(scalar, ScalarValue::Utf8View(_)),

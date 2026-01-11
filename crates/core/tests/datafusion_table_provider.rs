@@ -31,10 +31,7 @@ async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
     Ok((snapshot, session))
 }
 
-async fn scan_dat_with_session(
-    case: &str,
-    session: &SessionContext,
-) -> TestResult<Snapshot> {
+async fn scan_dat_with_session(case: &str, session: &SessionContext) -> TestResult<Snapshot> {
     let root_dir = format!(
         "{}/../../dat/v0.0.3/reader_tests/generated/{}/",
         env!["CARGO_MANIFEST_DIR"],
@@ -137,8 +134,8 @@ async fn test_all_primitive_types() -> TestResult<()> {
 async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
     use arrow_schema::DataType;
 
-    let config = SessionConfig::new()
-        .set_bool("datafusion.execution.parquet.schema_force_view_types", true);
+    let config =
+        SessionConfig::new().set_bool("datafusion.execution.parquet.schema_force_view_types", true);
     let session = SessionContext::new_with_config(config);
     let snapshot = scan_dat_with_session("all_primitive_types", &session).await?;
     let provider = DeltaScanNext::builder()
@@ -147,10 +144,15 @@ async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
         .await?;
 
     let plan = provider.scan(&session.state(), None, &[], None).await?;
-    let has_view_types = plan.schema().fields().iter().any(|field| {
-        matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView)
-    });
-    assert!(has_view_types, "view types should be present when configured");
+    let has_view_types = plan
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
+    assert!(
+        has_view_types,
+        "view types should be present when configured"
+    );
 
     let filter = col("utf8").eq(lit("1"));
     let batches = session
@@ -159,13 +161,7 @@ async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
         .select(vec![col("utf8")])?
         .collect()
         .await?;
-    let expected = vec![
-        "+------+",
-        "| utf8 |",
-        "+------+",
-        "| 1    |",
-        "+------+",
-    ];
+    let expected = vec!["+------+", "| utf8 |", "+------+", "| 1    |", "+------+"];
     assert_batches_sorted_eq!(&expected, &batches);
 
     Ok(())
@@ -175,8 +171,10 @@ async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
 async fn test_view_types_disabled() -> TestResult<()> {
     use arrow_schema::DataType;
 
-    let config = SessionConfig::new()
-        .set_bool("datafusion.execution.parquet.schema_force_view_types", false);
+    let config = SessionConfig::new().set_bool(
+        "datafusion.execution.parquet.schema_force_view_types",
+        false,
+    );
     let session = SessionContext::new_with_config(config);
     let snapshot = scan_dat_with_session("all_primitive_types", &session).await?;
     let provider = DeltaScanNext::builder()
@@ -185,10 +183,15 @@ async fn test_view_types_disabled() -> TestResult<()> {
         .await?;
 
     let plan = provider.scan(&session.state(), None, &[], None).await?;
-    let has_view_types = plan.schema().fields().iter().any(|field| {
-        matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView)
-    });
-    assert!(!has_view_types, "view types should be disabled when configured");
+    let has_view_types = plan
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
+    assert!(
+        !has_view_types,
+        "view types should be disabled when configured"
+    );
 
     Ok(())
 }
