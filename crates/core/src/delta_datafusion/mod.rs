@@ -1810,10 +1810,9 @@ mod tests {
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
         let expected = vec![
+            ObjectStoreOperation::Get(LocationType::Commit),
             ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
             ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
-            #[expect(clippy::single_range_in_vec_init)]
-            ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..46]),
         ];
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;

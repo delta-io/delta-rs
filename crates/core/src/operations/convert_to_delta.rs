@@ -570,9 +570,9 @@ mod tests {
         partition_schema: Vec<StructField>,
         // Whether testing on object store or path
         from_path: bool,
-    ) -> DeltaTable {
-        let temp_dir = tempdir().expect("Failed to create a temp directory");
-        let temp_dir = temp_dir
+    ) -> (tempfile::TempDir, DeltaTable) {
+        let root = tempdir().expect("Failed to create a temp directory");
+        let temp_dir = root
             .path()
             .to_str()
             .expect("Failed to convert Path to string slice");
@@ -585,20 +585,24 @@ mod tests {
         } else {
             ConvertToDeltaBuilder::new().with_log_store(log_store(temp_dir))
         };
-        builder
-            .with_partition_schema(partition_schema)
-            .await
-            .unwrap_or_else(|e| {
-                panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
-            })
+        (
+            root,
+            builder
+                .with_partition_schema(partition_schema)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
+                }),
+        )
     }
 
     async fn open_created_delta_table(
         path: &str,
         partition_schema: Vec<StructField>,
-    ) -> DeltaTable {
-        let temp_dir = tempdir().expect("Failed to create a temp directory");
-        let temp_dir = temp_dir
+    ) -> (tempfile::TempDir, DeltaTable) {
+        // The [TempDir] has to be returned so that it stays in scoipe until the function completes
+        let root = tempdir().expect("Failed to create a temp directory");
+        let temp_dir = root
             .path()
             .to_str()
             .expect("Failed to convert to string slice");
@@ -612,7 +616,10 @@ mod tests {
                 panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
             });
         let table_uri = url::Url::from_directory_path(std::path::Path::new(temp_dir)).unwrap();
-        open_table(table_uri).await.expect("Failed to open table")
+        (
+            root,
+            open_table(table_uri).await.expect("Failed to open table"),
+        )
     }
 
     async fn assert_delta_table(
@@ -690,7 +697,7 @@ mod tests {
     #[tokio::test]
     async fn test_convert_to_delta() {
         let path = "../test/tests/data/delta-0.8.0-date";
-        let table = create_delta_table(path, Vec::new(), false).await;
+        let (_tmp, table) = create_delta_table(path, Vec::new(), false).await;
         let action = table
             .get_active_add_actions_by_partitions(&[])
             .next()
@@ -726,7 +733,7 @@ mod tests {
         .await;
 
         let path = "../test/tests/data/delta-0.8.0-null-partition";
-        let table = create_delta_table(
+        let (_tmp2, table) = create_delta_table(
             path,
             vec![schema_field("k", PrimitiveType::String, true)],
             false,
@@ -751,7 +758,7 @@ mod tests {
         ).await;
 
         let path = "../test/tests/data/delta-0.8.0-special-partition";
-        let table = create_delta_table(
+        let (_tmp3, table) = create_delta_table(
             path,
             vec![schema_field("x", PrimitiveType::String, true)],
             false,
@@ -779,7 +786,7 @@ mod tests {
         .await;
 
         let path = "../test/tests/data/delta-0.8.0-partitioned";
-        let table = create_delta_table(
+        let (_tmp4, table) = create_delta_table(
             path,
             vec![
                 schema_field("day", PrimitiveType::String, true),
@@ -834,7 +841,7 @@ mod tests {
     #[tokio::test]
     async fn test_open_created_delta_table() {
         let path = "../test/tests/data/delta-0.2.0";
-        let table = open_created_delta_table(path, Vec::new()).await;
+        let (_tmp, table) = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
             path,
@@ -854,7 +861,7 @@ mod tests {
         .await;
 
         let path = "../test/tests/data/delta-0.8-empty";
-        let table = open_created_delta_table(path, Vec::new()).await;
+        let (_tmp2, table) = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
             path,
@@ -869,7 +876,7 @@ mod tests {
         .await;
 
         let path = "../test/tests/data/delta-0.8.0";
-        let table = open_created_delta_table(path, Vec::new()).await;
+        let (_tmp3, table) = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
             path,
@@ -889,7 +896,7 @@ mod tests {
     #[tokio::test]
     async fn test_convert_to_delta_from_path() {
         let path = "../test/tests/data/delta-2.2.0-partitioned-types";
-        let table = create_delta_table(
+        let (_tmp, table) = create_delta_table(
             path,
             vec![
                 schema_field("c1", PrimitiveType::Integer, true),
@@ -927,7 +934,7 @@ mod tests {
         .await;
 
         let path = "../test/tests/data/delta-0.8.0-numeric-partition";
-        let table = create_delta_table(
+        let (_tmp2, table) = create_delta_table(
             path,
             vec![
                 schema_field("x", PrimitiveType::Long, true),
