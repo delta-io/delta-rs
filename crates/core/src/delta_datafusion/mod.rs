@@ -311,7 +311,7 @@ impl DeltaTableState {
 pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store(None));
+    env.register_object_store(url, store.root_object_store(None));
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
