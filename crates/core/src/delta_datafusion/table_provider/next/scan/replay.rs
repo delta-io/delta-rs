@@ -335,7 +335,7 @@ fn extract_file_statistics(
                 .collect_vec();
 
             Some((
-                parse_path(scan.snapshot().table_root(), view.path_raw().as_ref()).ok()?,
+                parse_path(scan.snapshot().table_root(), view.path_raw()).ok()?,
                 (
                     Statistics {
                         num_rows,

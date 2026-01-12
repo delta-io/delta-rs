@@ -143,13 +143,10 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
                     other => other.schema_name().to_string(),
                 };
 
-                match to_delta_expression(&scalar_fn.args[0])? {
-                    Expression::Column(ref col_name) => {
-                        return Ok(Expression::Column(
-                            col_name.join(&ColumnName::from_naive_str_split(field_name)),
-                        ));
-                    }
-                    _ => {}
+                if let Expression::Column(ref col_name) = to_delta_expression(&scalar_fn.args[0])? {
+                    return Ok(Expression::Column(
+                        col_name.join(&ColumnName::from_naive_str_split(field_name)),
+                    ));
                 }
             }
             plan_err!(
