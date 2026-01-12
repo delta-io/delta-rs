@@ -12,14 +12,15 @@ use datafusion::catalog::TableProvider;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result, Statistics, ToDFSchema};
+use datafusion::common::{Column, ColumnStatistics, DFSchema, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+    FileGroup, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -52,7 +53,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::delta_datafusion::engine::AsObjectStoreUrl;
-use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
     DataFusionMixins as _, LogDataHandler, get_null_of_arrow_type, register_store,
@@ -362,7 +363,12 @@ pub struct DeltaScanConfig {
     /// Allow pushdown of the scan filter, defaults to true
     pub enable_parquet_pushdown: bool,
     /// If true, parquet reader will read columns of `Utf8`/`Utf8Large`
-    /// with Utf8View, and `Binary`/`BinaryLarge` with `BinaryView`
+    /// with Utf8View, and `Binary`/`BinaryLarge` with `BinaryView`.
+    ///
+    /// In the kernel-based "next scan" path, view types are supported by applying
+    /// filters inside the scan so literals are normalized to the read schema.
+    /// In the legacy `DeltaTableProvider` path, literal normalization is not applied;
+    /// leave this off unless DataFusion already produces view literals.
     pub schema_force_view_types: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
@@ -381,7 +387,7 @@ impl DeltaScanConfig {
             file_column_name: None,
             wrap_partition_values: true,
             enable_parquet_pushdown: true,
-            schema_force_view_types: true,
+            schema_force_view_types: false,
             schema: None,
         }
     }
@@ -704,12 +710,74 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
+        // Remap stats to TableSchema order: file_schema columns, then partition columns
+        let partition_col_names = self.snapshot.metadata().partition_columns();
+        let source_schema = self.snapshot.schema();
+        let stats_by_name: HashMap<String, ColumnStatistics> = source_schema
+            .fields()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                stats
+                    .column_statistics
+                    .get(idx)
+                    .map(|s| (field.name().to_string(), s.clone()))
+            })
+            .collect();
+
+        let file_col_stats: Vec<ColumnStatistics> = file_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                stats_by_name
+                    .get(f.name())
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown)
+            })
+            .collect();
+
+        let partition_col_stats: Vec<ColumnStatistics> = partition_col_names
+            .iter()
+            .map(|name| {
+                stats_by_name
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown)
+            })
+            .collect();
+
+        let mut reordered_stats = file_col_stats;
+        reordered_stats.extend(partition_col_stats);
+
+        let stats = Statistics {
+            num_rows: stats.num_rows,
+            total_byte_size: stats.total_byte_size,
+            column_statistics: reordered_stats,
+        };
+
+        // file_column has no source stats
+        let stats = if config.file_column_name.is_some() {
+            let mut col_stats = stats.column_statistics;
+            col_stats.push(ColumnStatistics::new_unknown());
+            Statistics {
+                num_rows: stats.num_rows,
+                total_byte_size: stats.total_byte_size,
+                column_statistics: col_stats,
+            }
+        } else {
+            stats
+        };
+
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
 
-        let mut file_source = ParquetSource::new(parquet_options);
+        let partition_fields: Vec<Arc<Field>> =
+            table_partition_cols.into_iter().map(Arc::new).collect();
+        let table_schema = TableSchema::new(file_schema, partition_fields);
+
+        let mut file_source =
+            ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
@@ -719,11 +787,9 @@ impl<'a> DeltaScanBuilder<'a> {
         {
             file_source = file_source.with_predicate(predicate);
         };
-        let file_source =
-            file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
 
         let file_scan_config =
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), file_schema, file_source)
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(file_source))
                 .with_file_groups(
                     // If all files were filtered out, we still need to emit at least one partition to
                     // pass datafusion sanity checks.
@@ -736,9 +802,8 @@ impl<'a> DeltaScanBuilder<'a> {
                     },
                 )
                 .with_statistics(stats)
-                .with_projection_indices(self.projection.cloned())
+                .with_projection_indices(self.projection.cloned())?
                 .with_limit(self.limit)
-                .with_table_partition_cols(table_partition_cols)
                 .build();
 
         let metrics = ExecutionPlanMetricsSet::new();
@@ -764,12 +829,24 @@ impl<'a> DeltaScanBuilder<'a> {
 /// A table provider can be built by providing either a log store, a Snapshot,
 /// or an eager snapshot. If some Snapshot is provided, that will be used directly,
 /// and no IO will be performed when building the provider.
-#[derive(Debug)]
 pub struct TableProviderBuilder {
     log_store: Option<Arc<dyn LogStore>>,
     snapshot: Option<SnapshotWrapper>,
     file_column: Option<String>,
     table_version: Option<Version>,
+    session: Option<Arc<dyn Session>>,
+}
+
+impl std::fmt::Debug for TableProviderBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TableProviderBuilder")
+            .field("log_store", &self.log_store)
+            .field("snapshot", &self.snapshot)
+            .field("file_column", &self.file_column)
+            .field("table_version", &self.table_version)
+            .field("session", &self.session.as_ref().map(|_| "<Session>"))
+            .finish()
+    }
 }
 
 impl Default for TableProviderBuilder {
@@ -785,6 +862,7 @@ impl TableProviderBuilder {
             snapshot: None,
             file_column: None,
             table_version: None,
+            session: None,
         }
     }
 
@@ -820,6 +898,15 @@ impl TableProviderBuilder {
         self.file_column = Some(file_column.to_string());
         self
     }
+
+    /// Provide a DataFusion session to seed scan configuration.
+    ///
+    /// Session-level options (e.g. parquet settings, view types) are only applied
+    /// when a session is supplied here.
+    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
+        self
+    }
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -830,7 +917,11 @@ impl std::future::IntoFuture for TableProviderBuilder {
         let this = self;
 
         Box::pin(async move {
-            let mut config = DeltaScanConfig::new();
+            let mut config = if let Some(session) = this.session.as_ref() {
+                DeltaScanConfig::new_from_session(session.as_ref())
+            } else {
+                DeltaScanConfig::new()
+            };
             if let Some(file_column) = this.file_column {
                 config = config.with_file_column_name(file_column);
             }
@@ -873,6 +964,11 @@ impl DeltaTable {
             builder = builder.with_log_store(self.log_store());
         }
         builder
+    }
+
+    /// Build a provider that honors session-level DataFusion configuration.
+    pub fn table_provider_with_session(&self, session: Arc<dyn Session>) -> TableProviderBuilder {
+        self.table_provider().with_session(session)
     }
 
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {

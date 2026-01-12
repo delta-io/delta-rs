@@ -302,6 +302,7 @@ fn extract_file_statistics(
                             min_value: Precision::Absent,
                             sum_value: Precision::Absent,
                             distinct_count: Precision::Absent,
+                            byte_size: Precision::Absent,
                         };
                     }
 
@@ -330,6 +331,7 @@ fn extract_file_statistics(
                         min_value,
                         sum_value: Precision::Absent,
                         distinct_count: Precision::Absent,
+                        byte_size: Precision::Absent,
                     }
                 })
                 .collect_vec();
