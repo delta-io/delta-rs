@@ -95,7 +95,7 @@ impl KernelScanPlan {
         // Specifically, if a filter references a partition column that is not
         // part of the projection, we need to add it to the scan projection.
         // This is because may not include columns that are handled Exact by a provider.
-        let result_schema = Arc::new(table_schema.project(&projection)?);
+        let result_schema = Arc::new(table_schema.project(projection)?);
         let columns_in_filters: HashSet<_> = filters
             .iter()
             .flat_map(|f| f.column_refs().iter().map(|c| c.name()).collect_vec())
@@ -335,8 +335,7 @@ fn process_filters(
             parquet
                 .iter()
                 .flatten()
-                .map(|ex| rewrite_expression((*ex).clone(), config).ok())
-                .flatten(),
+                .filter_map(|ex| rewrite_expression((*ex).clone(), config).ok()),
         )
     } else {
         conjunction(parquet.iter().flatten().map(|ex| (*ex).clone()))
@@ -408,29 +407,23 @@ fn rewrite_expression(expr: Expr, config: &TableConfiguration) -> Result<Expr> {
         .make_physical(config.column_mapping_mode())
         .leaves(None);
     let (physical_names, _) = physical_schema.as_ref();
-    let name_mapping: HashMap<_, _> = logical_names
-        .into_iter()
-        .zip(physical_names.into_iter())
-        .collect();
+    let name_mapping: HashMap<_, _> = logical_names.iter().zip(physical_names).collect();
     let transformed = expr.transform(|node| match &node {
         // Scalar functions might be field a field access for a nested column
         // (e.g. `a.b.c`), so we might be able to handle them here as well
         Expr::Column(_) | Expr::ScalarFunction(_) => {
             let col_name = to_delta_expression(&node)?;
-            match &col_name {
-                Expression::Column(name) => {
-                    if let Some(physical_name) = name_mapping.get(name) {
-                        return Ok(Transformed::yes(to_datafusion_expr(
-                            &Expression::Column((*physical_name).clone()),
-                            // This is just a dummy datatype, since column re-writes
-                            // do not require datatype information
-                            &KernelDataType::BOOLEAN,
-                        )?));
-                    } else {
-                        return plan_err!("Column '{name}' not found in physical schema");
-                    }
+            if let Expression::Column(name) = &col_name {
+                if let Some(physical_name) = name_mapping.get(name) {
+                    return Ok(Transformed::yes(to_datafusion_expr(
+                        &Expression::Column((*physical_name).clone()),
+                        // This is just a dummy datatype, since column re-writes
+                        // do not require datatype information
+                        &KernelDataType::BOOLEAN,
+                    )?));
+                } else {
+                    return plan_err!("Column '{name}' not found in physical schema");
                 }
-                _ => (),
             }
             Ok(Transformed::no(node))
         }

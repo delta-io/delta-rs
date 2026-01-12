@@ -2,13 +2,10 @@ use std::sync::Arc;
 
 use deltalake::{
     datafusion::{catalog::TableProvider, prelude::SessionContext},
-    delta_datafusion::{
-        DataFusionMixins, DeltaScanConfig, DeltaScanNext, DeltaSessionContext, SnapshotWrapper,
-    },
+    delta_datafusion::{DeltaScanConfig, DeltaScanNext, DeltaSessionContext, SnapshotWrapper},
 };
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
-use url::Url;
 
 use crate::{convert_stream_to_reader, error::PythonError, utils::rt, RawDeltaTable};
 

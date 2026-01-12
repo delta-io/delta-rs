@@ -252,7 +252,7 @@ fn update_partition_stats(
 ) -> Result<()> {
     for (field, stat) in data.fields().iter().zip(data.values().iter()) {
         let (null_count, value) = if stat.is_null() {
-            (stats.num_rows.clone(), Precision::Absent)
+            (stats.num_rows, Precision::Absent)
         } else {
             (
                 Precision::Exact(0),
