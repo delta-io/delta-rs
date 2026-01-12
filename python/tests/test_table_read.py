@@ -1127,11 +1127,11 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             {
                 "date": Array(
                     ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
-                    ArrowField("date", type=DataType.string(), nullable=True),
+                    ArrowField("date", type=DataType.string_view(), nullable=True),
                 ),
                 "value": Array(
                     ["a", "b", "c", "d"],
-                    ArrowField("value", type=DataType.string(), nullable=True),
+                    ArrowField("value", type=DataType.string_view(), nullable=True),
                 ),
             }
         ),
