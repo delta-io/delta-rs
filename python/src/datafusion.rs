@@ -2,7 +2,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow_schema::Schema as ArrowSchema;
+use arrow_schema::{Schema as ArrowSchema, SchemaRef};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -16,8 +16,10 @@ use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult
 use deltalake::datafusion::datasource::TableType;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
+use deltalake::delta_datafusion::DeltaScanNext;
 use deltalake::{datafusion, DeltaResult, DeltaTableError};
 use parking_lot::RwLock;
+use tokio::runtime::Handle;
 
 #[derive(Debug)]
 pub(crate) struct LazyTableProvider {
@@ -114,6 +116,61 @@ impl TableProvider for LazyTableProvider {
 
     fn statistics(&self) -> Option<Statistics> {
         None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TokioDeltaScan {
+    inner: DeltaScanNext,
+    handle: Handle,
+}
+
+impl TokioDeltaScan {
+    pub fn new(inner: DeltaScanNext, handle: Handle) -> Self {
+        Self { inner, handle }
+    }
+}
+
+#[async_trait::async_trait]
+impl TableProvider for TokioDeltaScan {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.inner.get_table_definition()
+    }
+
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
+        self.inner.get_logical_plan()
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let inner = &self.inner;
+
+        self.handle
+            .block_on(async { inner.scan(session, projection, filters, limit).await })
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        self.inner.supports_filters_pushdown(filter)
     }
 }
 

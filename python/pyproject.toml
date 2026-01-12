@@ -88,6 +88,7 @@ markers = [
     "unitycatalog_databricks: marks tests that require unitycatalog_databricks",
     "unitycatalog_oss: marks tests that require unitycatalog_oss",
     "pyspark: marks tests that require pyspark",
+    "datafusion: marks tests that require datafusion"
 ]
 
 [tool.coverage.run]
@@ -109,6 +110,7 @@ dev = [
 ]
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.32"]
+datafusion = ["datafusion==51.0.0"]
 lakefs = ["lakefs==0.8.0"]
 pyspark = [
     "pyspark==4.0.1",
@@ -125,4 +127,4 @@ other = [
 ]
 
 [tool.uv]
-default-groups = ["dev", "opentelemetry", "polars", "lakefs", "docs", "other"]
+default-groups = ["dev", "opentelemetry", "polars", "datafusion", "lakefs", "docs", "other"]
