@@ -1844,7 +1844,7 @@ impl RawDeltaTable {
 
         let table = self.with_table(|t| Ok(t.clone()))?;
 
-        let config = DeltaScanConfig::new();
+        let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(
             table
                 .snapshot()

@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use deltalake::{
-    datafusion::prelude::SessionContext,
+    datafusion::{catalog::TableProvider, prelude::SessionContext},
     delta_datafusion::{
-        DataFusionMixins, DeltaScanConfigBuilder, DeltaSessionContext, DeltaTableProvider,
+        DataFusionMixins, DeltaScanConfig, DeltaScanNext, DeltaSessionContext, SnapshotWrapper,
     },
 };
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
+use url::Url;
 
 use crate::{convert_stream_to_reader, error::PythonError, utils::rt, RawDeltaTable};
 
@@ -39,16 +40,16 @@ impl PyQueryBuilder {
     pub fn register(&self, table_name: &str, delta_table: &RawDeltaTable) -> PyResult<()> {
         let snapshot = delta_table.cloned_state()?;
         let log_store = delta_table.log_store()?;
+        let url = log_store.root_url();
 
-        let scan_config = DeltaScanConfigBuilder::default()
-            .with_schema(snapshot.input_schema())
-            .build(&snapshot)
-            .map_err(PythonError::from)?;
+        self.ctx
+            .register_object_store(url, log_store.root_object_store(None));
 
-        let provider = Arc::new(
-            DeltaTableProvider::try_new(snapshot, log_store, scan_config)
-                .map_err(PythonError::from)?,
-        );
+        let config = DeltaScanConfig::new().with_wrap_partition_values(false);
+        let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(snapshot));
+        let provider =
+            Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
+                as Arc<dyn TableProvider>;
 
         self.ctx
             .register_table(table_name, provider)
