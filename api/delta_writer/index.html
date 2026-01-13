@@ -2332,7 +2332,7 @@ If 'ignore', will not write anything if table already exists.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>When using <code>Overwrite</code> mode, replace data that matches a predicate. Only used in rust engine.'</p>
+              <p>When using <code>Overwrite</code> mode, replace data that matches a predicate.'</p>
             </div>
           </td>
           <td>
@@ -2518,7 +2518,7 @@ If 'ignore', will not write anything if table already exists.</p>
   </span>
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">ColumnProperties</span><span class="p">(</span><span class="n">dictionary_enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">statistics_enabled</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;NONE&#39;</span><span class="p">,</span> <span class="s1">&#39;CHUNK&#39;</span><span class="p">,</span> <span class="s1">&#39;PAGE&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">bloom_filter_properties</span><span class="p">:</span> <span class="n">BloomFilterProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">ColumnProperties</span><span class="p">(</span><span class="n">dictionary_enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">statistics_enabled</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;NONE&#39;</span><span class="p">,</span> <span class="s1">&#39;CHUNK&#39;</span><span class="p">,</span> <span class="s1">&#39;PAGE&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">bloom_filter_properties</span><span class="p">:</span> <span class="n">BloomFilterProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">encoding</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;PLAIN&#39;</span><span class="p">,</span> <span class="s1">&#39;RLE&#39;</span><span class="p">,</span> <span class="s1">&#39;DELTA_BINARY_PACKED&#39;</span><span class="p">,</span> <span class="s1">&#39;DELTA_LENGTH_BYTE_ARRAY&#39;</span><span class="p">,</span> <span class="s1">&#39;DELTA_BYTE_ARRAY&#39;</span><span class="p">,</span> <span class="s1">&#39;BYTE_STREAM_SPLIT&#39;</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2577,6 +2577,20 @@ If 'ignore', will not write anything if table already exists.</p>
           <td>
             <div class="doc-md-description">
               <p>Bloom Filter Properties for the column.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>encoding</code></td>
+          <td>
+                <code><span title="typing.Literal">Literal</span>[&#39;PLAIN&#39;, &#39;RLE&#39;, &#39;DELTA_BINARY_PACKED&#39;, &#39;DELTA_LENGTH_BYTE_ARRAY&#39;, &#39;DELTA_BYTE_ARRAY&#39;, &#39;BYTE_STREAM_SPLIT&#39;] | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Encoding for the column if <em>NOT</em> using dictionary encoding.</p>
             </div>
           </td>
           <td>

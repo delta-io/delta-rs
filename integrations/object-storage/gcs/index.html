@@ -1545,6 +1545,33 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#using-rust-with-gcs" class="md-nav__link">
+    Using Rust with GCS
+  </a>
+  
+    <nav class="md-nav" aria-label="Using Rust with GCS">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#before-manual-registration-deprecated" class="md-nav__link">
+    Before (manual registration - deprecated)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-automatic-registration" class="md-nav__link">
+    After (automatic registration)
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#using-application-default-credentials" class="md-nav__link">
     Using Application Default Credentials
   </a>
@@ -2051,6 +2078,33 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#using-rust-with-gcs" class="md-nav__link">
+    Using Rust with GCS
+  </a>
+  
+    <nav class="md-nav" aria-label="Using Rust with GCS">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#before-manual-registration-deprecated" class="md-nav__link">
+    Before (manual registration - deprecated)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-automatic-registration" class="md-nav__link">
+    After (automatic registration)
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#using-application-default-credentials" class="md-nav__link">
     Using Application Default Credentials
   </a>
@@ -2099,20 +2153,43 @@
 <h1 id="gcs-storage-backend">GCS Storage Backend</h1>
 <p><code>delta-rs</code> offers native support for using Google Cloud Storage (GCS) as an object storage backend.</p>
 <p>You don’t need to install any extra dependencies to read/write Delta tables to GCS with engines that use <code>delta-rs</code>. You do need to configure your GCS access credentials correctly.</p>
+<h2 id="using-rust-with-gcs">Using Rust with GCS</h2>
+<p>When using the Rust <code>deltalake</code> crate with the <code>gcs</code> feature enabled, GCS support is <strong>automatically registered</strong> at program startup. You don't need to manually call any registration functions.</p>
+<h3 id="before-manual-registration-deprecated">Before (manual registration - deprecated)</h3>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// Legacy approach where applications had to register the handler</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">deltalake</span><span class="p">::</span><span class="n">gcp</span><span class="p">::</span><span class="n">register_handlers</span><span class="p">(</span><span class="nb">None</span><span class="p">);</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kd">let</span><span class="w"> </span><span class="n">ops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DeltaOps</span><span class="p">::</span><span class="n">try_from_uri</span><span class="p">(</span><span class="s">&quot;gs://bucket/table&quot;</span><span class="p">.</span><span class="n">parse</span><span class="p">()</span><span class="o">?</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span></code></pre></div>
+<h3 id="after-automatic-registration">After (automatic registration)</h3>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// Enable the gcs feature in Cargo.toml:</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1">// deltalake = { version = &quot;0.29&quot;, features = [&quot;gcs&quot;] }</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">use</span><span class="w"> </span><span class="n">deltalake</span><span class="p">::</span><span class="n">DeltaOps</span><span class="p">;</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="cp">#[tokio::main]</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="c1">// The gs:// scheme is recognized automatically</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DeltaOps</span><span class="p">::</span><span class="n">try_from_uri</span><span class="p">(</span><span class="s">&quot;gs://bucket/table&quot;</span><span class="p">.</span><span class="n">parse</span><span class="p">()</span><span class="o">?</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The automatic registration happens via constructor hooks in the meta-crate (see the <a href="https://github.com/delta-io/delta-rs/blob/main/CHANGELOG.md">CHANGELOG</a> for details).</p>
+<p><strong>Note</strong>: If you're using <code>deltalake-core</code> and individual storage crates directly (instead of the <code>deltalake</code> meta-crate), you'll still need to call <code>deltalake_gcp::register_handlers(None)</code> manually.</p>
 <h2 id="using-application-default-credentials">Using Application Default Credentials</h2>
 <p>Application Default Credentials (ADC) is a strategy used by GCS to automatically find credentials based on the application environment.</p>
 <p>If you are working from your local machine and have ADC set up then you can read/write Delta tables from GCS directly, without having to pass your credentials explicitly.</p>
 <h2 id="example-write-delta-tables-to-gcs-with-polars">Example: Write Delta tables to GCS with Polars</h2>
 <p>Using Polars, you can write a Delta table to GCS like this:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># create a toy dataframe</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;foo&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]})</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># define path</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">table_path</span> <span class="o">=</span> <span class="s2">&quot;gs://bucket/delta-table&quot;</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># write Delta to GCS</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">df</span><span class="o">.</span><span class="n">write_delta</span><span class="p">(</span><span class="n">table_path</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># create a toy dataframe</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;foo&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]})</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># define path</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">table_path</span> <span class="o">=</span> <span class="s2">&quot;gs://bucket/delta-table&quot;</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># write Delta to GCS</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">df</span><span class="o">.</span><span class="n">write_delta</span><span class="p">(</span><span class="n">table_path</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="passing-gcs-credentials-explicitly">Passing GCS Credentials explicitly</h2>
 <p>Alternatively, you can pass GCS credentials to your query engine explicitly.</p>

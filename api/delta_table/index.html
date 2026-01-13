@@ -2010,6 +2010,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.count" class="md-nav__link">
+    count
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.create" class="md-nav__link">
     create
   </a>
@@ -2038,15 +2045,8 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.DeltaTable.files" class="md-nav__link">
-    files
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltalake.DeltaTable.files_by_partitions" class="md-nav__link">
-    files_by_partitions
+  <a href="#deltalake.DeltaTable.generate" class="md-nav__link">
+    generate
   </a>
   
 </li>
@@ -2458,6 +2458,55 @@ Depending on the storage backend used, you could provide options values using th
   
       <p>Delete expired log files before current version from table. The table log retention is based on
 the <code>delta.logRetentionDuration</code> value, 30 days by default.</p>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.DeltaTable.count" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">count</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">count</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Get the approximate row count based on file statistics added to the Delta table.</p>
+<p>This requires that add actions have been added to the Delta table with
+per-file statistics enabled. Because this is an optional field this
+"count" will be less than or equal to the true row count of the table.
+In order to get an exact number of rows a full table scan must happen</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>
+                <code>int</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>The approximate number of rows for this specific table</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 
@@ -2943,111 +2992,38 @@ The supported type for value is str. Use empty string <code>''</code> for Null p
 
 
 
-<h4 id="deltalake.DeltaTable.files" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">files</span>
+<h4 id="deltalake.DeltaTable.generate" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">generate</span>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">files</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">generate</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      <p>Get the .parquet files of the DeltaTable.</p>
-<p>The paths are as they are saved in the delta log, which may either be
-relative to the table root or absolute URIs.</p>
-
-
-
-  <p><strong>Parameters:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Description</th>
-        <th>Default</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td><code>partition_filters</code></td>
-          <td>
-                <code>list[tuple[str, str, <span title="typing.Any">Any</span>]] | None</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>the partition filters that will be used for
-                getting the matched files</p>
-            </div>
-          </td>
-          <td>
-                <code>None</code>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-
-
-
-  <p><strong>Returns:</strong></p>
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-        <tr>
-          <td>
-                <code>list[str]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>list of the .parquet files referenced for the current version of the DeltaTable</p>
-            </div>
-          </td>
-        </tr>
-    </tbody>
-  </table>
-      <p>Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
-DNF allows arbitrary boolean logical combinations of single partition predicates.
-The innermost tuples each describe a single partition predicate. The list of inner
-predicates is interpreted as a conjunction (AND), forming a more selective and
-multiple partition predicates. Each tuple has format: (key, op, value) and compares
-the key with the value. The supported op are: <code>=</code>, <code>!=</code>, <code>in</code>, and <code>not in</code>. If
-the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-The supported type for value is str. Use empty string <code>''</code> for Null partition value.</p>
-
-<details class="example" open>
-  <summary>Example</summary>
-  <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>(&quot;x&quot;, &quot;=&quot;, &quot;a&quot;)
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>(&quot;x&quot;, &quot;!=&quot;, &quot;a&quot;)
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>(&quot;y&quot;, &quot;in&quot;, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;])
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>(&quot;z&quot;, &quot;not in&quot;, [&quot;a&quot;,&quot;b&quot;])
+      <p>Generate symlink manifest for engines that cannot read native Delta Lake tables.</p>
+<p>The generate supports the fairly simple "GENERATE" operation which produces a
+<a href="https://docs.delta.io/delta-utility/#generate-a-manifest-file">symlink_format_manifest</a> file
+when needed for an external engine such as Presto or BigQuery.</p>
+<p>The "symlink_format_manifest" is not something that has been well documented, but for
+enon-partitioned tables this will generate a <code>_symlink_format_manifest/manifest</code> file next to
+the <code>_delta_log</code>, for example:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>COVID-19_NYT
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── _delta_log
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│   ├── 00000000000000000000.crc
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>│   └── 00000000000000000000.json
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── part-00000-a496f40c-e091-413a-85f9-b1b69d4b3b4e-c000.snappy.parquet
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── part-00001-9d9d980b-c500-4f0b-bb96-771a515fbccc-c000.snappy.parquet
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── part-00002-8826af84-73bd-49a6-a4b9-e39ffed9c15a-c000.snappy.parquet
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>├── part-00003-539aff30-2349-4b0d-9726-c18630c6ad90-c000.snappy.parquet
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>├── part-00004-1bb9c3e3-c5b0-4d60-8420-23261f58a5eb-c000.snappy.parquet
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>├── part-00005-4d47f8ff-94db-4d32-806c-781a1cf123d2-c000.snappy.parquet
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>├── part-00006-d0ec7722-b30c-4e1c-92cd-b4fe8d3bb954-c000.snappy.parquet
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>├── part-00007-4582392f-9fc2-41b0-ba97-a74b3afc8239-c000.snappy.parquet
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>└── _symlink_format_manifest
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    └── manifest
 </span></code></pre></div>
-</details>
-  </div>
-
-</div>
-
-
-<div class="doc doc-object doc-function">
-
-
-
-<h4 id="deltalake.DeltaTable.files_by_partitions" class="doc doc-heading">
-          <span class="doc doc-object-name doc-function-name">files_by_partitions</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">files_by_partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">PartitionFilterType</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      <p>Get the files for each partition</p>
 
   </div>
 
