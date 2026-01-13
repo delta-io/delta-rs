@@ -67,7 +67,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot, resolve_snapshot_with_config};
 use crate::logstore::LogStoreRef;
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -205,8 +205,9 @@ impl std::future::IntoFuture for DeleteBuilder {
         let this = self;
 
         Box::pin(async move {
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config());
             let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

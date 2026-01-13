@@ -48,6 +48,7 @@ use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
 use crate::kernel::{EagerSnapshot, Snapshot};
+use crate::table::builder::DeltaTableConfig;
 
 mod scan;
 
@@ -72,6 +73,13 @@ impl SnapshotWrapper {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.as_ref(),
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot(),
+        }
+    }
+
+    pub(crate) fn load_config(&self) -> &DeltaTableConfig {
+        match self {
+            SnapshotWrapper::Snapshot(snap) => snap.load_config(),
+            SnapshotWrapper::EagerSnapshot(esnap) => esnap.load_config(),
         }
     }
 }
@@ -138,6 +146,11 @@ impl TableProvider for DeltaScan {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Apply encryption settings to the session if configured
+        if let Some(format_options) = &self.snapshot.load_config().file_format_options {
+            format_options.update_session(session)?;
+        }
+
         let engine = DataFusionEngine::new_from_session(session);
 
         // Filter out file_id column from projection if present

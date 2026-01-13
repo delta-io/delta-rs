@@ -77,7 +77,7 @@ use crate::{
 };
 use crate::{
     delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
-    kernel::resolve_snapshot,
+    kernel::{resolve_snapshot, resolve_snapshot_with_config},
 };
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -523,8 +523,9 @@ impl std::future::IntoFuture for UpdateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config());
             let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

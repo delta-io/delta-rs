@@ -80,7 +80,7 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
+use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot, resolve_snapshot_with_config};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -1558,8 +1558,9 @@ impl std::future::IntoFuture for MergeBuilder {
         let this = self;
 
         Box::pin(async move {
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config());
             let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
 
             PROTOCOL.can_write_to(&snapshot)?;
 

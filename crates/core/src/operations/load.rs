@@ -11,7 +11,7 @@ use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
 use crate::delta_datafusion::{DataFusionMixins as _, create_session};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{EagerSnapshot, resolve_snapshot_with_config};
 use crate::logstore::{LogStoreExt, LogStoreRef};
 use crate::table::state::DeltaTableState;
 
@@ -77,7 +77,8 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot, true, None).await?;
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config().clone());
+            let snapshot = resolve_snapshot_with_config(&this.log_store, this.snapshot, true, None, base_config.as_ref()).await?;
             PROTOCOL.can_read_from(&snapshot)?;
 
             let schema = snapshot.read_schema();
@@ -109,6 +110,11 @@ impl std::future::IntoFuture for LoadBuilder {
                 }
                 session
             };
+
+            // Apply encryption settings to the session if configured
+            if let Some(format_options) = &snapshot.load_config().file_format_options {
+                format_options.update_session(session.as_ref())?;
+            }
 
             let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             let provider = table.table_provider().await?;

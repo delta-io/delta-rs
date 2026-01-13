@@ -886,6 +886,11 @@ impl std::future::IntoFuture for TableProviderBuilder {
                 }
             };
 
+            // Set table_parquet_options from the snapshot's file_format_options
+            if let Some(file_format_options) = &snapshot.load_config().file_format_options {
+                config.table_parquet_options = Some(file_format_options.table_options().parquet);
+            }
+
             Ok(Arc::new(next::DeltaScan::new(snapshot, config)?) as Arc<dyn TableProvider>)
         })
     }
@@ -898,7 +903,7 @@ impl DeltaTable {
     pub fn table_provider(&self) -> TableProviderBuilder {
         let mut builder = TableProviderBuilder::new();
         if let Ok(state) = self.snapshot() {
-            builder = builder.with_eager_snapshot(state.snapshot().clone());
+            builder = builder.with_eager_snapshot(state.snapshot.clone());
         } else {
             builder = builder.with_log_store(self.log_store());
         }

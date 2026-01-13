@@ -220,7 +220,9 @@ impl EncryptionFactory for MockKmsClient {
         let file_idx = self.counter.fetch_add(1, Ordering::Relaxed);
         let key = vec![file_idx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let mut keys = self.encryption_keys.lock().unwrap();
-        keys.insert(file_path.clone(), key.clone());
+        // Use just the filename as key to handle path prefix differences between write and read
+        let filename = Path::from(file_path.filename().unwrap_or(file_path.as_ref()));
+        keys.insert(filename, key.clone());
         let encryption_properties = FileEncryptionProperties::builder(key).build()?;
         Ok(Some(encryption_properties))
     }
@@ -231,7 +233,9 @@ impl EncryptionFactory for MockKmsClient {
         file_path: &Path,
     ) -> datafusion::error::Result<Option<Arc<FileDecryptionProperties>>> {
         let keys = self.encryption_keys.lock().unwrap();
-        let key = keys.get(file_path).ok_or_else(|| {
+        // Use just the filename as key to handle path prefix differences between write and read
+        let filename = Path::from(file_path.filename().unwrap_or(file_path.as_ref()));
+        let key = keys.get(&filename).ok_or_else(|| {
             datafusion::error::DataFusionError::Execution(format!("No key for file {file_path:?}"))
         })?;
         let decryption_properties = FileDecryptionProperties::builder(key.clone()).build()?;

@@ -56,7 +56,7 @@ use crate::delta_datafusion::{DeltaRuntimeEnvBuilder, DeltaSessionContext, Delta
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{EagerSnapshot, resolve_snapshot, resolve_snapshot_with_config};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -369,8 +369,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config());
             let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();

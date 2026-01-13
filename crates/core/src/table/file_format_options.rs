@@ -60,6 +60,10 @@ impl FileFormatOptions for SimpleFileFormatOptions {
     fn writer_properties_factory(&self) -> WriterPropertiesFactoryRef {
         build_writer_properties_factory_tpo(&Some(self.table_options.parquet.clone())).unwrap()
     }
+
+    // Note: SimpleFileFormatOptions doesn't need to update the session
+    // because the table_options() method provides the parquet options directly.
+    // The scan code retrieves these options via file_format_options.table_options().
 }
 
 pub trait FileFormatToWriterPropertiesFactory {
