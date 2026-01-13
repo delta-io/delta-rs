@@ -56,27 +56,9 @@ pub enum DeltaTableError {
         json_err: serde_json::error::Error,
     },
 
-    /// Error returned when the log contains invalid stats JSON.
-    #[error("Invalid JSON in invariant expression, line=`{line}`, err=`{json_err}`")]
-    InvalidInvariantJson {
-        /// JSON error details returned when parsing the invariant expression JSON.
-        json_err: serde_json::error::Error,
-        /// Invariant expression.
-        line: String,
-    },
-
     /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
     InvalidVersion(i64),
-
-    /// Error returned when the DeltaTable has no data files.
-    #[error("Corrupted table, cannot read data file {}: {}", .path, .source)]
-    MissingDataFile {
-        /// Source error details returned when the DeltaTable has no data files.
-        source: std::io::Error,
-        /// The Path used of the DeltaTable
-        path: String,
-    },
 
     /// Error returned when the datetime string is invalid for a conversion.
     #[error("Invalid datetime string: {}", .source)]
@@ -101,10 +83,6 @@ pub enum DeltaTableError {
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
 
-    /// Error returned when no partition was found in the DeltaTable.
-    #[error("No partitions found, please make sure table is partitioned.")]
-    LoadPartitions,
-
     /// Error returned when writes are attempted with data that doesn't match the schema of the
     /// table
     #[error("Data does not match the schema or partitions of the table: {}", msg)]
@@ -125,13 +103,6 @@ pub enum DeltaTableError {
     InvalidPartitionFilter {
         /// The invalid partition filter used.
         partition_filter: String,
-    },
-
-    /// Error returned when a partition filter uses a nonpartitioned column.
-    #[error("Tried to filter partitions on non-partitioned columns: {:#?}", .nonpartitioned_columns)]
-    ColumnsNotPartitioned {
-        /// The columns used in the partition filter that is not partitioned
-        nonpartitioned_columns: Vec<String>,
     },
 
     /// Error returned when a line from log record is invalid.
@@ -180,13 +151,6 @@ pub enum DeltaTableError {
     /// Generic Delta Table error
     #[error("Log JSON serialization error: {json_err}")]
     SerializeLogJson {
-        /// JSON serialization error
-        json_err: serde_json::error::Error,
-    },
-
-    /// Generic Delta Table error
-    #[error("Schema JSON serialization error: {json_err}")]
-    SerializeSchemaJson {
         /// JSON serialization error
         json_err: serde_json::error::Error,
     },
