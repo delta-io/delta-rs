@@ -5,16 +5,32 @@
 //! that contain records that satisfy the predicate. Once files are determined
 //! they are rewritten without the records.
 //!
-//!
 //! Predicates MUST be deterministic otherwise undefined behaviour may occur during the
 //! scanning and rewriting phase.
 //!
 //! # Example
-//! ```rust ignore
-//! let table = open_table("../path/to/table")?;
-//! let (table, metrics) = DeleteBuilder::new(table.object_store(), table.state)
-//!     .with_predicate(col("col1").eq(lit(1)))
-//!     .await?;
+//! ```
+//! # use datafusion::logical_expr::{col, lit};
+//! # use deltalake_core::{DeltaTable, kernel::{DataType, PrimitiveType, StructType, StructField}};
+//! # use deltalake_core::operations::delete::DeleteBuilder;
+//! # tokio_test::block_on(async {
+//! #  let schema = StructType::try_new(vec![
+//! #      StructField::new(
+//! #          "id".to_string(),
+//! #          DataType::Primitive(PrimitiveType::String),
+//! #          true,
+//! #      )]).expect("Failed to generate schema for test");
+//! # let table = DeltaTable::try_from_url(url::Url::parse("memory://").unwrap())
+//! #               .await.expect("Failed to construct DeltaTable instance for test")
+//! #        .create()
+//! #        .with_columns(schema.fields().cloned())
+//! #        .await
+//! #        .expect("Failed to create test table");
+//! let (table, metrics) = table.delete()
+//!     .with_predicate(col("id").eq(lit(102)))
+//!     .await
+//!     .expect("Failed to delete");
+//! # })
 //! ````
 
 use async_trait::async_trait;
@@ -470,8 +486,8 @@ async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use crate::DeltaTable;
-    use crate::TableProperty;
+    use super::*;
+
     use crate::kernel::DataType as DeltaDataType;
     use crate::operations::collect_sendable_stream;
     use crate::protocol::*;
@@ -480,6 +496,7 @@ mod tests {
     use crate::writer::test_utils::{
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
+    use crate::{DeltaResult, DeltaTable, TableProperty};
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -493,6 +510,7 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
     use delta_kernel::schema::PrimitiveType;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -507,6 +525,24 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         table
+    }
+
+    #[tokio::test]
+    async fn test_delete_on_empty_table() -> DeltaResult<()> {
+        let table = setup_table(None).await;
+        let batch = get_record_batch(None, false);
+        let table = write_batch(table, batch).await;
+        assert_eq!(Some(1), table.version());
+
+        let (table, _metrics) = DeleteBuilder::new(table.log_store(), None).await?;
+        assert_eq!(Some(2), table.version());
+
+        let (table, _metrics) = DeleteBuilder::new(table.log_store(), None).await?;
+        assert_eq!(Some(2), table.version());
+
+        let actual = get_data(&table).await;
+        assert!(actual.is_empty());
+        Ok(())
     }
 
     #[tokio::test]

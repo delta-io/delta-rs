@@ -70,6 +70,7 @@ use uuid::Uuid;
 
 use writer::maybe_lazy_cast_reader;
 
+use crate::datafusion::TokioDeltaScan;
 use crate::error::{to_rt_err, DeltaError, DeltaProtocolError, PythonError};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
@@ -1839,12 +1840,11 @@ impl RawDeltaTable {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         // tokio runtime handle?
-        let handle = None;
+        let handle = rt().handle();
         let name = CString::new("datafusion_table_provider").unwrap();
-
         let table = self.with_table(|t| Ok(t.clone()))?;
 
-        let config = DeltaScanConfig::new();
+        let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(
             table
                 .snapshot()
@@ -1852,10 +1852,10 @@ impl RawDeltaTable {
                 .snapshot()
                 .clone(),
         ));
-        let scan =
-            Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
-                as Arc<dyn TableProvider>;
-        let provider = FFI_TableProvider::new(scan, false, handle);
+        let scan = DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?;
+        let tokio_scan =
+            Arc::new(TokioDeltaScan::new(scan, handle.clone())) as Arc<dyn TableProvider>;
+        let provider = FFI_TableProvider::new(tokio_scan, false, Some(handle.clone()));
 
         PyCapsule::new(py, provider, Some(name.clone()))
     }

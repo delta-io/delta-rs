@@ -14,7 +14,7 @@
 //!   )
 //!       .await
 //!       .unwrap();
-//!   ctx.register_table("demo", Arc::new(table)).unwrap();
+//!   ctx.register_table("demo", table.table_provider().await.unwrap()).unwrap();
 //!
 //!   let batches = ctx
 //!       .sql("SELECT * FROM demo").await.unwrap()
@@ -67,15 +67,15 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::{Constraint, GeneratedColumn};
-use crate::{DeltaTable, open_table, open_table_with_storage_options};
+use crate::{open_table, open_table_with_storage_options};
 
 pub(crate) use self::session::session_state_from_session;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
-pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub use self::table_provider::next::SnapshotWrapper;
+pub use self::table_provider::next::{DeltaScan as DeltaScanNext, DeltaScanExec};
 pub(crate) use find_files::*;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -237,7 +237,7 @@ fn _arrow_schema(
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
-                        // // https://github.com/apache/arrow-datafusion/pull/5545
+                        // https://github.com/apache/arrow-datafusion/pull/5545
                         ArrowDataType::Utf8
                         | ArrowDataType::LargeUtf8
                         | ArrowDataType::Binary
@@ -707,7 +707,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         _schema: SchemaRef,
         _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-        let provider: DeltaTable = serde_json::from_slice(buf)
+        let provider: DeltaScanNext = serde_json::from_slice(buf)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))?;
         Ok(Arc::new(provider))
     }
@@ -718,14 +718,14 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let table = node
+        let scan = node
             .as_ref()
             .as_any()
-            .downcast_ref::<DeltaTable>()
+            .downcast_ref::<DeltaScanNext>()
             .ok_or_else(|| {
                 DataFusionError::Internal("Can't encode non-delta tables".to_string())
             })?;
-        serde_json::to_writer(buf, table)
+        serde_json::to_writer(buf, scan)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
 }
@@ -741,14 +741,14 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = if cmd.options.is_empty() {
+        let table = if cmd.options.is_empty() {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table(table_url).await?
         } else {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(Arc::new(provider))
+        Ok(table.table_provider().await?)
     }
 }
 
@@ -798,9 +798,11 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
+    use crate::DeltaTable;
     use crate::logstore::ObjectStoreRef;
     use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
+    use crate::test_utils::open_fs_path;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
@@ -1119,27 +1121,19 @@ mod tests {
 
     #[tokio::test]
     async fn delta_table_provider_with_config() {
-        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
-            .canonicalize()
+        let table = open_fs_path("../test/tests/data/delta-2.2.0-partitioned-types");
+        let provider = table
+            .table_provider()
+            .with_file_column("file_source")
+            .await
             .unwrap();
-        let table_url = url::Url::from_directory_path(table_path).unwrap();
-        let table = crate::open_table(table_url).await.unwrap();
-        let config = DeltaScanConfigBuilder::new()
-            .with_file_column_name(&"file_source")
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-
-        let log_store = table.log_store();
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            log_store,
-            config,
-        )
-        .unwrap();
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
-        let df = ctx.sql("select * from test").await.unwrap();
+        let df = ctx
+            .sql("select c3, c1, c2, right(file_source, 77) as file_source from test")
+            .await
+            .unwrap();
         let actual = df.collect().await.unwrap();
         let expected = vec![
             "+----+----+----+-------------------------------------------------------------------------------+",
@@ -1192,22 +1186,16 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-
-        let log_store = table.log_store();
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            log_store,
-            config,
-        )
-        .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let logical_schema = provider.schema();
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.runtime_env().register_object_store(
+            table.log_store().root_url(),
+            table.log_store().object_store(None),
+        );
+        ctx.register_table("test", provider).unwrap();
 
-        let expected_logical_order = vec!["value", "modified", "id"];
+        let expected_logical_order = vec!["id", "value", "modified"];
         let actual_order: Vec<String> = logical_schema
             .fields()
             .iter()
@@ -1217,14 +1205,14 @@ mod tests {
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
         let expected = vec![
-            "+-------+------------+----+",
-            "| value | modified   | id |",
-            "+-------+------------+----+",
-            "| 1     | 2021-02-01 | A  |",
-            "| 10    | 2021-02-01 | B  |",
-            "| 100   | 2021-02-02 | D  |",
-            "| 20    | 2021-02-02 | C  |",
-            "+-------+------------+----+",
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 20    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
         assert_eq!(expected_logical_order, actual_order);
@@ -1538,7 +1526,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_predicate_pushdown() {
-        use crate::datafusion::prelude::SessionContext;
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("moDified", ArrowDataType::Utf8, true),
             Field::new("id", ArrowDataType::Utf8, true),
@@ -1567,9 +1554,13 @@ mod tests {
             .unwrap();
 
         let datafusion = SessionContext::new();
-        let table = Arc::new(table);
+        table
+            .update_datafusion_session(&datafusion.state())
+            .unwrap();
 
-        datafusion.register_table("snapshot", table).unwrap();
+        datafusion
+            .register_table("snapshot", table.table_provider().await.unwrap())
+            .unwrap();
 
         let df = datafusion
             .sql("select * from snapshot where id > 10000 and id < 20000")
@@ -1702,20 +1693,17 @@ mod tests {
         }
     }
 
+    // Run a query that filters out all files and sorts.
+    // Verify that it returns an empty set of rows without panicking.
+    //
+    // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
+    // datafusion rejected.
     #[tokio::test]
     async fn passes_sanity_checker_when_all_files_filtered() {
-        // Run a query that filters out all files and sorts.
-        // Verify that it returns an empty set of rows without panicking.
-        //
-        // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
-        // datafusion rejected.
-        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
-            .canonicalize()
+        let table = open_fs_path("../test/tests/data/delta-2.2.0-partitioned-types");
+        let ctx = create_session().into_inner();
+        ctx.register_table("test", table.table_provider().await.unwrap())
             .unwrap();
-        let table_url = url::Url::from_directory_path(table_path).unwrap();
-        let table = crate::open_table(table_url).await.unwrap();
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
 
         let df = ctx
             .sql("select * from test where c3 = 100 ORDER BY c1 ASC")
@@ -1810,10 +1798,9 @@ mod tests {
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
         let expected = vec![
+            ObjectStoreOperation::Get(LocationType::Commit),
             ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
             ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
-            #[expect(clippy::single_range_in_vec_init)]
-            ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..46]),
         ];
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;
@@ -1851,8 +1838,10 @@ mod tests {
                 None,
             )
             .await?;
+        table.update_datafusion_session(&ctx.state()).unwrap();
 
-        ctx.register_table("snapshot", Arc::new(table)).unwrap();
+        ctx.register_table("snapshot", table.table_provider().await.unwrap())
+            .unwrap();
 
         let df = ctx
             .sql("select * from snapshot where id > 10000 and id < 20000")

@@ -202,16 +202,10 @@ impl DeltaTable {
         &mut self,
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        match self.state.as_mut() {
-            Some(state) => state.update(&self.log_store, max_version).await,
-            _ => {
-                let state =
-                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
-                        .await?;
-                self.state = Some(state);
-                Ok(())
-            }
-        }
+        self.state = Some(
+            DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version).await?,
+        );
+        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.

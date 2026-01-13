@@ -187,16 +187,22 @@ mod delete_expired_delta_log_in_checkpoint {
 
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
             table.table_url().clone(),
-            table.version().unwrap(),
+            table.version().expect("Failed to load version() on table"),
             None,
             None,
         )
         .await
-        .unwrap();
+        .expect("Failed to create a checkpoint and cleanup");
 
-        table.update_state().await.unwrap(); // make table to read the checkpoint
+        table
+            .load()
+            .await
+            .expect("Failed to read the checkpoint back");
         assert_eq!(
-            table.get_files_by_partitions(&[]).await?,
+            table
+                .get_files_by_partitions(&[])
+                .await
+                .expect("Failed to get_files_by_partitions()"),
             vec![
                 ObjectStorePath::from(a2.path.as_ref()),
                 ObjectStorePath::from(a1.path.as_ref()),

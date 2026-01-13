@@ -767,9 +767,8 @@ mod tests {
     use itertools::Itertools;
     use serde_json::{Value, json};
 
-    async fn get_write_metrics(table: DeltaTable) -> WriteMetrics {
-        let mut commit_info: Vec<crate::kernel::CommitInfo> =
-            table.history(Some(1)).await.unwrap().collect();
+    async fn get_write_metrics(table: &DeltaTable) -> WriteMetrics {
+        let mut commit_info: Vec<_> = table.history(Some(1)).await.unwrap().collect();
         let metrics = commit_info
             .first_mut()
             .unwrap()
@@ -790,7 +789,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         // Append
         let table = write_batch(table, batch.clone()).await;
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert_eq!(write_metrics.num_removed_files, 0);
         assert_common_write_metrics(write_metrics);
@@ -826,7 +825,7 @@ mod tests {
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert_eq!(
             write_metrics.num_added_files,
@@ -858,7 +857,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert_eq!(write_metrics.num_added_files, 1);
         assert_common_write_metrics(write_metrics);
@@ -887,7 +886,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(3));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert!(write_metrics.num_removed_files > 0);
         assert_common_write_metrics(write_metrics);
@@ -926,7 +925,7 @@ mod tests {
             .write(vec![batch])
             .await
             .unwrap();
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 2);
         assert_common_write_metrics(write_metrics);
 
@@ -953,7 +952,7 @@ mod tests {
             .await
             .unwrap();
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
 
@@ -993,7 +992,7 @@ mod tests {
             .await
             .unwrap();
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert_common_write_metrics(write_metrics);
 
@@ -1033,7 +1032,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
     }
 
@@ -1048,7 +1047,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_files, 2);
         assert_common_write_metrics(write_metrics);
 
@@ -1061,7 +1060,7 @@ mod tests {
         assert_eq!(table.version(), Some(0));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 4);
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_files, 4);
         assert_common_write_metrics(write_metrics);
     }
@@ -1076,7 +1075,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
@@ -1137,7 +1136,7 @@ mod tests {
             "Created time should be the milliseconds since epoch of when the action was created"
         );
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
     }
 
@@ -1152,7 +1151,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
@@ -1209,7 +1208,7 @@ mod tests {
             .clone();
         assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
 
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
     }
 
@@ -1222,7 +1221,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
         for field in batch.schema().fields() {
@@ -1276,7 +1275,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
@@ -1333,7 +1332,7 @@ mod tests {
 
         let table = table.write(vec![batch.clone()]).await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let schema: StructType = serde_json::from_value(json!({
@@ -1377,7 +1376,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let actual = get_data(&table).await;
@@ -1414,12 +1413,12 @@ mod tests {
         .await
         .unwrap();
 
-        let _table = ops
+        let table = ops
             .write([batch.clone()])
             .with_partition_columns(["string"])
             .await
             .unwrap();
-        let write_metrics: WriteMetrics = get_write_metrics(_table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let table_uri = url::Url::from_directory_path(&tmp_path).unwrap();
@@ -1428,11 +1427,11 @@ mod tests {
         let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
 
         let expected = vec![
-            "+------+----------------------------------+",
-            "| data | string                           |",
-            "+------+----------------------------------+",
-            "| test | $%&/()=^\"[]#*?._- {=}|`<>~/\\r\\n+ |",
-            "+------+----------------------------------+",
+            r#"+----------------------------------+------+"#,
+            r#"| string                           | data |"#,
+            r#"+----------------------------------+------+"#,
+            r#"| $%&/()=^"[]#*?._- {=}|`<>~/\r\n+ | test |"#,
+            r#"+----------------------------------+------+"#,
         ];
 
         assert_batches_eq!(&expected, &data);
@@ -1463,7 +1462,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 4);
         assert_common_write_metrics(write_metrics);
 
@@ -1484,7 +1483,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert_common_write_metrics(write_metrics);
 
@@ -1525,7 +1524,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         // Take clones of these before an operation resulting in error, otherwise it will
@@ -1569,7 +1568,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
 
         let batch_add = RecordBatch::try_new(
@@ -1593,7 +1592,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
 
@@ -1657,7 +1656,7 @@ mod tests {
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
 
@@ -1667,7 +1666,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert!(write_metrics.num_removed_files > 0);
         assert_common_write_metrics(write_metrics);
@@ -1730,7 +1729,7 @@ mod tests {
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 3);
         assert_common_write_metrics(write_metrics);
 
@@ -1741,7 +1740,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        let write_metrics: WriteMetrics = get_write_metrics(table.clone()).await;
+        let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, 1);
         assert!(write_metrics.num_removed_files > 0);
         assert_common_write_metrics(write_metrics);

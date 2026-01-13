@@ -8,7 +8,7 @@ on:
 jobs:
   cleanup:
     name: Cleanup PR Caches
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     permissions:
       actions: write
