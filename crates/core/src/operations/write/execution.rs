@@ -33,7 +33,6 @@ use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::WriterPropertiesFactoryRef;
 use crate::table::Constraint as DeltaConstraint;
-use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 

@@ -77,7 +77,7 @@ use crate::{
 };
 use crate::{
     delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
-    kernel::{resolve_snapshot, resolve_snapshot_with_config},
+    kernel::resolve_snapshot_with_config,
 };
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated

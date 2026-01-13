@@ -67,7 +67,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot, resolve_snapshot_with_config};
+use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot_with_config};
 use crate::logstore::LogStoreRef;
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;

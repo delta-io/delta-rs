@@ -108,7 +108,6 @@ pub use self::table::builder::{
 };
 pub use self::table::config::TableProperty;
 pub use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, path::Path};
-pub use operations::DeltaOps;
 
 pub use protocol::checkpoints;
 
