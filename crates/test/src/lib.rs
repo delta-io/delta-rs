@@ -61,7 +61,7 @@ impl TestContext {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
         let table_url = ensure_table_uri(&uri).unwrap();
-        DeltaTableBuilder::from_uri(table_url)
+        DeltaTableBuilder::from_url(table_url)
             .unwrap()
             .with_storage_options(config)
             .build_storage()
@@ -150,7 +150,7 @@ pub async fn add_file(
             .build(Some(snapshot), table.log_store(), operation)
             .await
             .unwrap();
-        table.update().await.unwrap();
+        table.update_state().await.unwrap();
     }
 }
 
@@ -186,5 +186,5 @@ pub async fn remove_file(
         .build(Some(snapshot), table.log_store(), operation)
         .await
         .unwrap();
-    table.update().await.unwrap();
+    table.update_state().await.unwrap();
 }

@@ -45,6 +45,9 @@ format: ## Format the code
 	uv run --no-sync ruff check . --fix
 	uv run --no-sync ruff format .
 
+.PHONY: check
+check: check-rust check-python ## Run all checks for formatting, etc.
+
 .PHONY: check-rust
 check-rust: ## Run check on Rust
 	$(info --- Check Rust clippy ---)

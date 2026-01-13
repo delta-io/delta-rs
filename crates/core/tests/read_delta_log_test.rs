@@ -31,7 +31,7 @@ async fn test_log_buffering() {
     let max_iter = 10;
     let buf_size = 10;
 
-    let location = Url::from_directory_path(&path).unwrap();
+    let location = Url::from_directory_path(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
     let store = std::sync::Arc::new(fs_common::SlowStore::new(location.clone()).unwrap());
@@ -39,7 +39,7 @@ async fn test_log_buffering() {
     let mut seq_version = 0;
     let t = SystemTime::now();
     for _x in 0..max_iter {
-        let mut table_seq = DeltaTableBuilder::from_uri(Url::from_directory_path(&path).unwrap())
+        let mut table_seq = DeltaTableBuilder::from_url(Url::from_directory_path(path).unwrap())
             .unwrap()
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
@@ -56,7 +56,7 @@ async fn test_log_buffering() {
     let mut buf_version = 0;
     let t2 = SystemTime::now();
     for _x in 0..max_iter {
-        let mut table_buf = DeltaTableBuilder::from_uri(Url::from_directory_path(&path).unwrap())
+        let mut table_buf = DeltaTableBuilder::from_url(Url::from_directory_path(path).unwrap())
             .unwrap()
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
@@ -91,7 +91,7 @@ async fn test_log_buffering_success_explicit_version() {
     let buf_sizes = [1, 2, 10, 50];
     for buf_size in buf_sizes {
         let table_uri = Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap();
-        let mut table = DeltaTableBuilder::from_uri(table_uri)
+        let mut table = DeltaTableBuilder::from_url(table_uri)
             .unwrap()
             .with_version(0)
             .with_log_buffer_size(buf_size)
@@ -102,7 +102,7 @@ async fn test_log_buffering_success_explicit_version() {
         table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), Some(10));
 
-        let mut table = DeltaTableBuilder::from_uri(Url::from_directory_path(&path).unwrap())
+        let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
             .with_log_buffer_size(buf_size)
@@ -113,7 +113,7 @@ async fn test_log_buffering_success_explicit_version() {
         table.update_incremental(Some(0)).await.unwrap();
         assert_eq!(table.version(), Some(0));
 
-        let mut table = DeltaTableBuilder::from_uri(Url::from_directory_path(&path).unwrap())
+        let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
             .with_log_buffer_size(buf_size)
@@ -124,7 +124,7 @@ async fn test_log_buffering_success_explicit_version() {
         table.update_incremental(Some(1)).await.unwrap();
         assert_eq!(table.version(), Some(1));
 
-        let mut table = DeltaTableBuilder::from_uri(Url::from_directory_path(&path).unwrap())
+        let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
             .with_log_buffer_size(buf_size)
@@ -135,7 +135,7 @@ async fn test_log_buffering_success_explicit_version() {
         table.update_incremental(Some(10)).await.unwrap();
         assert_eq!(table.version(), Some(10));
 
-        let mut table = DeltaTableBuilder::from_uri(Url::from_directory_path(&path).unwrap())
+        let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
             .with_log_buffer_size(buf_size)
@@ -154,7 +154,7 @@ async fn test_log_buffering_fail() {
     let path = tmp_dir.path().to_path_buf();
     let _table = fs_common::create_table(&path.to_string_lossy(), None).await;
     let table_uri = Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap();
-    let table_result = DeltaTableBuilder::from_uri(table_uri)
+    let table_result = DeltaTableBuilder::from_url(table_uri)
         .and_then(|builder| builder.with_version(0).with_log_buffer_size(0));
     assert!(table_result.is_err());
 }
@@ -172,7 +172,7 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 #[ignore = "not implemented"]
 async fn test_read_table_features() -> DeltaResult<()> {
     let path = "../test/tests/data/simple_table_features";
-    let table_uri = Url::from_directory_path(&path).unwrap();
+    let table_uri = Url::from_directory_path(path).unwrap();
     let mut _table = deltalake_core::open_table(table_uri).await?;
     let rf = _table.snapshot()?.protocol().reader_features();
     let wf = _table.snapshot()?.protocol().writer_features();

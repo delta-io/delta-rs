@@ -13,8 +13,8 @@ use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::expressions::UnaryExpressionOp;
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::DataType;
 use delta_kernel::schema::PrimitiveType;
+use delta_kernel::schema::{DataType, SchemaRef as KernelSchemaRef};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator};
@@ -22,10 +22,10 @@ use futures::Stream;
 use pin_project_lite::pin_project;
 use tracing::log::*;
 
+use crate::kernel::ARROW_HANDLER;
+use crate::kernel::StructType;
 use crate::kernel::arrow::engine_ext::SnapshotExt;
 use crate::kernel::arrow::extract::{self as ex};
-use crate::kernel::StructType;
-use crate::kernel::ARROW_HANDLER;
 use crate::{DeltaResult, DeltaTableError};
 
 pin_project! {
@@ -95,6 +95,15 @@ pub(crate) fn scan_row_in_eval(
 }
 
 fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<RecordBatch> {
+    let stats_schema = sn.stats_schema()?;
+    parse_stats_column_with_schema(sn, batch, stats_schema)
+}
+
+pub(crate) fn parse_stats_column_with_schema(
+    sn: &KernelSnapshot,
+    batch: &RecordBatch,
+    stats_schema: KernelSchemaRef,
+) -> DeltaResult<RecordBatch> {
     let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
         return Err(DeltaTableError::SchemaMismatch {
             msg: "stats column not found".to_string(),
@@ -105,7 +114,6 @@ fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<R
     let mut columns = batch.columns().to_vec();
     let mut fields = batch.schema().fields().to_vec();
 
-    let stats_schema = sn.stats_schema()?;
     let stats_batch = batch.project(&[stats_idx])?;
     let stats_data = Box::new(ArrowEngineData::new(stats_batch));
 
@@ -147,7 +155,9 @@ pub(crate) fn parse_partitions(
     raw_path: &str,
     column_mapping_mode: ColumnMappingMode,
 ) -> DeltaResult<StructArray> {
-    trace!("parse_partitions: batch: {batch:?}\npartition_schema: {partition_schema:?}\npath: {raw_path}");
+    trace!(
+        "parse_partitions: batch: {batch:?}\npartition_schema: {partition_schema:?}\npath: {raw_path}"
+    );
     let partitions =
         ex::extract_and_cast_opt::<MapArray>(batch, raw_path).ok_or(DeltaTableError::generic(
             "No partitionValues column found in files batch. This is unexpected.",
@@ -369,20 +379,18 @@ mod tests {
         let physical_partition_name = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb".to_string();
         let schema: SchemaRef =
             scan_row_schema().project(&["path", "size", "fileConstantValues"])?;
-        let partition_schema = StructType::try_new(vec![StructField::nullable(
-            "Company Very Short",
-            DataType::STRING,
-        )
-        .with_metadata(vec![
-            (
-                "delta.columnMapping.id".to_string(),
-                MetadataValue::Number(1),
-            ),
-            (
-                "delta.columnMapping.physicalName".to_string(),
-                MetadataValue::String(physical_partition_name.clone()),
-            ),
-        ])])
+        let partition_schema = StructType::try_new(vec![
+            StructField::nullable("Company Very Short", DataType::STRING).with_metadata(vec![
+                (
+                    "delta.columnMapping.id".to_string(),
+                    MetadataValue::Number(1),
+                ),
+                (
+                    "delta.columnMapping.physicalName".to_string(),
+                    MetadataValue::String(physical_partition_name.clone()),
+                ),
+            ]),
+        ])
         .unwrap();
 
         let partition_values = MapType::new(DataType::STRING, DataType::STRING, true);

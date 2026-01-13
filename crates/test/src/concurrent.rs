@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
-use deltalake_core::operations::DeltaOps;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
 
@@ -14,6 +13,60 @@ use crate::utils::*;
 pub async fn test_concurrent_writes(context: &IntegrationContext) -> TestResult {
     let (_table, table_uri) = prepare_table(context).await?;
     run_test(|name| Worker::new(&table_uri, name)).await;
+    Ok(())
+}
+
+pub async fn test_concurrent_table_creation(context: &IntegrationContext) -> TestResult {
+    let table_uri = context.uri_for_table(TestTables::Custom("concurrent_create".into()));
+
+    if table_uri.starts_with("file://") {
+        let path = table_uri.strip_prefix("file://").unwrap();
+        std::fs::create_dir_all(path)?;
+    }
+
+    let schema = StructType::try_new(vec![StructField::new(
+        "Id",
+        DataType::Primitive(PrimitiveType::Integer),
+        true,
+    )])?;
+
+    const NUM_WRITERS: usize = 5;
+
+    // Spawn multiple tasks that all try to create the table simultaneously
+    let mut futures = Vec::new();
+    for i in 0..NUM_WRITERS {
+        let uri = table_uri.clone();
+        let schema = schema.clone();
+        futures.push(tokio::spawn(async move {
+            let table_url = url::Url::parse(&uri).unwrap();
+            let table = DeltaTableBuilder::from_url(table_url)
+                .unwrap()
+                .with_allow_http(true)
+                .build()
+                .unwrap();
+
+            // Each writer tries to create the table
+            let result = table.create().with_columns(schema.fields().cloned()).await;
+
+            (i, result)
+        }));
+    }
+
+    // Collect results - all writers must succeed
+    let mut versions = Vec::new();
+    for f in futures {
+        let (i, result) = f.await.unwrap();
+        let table = result.unwrap_or_else(|e| panic!("Writer {i} failed: {e}"));
+        versions.push(table.version());
+    }
+
+    // Exactly one should have version 0
+    let version_zero_count = versions.iter().filter(|v| **v == Some(0)).count();
+    assert_eq!(
+        version_zero_count, 1,
+        "Exactly one writer should get version 0"
+    );
+
     Ok(())
 }
 
@@ -34,11 +87,11 @@ async fn prepare_table(
     }
 
     let table_url = url::Url::parse(&table_uri)?;
-    let table = DeltaTableBuilder::from_uri(table_url)?
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .build()?;
 
-    let table = DeltaOps(table)
+    let table = table
         .create()
         .with_columns(schema.fields().cloned())
         .await?;
@@ -102,9 +155,9 @@ pub struct Worker {
 
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
-        std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
+        unsafe { std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name) };
         let table_url = url::Url::parse(path).unwrap();
-        let table = DeltaTableBuilder::from_uri(table_url)
+        let table = DeltaTableBuilder::from_url(table_url)
             .unwrap()
             .with_allow_http(true)
             .load()
@@ -152,7 +205,7 @@ impl Worker {
             .await
             .unwrap()
             .version();
-        self.table.update().await.unwrap();
+        self.table.update_state().await.unwrap();
         version
     }
 }

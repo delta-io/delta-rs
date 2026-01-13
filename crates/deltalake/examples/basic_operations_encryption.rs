@@ -86,7 +86,7 @@ async fn ops_with_crypto(
 ) -> Result<DeltaOps, DeltaTableError> {
     let prefix_uri = format!("file://{}", uri);
     let url = Url::parse(&*prefix_uri).unwrap();
-    let ops = DeltaOps::try_from_uri(url).await?;
+    let ops = DeltaOps::try_from_url(url).await?;
     let ops = ops
         .with_file_format_options(file_format_options.clone())
         .await?;

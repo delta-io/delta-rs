@@ -6,13 +6,13 @@ pub mod pagination;
 pub mod retry;
 pub mod token;
 
-use crate::client::retry::RetryConfig;
 use crate::UnityCatalogError;
+use crate::client::retry::RetryConfig;
 use deltalake_core::data_catalog::DataCatalogResult;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{ClientBuilder, Proxy};
 use reqwest_middleware::ClientWithMiddleware;
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use std::time::Duration;
 use typed_builder::TypedBuilder;
 

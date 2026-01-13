@@ -3,20 +3,22 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray};
-use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::{col, Expr, Volatility};
+use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::{Expr, Volatility, col};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::ExecutionPlan;
+use futures::TryStreamExt;
 use itertools::Itertools;
+use percent_encoding::percent_decode_str;
 use tracing::*;
 
 use crate::delta_datafusion::{
-    df_logical_schema, get_path_column, DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN,
+    DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN, get_path_column,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot};
@@ -85,7 +87,11 @@ pub(crate) async fn find_files(
         }
         None => {
             let result = FindFiles {
-                candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
+                candidates: snapshot
+                    .file_views(&log_store, None)
+                    .map_ok(|f| f.add_action())
+                    .try_collect()
+                    .await?,
                 partition_scan: true,
             };
             Span::current().record("partition_scan", result.partition_scan);
@@ -169,6 +175,7 @@ fn join_batches_with_add_actions(
     mut actions: HashMap<String, Add>,
     path_column: &str,
     dict_array: bool,
+    decode_paths: bool,
 ) -> DeltaResult<Vec<Add>> {
     // Given RecordBatches that contains `__delta_rs_path` perform a hash join
     // with actions to obtain original add actions
@@ -195,12 +202,18 @@ fn join_batches_with_add_actions(
                 "{path_column} cannot be null"
             )))?;
 
-            match actions.remove(path) {
+            let key = if decode_paths {
+                percent_decode_str(path).decode_utf8_lossy()
+            } else {
+                std::borrow::Cow::Borrowed(path)
+            };
+
+            match actions.remove(key.as_ref()) {
                 Some(action) => files.push(action),
                 None => {
                     return Err(DeltaTableError::Generic(
                         "Unable to map __delta_rs_path to action.".to_owned(),
-                    ))
+                    ));
                 }
             }
         }
@@ -223,32 +236,39 @@ async fn find_files_scan(
     session: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = snapshot
-        .log_data()
-        .iter()
-        .map(|f| f.add_action())
-        .map(|add| {
-            let path = add.path.clone();
-            (path, add)
+    // let kernel_predicate = to_predicate(&expression).ok().map(Arc::new);
+    let candidate_map: HashMap<_, _> = snapshot
+        .file_views(&log_store, None)
+        .map_ok(|f| {
+            let add = f.add_action();
+            (add.path.clone(), add)
         })
-        .collect();
+        .try_collect()
+        .await?;
 
     Span::current().record("total_files", candidate_map.len());
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .build(snapshot)?;
+    let file_column_name = scan_config
+        .file_column_name
+        .as_ref()
+        .ok_or(DeltaTableError::Generic(
+            "File column name must be set in scan config".to_string(),
+        ))?
+        .clone();
 
-    let logical_schema = df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
+    let logical_schema = df_logical_schema(snapshot, &file_column_name)?;
 
     // Identify which columns we need to project
-    let mut used_columns = expression
+    let mut used_columns: Vec<_> = expression
         .column_refs()
         .into_iter()
         .map(|column| logical_schema.index_of(&column.name))
-        .collect::<Result<Vec<usize>, ArrowError>>()?;
+        .try_collect()?;
     // Add path column
-    used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
+    used_columns.push(logical_schema.index_of(&file_column_name)?);
 
     let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))
@@ -258,9 +278,7 @@ async fn find_files_scan(
         .await?;
     let scan = Arc::new(scan);
 
-    let config = &scan.config;
     let input_dfschema = scan.logical_schema.as_ref().to_owned().try_into()?;
-
     let predicate_expr = session
         .create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
 
@@ -268,15 +286,10 @@ async fn find_files_scan(
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
-    let task_ctx = Arc::new(TaskContext::from(session));
-    let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
+    let path_batches = datafusion::physical_plan::collect(limit, session.task_ctx()).await?;
 
-    let result = join_batches_with_add_actions(
-        path_batches,
-        candidate_map,
-        config.file_column_name.as_ref().unwrap(),
-        true,
-    )?;
+    let result =
+        join_batches_with_add_actions(path_batches, candidate_map, &file_column_name, true, false)?;
 
     Span::current().record("matching_files", result.len());
     Ok(result)
@@ -302,24 +315,20 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
             ))?
             .to_owned(),
     );
-    fields.push(Field::new(PATH_COLUMN, ArrowDataType::Utf8, false));
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
 
     for field in schema.fields() {
-        if field.name().starts_with("partition.") {
-            let name = field.name().strip_prefix("partition.").unwrap();
-
+        if let Some(name) = field.name().strip_prefix("partition.") {
             arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            fields.push(Field::new(
-                name,
-                field.data_type().to_owned(),
-                field.is_nullable(),
-            ));
+            fields.push(field.as_ref().clone().with_name(name));
         }
     }
 
-    let schema = Arc::new(ArrowSchema::new(fields));
-    let batch = RecordBatch::try_new(schema, arrays)?;
-    let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let schema = Arc::new(Schema::new(fields));
+    let mem_table = MemTable::try_new(
+        schema.clone(),
+        vec![vec![RecordBatch::try_new(schema, arrays)?]],
+    )?;
 
     let ctx = SessionContext::new();
     let mut df = ctx.read_table(Arc::new(mem_table))?;
@@ -330,11 +339,39 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
 
     let map = actions
         .into_iter()
-        .map(|action| {
-            let path = action.path.clone();
-            (path, action)
-        })
-        .collect::<HashMap<String, Add>>();
+        .map(|action| (action.path.clone(), action))
+        .collect::<HashMap<_, _>>();
 
-    join_batches_with_add_actions(batches, map, PATH_COLUMN, false)
+    join_batches_with_add_actions(batches, map, PATH_COLUMN, false, true)
+}
+
+/// The logical schema for a Deltatable is different from the protocol level schema since partition
+/// columns must appear at the end of the schema. This is to align with how partition are handled
+/// at the physical level
+fn df_logical_schema(
+    snapshot: &EagerSnapshot,
+    file_column_name: &String,
+) -> DeltaResult<SchemaRef> {
+    let input_schema = snapshot.input_schema();
+    let table_partition_cols = snapshot.metadata().partition_columns();
+
+    let mut fields: Vec<_> = input_schema
+        .fields()
+        .iter()
+        .filter(|f| !table_partition_cols.contains(f.name()))
+        .cloned()
+        .collect();
+
+    for partition_col in table_partition_cols.iter() {
+        fields.push(Arc::new(
+            input_schema
+                .field_with_name(partition_col)
+                .unwrap()
+                .to_owned(),
+        ));
+    }
+
+    fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
+
+    Ok(Arc::new(Schema::new(fields)))
 }

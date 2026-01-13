@@ -1,12 +1,10 @@
 use chrono::Utc;
+use deltalake_core::DeltaTable;
 use deltalake_core::kernel::transaction::CommitBuilder;
-use deltalake_core::kernel::{
-    Action, Add, DataType, PrimitiveType, Remove, StructField, StructType,
-};
+use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use deltalake_core::DeltaTable;
 use object_store::path::Path as StorePath;
 use object_store::{
     MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
@@ -16,7 +14,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use tempfile::TempDir;
 use url::Url;
 use uuid::Uuid;
 
@@ -29,23 +26,6 @@ pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
             fs::remove_file(path).unwrap();
         }
     }
-}
-
-/// Clone an existing test table from the tests crate into a [TempDir] for use in an integration
-/// test
-pub fn clone_table(table_name: impl AsRef<str> + std::fmt::Display) -> TempDir {
-    // Create a temporary directory
-    let tmp_dir = TempDir::new().expect("Failed to make temp dir");
-
-    // Copy recursively from the test data directory to the temporary directory
-    let source_path = format!("../test/tests/data/{table_name}");
-    let options = fs_extra::dir::CopyOptions {
-        content_only: true,
-        ..Default::default()
-    };
-    println!("copying from {source_path}");
-    fs_extra::dir::copy(source_path, tmp_dir.path(), &options).unwrap();
-    tmp_dir
 }
 
 // TODO: should we drop this
@@ -125,15 +105,6 @@ pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
     commit_actions(table, vec![Action::Add(add.clone())], operation).await
 }
 
-pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i64 {
-    let vec = removes
-        .iter()
-        .map(|r| Action::Remove((*r).clone()))
-        .collect();
-    let operation = DeltaOperation::Delete { predicate: None };
-    commit_actions(table, vec, operation).await
-}
-
 pub async fn commit_actions(
     table: &mut DeltaTable,
     actions: Vec<Action>,
@@ -149,7 +120,10 @@ pub async fn commit_actions(
         .await
         .unwrap()
         .version();
-    table.update().await.unwrap();
+    table
+        .update_state()
+        .await
+        .expect("Failed to commit_actions: {actions:?}");
     version
 }
 

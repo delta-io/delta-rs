@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
-use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
+use dashmap::mapref::one::Ref;
 use datafusion::execution::TaskContext;
+use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
@@ -54,10 +54,12 @@ impl DataFusionStorageHandler {
             RuntimeFlavor::MultiThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
+                None,
             )),
             RuntimeFlavor::CurrentThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioBackgroundExecutor::new()),
+                None,
             )),
             _ => panic!("unsupported runtime flavor"),
         };
@@ -99,13 +101,13 @@ impl StorageHandler for DataFusionStorageHandler {
         Err(delta_kernel::Error::generic("copy_atomic not implemented"))
     }
 
-    fn head(&self, path: &Url) -> DeltaResult<FileMeta> {
+    fn head(&self, _path: &Url) -> DeltaResult<FileMeta> {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("head not implemented"))
     }
 }
 
-pub(crate) trait AsObjectStoreUrl {
+pub trait AsObjectStoreUrl {
     fn as_object_store_url(&self) -> ObjectStoreUrl;
 }
 
@@ -159,7 +161,7 @@ mod tests {
     use std::ops::Range;
 
     use datafusion::prelude::SessionContext;
-    use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
+    use object_store::{ObjectStore, local::LocalFileSystem, path::Path};
     use rstest::*;
 
     use crate::test_utils::TestResult;
@@ -170,8 +172,8 @@ mod tests {
         let handle = Handle::current();
         let session = SessionContext::new();
         let ctx = session.task_ctx();
-        let storage = DataFusionStorageHandler::new(ctx, handle);
-        storage
+
+        DataFusionStorageHandler::new(ctx, handle)
     }
 
     pub fn delta_path_for_version(version: u64, suffix: &str) -> Path {

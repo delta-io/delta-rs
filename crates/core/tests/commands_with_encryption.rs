@@ -82,7 +82,7 @@ fn get_table_batches() -> RecordBatch {
 async fn ops_from_uri(uri: &str) -> Result<DeltaOps, DeltaTableError> {
     let prefix_uri = format!("file://{}", uri);
     let url = Url::parse(&*prefix_uri).unwrap();
-    let ops = DeltaOps::try_from_uri(url).await?;
+    let ops = DeltaOps::try_from_url(url).await?;
     Ok(ops)
 }
 

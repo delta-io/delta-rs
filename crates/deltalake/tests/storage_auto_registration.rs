@@ -1,13 +1,13 @@
 //! Smoke tests ensuring storage backends register their URI schemes automatically when the
 //! corresponding feature is enabled.
 
-use deltalake::{table::builder::DeltaTableBuilder, DeltaResult};
+use deltalake::{DeltaResult, table::builder::DeltaTableBuilder};
 use url::Url;
 
 #[allow(dead_code)]
 fn builder_for(uri: &str) -> DeltaResult<DeltaTableBuilder> {
     let url = Url::parse(uri).expect("static test URI must parse");
-    DeltaTableBuilder::from_uri(url)
+    DeltaTableBuilder::from_url(url)
 }
 
 #[cfg(feature = "gcs")]

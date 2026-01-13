@@ -7,11 +7,11 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, EagerSnapshot, ProtocolExt as _, TableFeatures};
+use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 /// Enable table features for a table
@@ -92,7 +92,8 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
             let name = if this.name.is_empty() {
                 return Err(DeltaTableError::Generic("No features provided".to_string()));
@@ -156,19 +157,17 @@ mod tests {
     use crate::{
         kernel::TableFeatures,
         writer::test_utils::{create_bare_table, get_record_batch},
-        DeltaOps,
     };
-    use delta_kernel::table_features::TableFeature;
     use delta_kernel::DeltaResult;
+    use delta_kernel::table_features::TableFeature;
 
     #[tokio::test]
     async fn add_feature() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
+        let table = create_bare_table()
             .write(vec![batch.clone()])
             .await
             .unwrap();
-        let table = DeltaOps(write);
         let result = table
             .add_feature()
             .with_feature(TableFeatures::ChangeDataFeed)
@@ -176,15 +175,17 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(&result
-            .snapshot()
-            .unwrap()
-            .protocol()
-            .writer_features()
-            .unwrap_or_default()
-            .contains(&TableFeature::ChangeDataFeed));
+        assert!(
+            &result
+                .snapshot()
+                .unwrap()
+                .protocol()
+                .writer_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::ChangeDataFeed)
+        );
 
-        let result = DeltaOps(result)
+        let result = result
             .add_feature()
             .with_feature(TableFeatures::DeletionVectors)
             .with_allow_protocol_versions_increase(true)
@@ -192,14 +193,18 @@ mod tests {
             .unwrap();
 
         let current_protocol = &result.snapshot().unwrap().protocol().clone();
-        assert!(&current_protocol
-            .writer_features()
-            .unwrap_or_default()
-            .contains(&TableFeature::DeletionVectors));
-        assert!(&current_protocol
-            .reader_features()
-            .unwrap_or_default()
-            .contains(&TableFeature::DeletionVectors));
+        assert!(
+            &current_protocol
+                .writer_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::DeletionVectors)
+        );
+        assert!(
+            &current_protocol
+                .reader_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::DeletionVectors)
+        );
         assert_eq!(result.version(), Some(2));
         Ok(())
     }
@@ -207,11 +212,10 @@ mod tests {
     #[tokio::test]
     async fn add_feature_disallowed_increase() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
-        let write = DeltaOps(create_bare_table())
+        let table = create_bare_table()
             .write(vec![batch.clone()])
             .await
             .unwrap();
-        let table = DeltaOps(write);
         let result = table
             .add_feature()
             .with_feature(TableFeatures::ChangeDataFeed)

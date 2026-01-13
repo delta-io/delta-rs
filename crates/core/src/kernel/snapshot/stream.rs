@@ -6,11 +6,11 @@ use futures::{Future, Stream, StreamExt};
 use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
-use tracing::dispatcher;
 use tracing::Span;
+use tracing::dispatcher;
 
-use crate::errors::DeltaResult;
 use crate::DeltaTableError;
+use crate::errors::DeltaResult;
 
 /// Trait for types that stream [RecordBatch]
 ///
@@ -89,6 +89,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 
     /// Spawn task that will be aborted if this builder (or the stream
     /// built from it) are dropped
+    #[allow(unused)]
     pub fn spawn<F>(&mut self, task: F)
     where
         F: Future<Output = DeltaResult<()>>,

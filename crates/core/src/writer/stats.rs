@@ -19,7 +19,7 @@ use parquet::{
 use tracing::warn;
 
 use super::*;
-use crate::kernel::{scalars::ScalarExt, Add};
+use crate::kernel::{Add, scalars::ScalarExt};
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
@@ -105,8 +105,7 @@ fn stats_from_file_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> =
-        file_metadata.row_groups().iter().cloned().collect();
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
 
     stats_from_metadata(
         partition_values,
@@ -188,7 +187,8 @@ fn stats_from_metadata(
             .flat_map(|g| {
                 g.column(idx).statistics().into_iter().filter_map(|s| {
                     let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                        && matches!(column_descr.logical_type_ref(), Some(LogicalType::String))
+                            .not();
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
@@ -196,7 +196,7 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                        Some(AggregatedStats::from((s, column_descr.logical_type_ref())))
                     }
                 })
             })
@@ -249,7 +249,7 @@ enum StatsScalar {
 impl StatsScalar {
     fn try_from_stats(
         stats: &Statistics,
-        logical_type: &Option<LogicalType>,
+        logical_type: Option<&LogicalType>,
         use_min: bool,
     ) -> Result<Self, DeltaWriterError> {
         macro_rules! get_stat {
@@ -296,7 +296,7 @@ impl StatsScalar {
                 };
                 let timestamp = timestamp.ok_or(DeltaWriterError::StatsParsingFailed {
                     debug_value: v.to_string(),
-                    logical_type: logical_type.clone(),
+                    logical_type: logical_type.cloned(),
                 })?;
                 Ok(Self::Timestamp(timestamp.naive_utc()))
             }
@@ -330,7 +330,7 @@ impl StatsScalar {
                     }
                     _ => Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{bytes:?}"),
-                        logical_type: logical_type.clone(),
+                        logical_type: logical_type.cloned(),
                     }),
                 }
             }
@@ -392,7 +392,7 @@ impl StatsScalar {
             }
             (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
                 debug_value: format!("{stats:?}"),
-                logical_type: logical_type.clone(),
+                logical_type: logical_type.cloned(),
             }),
         }
     }
@@ -453,8 +453,8 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
-    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
         let null_count = stats.null_count_opt().unwrap_or_default();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
@@ -630,15 +630,15 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
+        DeltaTable,
         errors::DeltaTableError,
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
-        DeltaTable,
     };
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
     use parquet::{basic::Compression, file::properties::WriterProperties};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::LazyLock;
@@ -843,7 +843,7 @@ mod tests {
         ];
 
         for (stats, logical_type, expected) in cases {
-            let scalar = StatsScalar::try_from_stats(stats, logical_type, true).unwrap();
+            let scalar = StatsScalar::try_from_stats(stats, logical_type.as_ref(), true).unwrap();
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }
@@ -985,12 +985,10 @@ mod tests {
     }
 
     async fn load_table(
-        table_uri: &Url,
+        table_url: &Url,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        let table_uri = table_uri.clone();
-        DeltaTableBuilder::from_uri(table_uri)
-            .unwrap()
+        DeltaTableBuilder::from_url(table_url.clone())?
             .with_storage_options(options)
             .load()
             .await

@@ -34,18 +34,18 @@ use delta_kernel::{
     Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
 };
 use futures::future::ready;
-use futures::stream::{once, BoxStream};
+use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::path::Path;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use serde_json::Deserializer;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
-use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
-use crate::kernel::{spawn_blocking_with_span, StructType, ARROW_HANDLER};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
+use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
 pub use iterators::*;
@@ -257,7 +257,7 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let stream = scan
             .scan_metadata(engine)
-            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
+            .map(|d| Ok(rb_from_scan_meta(d?)?));
 
         ScanRowOutStream::new(self.inner.clone(), stream).boxed()
     }
@@ -278,9 +278,37 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let stream = scan
             .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
-            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
+            .map(|d| Ok(rb_from_scan_meta(d?)?));
 
         ScanRowOutStream::new(self.inner.clone(), stream).boxed()
+    }
+
+    /// Stream the active files in the snapshot
+    ///
+    /// This function returns a stream of [`LogicalFileView`] objects,
+    /// which represent the active files in the snapshot.
+    ///
+    /// ## Parameters
+    ///
+    /// * `log_store` - A reference to a [`LogStore`] implementation.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of [`LogicalFileView`] objects.
+    pub fn file_views(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        self.files(log_store, predicate)
+            .map_ok(|batch| {
+                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                })
+            })
+            .try_flatten()
+            .boxed()
     }
 
     /// Get the commit infos in the snapshot
@@ -322,10 +350,10 @@ impl Snapshot {
         {
             // safety: object store path are always valid urls paths.
             let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
-            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
-                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
-                    commit_files.push(meta);
-                }
+            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)?
+                && matches!(parsed_path.file_type, LogPathFileType::Commit)
+            {
+                commit_files.push(meta);
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
@@ -472,8 +500,16 @@ pub(crate) async fn resolve_snapshot(
     log_store: &dyn LogStore,
     maybe_snapshot: Option<EagerSnapshot>,
     require_files: bool,
+    version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
     if let Some(snapshot) = maybe_snapshot {
+        if let Some(version) = version
+            && snapshot.version() as Version != version
+        {
+            return Err(DeltaTableError::Generic(
+                "Provided snapshot version does not match the requested version".to_string(),
+            ));
+        }
         if require_files {
             snapshot.with_files(log_store).await
         } else {
@@ -482,7 +518,7 @@ pub(crate) async fn resolve_snapshot(
     } else {
         let mut config = DeltaTableConfig::default();
         config.require_files = require_files;
-        EagerSnapshot::try_new(log_store, config, None).await
+        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
     }
 }
 
@@ -629,27 +665,7 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if !self.snapshot.load_config().require_files {
-            return Box::pin(once(ready(Err(DeltaTableError::NotInitializedWithFiles(
-                "file_views".into(),
-            )))));
-        }
-
-        self.snapshot
-            .files_from(
-                log_store,
-                predicate,
-                self.version() as u64,
-                Box::new(self.files.clone().into_iter()),
-                None,
-            )
-            .map_ok(|batch| {
-                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
-                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
-                })
-            })
-            .try_flatten()
-            .boxed()
+        self.snapshot.file_views(log_store, predicate)
     }
 
     #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
@@ -719,7 +735,7 @@ mod tests {
     use super::*;
     use crate::{
         kernel::transaction::CommitData,
-        test_utils::{assert_batches_sorted_eq, TestResult, TestTables},
+        test_utils::{TestResult, TestTables, assert_batches_sorted_eq},
     };
 
     impl Snapshot {
