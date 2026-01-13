@@ -17,8 +17,8 @@ use deltalake_core::table::file_format_options::{FileFormatRef, SimpleFileFormat
 use deltalake_core::test_utils::kms_encryption::{
     KmsFileFormatOptions, MockKmsClient, TableEncryption,
 };
-use deltalake_core::{arrow, parquet, operations::DeltaOps};
-use deltalake_core::{operations::optimize::OptimizeType, DeltaTable, DeltaTableError};
+use deltalake_core::{DeltaTable, DeltaTableError, operations::optimize::OptimizeType};
+use deltalake_core::{arrow, operations::DeltaOps, parquet};
 
 use datafusion::config::EncryptionFactoryOptions;
 use paste::paste;

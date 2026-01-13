@@ -35,7 +35,7 @@
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::{exec_datafusion_err, ScalarValue};
+use datafusion::common::{ScalarValue, exec_datafusion_err};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
@@ -76,7 +76,7 @@ use crate::operations::write::execution::{write_execution_plan, write_execution_
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
-    state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableError};
@@ -206,8 +206,14 @@ impl std::future::IntoFuture for DeleteBuilder {
 
         Box::pin(async move {
             let base_config = this.snapshot.as_ref().map(|s| s.load_config());
-            let snapshot =
-                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot.clone(),
+                true,
+                None,
+                base_config,
+            )
+            .await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

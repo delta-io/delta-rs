@@ -6,7 +6,7 @@ pub use datafusion::config::{ConfigFileType, TableOptions, TableParquetOptions};
 use datafusion::execution::SessionState;
 use std::fmt::Debug;
 
-use crate::{crate_version, DeltaResult};
+use crate::{DeltaResult, crate_version};
 use arrow_schema::Schema as ArrowSchema;
 
 use async_trait::async_trait;

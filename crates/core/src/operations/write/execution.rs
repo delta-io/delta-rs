@@ -30,9 +30,9 @@ use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, 
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
+use crate::table::Constraint as DeltaConstraint;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::WriterPropertiesFactoryRef;
-use crate::table::Constraint as DeltaConstraint;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 

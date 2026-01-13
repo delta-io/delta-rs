@@ -78,7 +78,14 @@ impl std::future::IntoFuture for LoadBuilder {
 
         Box::pin(async move {
             let base_config = this.snapshot.as_ref().map(|s| s.load_config().clone());
-            let snapshot = resolve_snapshot_with_config(&this.log_store, this.snapshot, true, None, base_config.as_ref()).await?;
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot,
+                true,
+                None,
+                base_config.as_ref(),
+            )
+            .await?;
             PROTOCOL.can_read_from(&snapshot)?;
 
             let schema = snapshot.read_schema();

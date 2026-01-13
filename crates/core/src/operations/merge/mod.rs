@@ -80,7 +80,9 @@ use crate::delta_datafusion::{
 };
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot_with_config};
+use crate::kernel::{
+    Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot_with_config,
+};
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -92,7 +94,7 @@ use crate::operations::write::generated_columns::{
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::{
-    state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -1559,8 +1561,14 @@ impl std::future::IntoFuture for MergeBuilder {
 
         Box::pin(async move {
             let base_config = this.snapshot.as_ref().map(|s| s.load_config());
-            let snapshot =
-                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot.clone(),
+                true,
+                None,
+                base_config,
+            )
+            .await?;
 
             PROTOCOL.can_write_to(&snapshot)?;
 

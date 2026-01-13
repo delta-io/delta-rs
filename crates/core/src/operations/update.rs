@@ -57,7 +57,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::file_format_options::{
-    state_with_file_format_options, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -524,8 +524,14 @@ impl std::future::IntoFuture for UpdateBuilder {
         let this = self;
         Box::pin(async move {
             let base_config = this.snapshot.as_ref().map(|s| s.load_config());
-            let snapshot =
-                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot.clone(),
+                true,
+                None,
+                base_config,
+            )
+            .await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

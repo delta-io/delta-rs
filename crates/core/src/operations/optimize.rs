@@ -370,8 +370,14 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
         Box::pin(async move {
             let base_config = this.snapshot.as_ref().map(|s| s.load_config());
-            let snapshot =
-                resolve_snapshot_with_config(&this.log_store, this.snapshot.clone(), true, None, base_config).await?;
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot.clone(),
+                true,
+                None,
+                base_config,
+            )
+            .await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
@@ -692,15 +698,16 @@ impl MergePlan {
                             async move {
                                 let decrypt: Option<Arc<FileDecryptionProperties>> =
                                     match &*file_format_options {
-                                        Some(ffo) => {
-                                            get_file_decryption_properties(ffo, &meta.location)
-                                                .await
-                                                .map_err(|e| {
-                                                    ParquetError::General(format!(
-                                                    "Error getting file decryption properties: {e}"
-                                                ))
-                                                })?
-                                        }
+                                        Some(ffo) => get_file_decryption_properties(
+                                            ffo,
+                                            &meta.location,
+                                        )
+                                        .await
+                                        .map_err(|e| {
+                                            ParquetError::General(format!(
+                                                "Error getting file decryption properties: {e}"
+                                            ))
+                                        })?,
                                         None => None,
                                     };
                                 let file_reader =

@@ -36,7 +36,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
 use crate::table::builder::DeltaTableBuilder;
-use crate::table::config::{TablePropertiesExt as _, DEFAULT_NUM_INDEX_COLS};
+use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
 use crate::table::file_format_options::FileFormatRef;
 use crate::table::state::DeltaTableState;
 

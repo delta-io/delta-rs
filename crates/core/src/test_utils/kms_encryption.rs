@@ -16,7 +16,7 @@
 use crate::table::file_format_options::{
     FileFormatOptions, TableOptions, WriterPropertiesFactory, WriterPropertiesFactoryRef,
 };
-use crate::{crate_version, DeltaResult};
+use crate::{DeltaResult, crate_version};
 use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
 use datafusion::catalog::Session;

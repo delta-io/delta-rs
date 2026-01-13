@@ -309,7 +309,9 @@ async fn get_read_plan(
 
         // Set encryption factory if configured
         if let Some(factory_id) = &pq_options.crypto.factory_id {
-            if let Ok(encryption_factory) = state.runtime_env().parquet_encryption_factory(factory_id) {
+            if let Ok(encryption_factory) =
+                state.runtime_env().parquet_encryption_factory(factory_id)
+            {
                 file_source = file_source.with_encryption_factory(encryption_factory);
             }
         }

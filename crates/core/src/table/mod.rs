@@ -1,9 +1,9 @@
 //! Delta Table read and write implementation
 
-use std::sync::Arc;
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::fmt;
 use std::fmt::Formatter;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures::future::ready;
