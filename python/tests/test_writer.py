@@ -22,7 +22,6 @@ from deltalake._internal import (
 )
 from deltalake.exceptions import (
     DeltaError,
-    DeltaProtocolError,
     SchemaMismatchError,
 )
 from deltalake.query import QueryBuilder
@@ -1169,7 +1168,7 @@ def test_partition_overwrite(
         )
         == expected_data
     )
-    with pytest.raises(DeltaProtocolError, match="Invariant violations"):
+    with pytest.raises(Exception, match="Invalid data found:"):
         write_deltalake(
             tmp_path,
             sample_data_pyarrow,
@@ -1460,8 +1459,8 @@ def test_partition_overwrite_with_wrong_partition(
     )
 
     with pytest.raises(
-        DeltaProtocolError,
-        match="Invariant violations",
+        Exception,
+        match="Invalid data found: 1 rows failed validation check.",
     ):
         write_deltalake(
             tmp_path,
