@@ -178,7 +178,8 @@ mod local {
         .collect()
         .await?;
 
-        let batch = &batches[0];
+        let schema = batches[0].schema();
+        let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
         assert_eq!(
             batch.column(0).as_ref(),
@@ -200,7 +201,8 @@ mod local {
             .collect()
             .await?;
 
-        let batch = &batches[0];
+        let schema = batches[0].schema();
+        let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
         assert_eq!(
             batch.column(0).as_ref(),
@@ -327,7 +329,8 @@ mod local {
 
             let batches = df.collect().await?;
 
-            let batch = &batches[0];
+            let schema = batches[0].schema();
+            let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
             assert_eq!(
                 batch.column(0).as_ref(),
