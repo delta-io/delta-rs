@@ -383,7 +383,16 @@ impl MergeBuilder {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `state` must wrap a concrete `datafusion::execution::context::SessionState`.
+    /// Other `datafusion::catalog::Session` implementations will cause the operation to return an
+    /// error at execution time.
+    ///
+    /// This strictness avoids subtle bugs where Delta object stores could be registered on one
+    /// runtime environment while execution uses a different `task_ctx()` / runtime environment.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self

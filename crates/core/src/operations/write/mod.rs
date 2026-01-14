@@ -34,7 +34,7 @@ use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
@@ -54,11 +54,11 @@ use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
+use crate::delta_datafusion::DataFusionMixins;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
-use crate::delta_datafusion::{DataFusionMixins, session_state_from_session};
 use crate::delta_datafusion::{create_session, register_store};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
@@ -244,7 +244,6 @@ impl WriteBuilder {
         self
     }
 
-    /// The Datafusion session state to use
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
         self
@@ -435,8 +434,14 @@ impl std::future::IntoFuture for WriteBuilder {
                 let session = this
                     .session
                     .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-                register_store(this.log_store.clone(), session.runtime_env().as_ref());
-                let state = session_state_from_session(session.as_ref())?;
+
+                let state = session
+                    .as_any()
+                    .downcast_ref::<SessionState>()
+                    .cloned()
+                    .unwrap_or_else(|| create_session().state());
+
+                register_store(this.log_store.clone(), state.runtime_env().as_ref());
 
                 let mut schema_drift = false;
                 let mut generated_col_exp = None;
@@ -532,7 +537,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         source,
                         &generated_columns_exp,
                         &missing_generated_col,
-                        state,
+                        &state,
                     )?;
                 }
 
@@ -592,7 +597,7 @@ impl std::future::IntoFuture for WriteBuilder {
                             Expression::DataFusion(expr) => expr,
                             Expression::String(s) => {
                                 let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
-                                parse_predicate_expression(&df_schema, s, session.as_ref())?
+                                parse_predicate_expression(&df_schema, s, &state)?
                             }
                         };
                         (Some(fmt_expr_to_sql(&pred)?), Some(pred))
@@ -632,7 +637,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                     pred.clone(),
                                     this.log_store.clone(),
                                     snapshot,
-                                    session.as_ref(),
+                                    &state,
                                     partition_columns.clone(),
                                     this.writer_properties.clone(),
                                     deletion_timestamp,
@@ -673,7 +678,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
-                    session.as_ref(),
+                    &state,
                     source_plan.clone(),
                     partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),

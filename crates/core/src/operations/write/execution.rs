@@ -8,7 +8,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::ToDFSchema;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::logical_expr::{Expr, LogicalPlanBuilder, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use datafusion::prelude::DataFrame;
@@ -23,8 +23,8 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
-    DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    generated_columns_to_exprs, session_state_from_session, validation_predicates,
+    DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider,
+    create_session, find_files, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
@@ -187,8 +187,14 @@ pub(crate) async fn execute_non_empty_expr(
         // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
         // based on the remove actions if a partition got deleted
         if should_write_cdc(snapshot)? {
-            let state = session_state_from_session(session)?;
+            let state = session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .cloned()
+                .unwrap_or_else(|| create_session().state());
+
             let df = DataFrame::new(state.clone(), source.as_ref().clone());
+
             Some(
                 df.filter(expression.clone())?
                     .with_column(CDC_COLUMN_NAME, lit("delete"))?,
@@ -274,6 +280,7 @@ pub(crate) async fn write_execution_plan_v2(
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
     let schema = plan.schema();
+
     let mut validations = if let Some(snapshot) = snapshot {
         validation_predicates(session, plan.clone(), snapshot.table_configuration())?
     } else {

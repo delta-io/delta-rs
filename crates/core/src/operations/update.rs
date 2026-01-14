@@ -64,7 +64,6 @@ use crate::{
         expr::fmt_expr_to_sql,
         logical::MetricObserver,
         physical::{MetricObserverExec, find_metric_node, get_metric},
-        session_state_from_session,
     },
     kernel::{
         Action, EagerSnapshot, Remove,
@@ -165,7 +164,6 @@ impl UpdateBuilder {
         self
     }
 
-    /// The Datafusion session state to use
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
         self
@@ -514,8 +512,14 @@ impl std::future::IntoFuture for UpdateBuilder {
             let session = this
                 .session
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-            register_store(this.log_store.clone(), session.runtime_env().as_ref());
-            let state = session_state_from_session(session.as_ref())?;
+
+            let state = session
+                .as_any()
+                .downcast_ref::<SessionState>()
+                .cloned()
+                .unwrap_or_else(|| create_session().state());
+
+            register_store(this.log_store.clone(), state.runtime_env().as_ref());
 
             let (snapshot, metrics) = execute(
                 this.predicate,
