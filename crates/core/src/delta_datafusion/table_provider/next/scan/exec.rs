@@ -77,7 +77,11 @@ pub(crate) fn consume_dv_mask(
 /// Wraps a Parquet reader execution plan and applies Delta Lake protocol transformations
 /// to produce the logical table data. This includes:
 ///
-/// Handles column mapping, partition values, deletion vectors, and schema evolution.
+/// - **Column mapping**: Translates physical column names to logical names
+/// - **Partition values**: Materializes partition column values from file paths
+/// - **Deletion vectors**: Filters out deleted rows using per-file selection vectors
+/// - **Schema evolution**: Handles missing columns and type coercion
+///
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
     scan_plan: Arc<KernelScanPlan>,

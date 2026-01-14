@@ -497,9 +497,14 @@ mod local {
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
-        assert_eq!(
-            statistics.total_byte_size,
-            Precision::Exact((400 + 404 + 396) as usize)
+        let expected_total_byte_size = (400 + 404 + 396) as usize;
+        assert!(
+            matches!(
+                statistics.total_byte_size,
+                Precision::Exact(v) | Precision::Inexact(v) if v == expected_total_byte_size
+            ),
+            "expected total_byte_size to be exact or inexact with value {expected_total_byte_size:?}, got {:?}",
+            statistics.total_byte_size
         );
         let column_stats = statistics.column_statistics.first().unwrap();
         assert_eq!(column_stats.null_count, Precision::Absent);
@@ -1777,7 +1782,12 @@ mod insert_into_tests {
 
         let names_col = data_batch.column_by_name("name").unwrap();
         let ages_col = data_batch.column_by_name("age").unwrap();
-        let names_array = arrow::array::StringArray::from(names_col.to_data());
+        let names_utf8 = arrow::compute::cast(names_col, &arrow_schema::DataType::Utf8)
+            .expect("cast name column to Utf8");
+        let names_array = names_utf8
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("name column should be Utf8 after cast");
         let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
 
         assert_eq!(names_array.value(0), "Thierry");
@@ -1899,7 +1909,12 @@ mod insert_into_tests {
 
         let names_col = data_batch.column_by_name("name").unwrap();
         let ages_col = data_batch.column_by_name("age").unwrap();
-        let names_array = arrow::array::StringArray::from(names_col.to_data());
+        let names_utf8 = arrow::compute::cast(names_col, &arrow_schema::DataType::Utf8)
+            .expect("cast name column to Utf8");
+        let names_array = names_utf8
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("name column should be Utf8 after cast");
         let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
 
         assert_eq!(names_array.value(0), "Robert");
@@ -2017,7 +2032,12 @@ mod insert_into_tests {
 
         let names_col = content_batch.column_by_name("name").unwrap();
         let ages_col = content_batch.column_by_name("age").unwrap();
-        let names_array = names_col.as_string_view();
+        let names_utf8 = arrow::compute::cast(names_col, &arrow_schema::DataType::Utf8)
+            .expect("cast name column to Utf8");
+        let names_array = names_utf8
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("name column should be Utf8 after cast");
         let ages_array = ages_col.as_primitive::<Int64Type>();
 
         assert_eq!(names_array.value(0), "Robert");

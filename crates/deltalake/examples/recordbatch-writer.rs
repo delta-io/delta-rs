@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_schema() {
-        let schema: Schema = WeatherRecord::schema();
-        assert_eq!(schema.get_fields().len(), 4, "schema should have 4 fields");
+        let schema: Schema = Schema::try_new(WeatherRecord::columns()).expect("valid schema");
+        assert_eq!(schema.fields().len(), 4, "schema should have 4 fields");
     }
 }

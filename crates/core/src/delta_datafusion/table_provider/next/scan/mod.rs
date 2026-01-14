@@ -892,10 +892,17 @@ mod tests {
         )
         .await?;
 
-        let error = collect(plan, session.task_ctx())
-            .await
-            .expect_err("expected nested schema extension to fail for parquet read");
-        assert!(error.to_string().contains("expected Struct"));
+        let batches = collect(plan, session.task_ctx()).await?;
+        let expected = vec![
+            "+----+--------------------+-----------------------------+",
+            "| id | nested             | __delta_rs_file_id__        |",
+            "+----+--------------------+-----------------------------+",
+            "| 1  | {a: a, b: aa, c: } | memory:///test_data.parquet |",
+            "| 2  | {a: b, b: bb, c: } | memory:///test_data.parquet |",
+            "| 3  | {a: c, b: cc, c: } | memory:///test_data.parquet |",
+            "+----+--------------------+-----------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }

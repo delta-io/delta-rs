@@ -6,7 +6,7 @@ use datafusion::arrow::compute::can_cast_types;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
+use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_adapter::schema_rewriter::{
     PhysicalExprAdapter, PhysicalExprAdapterFactory,
@@ -24,8 +24,8 @@ use datafusion_physical_expr_adapter::schema_rewriter::{
 /// - **Missing non-nullable column**: Returns zero-value (e.g., `0` for Int32), or `NULL` as fallback
 /// - **Type mismatch**: Wraps column in a `CAST` expression if `can_cast_types` allows
 /// - **Missing nested struct field**: Returns `NULL` when accessing a field via `GetFieldFunc`
-/// - **Parquet read schema**: This adapter does not extend the file read schema; nested struct
-///   evolution in the scan schema will still surface a parquet schema mismatch
+/// - **Parquet read schema**: This adapter does not extend the file read schema; struct columns
+///   are cast to the logical struct type (missing fields filled with nulls) during scan
 /// - **Partition columns**: Partition values are injected by the scan path; the adapter does
 ///   not synthesize partition literals on its own
 ///
@@ -122,6 +122,66 @@ struct DeltaPhysicalExprRewriter<'a> {
     physical_file_schema: &'a Schema,
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
+}
+
+fn validate_struct_compatibility(
+    column_path: &str,
+    physical_fields: &arrow_schema::Fields,
+    logical_fields: &arrow_schema::Fields,
+) -> Result<()> {
+    for logical_field in logical_fields.iter() {
+        if physical_fields
+            .iter()
+            .all(|f| f.name() != logical_field.name())
+            && !logical_field.is_nullable()
+        {
+            return exec_err!(
+                "Cannot cast column '{}.{}' because the field is missing in the physical schema but is non-nullable in the logical schema",
+                column_path,
+                logical_field.name()
+            );
+        }
+    }
+
+    for physical_field in physical_fields.iter() {
+        let Some(logical_field) = logical_fields
+            .iter()
+            .find(|f| f.name() == physical_field.name())
+        else {
+            continue;
+        };
+
+        let field_path = format!("{}.{}", column_path, physical_field.name());
+
+        if physical_field.is_nullable() && !logical_field.is_nullable() {
+            return exec_err!(
+                "Cannot cast column '{}' from nullable (physical) to non-nullable (logical)",
+                field_path
+            );
+        }
+
+        match (physical_field.data_type(), logical_field.data_type()) {
+            (DataType::Struct(physical_child_fields), DataType::Struct(logical_child_fields)) => {
+                validate_struct_compatibility(
+                    &field_path,
+                    physical_child_fields,
+                    logical_child_fields,
+                )?
+            }
+            _ => {
+                if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
+                    return exec_err!(
+                        "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
+                        field_path,
+                        physical_field.data_type(),
+                        logical_field.data_type()
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl<'a> DeltaPhysicalExprRewriter<'a> {
@@ -296,20 +356,25 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // For struct types with schema evolution (physical has subset of logical fields),
-        // pass through without casting. GetFieldFunc handler will manage missing field access.
         if let (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) =
             (physical_field.data_type(), logical_field.data_type())
         {
-            // Check if physical fields are a subset of logical fields (schema evolution)
-            let physical_names: std::collections::HashSet<_> =
-                physical_fields.iter().map(|f| f.name()).collect();
-            let logical_names: std::collections::HashSet<_> =
-                logical_fields.iter().map(|f| f.name()).collect();
-            if physical_names.is_subset(&logical_names) {
-                // Schema evolution case - pass column through unchanged
-                return Ok(Transformed::no(column_expr));
+            if physical_field.is_nullable() && !logical_field.is_nullable() {
+                return exec_err!(
+                    "Cannot cast column '{}' from nullable (physical) to non-nullable (logical)",
+                    logical_field.name()
+                );
             }
+
+            validate_struct_compatibility(logical_field.name(), physical_fields, logical_fields)?;
+
+            let cast_expr = Arc::new(CastColumnExpr::new(
+                column_expr,
+                Arc::new(physical_field.clone()),
+                Arc::new(logical_field.clone()),
+                None,
+            ));
+            return Ok(Transformed::yes(cast_expr));
         }
 
         if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
@@ -341,7 +406,9 @@ mod tests {
 
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::functions::core::expr_fn::get_field;
-    use datafusion::physical_expr::expressions::{CastExpr, Literal};
+    use datafusion::functions::core::getfield::GetFieldFunc;
+    use datafusion::physical_expr::ScalarFunctionExpr;
+    use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr, Literal};
     use datafusion::physical_expr::planner::logical2physical;
     use datafusion::prelude::col;
     use datafusion::scalar::ScalarValue;
@@ -458,8 +525,132 @@ mod tests {
         let expr = get_field(col("s"), "b");
         let physical_expr = logical2physical(&expr, logical.as_ref());
         let rewritten = adapter.rewrite(physical_expr).unwrap();
-        let literal = rewritten.as_any().downcast_ref::<Literal>().unwrap();
-        assert_eq!(literal.value(), &ScalarValue::Utf8(None));
+
+        if let Some(literal) = rewritten.as_any().downcast_ref::<Literal>() {
+            assert_eq!(literal.value(), &ScalarValue::Utf8(None));
+            return;
+        }
+
+        let get_field_expr =
+            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(rewritten.as_ref())
+                .expect("expected GetFieldFunc");
+        let source_expr = get_field_expr.args().first().expect("expected struct arg");
+        assert!(
+            source_expr
+                .as_any()
+                .downcast_ref::<CastColumnExpr>()
+                .is_some(),
+            "expected get_field to read from a casted struct expression"
+        );
+    }
+
+    #[test]
+    fn struct_type_mismatch_casts_struct_column() {
+        let logical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ])),
+            true,
+        )]);
+        let physical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+            true,
+        )]);
+        let adapter = make_adapter(logical.clone(), physical);
+
+        let expr = logical2physical(&col("s"), logical.as_ref());
+        let rewritten = adapter.rewrite(expr).unwrap();
+        assert!(
+            rewritten
+                .as_any()
+                .downcast_ref::<CastColumnExpr>()
+                .is_some(),
+            "Expected struct column to be wrapped in CastColumnExpr"
+        );
+    }
+
+    #[test]
+    fn struct_cast_rejects_missing_non_nullable_logical_field() {
+        let logical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, false),
+            ])),
+            true,
+        )]);
+        let physical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+            true,
+        )]);
+        let adapter = make_adapter(logical.clone(), physical);
+
+        let expr = logical2physical(&col("s"), logical.as_ref());
+        let err = adapter.rewrite(expr).unwrap_err().to_string();
+        assert!(
+            err.contains("s.b"),
+            "expected error to mention 's.b', got: {err}"
+        );
+    }
+
+    #[test]
+    fn struct_cast_rejects_nullability_tightening() {
+        let logical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, false)])),
+            true,
+        )]);
+        let physical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+            true,
+        )]);
+        let adapter = make_adapter(logical.clone(), physical);
+
+        let expr = logical2physical(&col("s"), logical.as_ref());
+        let err = adapter.rewrite(expr).unwrap_err().to_string();
+        assert!(
+            err.contains("s.a"),
+            "expected error to mention 's.a', got: {err}"
+        );
+    }
+
+    #[test]
+    fn struct_cast_error_includes_nested_path() {
+        let logical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "inner",
+                DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, true)])),
+                true,
+            )])),
+            true,
+        )]);
+        let physical = schema_from_fields(vec![Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "inner",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "x",
+                    DataType::Struct(Fields::from(vec![Field::new("y", DataType::Utf8, true)])),
+                    true,
+                )])),
+                true,
+            )])),
+            true,
+        )]);
+        let adapter = make_adapter(logical.clone(), physical);
+
+        let expr = logical2physical(&col("s"), logical.as_ref());
+        let err = adapter.rewrite(expr).unwrap_err().to_string();
+        assert!(
+            err.contains("s.inner.x"),
+            "expected error to mention 's.inner.x', got: {err}"
+        );
     }
 
     #[test]
