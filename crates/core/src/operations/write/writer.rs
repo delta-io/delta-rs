@@ -407,7 +407,6 @@ pub struct PartitionWriter {
     config: PartitionWriterConfig,
     writer: LazyArrowWriter,
     part_counter: usize,
-    data_path: Path,
     /// Num index cols to collect stats for
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
@@ -438,7 +437,6 @@ impl PartitionWriter {
             config,
             writer,
             part_counter: 0,
-            data_path,
             num_indexed_cols,
             stats_columns,
             in_flight_writers: JoinSet::new(),
