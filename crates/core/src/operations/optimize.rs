@@ -56,7 +56,7 @@ use crate::delta_datafusion::{DeltaRuntimeEnvBuilder, DeltaSessionContext, Delta
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
-use crate::kernel::{EagerSnapshot, resolve_snapshot, resolve_snapshot_with_config};
+use crate::kernel::{EagerSnapshot, resolve_snapshot_with_config};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
