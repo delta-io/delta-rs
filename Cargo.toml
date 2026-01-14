@@ -39,11 +39,11 @@ object_store = { version = "0.12.1" }
 parquet = { version = "57" }
 
 # datafusion 52
-datafusion = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
-datafusion-datasource = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
-datafusion-physical-expr-adapter = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
-datafusion-ffi = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
-datafusion-proto = { git = "https://github.com/apache/datafusion", branch = "branch-52" }
+datafusion = { version = "52.0.0" }
+datafusion-datasource = { version = "52.0.0" }
+datafusion-physical-expr-adapter = { version = "52.0.0" }
+datafusion-ffi = { version = "52.0.0" }
+datafusion-proto = { version = "52.0.0" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
