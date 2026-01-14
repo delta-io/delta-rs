@@ -112,7 +112,9 @@ impl DeltaTable {
 
     #[must_use]
     pub fn create(&self) -> CreateBuilder {
-        CreateBuilder::default().with_log_store(self.log_store())
+        CreateBuilder::default()
+            .with_log_store(self.log_store())
+            .with_table_config(self.config.clone())
     }
 
     #[must_use]
