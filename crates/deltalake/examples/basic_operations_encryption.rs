@@ -13,7 +13,7 @@ use deltalake::datafusion::{
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::encryption::decrypt::FileDecryptionProperties;
-use deltalake::{arrow, parquet, DeltaTable, DeltaTableError};
+use deltalake::{DeltaTable, DeltaTableError, arrow, parquet};
 use deltalake_core::datafusion::common::test_util::format_batches;
 use deltalake_core::operations::optimize::OptimizeType;
 use deltalake_core::table::builder::DeltaTableBuilder;

@@ -12,14 +12,14 @@ use datafusion::{
 };
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::operations::collect_sendable_stream;
+use deltalake_core::operations::optimize::OptimizeType;
 use deltalake_core::parquet::encryption::decrypt::FileDecryptionProperties;
 use deltalake_core::table::builder::DeltaTableBuilder;
 use deltalake_core::table::file_format_options::{FileFormatRef, SimpleFileFormatOptions};
 use deltalake_core::test_utils::kms_encryption::{
     KmsFileFormatOptions, MockKmsClient, TableEncryption,
 };
-use deltalake_core::{arrow, parquet, DeltaTable, DeltaTableError};
-use deltalake_core::operations::optimize::OptimizeType;
+use deltalake_core::{DeltaTable, DeltaTableError, arrow, parquet};
 
 use datafusion::config::EncryptionFactoryOptions;
 use paste::paste;
