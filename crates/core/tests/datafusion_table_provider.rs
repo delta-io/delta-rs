@@ -24,9 +24,14 @@ async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
     let session = create_session().into_inner();
     let engine = DataFusionEngine::new_from_session(&session.state());
 
-    let snapshot =
-        Snapshot::try_new_with_engine(engine.clone(), case.table_root()?, Default::default(), None)
-            .await?;
+    let snapshot = Snapshot::try_new_with_engine(
+        engine.clone(),
+        case.table_root()?,
+        Default::default(),
+        None,
+        None,
+    )
+    .await?;
 
     Ok((snapshot, session))
 }

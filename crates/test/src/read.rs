@@ -43,7 +43,7 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
         .with_allow_http(true)
         .load()
         .await?;
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     assert_eq!(snapshot.version(), 4);
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -94,7 +94,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
         .with_version(3)
         .load()
         .await?;
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     assert_eq!(snapshot.version(), 3);
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -146,7 +146,7 @@ pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
         .load()
         .await
         .unwrap();
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     assert_eq!(snapshot.version(), 0);
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -184,7 +184,7 @@ async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -
         .with_allow_http(true)
         .load()
         .await?;
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     assert_eq!(snapshot.version(), 0);
     assert_eq!(snapshot.log_data().num_files(), 2);
 

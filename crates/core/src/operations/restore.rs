@@ -37,7 +37,7 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
 use crate::kernel::{
-    Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove, resolve_snapshot,
+    Action, Add, ProtocolExt as _, ProtocolInner, Remove, Snapshot, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -79,7 +79,7 @@ pub struct RestoreMetrics {
 /// See this module's documentation for more information
 pub struct RestoreBuilder {
     /// A snapshot of the to-be-restored table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to restore
@@ -106,7 +106,7 @@ impl super::Operation for RestoreBuilder {
 
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -160,7 +160,7 @@ impl RestoreBuilder {
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     log_store: LogStoreRef,
-    snapshot: EagerSnapshot,
+    snapshot: Snapshot,
     version_to_restore: Option<i64>,
     datetime_to_restore: Option<DateTime<Utc>>,
     ignore_missing_files: bool,
@@ -198,7 +198,7 @@ async fn execute(
         )));
     }
 
-    let snapshot_restored = table.snapshot()?;
+    let snapshot_restored = table.table_state()?;
     let metadata_restored_version = snapshot_restored.metadata();
 
     let state_to_restore_files: Vec<_> = snapshot_restored

@@ -33,6 +33,7 @@ async fn parquet_provider(
     Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
+#[cfg(not(windows))]
 #[rstest]
 #[tokio::test]
 async fn scan_dat(

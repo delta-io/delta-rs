@@ -23,7 +23,7 @@ async fn test_commit_info_engine_info() -> Result<(), Box<dyn Error>> {
 
     CommitBuilder::default()
         .with_actions(actions)
-        .build(Some(table.snapshot()?), table.log_store(), operation)
+        .build(Some(table.table_state()?), table.log_store(), operation)
         .await?;
     table.update_state().await?;
 

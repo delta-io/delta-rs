@@ -1,4 +1,4 @@
-use crate::kernel::EagerSnapshot;
+use crate::kernel::Snapshot;
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::{ExprSchemable, col, when};
 use datafusion::prelude::lit;
@@ -9,7 +9,7 @@ use tracing::debug;
 use crate::{DeltaResult, kernel::DataCheck, table::GeneratedColumn};
 
 /// check if the writer version is able to write generated columns
-pub fn able_to_gc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
+pub fn able_to_gc(snapshot: &Snapshot) -> DeltaResult<bool> {
     if let Some(features) = &snapshot.protocol().writer_features() {
         if snapshot.protocol().min_writer_version() < 4 {
             return Ok(false);

@@ -9,7 +9,7 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures, resolve_snapshot};
+use crate::kernel::{ProtocolExt as _, Snapshot, TableFeatures, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -17,7 +17,7 @@ use crate::{DeltaResult, DeltaTableError};
 /// Enable table features for a table
 pub struct AddTableFeatureBuilder {
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Name of the feature
     name: Vec<TableFeatures>,
     /// Allow protocol versions to be increased by setting features
@@ -40,7 +40,7 @@ impl super::Operation for AddTableFeatureBuilder {
 
 impl AddTableFeatureBuilder {
     /// Create a new builder
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             name: vec![],
             allow_protocol_versions_increase: false,
@@ -177,7 +177,7 @@ mod tests {
 
         assert!(
             &result
-                .snapshot()
+                .table_state()
                 .unwrap()
                 .protocol()
                 .writer_features()
@@ -192,7 +192,7 @@ mod tests {
             .await
             .unwrap();
 
-        let current_protocol = &result.snapshot().unwrap().protocol().clone();
+        let current_protocol = &result.table_state().unwrap().protocol().clone();
         assert!(
             &current_protocol
                 .writer_features()

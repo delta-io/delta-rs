@@ -67,7 +67,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot};
+use crate::kernel::{Action, Add, Remove, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -88,7 +88,7 @@ pub struct DeleteBuilder {
     /// Which records to delete
     predicate: Option<Expression>,
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -141,7 +141,7 @@ impl super::Operation for DeleteBuilder {
 
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             predicate: None,
             snapshot,
@@ -279,7 +279,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_non_empty_expr(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
     expression: &Expr,
@@ -391,13 +391,13 @@ async fn execute_non_empty_expr(
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
-    snapshot: EagerSnapshot,
+    snapshot: Snapshot,
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(EagerSnapshot, DeleteMetrics)> {
+) -> DeltaResult<(Snapshot, DeleteMetrics)> {
     if !&snapshot.load_config().require_files {
         return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
     }
@@ -584,12 +584,12 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 1);
 
         let (table, metrics) = table.delete().await.unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
 
         assert_eq!(state.version(), 2);
         assert_eq!(state.log_data().num_files(), 0);
@@ -637,7 +637,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 1);
 
@@ -662,7 +662,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 2);
         assert_eq!(state.log_data().num_files(), 2);
 
@@ -671,7 +671,7 @@ mod tests {
             .with_predicate(col("value").eq(lit(1)))
             .await
             .unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 3);
         assert_eq!(state.log_data().num_files(), 2);
 
@@ -822,7 +822,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 2);
 
@@ -831,7 +831,7 @@ mod tests {
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .await
             .unwrap();
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 2);
         assert_eq!(state.log_data().num_files(), 1);
 
@@ -882,7 +882,7 @@ mod tests {
             .await
             .unwrap();
 
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 1);
         assert_eq!(state.log_data().num_files(), 3);
 
@@ -896,7 +896,7 @@ mod tests {
             .await
             .unwrap();
 
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.version(), 2);
         assert_eq!(state.log_data().num_files(), 2);
 

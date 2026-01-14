@@ -23,23 +23,23 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     context.object_store().delete(&path).await?;
 
     let table = context.table_builder(TestTables::Simple).load().await?;
-    let version = table.snapshot()?.version();
-    let active = table.snapshot()?.log_data().num_files();
+    let version = table.table_state()?.version();
+    let active = table.table_state()?.log_data().num_files();
 
     // Validate a Dry run does not mutate the table log and identifies orphaned add actions
     let (table, metrics) = table.filesystem_check().with_dry_run(true).await?;
-    assert_eq!(version, table.snapshot()?.version());
-    assert_eq!(active, table.snapshot()?.log_data().num_files());
+    assert_eq!(version, table.table_state()?.version());
+    assert_eq!(active, table.table_state()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     // Validate a run updates the table version with proper remove actions
     let (table, metrics) = table.filesystem_check().await?;
-    assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
+    assert_eq!(version + 1, table.table_state()?.version());
+    assert_eq!(active - 1, table.table_state()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
-        .snapshot()?
+        .table_state()?
         .all_tombstones(&table.log_store())
         .map_ok(|t| (t.path().to_string(), t))
         .try_collect::<HashMap<_, _>>()
@@ -49,8 +49,8 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
 
     // An additional run should return an empty list of orphaned actions
     let (table, metrics) = table.filesystem_check().await?;
-    assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
+    assert_eq!(version + 1, table.table_state()?.version());
+    assert_eq!(active - 1, table.table_state()?.log_data().num_files());
     assert!(metrics.files_removed.is_empty());
 
     Ok(())
@@ -75,17 +75,17 @@ async fn test_filesystem_check_partitioned() -> TestResult {
         .load()
         .await?;
 
-    let version = table.snapshot()?.version();
-    let active = table.snapshot()?.log_data().num_files();
+    let version = table.table_state()?.version();
+    let active = table.table_state()?.log_data().num_files();
 
     // Validate a run updates the table version with proper remove actions
     let (table, metrics) = table.filesystem_check().await?;
-    assert_eq!(version + 1, table.snapshot()?.version());
-    assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
+    assert_eq!(version + 1, table.table_state()?.version());
+    assert_eq!(active - 1, table.table_state()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table
-        .snapshot()?
+        .table_state()?
         .all_tombstones(&table.log_store())
         .map_ok(|t| (t.path().to_string(), t))
         .try_collect::<HashMap<_, _>>()

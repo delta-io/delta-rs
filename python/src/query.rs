@@ -43,8 +43,9 @@ impl PyQueryBuilder {
             .register_object_store(url, log_store.root_object_store(None));
 
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
-        let provider = Arc::new(DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?)
-            as Arc<dyn TableProvider>;
+        let provider =
+            Arc::new(DeltaScanNext::new(snapshot.into(), config).map_err(PythonError::from)?)
+                as Arc<dyn TableProvider>;
 
         self.ctx
             .register_table(table_name, provider)

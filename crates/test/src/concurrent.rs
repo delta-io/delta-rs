@@ -95,7 +95,7 @@ async fn prepare_table(
         .create()
         .with_columns(schema.fields().cloned())
         .await?;
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     assert_eq!(snapshot.version(), 0);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
@@ -197,7 +197,7 @@ impl Worker {
             default_row_commit_version: None,
             clustering_provider: None,
         })];
-        let snapshot = self.table.snapshot().unwrap().snapshot();
+        let snapshot = self.table.table_state().unwrap().snapshot();
 
         let version = CommitBuilder::default()
             .with_actions(actions)

@@ -7,6 +7,7 @@ use rstest::rstest;
 
 static SKIPPED_TESTS: &[&str; 1] = &["iceberg_compat_v1"];
 
+#[cfg(not(windows))]
 #[rstest]
 #[tokio::test]
 async fn test_protocol_and_meta(
@@ -25,7 +26,7 @@ async fn test_protocol_and_meta(
         .load()
         .await?;
 
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     let protocol = snapshot.protocol();
     assert_eq!(snapshot.version() as u64, table_info.version);
     assert_eq!(

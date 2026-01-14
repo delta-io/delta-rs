@@ -365,14 +365,14 @@ impl std::future::IntoFuture for CreateBuilder {
                     SaveMode::Overwrite => {
                         table.load().await?;
                         let remove_actions = table
-                            .snapshot()?
+                            .table_state()?
                             .snapshot()
                             .file_views(&table.log_store(), None)
                             .map_ok(|p| p.remove_action(true).into())
                             .try_collect::<Vec<_>>()
                             .await?;
                         actions.extend(remove_actions);
-                        Some(table.snapshot()?)
+                        Some(table.table_state()?)
                     }
                 }
             } else {
@@ -420,7 +420,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema)
+        assert_eq!(
+            table.table_state().unwrap().schema().as_ref(),
+            &table_schema
+        )
     }
 
     #[tokio::test]
@@ -444,7 +447,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema)
+        assert_eq!(
+            table.table_state().unwrap().schema().as_ref(),
+            &table_schema
+        )
     }
 
     #[tokio::test]
@@ -471,7 +477,7 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 0);
         assert_eq!(
             snapshot.protocol().min_reader_version(),
@@ -497,7 +503,7 @@ mod tests {
             .with_actions(vec![Action::Protocol(protocol)])
             .await
             .unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
 
@@ -508,7 +514,7 @@ mod tests {
             .await
             .unwrap();
         let append = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .metadata()
             .configuration()
@@ -534,7 +540,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(table.version(), Some(0));
-            let first_id = table.snapshot().unwrap().metadata().id().to_string();
+            let first_id = table.table_state().unwrap().metadata().id().to_string();
 
             let log_store = table.log_store;
 
@@ -553,7 +559,7 @@ mod tests {
                 .with_save_mode(SaveMode::Ignore)
                 .await
                 .unwrap();
-            assert_eq!(table.snapshot().unwrap().metadata().id(), first_id);
+            assert_eq!(table.table_state().unwrap().metadata().id(), first_id);
 
             // Check table is overwritten
             let table = CreateBuilder::new()
@@ -562,7 +568,7 @@ mod tests {
                 .with_save_mode(SaveMode::Overwrite)
                 .await
                 .unwrap();
-            assert_ne!(table.snapshot().unwrap().metadata().id(), first_id)
+            assert_ne!(table.table_state().unwrap().metadata().id(), first_id)
         }
 
         #[tokio::test]
@@ -574,7 +580,7 @@ mod tests {
                 .with_save_mode(SaveMode::ErrorIfExists)
                 .await
                 .unwrap();
-            let state = table.snapshot().unwrap();
+            let state = table.table_state().unwrap();
             assert_eq!(state.version(), 0);
             assert_eq!(state.log_data().num_files(), 1);
 
@@ -585,7 +591,7 @@ mod tests {
                 .await
                 .unwrap();
             table.load().await.unwrap();
-            let state = table.snapshot().unwrap();
+            let state = table.table_state().unwrap();
             assert_eq!(state.version(), 1);
             // Checks if files got removed after overwrite
             assert_eq!(state.log_data().num_files(), 0);
@@ -600,7 +606,7 @@ mod tests {
                 .with_save_mode(SaveMode::ErrorIfExists)
                 .await
                 .unwrap();
-            let state = table.snapshot().unwrap();
+            let state = table.table_state().unwrap();
             assert_eq!(state.version(), 0);
             assert_eq!(state.log_data().num_files(), 1);
 
@@ -612,7 +618,7 @@ mod tests {
                 .await
                 .unwrap();
             table.load().await.unwrap();
-            let state = table.snapshot().unwrap();
+            let state = table.table_state().unwrap();
             assert_eq!(state.version(), 1);
             // Checks if files got removed after overwrite
             assert_eq!(state.log_data().num_files(), 0);
@@ -646,7 +652,7 @@ mod tests {
             // Ensure the non-Delta key was set correctly
             let value = table
                 .unwrap()
-                .snapshot()
+                .table_state()
                 .unwrap()
                 .metadata()
                 .configuration()

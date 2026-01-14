@@ -39,7 +39,6 @@ use datafusion::{
     logical_expr::LogicalPlan,
     physical_plan::ExecutionPlan,
 };
-use delta_kernel::table_configuration::TableConfiguration;
 use serde::{Deserialize, Serialize};
 
 pub use self::scan::DeltaScanExec;
@@ -47,7 +46,7 @@ use self::scan::KernelScanPlan;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
-use crate::kernel::{EagerSnapshot, Snapshot};
+use crate::kernel::Snapshot;
 
 mod scan;
 
@@ -55,54 +54,8 @@ mod scan;
 const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum SnapshotWrapper {
-    Snapshot(Arc<Snapshot>),
-    EagerSnapshot(Arc<EagerSnapshot>),
-}
-
-impl From<Arc<Snapshot>> for SnapshotWrapper {
-    fn from(snap: Arc<Snapshot>) -> Self {
-        SnapshotWrapper::Snapshot(snap)
-    }
-}
-
-impl From<Snapshot> for SnapshotWrapper {
-    fn from(snap: Snapshot) -> Self {
-        SnapshotWrapper::Snapshot(snap.into())
-    }
-}
-
-impl From<Arc<EagerSnapshot>> for SnapshotWrapper {
-    fn from(esnap: Arc<EagerSnapshot>) -> Self {
-        SnapshotWrapper::EagerSnapshot(esnap)
-    }
-}
-
-impl From<EagerSnapshot> for SnapshotWrapper {
-    fn from(esnap: EagerSnapshot) -> Self {
-        SnapshotWrapper::EagerSnapshot(esnap.into())
-    }
-}
-
-impl SnapshotWrapper {
-    fn table_configuration(&self) -> &TableConfiguration {
-        match self {
-            SnapshotWrapper::Snapshot(snap) => snap.table_configuration(),
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot().table_configuration(),
-        }
-    }
-
-    fn snapshot(&self) -> &Snapshot {
-        match self {
-            SnapshotWrapper::Snapshot(snap) => snap.as_ref(),
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaScan {
-    snapshot: SnapshotWrapper,
+    snapshot: Arc<Snapshot>,
     config: DeltaScanConfig,
     scan_schema: SchemaRef,
     /// Full schema including file_id column if configured
@@ -111,8 +64,7 @@ pub struct DeltaScan {
 
 impl DeltaScan {
     // create new delta scan
-    pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
-        let snapshot = snapshot.into();
+    pub fn new(snapshot: Arc<Snapshot>, config: DeltaScanConfig) -> Result<Self> {
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
         let full_schema = if config.retain_file_id() {
             let mut fields = scan_schema.fields().to_vec();
@@ -179,25 +131,24 @@ impl TableProvider for DeltaScan {
         });
 
         let scan_plan = KernelScanPlan::try_new(
-            self.snapshot.snapshot(),
+            self.snapshot.as_ref(),
             kernel_projection.as_ref(),
             filters,
             &self.config,
         )?;
 
-        let stream = match &self.snapshot {
-            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine.clone()),
-            SnapshotWrapper::EagerSnapshot(esn) => {
-                if let Ok(files) = esn.files() {
-                    scan_plan.scan.scan_metadata_from(
-                        engine.clone(),
-                        esn.snapshot().version() as u64,
-                        Box::new(files.to_vec().into_iter()),
-                        None,
-                    )
-                } else {
-                    scan_plan.scan.scan_metadata(engine.clone())
-                }
+        let stream = if !self.snapshot.is_eager() {
+            scan_plan.scan.scan_metadata(engine.clone())
+        } else {
+            if let Ok(files) = self.snapshot.logical_files() {
+                scan_plan.scan.scan_metadata_from(
+                    engine.clone(),
+                    self.snapshot.version() as u64,
+                    Box::new(files.to_vec().into_iter()),
+                    None,
+                )
+            } else {
+                scan_plan.scan.scan_metadata(engine.clone())
             }
         };
 
@@ -297,13 +248,13 @@ mod tests {
     #[tokio::test]
     async fn test_query_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).await?;
 
         let session = Arc::new(create_session().into_inner());
-        session.register_table("delta_table", provider).unwrap();
+        session.register_table("delta_table", provider)?;
 
-        let df = session.sql("SELECT * FROM delta_table").await.unwrap();
+        let df = session.sql("SELECT * FROM delta_table").await?;
         let batches = df.collect().await?;
 
         let expected = vec![
@@ -317,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).await?;
 
         let session = Arc::new(create_session().into_inner());

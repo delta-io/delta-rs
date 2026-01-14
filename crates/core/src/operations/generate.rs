@@ -79,7 +79,7 @@ use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::logstore::object_store::PutPayload;
 use crate::table::state::DeltaTableState;
@@ -89,7 +89,7 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 #[derive(Clone)]
 pub struct GenerateBuilder {
     /// A snapshot of the table state to be generated
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     log_store: LogStoreRef,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -98,7 +98,7 @@ impl GenerateBuilder {
     /// Create a new [GenerateBuilder]
     ///
     /// Currently only one mode is supported: [GenerateMode::SymlinkFormatManifest]
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             snapshot,
             log_store,

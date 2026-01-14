@@ -143,7 +143,7 @@ pub async fn add_file(
             predicate: None,
         };
         let actions = vec![Action::Add(add)];
-        let snapshot = table.snapshot().unwrap().snapshot();
+        let snapshot = table.table_state().unwrap().snapshot();
 
         CommitBuilder::default()
             .with_actions(actions)
@@ -179,7 +179,7 @@ pub async fn remove_file(
     };
     let operation = DeltaOperation::Delete { predicate: None };
     let actions = vec![Action::Remove(remove)];
-    let snapshot = table.snapshot().unwrap().snapshot();
+    let snapshot = table.table_state().unwrap().snapshot();
 
     CommitBuilder::default()
         .with_actions(actions)

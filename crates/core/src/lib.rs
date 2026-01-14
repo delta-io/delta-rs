@@ -205,7 +205,7 @@ mod tests {
             .unwrap();
         let table_url = url::Url::from_directory_path(table_path).unwrap();
         let table = crate::open_table(table_url).await.unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 3);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -218,7 +218,7 @@ mod tests {
             ]
         );
         let tombstones = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .all_tombstones(&table.log_store())
             .try_collect::<Vec<_>>()
@@ -255,11 +255,11 @@ mod tests {
 
         assert_eq!(
             file_paths_from(
-                table_newest_version.snapshot()?,
+                table_newest_version.table_state()?,
                 &table_newest_version.log_store()
             )
             .await?,
-            file_paths_from(table_to_update.snapshot()?, &table_to_update.log_store()).await?
+            file_paths_from(table_to_update.table_state()?, &table_to_update.log_store()).await?
         );
         Ok(())
     }
@@ -273,7 +273,7 @@ mod tests {
         let mut table = crate::open_table_with_version(table_url.clone(), 0)
             .await
             .unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 0);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -288,7 +288,7 @@ mod tests {
         table = crate::open_table_with_version(table_url.clone(), 2)
             .await
             .unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 2);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -301,7 +301,7 @@ mod tests {
         );
 
         table = crate::open_table_with_version(table_url, 3).await.unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 3);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -323,7 +323,7 @@ mod tests {
             .unwrap();
         let table_url = url::Url::from_directory_path(table_path).unwrap();
         let table = crate::open_table(table_url).await.unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 1);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -334,9 +334,13 @@ mod tests {
                 "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
             ]
         );
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 2);
 
-        let stats = table.snapshot().unwrap().add_actions_table(true).unwrap();
+        let stats = table
+            .table_state()
+            .unwrap()
+            .add_actions_table(true)
+            .unwrap();
 
         let num_records = stats.column_by_name("num_records").unwrap();
         let num_records = num_records
@@ -354,7 +358,7 @@ mod tests {
         null_counts.values().iter().for_each(|x| assert_eq!(*x, 0));
 
         let tombstones = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .all_tombstones(&table.log_store())
             .try_collect::<Vec<_>>()
@@ -376,7 +380,7 @@ mod tests {
             .unwrap();
         let table_url = url::Url::from_directory_path(table_path).unwrap();
         let mut table = crate::open_table(table_url).await.unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 1);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -388,7 +392,7 @@ mod tests {
             ]
         );
         table.load_version(0).await.unwrap();
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         assert_eq!(snapshot.version(), 0);
         assert_eq!(snapshot.protocol().min_writer_version(), 2);
         assert_eq!(snapshot.protocol().min_reader_version(), 1);
@@ -689,7 +693,7 @@ mod tests {
         let table = crate::open_table(table_url).await.unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(
-            file_paths_from(table.snapshot().unwrap(), &table.log_store())
+            file_paths_from(table.table_state().unwrap(), &table.log_store())
                 .await
                 .unwrap(),
             vec!["part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"]

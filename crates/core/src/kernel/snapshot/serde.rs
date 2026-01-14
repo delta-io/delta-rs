@@ -223,6 +223,7 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             inner: Arc::new(snapshot),
             schema: Arc::new(schema),
             config,
+            logical_files: vec![],
         })
     }
 }

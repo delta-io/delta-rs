@@ -99,7 +99,7 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     let result = table.restore().with_version_to_restore(1).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
-    assert_eq!(result.0.snapshot()?.version(), 4);
+    assert_eq!(result.0.table_state()?.version(), 4);
 
     let mut table = DeltaTable::try_from_url(ensure_table_uri(table_uri).unwrap())
         .await
@@ -110,7 +110,7 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     assert_eq!(curr_files, result_files);
 
     let result = result.0.restore().with_version_to_restore(0).await?;
-    assert_eq!(result.0.snapshot().unwrap().log_data().num_files(), 0);
+    assert_eq!(result.0.table_state().unwrap().log_data().num_files(), 0);
     Ok(())
 }
 
@@ -133,7 +133,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let result = table.restore().with_datetime_to_restore(datetime).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
-    assert_eq!(result.0.snapshot()?.version(), 4);
+    assert_eq!(result.0.table_state()?.version(), 4);
     Ok(())
 }
 
@@ -170,14 +170,14 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let context = setup_test(table_uri).await?;
 
-    for file in context.table.snapshot()?.log_data() {
+    for file in context.table.table_state()?.log_data() {
         let p = tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
     for file in context
         .table
-        .snapshot()?
+        .table_state()?
         .all_tombstones(&context.table.log_store())
         .try_collect::<Vec<_>>()
         .await?
@@ -197,14 +197,14 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let context = setup_test(table_uri).await?;
 
-    for file in context.table.snapshot()?.log_data() {
+    for file in context.table.table_state()?.log_data() {
         let p = tmp_dir.path().join(file.path().as_ref());
         fs::remove_file(p).unwrap();
     }
 
     for file in context
         .table
-        .snapshot()?
+        .table_state()?
         .all_tombstones(&context.table.log_store())
         .try_collect::<Vec<_>>()
         .await?

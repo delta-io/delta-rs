@@ -638,7 +638,7 @@ mod tests {
         );
 
         // Execute the future, blocking the current thread until completion
-        let mut files = file_paths_from(table.snapshot().unwrap(), &table.log_store())
+        let mut files = file_paths_from(table.table_state().unwrap(), &table.log_store())
             .await
             .unwrap();
 
@@ -649,8 +649,8 @@ mod tests {
         );
 
         let mut schema_fields = table
-            .snapshot()
-            .expect("Failed to get snapshot")
+            .table_state()
+            .expect("Failed to get table state")
             .schema()
             .fields()
             .cloned()
@@ -662,7 +662,7 @@ mod tests {
         );
 
         let mut partition_values = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .log_data()
             .iter()
@@ -686,7 +686,7 @@ mod tests {
 
             match (value, found_value) {
                 // no-op the null comparison due to a breaking change in delta-kernel-rs 0.7.0
-                // which changes null comparables
+                // which changes null comparable
                 (Scalar::Null(_), Scalar::Null(_)) => {}
                 (v, fv) => assert_eq!(v, &fv),
             }
@@ -1237,7 +1237,7 @@ mod tests {
             .with_location(temp_dir.path().to_str().unwrap())
             .await
             .expect("Failed to convert to Delta table");
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
 
         assert_eq!(state.version(), 0);
 
@@ -1263,7 +1263,7 @@ mod tests {
         );
 
         // Verify can get file metadata
-        let state = table.snapshot().unwrap();
+        let state = table.table_state().unwrap();
         assert_eq!(state.log_data().num_files(), 1);
     }
 }

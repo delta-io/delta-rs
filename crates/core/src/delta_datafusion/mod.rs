@@ -58,7 +58,7 @@ use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
+use crate::kernel::{Add, LogDataHandler, Snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
@@ -197,24 +197,6 @@ impl DataFusionMixins for LogDataHandler<'_> {
     ) -> DeltaResult<Expr> {
         let schema = DFSchema::try_from(self.read_schema().as_ref().to_owned())?;
         parse_predicate_expression(&schema, expr, session)
-    }
-}
-
-impl DataFusionMixins for EagerSnapshot {
-    fn read_schema(&self) -> ArrowSchemaRef {
-        self.snapshot().read_schema()
-    }
-
-    fn input_schema(&self) -> ArrowSchemaRef {
-        self.snapshot().input_schema()
-    }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        session: &dyn Session,
-    ) -> DeltaResult<Expr> {
-        self.snapshot().parse_predicate_expression(expr, session)
     }
 }
 
@@ -618,7 +600,7 @@ mod tests {
     use bytes::Bytes;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::config::TableParquetOptions;
-    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+    use datafusion::datasource::physical_plan::{FileScanConfig, FileSource, ParquetSource};
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
@@ -871,13 +853,16 @@ mod tests {
             .unwrap();
 
         let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.table_state().unwrap().snapshot())
             .unwrap();
         let log = table.log_store();
 
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = DeltaTableProvider::try_new(
+            table.table_state().unwrap().snapshot().clone(),
+            log,
+            config,
+        )
+        .unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -964,13 +949,16 @@ mod tests {
             .unwrap();
 
         let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.table_state().unwrap().snapshot())
             .unwrap();
         let log = table.log_store();
 
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = DeltaTableProvider::try_new(
+            table.table_state().unwrap().snapshot().clone(),
+            log,
+            config,
+        )
+        .unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1021,13 +1009,16 @@ mod tests {
             .unwrap();
 
         let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.table_state().unwrap().snapshot())
             .unwrap();
         let log = table.log_store();
 
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = DeltaTableProvider::try_new(
+            table.table_state().unwrap().snapshot().clone(),
+            log,
+            config,
+        )
+        .unwrap();
 
         let mut cfg = SessionConfig::default();
         cfg.options_mut().execution.parquet.pushdown_filters = true;
@@ -1118,13 +1109,16 @@ mod tests {
             .unwrap();
 
         let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.table_state().unwrap().snapshot())
             .unwrap();
         let log = table.log_store();
 
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = DeltaTableProvider::try_new(
+            table.table_state().unwrap().snapshot().clone(),
+            log,
+            config,
+        )
+        .unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
         ctx.register_table("test", Arc::new(provider)).unwrap();
 
@@ -1206,7 +1200,7 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
         let scan = DeltaScanBuilder::new(
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             table.log_store(),
             &state,
         )
@@ -1231,7 +1225,7 @@ mod tests {
             .await
             .unwrap();
 
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
         let ctx = SessionContext::new();
         let state = ctx.state();
         let scan = DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
@@ -1262,7 +1256,7 @@ mod tests {
             .await
             .unwrap();
 
-        let snapshot = table.snapshot().unwrap();
+        let snapshot = table.table_state().unwrap();
 
         let mut config = SessionConfig::default();
         config.options_mut().execution.parquet.pushdown_filters = true;
@@ -1351,7 +1345,7 @@ mod tests {
             .unwrap();
 
         let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.table_state().unwrap().snapshot())
             .unwrap();
 
         let (object_store, mut operations) =
@@ -1364,7 +1358,7 @@ mod tests {
             table.log_store().config().clone(),
         );
         let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
+            table.table_state().unwrap().snapshot().clone(),
             Arc::new(log_store),
             config,
         )

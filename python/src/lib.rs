@@ -29,7 +29,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
+    Action, Add, LogicalFileView, MetadataExt as _, Snapshot, StructDataExt as _, Transaction,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -137,9 +137,9 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.log_store().object_store(None).clone()))
     }
 
-    fn cloned_state(&self) -> PyResult<EagerSnapshot> {
+    fn cloned_state(&self) -> PyResult<Snapshot> {
         self.with_table(|t| {
-            t.snapshot()
+            t.table_state()
                 .map(|snapshot| snapshot.snapshot())
                 .cloned()
                 .map_err(PythonError::from)
@@ -252,7 +252,7 @@ impl RawDeltaTable {
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
         let metadata = self.with_table(|t| {
             let snapshot = t
-                .snapshot()
+                .table_state()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             Ok(snapshot.metadata().clone())
@@ -270,7 +270,7 @@ impl RawDeltaTable {
     pub fn protocol_versions(&self) -> PyResult<(i32, i32, Option<StringVec>, Option<StringVec>)> {
         let table_protocol = self.with_table(|t| {
             let snapshot = t
-                .snapshot()
+                .table_state()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             Ok(snapshot.protocol().clone())
@@ -339,7 +339,7 @@ impl RawDeltaTable {
     fn get_num_index_cols(&self) -> PyResult<i32> {
         self.with_table(|t| {
             let n_cols = t
-                .snapshot()
+                .table_state()
                 .map_err(PythonError::from)?
                 .config()
                 .num_indexed_cols();
@@ -352,7 +352,7 @@ impl RawDeltaTable {
 
     fn get_stats_columns(&self) -> PyResult<Option<Vec<String>>> {
         self.with_table(|t| {
-            Ok(t.snapshot()
+            Ok(t.table_state()
                 .map_err(PythonError::from)?
                 .config()
                 .data_skipping_stats_columns
@@ -452,7 +452,7 @@ impl RawDeltaTable {
     pub fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let schema = self.with_table(|t| {
             let snapshot = t
-                .snapshot()
+                .table_state()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             Ok(snapshot.schema().clone())
@@ -1166,14 +1166,14 @@ impl RawDeltaTable {
     ) -> PyResult<Bound<'py, PyFrozenSet>> {
         let schema = self.with_table(|t| {
             let snapshot = t
-                .snapshot()
+                .table_state()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             Ok(snapshot.schema().clone())
         })?;
         let metadata = self.with_table(|t| {
             let snapshot = t
-                .snapshot()
+                .table_state()
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
             Ok(snapshot.metadata().clone())
@@ -1287,7 +1287,7 @@ impl RawDeltaTable {
             let mode = mode.parse().map_err(PythonError::from)?;
 
             let existing_schema = self.with_table(|t| {
-                let snapshot = t.snapshot().map_err(PythonError::from)?;
+                let snapshot = t.table_state().map_err(PythonError::from)?;
                 Ok(snapshot.schema().clone())
             })?;
 
@@ -1324,7 +1324,7 @@ impl RawDeltaTable {
                     if &schema != existing_schema.as_ref() {
                         let mut metadata = self.with_table(|t| {
                             let snapshot = t
-                                .snapshot()
+                                .table_state()
                                 .map_err(PythonError::from)
                                 .map_err(PyErr::from)?;
                             Ok(snapshot.metadata().clone())
@@ -1493,7 +1493,7 @@ impl RawDeltaTable {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
         let batch = self.with_table(|t| {
-            Ok(t.snapshot()
+            Ok(t.table_state()
                 .map_err(PythonError::from)?
                 .add_actions_table(flatten)
                 .map_err(PythonError::from)?)
@@ -1506,7 +1506,7 @@ impl RawDeltaTable {
             let log_store = t.log_store();
             let sizes: HashMap<String, i64> = rt()
                 .block_on(async {
-                    t.snapshot()?
+                    t.table_state()?
                         .snapshot()
                         .file_views(&log_store, None)
                         .map_ok(|f| (f.path().to_string(), f.size()))
@@ -1678,7 +1678,8 @@ impl RawDeltaTable {
     pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
         // NOTE: this will simplify once we have moved logstore onto state.
         let log_store = self.log_store()?;
-        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+        let snapshot =
+            self.with_table(|t| Ok(t.table_state().map_err(PythonError::from)?.clone()))?;
         Ok(rt()
             .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
             .map_err(PythonError::from)?)
@@ -1843,11 +1844,11 @@ impl RawDeltaTable {
 
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let snapshot = table
-            .snapshot()
+            .table_state()
             .map_err(PythonError::from)?
             .snapshot()
             .clone();
-        let scan = DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?;
+        let scan = DeltaScanNext::new(snapshot.into(), config).map_err(PythonError::from)?;
         let tokio_scan =
             Arc::new(TokioDeltaScan::new(scan, handle.clone())) as Arc<dyn TableProvider>;
         let provider = FFI_TableProvider::new(tokio_scan, false, Some(handle.clone()));

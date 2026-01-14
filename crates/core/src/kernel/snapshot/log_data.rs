@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+use arrow_cast::pretty::print_batches;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
@@ -51,11 +52,11 @@ impl<T: PartitionsExt> PartitionsExt for Arc<T> {
     }
 }
 
-/// Provides semanitc access to the log data.
+/// Provides semantic access to the log data.
 ///
 /// This is a helper struct that provides access to the log data in a more semantic way
-/// to avid the necessiity of knowing the exact layout of the underlying log data.
-#[derive(Clone)]
+/// to avid the necessity of knowing the exact layout of the underlying log data.
+#[derive(Clone, Debug)]
 pub struct LogDataHandler<'a> {
     data: &'a [RecordBatch],
     config: &'a TableConfiguration,
@@ -63,6 +64,7 @@ pub struct LogDataHandler<'a> {
 
 impl<'a> LogDataHandler<'a> {
     pub(crate) fn new(data: &'a [RecordBatch], config: &'a TableConfiguration) -> Self {
+        print_batches(data).unwrap();
         Self { data, config }
     }
 
@@ -624,7 +626,7 @@ mod df_tests {
         let log_store = table_from_struct_stats.log_store();
 
         let json_adds: Vec<_> = table_from_json_stats
-            .snapshot()
+            .table_state()
             .unwrap()
             .snapshot()
             .file_views(&log_store, None)
@@ -641,7 +643,7 @@ mod df_tests {
             .unwrap();
 
         let struct_adds: Vec<_> = table_from_struct_stats
-            .snapshot()
+            .table_state()
             .unwrap()
             .snapshot()
             .file_views(&log_store, None)
@@ -681,7 +683,7 @@ mod df_tests {
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
 
         let file_stats = table_from_struct_stats
-            .snapshot()
+            .table_state()
             .unwrap()
             .snapshot()
             .log_data();

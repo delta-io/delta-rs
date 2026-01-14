@@ -67,7 +67,7 @@ use crate::{
         session_state_from_session,
     },
     kernel::{
-        Action, EagerSnapshot, Remove,
+        Action, Remove, Snapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
@@ -92,7 +92,7 @@ pub struct UpdateBuilder {
     /// How to update columns in a record that match the predicate
     updates: HashMap<Column, Expression>,
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -135,7 +135,7 @@ impl super::Operation for UpdateBuilder {
 
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             predicate: None,
             updates: HashMap::new(),
@@ -254,14 +254,14 @@ async fn execute(
     predicate: Option<Expression>,
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
-    snapshot: EagerSnapshot,
+    snapshot: Snapshot,
     session: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     operation_id: Uuid,
     handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(EagerSnapshot, UpdateMetrics)> {
+) -> DeltaResult<(Snapshot, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -693,7 +693,7 @@ mod tests {
 
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
 
         let (table, metrics) = table
             .update()
@@ -702,7 +702,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 4);
@@ -747,7 +747,7 @@ mod tests {
 
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
 
         let (table, metrics) = table
             .update()
@@ -757,7 +757,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -803,7 +803,7 @@ mod tests {
 
         let table = write_batch(table, batch.clone()).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 2);
 
         let (table, metrics) = table
             .update()
@@ -814,7 +814,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 2);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -838,7 +838,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_batch(table, batch).await;
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 2);
 
         let (table, metrics) = table
             .update()
@@ -853,7 +853,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 3);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 3);
         assert_eq!(metrics.num_added_files, 2);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 1);
@@ -950,7 +950,7 @@ mod tests {
     async fn test_update_null() {
         let table = prepare_values_table().await;
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
 
         let (table, metrics) = table
             .update()
@@ -958,7 +958,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 5);
@@ -988,7 +988,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -1023,7 +1023,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_updated_rows, 2);
@@ -1232,7 +1232,7 @@ mod tests {
     async fn test_no_cdc_on_older_tables() {
         let table = prepare_values_table().await;
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",

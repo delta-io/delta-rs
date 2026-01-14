@@ -14,7 +14,7 @@ use either::{Left, Right};
 use futures::TryStreamExt as _;
 use itertools::Itertools;
 
-use crate::kernel::EagerSnapshot;
+use crate::kernel::Snapshot;
 use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug)]
@@ -323,7 +323,7 @@ pub(crate) fn generalize_filter(
 
 pub(crate) async fn try_construct_early_filter(
     join_predicate: Expr,
-    table_snapshot: &EagerSnapshot,
+    table_snapshot: &Snapshot,
     session_state: &dyn Session,
     source: &LogicalPlan,
     source_name: &TableReference,
@@ -444,7 +444,7 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -478,7 +478,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -536,7 +536,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -569,7 +569,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -591,7 +591,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -627,7 +627,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -651,7 +651,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -690,7 +690,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -717,7 +717,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -759,7 +759,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -789,7 +789,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -831,7 +831,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.table_state().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,

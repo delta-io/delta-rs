@@ -50,9 +50,9 @@ use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::resolve_snapshot;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{Action, Add, PartitionsExt, Remove, Snapshot, scalars::ScalarExt};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -197,7 +197,7 @@ pub enum OptimizeType {
 /// table's configuration is read. Otherwise a default value is used.
 pub struct OptimizeBuilder<'a> {
     /// A snapshot of the to-be-optimized table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
@@ -258,7 +258,7 @@ pub fn create_session_state_for_optimize(
 
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -638,7 +638,7 @@ impl MergePlan {
     pub async fn execute(
         mut self,
         log_store: LogStoreRef,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         max_concurrent_tasks: usize,
         min_commit_interval: Option<Duration>,
         commit_properties: CommitProperties,
@@ -831,7 +831,7 @@ impl MergePlan {
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties: WriterProperties,
@@ -937,7 +937,7 @@ impl IntoIterator for MergeBin {
 
 async fn build_compaction_plan(
     log_store: &dyn LogStore,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     filters: &[PartitionFilter],
     target_size: u64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
@@ -1018,7 +1018,7 @@ async fn build_compaction_plan(
 async fn build_zorder_plan(
     log_store: &dyn LogStore,
     zorder_columns: Vec<String>,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
     session: SessionState,

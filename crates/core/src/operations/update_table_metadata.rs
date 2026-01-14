@@ -8,7 +8,7 @@ use validator::Validate;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt, resolve_snapshot};
+use crate::kernel::{Action, MetadataExt, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -45,7 +45,7 @@ fn validate_at_least_one_field(
 /// Update table metadata operation
 pub struct UpdateTableMetadataBuilder {
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// The metadata update to apply
     update: Option<TableMetadataUpdate>,
     /// Delta object store for handling data files
@@ -66,7 +66,7 @@ impl super::Operation for UpdateTableMetadataBuilder {
 
 impl UpdateTableMetadataBuilder {
     /// Create a new builder
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             update: None,
             snapshot,

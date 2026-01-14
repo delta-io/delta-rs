@@ -7,7 +7,7 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt, resolve_snapshot};
+use crate::kernel::{Action, MetadataExt, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -16,7 +16,7 @@ use crate::{DeltaResult, DeltaTableError};
 /// Remove constraints from the table
 pub struct DropConstraintBuilder {
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Name of the constraint
     name: Option<String>,
     /// Raise if constraint doesn't exist
@@ -39,7 +39,7 @@ impl super::Operation for DropConstraintBuilder {
 
 impl DropConstraintBuilder {
     /// Create a new builder
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             name: None,
             raise_if_not_exists: true,
@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(get_constraint_op_params(&mut table).await, expected_name);
         assert_eq!(
             table
-                .snapshot()
+                .table_state()
                 .unwrap()
                 .metadata()
                 .configuration()

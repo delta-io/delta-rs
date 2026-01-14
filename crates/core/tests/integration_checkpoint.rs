@@ -247,7 +247,7 @@ async fn test_checkpoint_with_domain_meta() -> DeltaResult<()> {
         deltalake_core::open_table(Url::parse(&format!("file://{table_path}")).unwrap()).await?;
     assert_eq!(table.version(), Some(108));
     let metadata = table
-        .snapshot()
+        .table_state()
         .unwrap()
         .snapshot()
         .domain_metadata(&table.log_store(), "delta.clustering")

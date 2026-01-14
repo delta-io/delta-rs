@@ -31,7 +31,7 @@ use super::CustomExecuteHandler;
 use super::Operation;
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::EagerSnapshot;
+use crate::kernel::Snapshot;
 use crate::kernel::resolve_snapshot;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Remove};
@@ -43,7 +43,7 @@ use crate::table::state::DeltaTableState;
 /// See this module's documentation for more information
 pub struct FileSystemCheckBuilder {
     /// A snapshot of the to-be-checked table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Don't remove actions to the table log. Just determine which files can be removed
@@ -113,7 +113,7 @@ impl super::Operation for FileSystemCheckBuilder {
 
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         FileSystemCheckBuilder {
             snapshot,
             log_store,
@@ -141,7 +141,7 @@ impl FileSystemCheckBuilder {
         self
     }
 
-    async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
+    async fn create_fsck_plan(&self, snapshot: &Snapshot) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
         let mut file_stream = snapshot
@@ -193,7 +193,7 @@ impl FileSystemCheckBuilder {
 impl FileSystemCheckPlan {
     pub async fn execute(
         self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         mut commit_properties: CommitProperties,
         operation_id: Uuid,
         handle: Option<Arc<dyn CustomExecuteHandler>>,

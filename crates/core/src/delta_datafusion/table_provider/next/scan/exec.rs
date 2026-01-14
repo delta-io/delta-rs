@@ -821,7 +821,7 @@ mod tests {
 
         // for scans with predicates, we gather full statistics
         let predicates = table
-            .snapshot()?
+            .table_state()?
             .schema()
             .field_names()
             .map(|c| col(c).is_not_null())
@@ -861,7 +861,7 @@ mod tests {
 
         // for scans with predicates, we gather full statistics
         let predicates = table
-            .snapshot()?
+            .table_state()?
             .schema()
             .field_names()
             .map(|c| col(c).is_not_null())
@@ -893,7 +893,7 @@ mod tests {
 
         // for scans with predicates, we gather full statistics
         let predicates = table
-            .snapshot()?
+            .table_state()?
             .schema()
             .field_names()
             .map(|c| col(c).is_not_null())

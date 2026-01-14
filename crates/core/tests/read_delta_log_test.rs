@@ -174,8 +174,8 @@ async fn test_read_table_features() -> DeltaResult<()> {
     let path = "../test/tests/data/simple_table_features";
     let table_uri = Url::from_directory_path(path).unwrap();
     let mut _table = deltalake_core::open_table(table_uri).await?;
-    let rf = _table.snapshot()?.protocol().reader_features();
-    let wf = _table.snapshot()?.protocol().writer_features();
+    let rf = _table.table_state()?.protocol().reader_features();
+    let wf = _table.table_state()?.protocol().writer_features();
 
     assert!(rf.is_some());
     assert!(wf.is_some());
@@ -194,7 +194,7 @@ async fn read_delta_table_from_dlt() {
     .await
     .unwrap();
     assert_eq!(table.version(), Some(1));
-    assert!(table.snapshot().is_ok());
+    assert!(table.table_state().is_ok());
 }
 
 #[tokio::test]
@@ -204,7 +204,7 @@ async fn read_delta_table_with_null_stats_in_notnull_struct() {
     let table_uri = Url::from_directory_path(std::fs::canonicalize(&table_path).unwrap()).unwrap();
     let table = deltalake_core::open_table(table_uri).await.unwrap();
     assert_eq!(table.version(), Some(1));
-    assert!(table.snapshot().is_ok());
+    assert!(table.table_state().is_ok());
 }
 
 #[tokio::test]
@@ -219,5 +219,5 @@ async fn read_delta_table_with_renamed_partitioning_column() {
     .await
     .unwrap();
     assert_eq!(table.version(), Some(4));
-    assert!(table.snapshot().is_ok());
+    assert!(table.table_state().is_ok());
 }

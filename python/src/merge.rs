@@ -3,7 +3,7 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::kernel::EagerSnapshot;
+use deltalake::kernel::Snapshot;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
@@ -40,7 +40,7 @@ impl PyMergeBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: EagerSnapshot,
+        snapshot: Snapshot,
         source: PyRecordBatchReader,
         batch_schema: PyArrowSchema,
         predicate: String,
@@ -71,12 +71,12 @@ impl PyMergeBuilder {
                 schema.clone(),
                 vec![arrow_stream_batch_generator],
             )?);
-            ctx.read_table(table_provider).unwrap()
+            ctx.read_table(table_provider)?
         } else {
             let batches = vec![source.map(|batch| batch.unwrap()).collect::<Vec<_>>()];
             let table_provider: Arc<dyn TableProvider> =
-                Arc::new(MemTable::try_new(schema.clone(), batches).unwrap());
-            ctx.read_table(table_provider).unwrap()
+                Arc::new(MemTable::try_new(schema.clone(), batches)?);
+            ctx.read_table(table_provider)?
         };
 
         let mut cmd = MergeBuilder::new(log_store, Some(snapshot), predicate, source_df)

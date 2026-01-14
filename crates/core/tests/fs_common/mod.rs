@@ -113,7 +113,7 @@ pub async fn commit_actions(
     let version = CommitBuilder::default()
         .with_actions(actions)
         .build(
-            Some(table.snapshot().unwrap()),
+            Some(table.table_state().unwrap()),
             table.log_store().clone(),
             operation,
         )

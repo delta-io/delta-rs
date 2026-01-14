@@ -245,8 +245,7 @@ impl DeltaTable {
         limit: Option<usize>,
     ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
         let infos = self
-            .snapshot()?
-            .snapshot()
+            .table_state()?
             .snapshot()
             .commit_infos(&self.log_store(), limit)
             .await?
@@ -341,7 +340,7 @@ impl DeltaTable {
     /// ## Errors
     ///
     /// Returns [`NotInitialized`](DeltaTableError::NotInitialized) if the table has not been initialized.
-    pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
+    pub fn table_state(&self) -> DeltaResult<&DeltaTableState> {
         self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
     }
 

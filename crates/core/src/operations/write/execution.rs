@@ -27,7 +27,7 @@ use crate::delta_datafusion::{
     generated_columns_to_exprs, session_state_from_session, validation_predicates,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
+use crate::kernel::{Action, Add, AddCDCFile, Remove, Snapshot, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
@@ -54,7 +54,7 @@ pub(crate) struct WriteExecutionPlanMetrics {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -101,7 +101,7 @@ pub(crate) async fn write_execution_plan_cdc(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -130,7 +130,7 @@ pub(crate) async fn write_execution_plan(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_non_empty_expr(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
     partition_columns: Vec<String>,
@@ -208,7 +208,7 @@ pub(crate) async fn execute_non_empty_expr(
 pub(crate) async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     session: &dyn Session,
     partition_columns: Vec<String>,
     writer_properties: Option<WriterProperties>,
@@ -259,7 +259,7 @@ pub(crate) async fn prepare_predicate_actions(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
