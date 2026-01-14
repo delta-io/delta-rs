@@ -502,24 +502,7 @@ pub(crate) async fn resolve_snapshot(
     require_files: bool,
     version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
-    if let Some(snapshot) = maybe_snapshot {
-        if let Some(version) = version
-            && snapshot.version() as Version != version
-        {
-            return Err(DeltaTableError::Generic(
-                "Provided snapshot version does not match the requested version".to_string(),
-            ));
-        }
-        if require_files {
-            snapshot.with_files(log_store).await
-        } else {
-            Ok(snapshot)
-        }
-    } else {
-        let mut config = DeltaTableConfig::default();
-        config.require_files = require_files;
-        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
-    }
+    resolve_snapshot_with_config(log_store, maybe_snapshot, require_files, version, None).await
 }
 
 pub(crate) async fn resolve_snapshot_with_config(

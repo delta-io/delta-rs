@@ -903,7 +903,7 @@ impl DeltaTable {
     pub fn table_provider(&self) -> TableProviderBuilder {
         let mut builder = TableProviderBuilder::new();
         if let Ok(state) = self.snapshot() {
-            builder = builder.with_eager_snapshot(state.snapshot.clone());
+            builder = builder.with_eager_snapshot(state.snapshot().clone());
         } else {
             builder = builder.with_log_store(self.log_store());
         }

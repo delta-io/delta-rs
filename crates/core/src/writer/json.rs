@@ -120,6 +120,11 @@ impl DataArrowWriter {
         partition_columns: &[String],
         record_batch: RecordBatch,
     ) -> Result<(), DeltaWriterError> {
+        if self.partition_values.is_empty() {
+            let partition_values = extract_partition_values(partition_columns, &record_batch)?;
+            self.partition_values = partition_values;
+        }
+
         // Copy current buffered bytes so we can recover from failures
         let buffer_bytes = self.buffer.to_vec();
 
@@ -151,7 +156,6 @@ impl DataArrowWriter {
     fn new(
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
-        partition_values: IndexMap<String, Scalar>,
         path: Path,
     ) -> Result<Self, ParquetError> {
         let buffer = ShareableBuffer::default();
@@ -161,6 +165,7 @@ impl DataArrowWriter {
             writer_properties.clone(),
         )?;
 
+        let partition_values = IndexMap::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -339,7 +344,6 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 }
                 None => {
                     let schema = arrow_schema_without_partitions(&arrow_schema, &partition_columns);
-
                     let record_batch =
                         record_batch_from_message(arrow_schema.clone(), &values[..1])?;
                     let partition_values =
@@ -353,7 +357,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                         .create_writer_properties(&path, &arrow_schema)
                         .await?;
                     let mut writer =
-                        DataArrowWriter::new(schema, writer_properties, partition_values, path)?;
+                        DataArrowWriter::new(schema, writer_properties, path)?;
 
                     let result = writer
                         .write_values(&partition_columns, arrow_schema.clone(), values)

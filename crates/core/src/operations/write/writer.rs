@@ -585,7 +585,7 @@ mod tests {
         DeltaWriter::new(object_store, config)
     }
 
-    async fn get_partition_writer(
+    fn get_partition_writer(
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
@@ -621,7 +621,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None).await;
+        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -656,7 +656,7 @@ mod tests {
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
         let mut writer =
-            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None).await;
+            get_partition_writer(object_store, &batch, Some(properties), Some(10_000), None);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -684,7 +684,7 @@ mod tests {
             .unwrap()
             .object_store(None);
         // configure small target file size so we can observe multiple files written
-        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None).await;
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(10_000), None);
         writer.write(&batch).await.unwrap();
 
         // check that we have written more then once file, and no more then 1 is below target size
@@ -713,8 +713,7 @@ mod tests {
             .object_store(None);
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
-        let mut writer =
-            get_partition_writer(object_store, &batch, None, Some(9000), Some(10000)).await;
+        let mut writer = get_partition_writer(object_store, &batch, None, Some(9000), Some(10000));
         writer.write(&batch).await.unwrap();
 
         let adds = writer.close().await.unwrap();
