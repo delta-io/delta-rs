@@ -383,7 +383,7 @@ def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
         {
             "id": Array(
                 ["1", "2", "3", "4"],
-                type=ArrowField("id", DataType.string_view(), nullable=True),
+                type=ArrowField("id", DataType.string(), nullable=True),
             ),
             "price": Array(
                 [0, 1, 2, 3],
@@ -516,7 +516,7 @@ def test_update(lakefs_path, sample_table_update: Table, lakefs_storage_options)
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                type=ArrowField("id", DataType.string_view(), nullable=True),
+                type=ArrowField("id", DataType.string(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)),

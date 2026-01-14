@@ -1127,11 +1127,11 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             {
                 "date": Array(
                     ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
-                    ArrowField("date", type=DataType.string_view(), nullable=True),
+                    ArrowField("date", type=DataType.string(), nullable=True),
                 ),
                 "value": Array(
                     ["a", "b", "c", "d"],
-                    ArrowField("value", type=DataType.string_view(), nullable=True),
+                    ArrowField("value", type=DataType.string(), nullable=True),
                 ),
             }
         ),
@@ -1142,7 +1142,7 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         {
             "date": Array(
                 ["2021-01-01", "2021-01-02", "2021-01-03"],
-                ArrowField("date", type=DataType.string_view(), nullable=True),
+                ArrowField("date", type=DataType.string(), nullable=True),
             ),
             "dayOfYear": Array(
                 [1, 2, 3],
@@ -1150,7 +1150,7 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             ),
             "value": Array(
                 ["a", "b", "c"],
-                ArrowField("value", type=DataType.string_view(), nullable=True),
+                ArrowField("value", type=DataType.string(), nullable=True),
             ),
         }
     )

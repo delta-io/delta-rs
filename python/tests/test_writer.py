@@ -550,9 +550,7 @@ def test_roundtrip_null_partition(
         ChunkedArray(
             Array(
                 ["a", "a", "a", "a", None],
-                type=ArrowField(
-                    "utf8_with_nulls", DataType.string_view(), nullable=True
-                ),
+                type=ArrowField("utf8_with_nulls", DataType.string(), nullable=True),
             )
         ),
     )
@@ -825,7 +823,7 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
         {
             "p": Array(
                 ["a=b", "hello world", "hello%20world"],
-                ArrowField("p", type=DataType.string_view(), nullable=False),
+                ArrowField("p", type=DataType.string(), nullable=False),
             ),
             "x": Array(
                 [0, 1, 2],
@@ -1368,7 +1366,7 @@ def test_partition_overwrite_with_new_partition(
         {
             "p1": Array(
                 ["1", "1", "2", "2"],
-                ArrowField("p1", type=DataType.string_view(), nullable=False),
+                ArrowField("p1", type=DataType.string(), nullable=False),
             ),
             "p2": Array(
                 [1, 2, 1, 2],
@@ -1475,7 +1473,7 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
         {
             "field_one": Array(
                 [b"\x00\\"],
-                ArrowField("field_one", type=DataType.binary_view(), nullable=True),
+                ArrowField("field_one", type=DataType.binary(), nullable=True),
             ),
         }
     )
@@ -1710,7 +1708,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path):
         {
             "foo": Array(
                 ["B"] * 10,
-                ArrowField("foo", type=DataType.string_view(), nullable=True),
+                ArrowField("foo", type=DataType.string(), nullable=True),
             ),
             "bar": Array(
                 [1] * 10,
@@ -1737,7 +1735,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path):
             ),
             "foo": Array(
                 ["B"] * 10,
-                ArrowField("foo", type=DataType.string_view(), nullable=True),
+                ArrowField("foo", type=DataType.string(), nullable=True),
             ),
         }
     )
@@ -1758,7 +1756,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path):
             ),
             "foo": Array(
                 ["B"] * 20,
-                ArrowField("foo", type=DataType.string_view(), nullable=True),
+                ArrowField("foo", type=DataType.string(), nullable=True),
             ),
         }
     )
