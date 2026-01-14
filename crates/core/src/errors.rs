@@ -69,10 +69,10 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when attempting to write bad data to the table
-    #[error("Attempted to write invalid data to the table: {:#?}", violations)]
+    #[error("{message}")]
     InvalidData {
         /// Action error details returned of the invalid action.
-        violations: Vec<String>,
+        message: String,
     },
 
     /// Error returned when it is not a DeltaTable.

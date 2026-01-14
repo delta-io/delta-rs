@@ -27,9 +27,7 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         // protocol errors
         DeltaTableError::InvalidJsonLog { .. } => DeltaProtocolError::new_err(err.to_string()),
         DeltaTableError::InvalidStatsJson { .. } => DeltaProtocolError::new_err(err.to_string()),
-        DeltaTableError::InvalidData { violations } => {
-            DeltaProtocolError::new_err(format!("Invariant violations: {violations:?}"))
-        }
+        DeltaTableError::InvalidData { message } => DeltaProtocolError::new_err(message),
 
         // commit errors
         DeltaTableError::Transaction { source } => CommitFailedError::new_err(source.to_string()),
